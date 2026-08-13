@@ -26,8 +26,9 @@ use io::{
 #[cfg(test)]
 use protocol::StageObjectKind;
 use protocol::{
-    normalize_legacy_video_media_assets, set_video_output_mapping_field_value,
-    validate_engine_ready_video_media_assets, ActiveFadeSummary, AttributeControl,
+    normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
+    set_video_output_mapping_field_value, validate_engine_ready_video_clip_slots,
+    validate_video_clip_runtime_against_authored_slots, ActiveFadeSummary, AttributeControl,
     AttributeResolution, AttributeValueSummary, AudioAnalysisSummary, AudioReactiveCurve,
     AudioReactiveFeature, AudioSpectrumBand, AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction,
     AutoVjConfig, AutoVjMode, AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger,
@@ -62,17 +63,21 @@ use protocol::{
     TimelineTrackKind, TimelineVideoAutomationSummary, TouchFeaturePresetTarget,
     TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
     ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
-    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
-    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
-    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    VideoBlendMode, VideoClipLaunchQuantization, VideoClipLayerRuntimeSummary, VideoClipLoopMode,
+    VideoClipPendingLaunchSummary, VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary,
+    VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
+    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
     LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
     MIN_CUE_AUTHORED_BEATS,
 };
 use thiserror::Error;
 
 const ENGINE_QUEUE_CAPACITY: usize = 4096;
+/// Upper bound for one directly addressable layer clip bank.
+const MAX_VIDEO_CLIP_SLOTS_PER_LAYER: usize = 32;
 const COMMANDS_PER_TICK_LIMIT: usize = 512;
 const DMX_TICK_INTERVAL: Duration = Duration::from_micros(22_727);
 const LOW_LATENCY_DMX_TICK_THRESHOLD: Duration = Duration::from_micros(5_000);
@@ -1125,6 +1130,7 @@ enum AllocatorDomain {
     Automations,
     MediaAssets,
     VideoLayers,
+    VideoClipSlots,
     Compositions,
     VideoOutputs,
     NodeGraphs,
@@ -1146,6 +1152,7 @@ impl AllocatorDomain {
             Self::Automations => "automations",
             Self::MediaAssets => "media assets",
             Self::VideoLayers => "video layers",
+            Self::VideoClipSlots => "video clip slots",
             Self::Compositions => "compositions",
             Self::VideoOutputs => "video outputs",
             Self::NodeGraphs => "node graphs",
@@ -1281,6 +1288,26 @@ pub enum MediaAssetTransaction {
         output: VideoOutputSummary,
     },
     Update(MediaAssetSummary),
+}
+
+/// One direct-drop assignment. The MediaAsset rows and slot rows intentionally
+/// travel together so a failed slot validation can never leave an imported
+/// asset visible without the operator's requested target assignment.
+#[derive(Debug, Clone)]
+pub struct VideoClipSlotImportAssignment {
+    pub layer_id: VideoLayerId,
+    pub slot: VideoClipSlotSummary,
+    /// Insert before this current slot, or append when absent. Multiple input
+    /// files preserve the request order because every later insertion sees the
+    /// previously inserted candidate.
+    pub before_slot_id: Option<VideoClipSlotId>,
+    pub make_default: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct VideoClipSlotImportAndAssignCandidate {
+    pub assets: Vec<MediaAssetSummary>,
+    pub assignments: Vec<VideoClipSlotImportAssignment>,
 }
 
 #[derive(Debug)]
@@ -2111,6 +2138,7 @@ pub enum EngineCommand {
     AddVideoLayerWithAllocatedAsset {
         layer_id: VideoLayerId,
         asset_id: MediaAssetId,
+        clip_slot_id: VideoClipSlotId,
         label: String,
         source: VideoSourceSummary,
     },
@@ -2119,10 +2147,30 @@ pub enum EngineCommand {
         new_layer_id: VideoLayerId,
         label: String,
     },
+    /// Internal compatibility form. Slot identities are allocated under the
+    /// handle allocator before enqueue and paired with the exact source-bank
+    /// shape observed at that point; runtime never invents IDs later.
+    #[doc(hidden)]
+    DuplicateVideoLayerWithAllocatedSlots {
+        source_layer_id: VideoLayerId,
+        new_layer_id: VideoLayerId,
+        label: String,
+        expected_source_slot_ids: Vec<VideoClipSlotId>,
+        new_clip_slot_ids: Vec<VideoClipSlotId>,
+    },
     DuplicateVideoLayerPublished {
         source_layer_id: VideoLayerId,
         new_layer_id: VideoLayerId,
         label: String,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    #[doc(hidden)]
+    DuplicateVideoLayerPublishedWithAllocatedSlots {
+        source_layer_id: VideoLayerId,
+        new_layer_id: VideoLayerId,
+        label: String,
+        expected_source_slot_ids: Vec<VideoClipSlotId>,
+        new_clip_slot_ids: Vec<VideoClipSlotId>,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     RemoveVideoLayer(VideoLayerId),
@@ -2140,6 +2188,97 @@ pub enum EngineCommand {
     /// definitive publish-or-rollback result.
     MediaAssetTransactionPublished {
         transaction: MediaAssetTransaction,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// The only direct-drop form. It imports every prepared asset and creates
+    /// or assigns every ordered slot behind one admitted publication/rollback.
+    VideoClipSlotImportAndAssignPublished {
+        candidate: VideoClipSlotImportAndAssignCandidate,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    CreateVideoClipSlotPublished {
+        layer_id: VideoLayerId,
+        slot: VideoClipSlotSummary,
+        before_slot_id: Option<VideoClipSlotId>,
+        make_default: bool,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    AssignVideoClipSlotAssetPublished {
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+        media_asset_id: MediaAssetId,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    UpdateVideoClipSlotPublished {
+        layer_id: VideoLayerId,
+        slot: VideoClipSlotSummary,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    RemoveVideoClipSlotPublished {
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    ReorderVideoClipSlotsPublished {
+        layer_id: VideoLayerId,
+        slot_ids: Vec<VideoClipSlotId>,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    DuplicateVideoClipSlotPublished {
+        layer_id: VideoLayerId,
+        source_slot_id: VideoClipSlotId,
+        new_slot_id: VideoClipSlotId,
+        before_slot_id: Option<VideoClipSlotId>,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SetDefaultVideoClipSlotPublished {
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    QueueVideoClipSlotPublished {
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    CancelQueuedVideoClipSlotPublished {
+        layer_id: VideoLayerId,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    LaunchVideoClipSlotPublished {
+        layer_id: VideoLayerId,
+        /// When omitted, launch the currently queued slot. A queued launch is
+        /// never inferred from list position.
+        slot_id: Option<VideoClipSlotId>,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    SeekVideoClipSlotPublished {
+        layer_id: VideoLayerId,
+        position_ms: u64,
         expires_at: Instant,
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
@@ -2247,7 +2386,13 @@ pub enum EngineCommand {
     /// catalog identities for every compatibility layer.
     #[doc(hidden)]
     BootstrapVjShowWithAllocatedAssets {
-        layers: Vec<(VideoLayerId, MediaAssetId, String, VideoSourceSummary)>,
+        layers: Vec<(
+            VideoLayerId,
+            MediaAssetId,
+            VideoClipSlotId,
+            String,
+            VideoSourceSummary,
+        )>,
         output: VideoOutputSummary,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
@@ -2323,6 +2468,10 @@ impl EngineCommand {
         !matches!(
             self,
             EngineCommand::RequestPersistenceSnapshot { .. }
+                | EngineCommand::QueueVideoClipSlotPublished { .. }
+                | EngineCommand::CancelQueuedVideoClipSlotPublished { .. }
+                | EngineCommand::LaunchVideoClipSlotPublished { .. }
+                | EngineCommand::SeekVideoClipSlotPublished { .. }
                 | EngineCommand::SetOutputOwnershipRole { .. }
                 | EngineCommand::FenceOutputOwnership { .. }
                 | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -2510,6 +2659,7 @@ pub struct EngineHandle {
     next_automation_id: Arc<AtomicU64>,
     next_media_asset_id: Arc<AtomicU64>,
     next_video_layer_id: Arc<AtomicU64>,
+    next_video_clip_slot_id: Arc<AtomicU64>,
     next_composition_id: Arc<AtomicU64>,
     next_video_output_id: Arc<AtomicU64>,
     next_node_graph_id: Arc<AtomicU64>,
@@ -2523,6 +2673,10 @@ pub struct EngineHandle {
 #[derive(Debug, Clone, Default)]
 pub struct VideoAudioRuntimeSnapshot {
     pub layers: Vec<VideoLayerSummary>,
+    /// Derived under the same `EngineSnapshot` read guard as `layers`, so a
+    /// reader can never combine rendered media from one publication with clip
+    /// transport truth from another.
+    pub clip_slots: VideoClipRuntimeSnapshot,
     pub auto_vj_status: AutoVjStatus,
     pub timeline_audio: TimelineAudioRuntimeSnapshot,
 }
@@ -2725,6 +2879,7 @@ impl EngineHandle {
         let next_automation_id = Arc::new(AtomicU64::new(1));
         let next_media_asset_id = Arc::new(AtomicU64::new(1));
         let next_video_layer_id = Arc::new(AtomicU64::new(1));
+        let next_video_clip_slot_id = Arc::new(AtomicU64::new(1));
         let next_composition_id = Arc::new(AtomicU64::new(2));
         let next_video_output_id = Arc::new(AtomicU64::new(1));
         let next_node_graph_id = Arc::new(AtomicU64::new(1));
@@ -2791,6 +2946,7 @@ impl EngineHandle {
             next_automation_id,
             next_media_asset_id,
             next_video_layer_id,
+            next_video_clip_slot_id,
             next_composition_id,
             next_video_output_id,
             next_node_graph_id,
@@ -2857,6 +3013,16 @@ impl EngineHandle {
 
     pub fn allocate_video_layer_id(&self) -> VideoLayerId {
         self.allocate_u64_id(&self.next_video_layer_id, AllocatorDomain::VideoLayers)
+    }
+
+    /// Clip slot identity is global to the project even though a slot belongs
+    /// to one layer. This prevents a stale queued runtime action from being
+    /// retargeted by a layer-local ID reuse after a project replacement.
+    pub fn allocate_video_clip_slot_id(&self) -> VideoClipSlotId {
+        VideoClipSlotId(self.allocate_u64_id(
+            &self.next_video_clip_slot_id,
+            AllocatorDomain::VideoClipSlots,
+        ))
     }
 
     pub fn allocate_composition_id(&self) -> CompositionId {
@@ -3023,6 +3189,7 @@ impl EngineHandle {
             } => EngineCommand::AddVideoLayerWithAllocatedAsset {
                 layer_id,
                 asset_id: self.allocate_legacy_media_asset_id_locked()?,
+                clip_slot_id: self.allocate_legacy_video_clip_slot_id_locked()?,
                 label,
                 source,
             },
@@ -3035,7 +3202,8 @@ impl EngineHandle {
                 let mut allocated_layers = Vec::with_capacity(layers.len());
                 for (layer_id, label, source) in layers {
                     let asset_id = self.allocate_legacy_media_asset_id_locked()?;
-                    allocated_layers.push((layer_id, asset_id, label, source));
+                    let clip_slot_id = self.allocate_legacy_video_clip_slot_id_locked()?;
+                    allocated_layers.push((layer_id, asset_id, clip_slot_id, label, source));
                 }
                 EngineCommand::BootstrapVjShowWithAllocatedAssets {
                     layers: allocated_layers,
@@ -3072,6 +3240,30 @@ impl EngineHandle {
                 Ordering::Relaxed,
             ) {
                 Ok(_) => return Ok(current),
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn allocate_legacy_video_clip_slot_id_locked(&self) -> Result<VideoClipSlotId, String> {
+        let mut current = self.next_video_clip_slot_id.load(Ordering::Relaxed);
+        loop {
+            if current == 0 {
+                return Err(
+                    "video clip slot allocator attempted to issue reserved ID 0".to_string()
+                );
+            }
+            if current >= u64::MAX {
+                return Err("video clip slot allocator is exhausted".to_string());
+            }
+            let next = current + 1;
+            match self.next_video_clip_slot_id.compare_exchange(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(VideoClipSlotId(current)),
                 Err(observed) => current = observed,
             }
         }
@@ -4099,6 +4291,229 @@ impl EngineHandle {
         receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
     }
 
+    /// Run one clip-slot operation through the definitive publication
+    /// handshake. Both authored and runtime-only clip commands use it: the
+    /// latter still need a coherent rendered/runtime publication and complete
+    /// A rollback when that publication cannot be made visible.
+    fn video_clip_slot_command_published(
+        &self,
+        build: impl FnOnce(
+            Instant,
+            ProjectSnapshotLoadAdmission,
+            mpsc::SyncSender<Result<(), String>>,
+        ) -> EngineCommand,
+    ) -> Result<(), String> {
+        let timeout = PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT;
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(build(deadline, admission.clone(), ack))
+            .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
+    }
+
+    /// Atomically import catalog entries and insert their ordered slots. This
+    /// is the sole direct-drop entry point, so asset import plus assignment
+    /// yields one definitive acknowledgement and one rollback boundary.
+    pub fn import_and_assign_video_clip_slots_published(
+        &self,
+        candidate: VideoClipSlotImportAndAssignCandidate,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::VideoClipSlotImportAndAssignPublished {
+                candidate,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    pub fn create_video_clip_slot_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot: VideoClipSlotSummary,
+        before_slot_id: Option<VideoClipSlotId>,
+        make_default: bool,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::CreateVideoClipSlotPublished {
+                layer_id,
+                slot,
+                before_slot_id,
+                make_default,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    pub fn assign_video_clip_slot_asset_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+        media_asset_id: MediaAssetId,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::AssignVideoClipSlotAssetPublished {
+                layer_id,
+                slot_id,
+                media_asset_id,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    pub fn update_video_clip_slot_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot: VideoClipSlotSummary,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::UpdateVideoClipSlotPublished {
+                layer_id,
+                slot,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    pub fn remove_video_clip_slot_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::RemoveVideoClipSlotPublished {
+                layer_id,
+                slot_id,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    pub fn reorder_video_clip_slots_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot_ids: Vec<VideoClipSlotId>,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::ReorderVideoClipSlotsPublished {
+                layer_id,
+                slot_ids,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    pub fn duplicate_video_clip_slot_published(
+        &self,
+        layer_id: VideoLayerId,
+        source_slot_id: VideoClipSlotId,
+        new_slot_id: VideoClipSlotId,
+        before_slot_id: Option<VideoClipSlotId>,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::DuplicateVideoClipSlotPublished {
+                layer_id,
+                source_slot_id,
+                new_slot_id,
+                before_slot_id,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    pub fn set_default_video_clip_slot_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::SetDefaultVideoClipSlotPublished {
+                layer_id,
+                slot_id,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    /// Queueing is runtime-only: `persistence_snapshot` remains byte-stable.
+    pub fn queue_video_clip_slot_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::QueueVideoClipSlotPublished {
+                layer_id,
+                slot_id,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    pub fn cancel_queued_video_clip_slot_published(
+        &self,
+        layer_id: VideoLayerId,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::CancelQueuedVideoClipSlotPublished {
+                layer_id,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    pub fn launch_video_clip_slot_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot_id: Option<VideoClipSlotId>,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::LaunchVideoClipSlotPublished {
+                layer_id,
+                slot_id,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    pub fn seek_video_clip_slot_published(
+        &self,
+        layer_id: VideoLayerId,
+        position_ms: u64,
+    ) -> Result<(), String> {
+        self.video_clip_slot_command_published(|expires_at, admission, ack| {
+            EngineCommand::SeekVideoClipSlotPublished {
+                layer_id,
+                position_ms,
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
     #[cfg(test)]
     fn force_next_pending_publication_failure_for_tests(&self) {
         self.test_media_asset_publication_failed_after_b
@@ -4165,13 +4580,42 @@ impl EngineHandle {
         new_layer_id: VideoLayerId,
         label: String,
     ) -> Result<(), String> {
+        // This queue-ordered request is a fence for preceding compatibility
+        // Add/Bootstrap commands. Reading the asynchronous published snapshot
+        // directly here could otherwise see a source bank before it exists.
+        let persistence = self.persistence_snapshot()?;
+        let expected_source_slot_ids = persistence
+            .authored_video
+            .as_ref()
+            .unwrap_or(&persistence.video)
+            .layers
+            .iter()
+            .find(|layer| layer.id == source_layer_id)
+            .ok_or_else(|| format!("Video layer {source_layer_id} was not found"))?
+            .clip_slots
+            .iter()
+            .map(|slot| slot.id)
+            .collect::<Vec<_>>();
+        if expected_source_slot_ids.is_empty() {
+            return Err(format!(
+                "Video layer {source_layer_id} has no engine-ready clip slot bank"
+            ));
+        }
+        let new_clip_slot_ids = expected_source_slot_ids
+            .iter()
+            .map(|_| self.allocate_video_clip_slot_id())
+            .collect::<Vec<_>>();
         let (ack, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::DuplicateVideoLayerPublished {
-            source_layer_id,
-            new_layer_id,
-            label,
-            ack,
-        })
+        self.send(
+            EngineCommand::DuplicateVideoLayerPublishedWithAllocatedSlots {
+                source_layer_id,
+                new_layer_id,
+                label,
+                expected_source_slot_ids,
+                new_clip_slot_ids,
+                ack,
+            },
+        )
         .map_err(|error| error.to_string())?;
         receiver
             .recv_timeout(Duration::from_secs(3))
@@ -4508,6 +4952,7 @@ impl EngineHandle {
                     };
                 VideoAudioRuntimeSnapshot {
                     layers: snapshot.video.layers.clone(),
+                    clip_slots: snapshot.video_clip_runtime.clone(),
                     auto_vj_status: snapshot.video.auto_vj.status.clone(),
                     timeline_audio: TimelineAudioRuntimeSnapshot {
                         clips: snapshot.timeline.audio_clips.clone(),
@@ -4546,7 +4991,7 @@ impl EngineHandle {
         match command {
             EngineCommand::LoadProjectSnapshot(snapshot)
             | EngineCommand::LoadProjectSnapshotPublished { snapshot, .. } => {
-                let snapshot = normalized_engine_snapshot_video_media_assets(snapshot.clone())?;
+                let snapshot = normalized_engine_snapshot_video_for_load(snapshot.clone())?;
                 observe_project_snapshot_allocator_sources(&mut maxima, &snapshot)?;
             }
             EngineCommand::PatchFixture { fixture_id, .. }
@@ -4721,10 +5166,14 @@ impl EngineHandle {
                 maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
             }
             EngineCommand::AddVideoLayerWithAllocatedAsset {
-                layer_id, asset_id, ..
+                layer_id,
+                asset_id,
+                clip_slot_id,
+                ..
             } => {
                 maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
                 maxima.observe_u64(AllocatorDomain::MediaAssets, *asset_id);
+                maxima.observe_u64(AllocatorDomain::VideoClipSlots, clip_slot_id.0);
             }
             EngineCommand::DuplicateVideoLayer {
                 new_layer_id: layer_id,
@@ -4735,6 +5184,21 @@ impl EngineHandle {
                 ..
             } => {
                 maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
+            }
+            EngineCommand::DuplicateVideoLayerWithAllocatedSlots {
+                new_layer_id,
+                new_clip_slot_ids,
+                ..
+            }
+            | EngineCommand::DuplicateVideoLayerPublishedWithAllocatedSlots {
+                new_layer_id,
+                new_clip_slot_ids,
+                ..
+            } => {
+                maxima.observe_u64(AllocatorDomain::VideoLayers, *new_layer_id);
+                for slot_id in new_clip_slot_ids {
+                    maxima.observe_u64(AllocatorDomain::VideoClipSlots, slot_id.0);
+                }
             }
             EngineCommand::MediaAssetTransactionPublished { transaction, .. } => {
                 match transaction {
@@ -4747,6 +5211,9 @@ impl EngineHandle {
                             if let Some(asset_id) = layer.media_asset_id {
                                 maxima.observe_u64(AllocatorDomain::MediaAssets, asset_id);
                             }
+                            for slot in &layer.clip_slots {
+                                maxima.observe_u64(AllocatorDomain::VideoClipSlots, slot.id.0);
+                            }
                         }
                     }
                     MediaAssetTransaction::BootstrapVjShow { candidate, output } => {
@@ -4758,6 +5225,9 @@ impl EngineHandle {
                             if let Some(asset_id) = layer.media_asset_id {
                                 maxima.observe_u64(AllocatorDomain::MediaAssets, asset_id);
                             }
+                            for slot in &layer.clip_slots {
+                                maxima.observe_u64(AllocatorDomain::VideoClipSlots, slot.id.0);
+                            }
                         }
                         maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
                     }
@@ -4765,6 +5235,31 @@ impl EngineHandle {
                         maxima.observe_u64(AllocatorDomain::MediaAssets, asset.id);
                     }
                 }
+            }
+            EngineCommand::VideoClipSlotImportAndAssignPublished { candidate, .. } => {
+                for asset in &candidate.assets {
+                    maxima.observe_u64(AllocatorDomain::MediaAssets, asset.id);
+                }
+                for assignment in &candidate.assignments {
+                    maxima.observe_u64(AllocatorDomain::VideoLayers, assignment.layer_id);
+                    maxima.observe_u64(AllocatorDomain::VideoClipSlots, assignment.slot.id.0);
+                    maxima
+                        .observe_u64(AllocatorDomain::MediaAssets, assignment.slot.media_asset_id);
+                }
+            }
+            EngineCommand::CreateVideoClipSlotPublished { layer_id, slot, .. }
+            | EngineCommand::UpdateVideoClipSlotPublished { layer_id, slot, .. } => {
+                maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
+                maxima.observe_u64(AllocatorDomain::VideoClipSlots, slot.id.0);
+                maxima.observe_u64(AllocatorDomain::MediaAssets, slot.media_asset_id);
+            }
+            EngineCommand::DuplicateVideoClipSlotPublished {
+                layer_id,
+                new_slot_id,
+                ..
+            } => {
+                maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
+                maxima.observe_u64(AllocatorDomain::VideoClipSlots, new_slot_id.0);
             }
             EngineCommand::AddVideoComposition(composition) => {
                 maxima.observe_u64(AllocatorDomain::Compositions, composition.id);
@@ -4776,9 +5271,10 @@ impl EngineHandle {
                 maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
             }
             EngineCommand::BootstrapVjShowWithAllocatedAssets { layers, output, .. } => {
-                for (layer_id, asset_id, _, _) in layers {
+                for (layer_id, asset_id, clip_slot_id, _, _) in layers {
                     maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
                     maxima.observe_u64(AllocatorDomain::MediaAssets, *asset_id);
+                    maxima.observe_u64(AllocatorDomain::VideoClipSlots, clip_slot_id.0);
                 }
                 maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
             }
@@ -4817,7 +5313,15 @@ impl EngineHandle {
                     }
                 }
             }
-            EngineCommand::RemoveFixture(_)
+            EngineCommand::AssignVideoClipSlotAssetPublished { .. }
+            | EngineCommand::RemoveVideoClipSlotPublished { .. }
+            | EngineCommand::ReorderVideoClipSlotsPublished { .. }
+            | EngineCommand::SetDefaultVideoClipSlotPublished { .. }
+            | EngineCommand::QueueVideoClipSlotPublished { .. }
+            | EngineCommand::CancelQueuedVideoClipSlotPublished { .. }
+            | EngineCommand::LaunchVideoClipSlotPublished { .. }
+            | EngineCommand::SeekVideoClipSlotPublished { .. }
+            | EngineCommand::RemoveFixture(_)
             | EngineCommand::SetAttribute { .. }
             | EngineCommand::SetFixtureAttributeBatch { .. }
             | EngineCommand::SetGroupAttribute { .. }
@@ -4992,6 +5496,7 @@ struct AllocatorMaximums {
     automations: Option<u64>,
     media_assets: Option<u64>,
     video_layers: Option<u64>,
+    video_clip_slots: Option<u64>,
     compositions: Option<u64>,
     video_outputs: Option<u64>,
     node_graphs: Option<u64>,
@@ -5012,6 +5517,7 @@ impl AllocatorMaximums {
             AllocatorDomain::Automations => &mut self.automations,
             AllocatorDomain::MediaAssets => &mut self.media_assets,
             AllocatorDomain::VideoLayers => &mut self.video_layers,
+            AllocatorDomain::VideoClipSlots => &mut self.video_clip_slots,
             AllocatorDomain::Compositions => &mut self.compositions,
             AllocatorDomain::VideoOutputs => &mut self.video_outputs,
             AllocatorDomain::NodeGraphs => &mut self.node_graphs,
@@ -5046,6 +5552,7 @@ impl AllocatorMaximums {
             (AllocatorDomain::Automations, self.automations),
             (AllocatorDomain::MediaAssets, self.media_assets),
             (AllocatorDomain::VideoLayers, self.video_layers),
+            (AllocatorDomain::VideoClipSlots, self.video_clip_slots),
             (AllocatorDomain::Compositions, self.compositions),
             (AllocatorDomain::VideoOutputs, self.video_outputs),
             (AllocatorDomain::NodeGraphs, self.node_graphs),
@@ -5126,6 +5633,12 @@ impl AllocatorMaximums {
             store_next_id(
                 &engine.next_video_layer_id,
                 checked_next_allocator_u64_after_max(maximum, AllocatorDomain::VideoLayers)?,
+            );
+        }
+        if let Some(maximum) = self.video_clip_slots {
+            store_next_id(
+                &engine.next_video_clip_slot_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::VideoClipSlots)?,
             );
         }
         if let Some(maximum) = self.compositions {
@@ -5267,6 +5780,9 @@ fn observe_video_allocator_sources(maxima: &mut AllocatorMaximums, video: &Video
     }
     for layer in &video.layers {
         maxima.observe_u64(AllocatorDomain::VideoLayers, layer.id);
+        for slot in &layer.clip_slots {
+            maxima.observe_u64(AllocatorDomain::VideoClipSlots, slot.id.0);
+        }
     }
     for composition in &video.compositions {
         maxima.observe_u64(AllocatorDomain::Compositions, composition.id);
@@ -5276,19 +5792,42 @@ fn observe_video_allocator_sources(maxima: &mut AllocatorMaximums, video: &Video
     }
 }
 
-/// Apply the wire-compatible legacy migration to the authored image before a
-/// command reserves allocator capacity. This mirrors the runtime load path so
-/// a direct queue send cannot reserve below IDs that will materialize during
-/// installation.
-fn normalized_engine_snapshot_video_media_assets(
+/// Prepare the authored video image before either project-load reservation or
+/// runtime installation. Old snapshots can contain zero or duplicate layer
+/// IDs; retain the first usable serialized layer before any migration so
+/// discarded layers cannot consume generated catalog or slot identities.
+///
+/// Both routes must use this exact order: reconcile layer identities, migrate
+/// media assets, migrate clip slots, validate the engine-ready result, then
+/// enforce the per-layer bank limit.
+fn normalized_engine_snapshot_video_for_load(
     mut snapshot: EngineSnapshot,
 ) -> Result<EngineSnapshot, String> {
     if let Some(authored_video) = snapshot.authored_video.take() {
         snapshot.video = authored_video;
     }
+    let mut retained_layer_ids = HashSet::new();
+    snapshot
+        .video
+        .layers
+        .retain(|layer| layer.id != 0 && retained_layer_ids.insert(layer.id));
     normalize_legacy_video_media_assets(&mut snapshot.video)?;
-    validate_engine_ready_video_media_assets(&snapshot.video)?;
+    normalize_legacy_video_clip_slots(&mut snapshot.video)?;
+    validate_engine_ready_video_clip_slots(&snapshot.video)?;
+    validate_video_clip_slot_bank_limits(&snapshot.video)?;
     Ok(snapshot)
+}
+
+fn validate_video_clip_slot_bank_limits(video: &VideoSnapshot) -> Result<(), String> {
+    for layer in &video.layers {
+        if layer.clip_slots.len() > MAX_VIDEO_CLIP_SLOTS_PER_LAYER {
+            return Err(format!(
+                "Video layer {} exceeds the {} clip slot bank limit",
+                layer.id, MAX_VIDEO_CLIP_SLOTS_PER_LAYER
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn observe_derived_legacy_audio_layer_allocator_source(
@@ -11518,8 +12057,105 @@ struct RuntimeVideoLayer {
     source: VideoSourceSummary,
     media_asset_id: MediaAssetId,
     blend_mode: VideoBlendMode,
+    /// The durable layer state. Clip launch/seek manipulates `state` only;
+    /// persistence uses this value once a runtime transport action has run.
+    authored_state: VideoLayerState,
     state: VideoLayerState,
     isf_effect: Option<VideoIsfEffectSummary>,
+    /// Ordered authored bank. The `source` / `media_asset_id` projection above
+    /// is deliberately runtime-active so the renderer never accidentally
+    /// displays the default while a different slot is live.
+    clip_slots: Vec<VideoClipSlotSummary>,
+    default_clip_slot_id: Option<VideoClipSlotId>,
+    /// Runtime-only selection. These values never participate in the
+    /// persistence projection; project replacement resets all of them even
+    /// when the replacement reuses a layer or slot ID.
+    active_clip_slot_id: Option<VideoClipSlotId>,
+    queued_clip_slot_id: Option<VideoClipSlotId>,
+    pending_clip_launch: Option<RuntimePendingClipLaunch>,
+    clip_direction: RuntimeClipDirection,
+    runtime_transport_dirty: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeClipDirection {
+    Forward,
+    Reverse,
+    Stopped,
+}
+
+impl RuntimeClipDirection {
+    fn from_speed(speed: f32) -> Self {
+        if speed > 0.0 {
+            Self::Forward
+        } else if speed < 0.0 {
+            Self::Reverse
+        } else {
+            Self::Stopped
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeClipLaunchBoundary {
+    /// A global beat ordinal. NextBar is also stored as the corresponding
+    /// divisible-by-four beat ordinal; this avoids UI/protocol ambiguity and
+    /// keeps a queued target stable across later ticks.
+    GlobalBeat {
+        target_boundary_ordinal: u64,
+        quantization: VideoClipLaunchQuantization,
+        clock_generation: u64,
+        held_for_clock_discontinuity: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimePendingClipLaunch {
+    slot_id: VideoClipSlotId,
+    boundary: RuntimeClipLaunchBoundary,
+}
+
+/// A boundary target is captured once at Take time. We never derive a bar
+/// from `beat_counter % 4` after a clock reset because that can silently
+/// launch a previously queued clip on the wrong beat. Instead a detected
+/// discontinuity holds the immutable target until the clock is stable again.
+#[derive(Default)]
+struct RuntimeClipClockTracker {
+    last: Option<ClockSnapshot>,
+    discontinuity_hold: bool,
+    generation: u64,
+}
+
+impl RuntimeClipClockTracker {
+    fn observe(&mut self, current: &ClockSnapshot) -> bool {
+        let discontinuity = self.last.as_ref().is_some_and(|previous| {
+            previous.source != current.source
+                || current.beat_counter < previous.beat_counter
+                || current.beat_counter > previous.beat_counter.saturating_add(1)
+                || (current.beat_counter == previous.beat_counter
+                    && current.beat_phase + 0.01 < previous.beat_phase)
+        });
+        self.last = Some(current.clone());
+        if discontinuity {
+            self.discontinuity_hold = true;
+            self.generation = self.generation.wrapping_add(1);
+            return false;
+        }
+        if self.discontinuity_hold {
+            // One complete stable observation after the discontinuity keeps a
+            // pre-existing target intact but allows it to be considered on
+            // subsequent ticks. It does not retime or auto-launch on reset.
+            self.discontinuity_hold = false;
+            return false;
+        }
+        true
+    }
+
+    fn reset(&mut self, current: ClockSnapshot) {
+        self.last = Some(current);
+        self.discontinuity_hold = false;
+        self.generation = self.generation.wrapping_add(1);
+    }
 }
 
 #[derive(Clone)]
@@ -11598,6 +12234,14 @@ enum PendingCommandRollback {
         video_layer_fades: Vec<RuntimeVideoLayerFade>,
         video_outputs: Vec<RuntimeVideoOutput>,
         video_output_fades: Vec<RuntimeVideoOutputFade>,
+        last_error: Option<String>,
+    },
+    /// Covers both authored slot mutations and runtime queue/take/seek. The
+    /// whole layer vector is the smallest complete A image: slot bank/default
+    /// projection and active/queued/pending/playhead are inseparable at the
+    /// publication boundary.
+    RestoreVideoClipSlots {
+        video_layers: Vec<RuntimeVideoLayer>,
         last_error: Option<String>,
     },
     RestoreVideoLayerIsfEffect {
@@ -11705,6 +12349,7 @@ impl PendingCommandRollback {
                 | Self::RestoreExclusiveVideoTake { .. }
                 | Self::RestoreVideoLayersAndCompositions { .. }
                 | Self::RestoreMediaAssetTransaction { .. }
+                | Self::RestoreVideoClipSlots { .. }
                 | Self::RestoreVideoLayerIsfEffect { .. }
                 | Self::RestoreVideoLayerIsfEffectAndCancelEventPulse { .. }
                 | Self::RestoreAutoVj { .. }
@@ -11891,6 +12536,7 @@ struct EngineRuntime {
     timeline_reconform_count: u64,
     media_assets: Vec<MediaAssetSummary>,
     video_layers: Vec<RuntimeVideoLayer>,
+    clip_clock_tracker: RuntimeClipClockTracker,
     video_layer_fades: Vec<RuntimeVideoLayerFade>,
     video_compositions: Vec<RuntimeVideoComposition>,
     video_outputs: Vec<RuntimeVideoOutput>,
@@ -12025,6 +12671,35 @@ impl RuntimeDmxOutput {
 }
 
 impl EngineRuntime {
+    fn apply_video_clip_slot_published(
+        &mut self,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+        mutate: impl FnOnce(&mut Self) -> Result<(), String>,
+    ) {
+        let rollback = PendingCommandRollback::RestoreVideoClipSlots {
+            video_layers: self.video_layers.clone(),
+            last_error: self.last_error.clone(),
+        };
+        let result = if admission.try_admit_before(expires_at) {
+            mutate(self)
+        } else {
+            Err(
+                "Video clip slot operation expired or was cancelled before engine admission"
+                    .to_string(),
+            )
+        };
+        self.last_error = result.as_ref().err().cloned();
+        self.pending_command_acks.push(PendingCommandAck {
+            ack,
+            result,
+            rollback,
+            publication_error:
+                "Engine snapshot was busy; video clip slot operation was rolled back",
+        });
+    }
+
     #[cfg(test)]
     fn new(output: DmxOutputConfig) -> Self {
         Self::new_with_shared_telemetry(output, Arc::new(EngineSharedTelemetry::new()))
@@ -12129,6 +12804,7 @@ impl EngineRuntime {
             timeline_reconform_count: 0,
             media_assets: Vec::new(),
             video_layers: Vec::new(),
+            clip_clock_tracker: RuntimeClipClockTracker::default(),
             video_layer_fades: Vec::new(),
             video_compositions: Vec::new(),
             video_outputs: Vec::new(),
@@ -12538,15 +13214,7 @@ impl EngineRuntime {
         &mut self,
         mut snapshot: EngineSnapshot,
     ) -> Result<(), String> {
-        // Persisted projects may carry a rendered `video` projection plus an
-        // authored image. Choose authored first, then deterministically
-        // materialize legacy catalog refs before *any* capacity/project
-        // validation or runtime installation.
-        if let Some(authored_video) = snapshot.authored_video.take() {
-            snapshot.video = authored_video;
-        }
-        normalize_legacy_video_media_assets(&mut snapshot.video)?;
-        validate_engine_ready_video_media_assets(&snapshot.video)?;
+        snapshot = normalized_engine_snapshot_video_for_load(snapshot)?;
         validate_project_snapshot_allocator_capacity(&snapshot)?;
         if let Err(error) = normalize_and_validate_timeline_layers(
             &mut snapshot.timeline.layers,
@@ -12597,6 +13265,11 @@ impl EngineRuntime {
         self.group_strobe_compatible_counts.clear();
         self.group_strobe_effects.clear();
         self.pending_video_isf_event_resets.clear();
+        // Clip slot queue/take/playhead state is runtime-owned. Reset the
+        // discontinuity tracker at the same hard boundary so IDs reused by a
+        // replacement project cannot inherit an old pending global beat.
+        self.clip_clock_tracker
+            .reset(self.clock.snapshot(self.last_tick));
         let now = Instant::now();
         let (loaded_fixtures, loaded_fixture_summaries, dropped_fixture_count) =
             runtime_fixtures_from_snapshot(&snapshot.fixtures);
@@ -13431,6 +14104,19 @@ impl EngineRuntime {
                 EngineCommand::BootstrapVjShow { .. }
                     | EngineCommand::BootstrapVjShowWithAllocatedAssets { .. }
                     | EngineCommand::MediaAssetTransactionPublished { .. }
+                    | EngineCommand::VideoClipSlotImportAndAssignPublished { .. }
+                    | EngineCommand::CreateVideoClipSlotPublished { .. }
+                    | EngineCommand::AssignVideoClipSlotAssetPublished { .. }
+                    | EngineCommand::UpdateVideoClipSlotPublished { .. }
+                    | EngineCommand::RemoveVideoClipSlotPublished { .. }
+                    | EngineCommand::ReorderVideoClipSlotsPublished { .. }
+                    | EngineCommand::DuplicateVideoClipSlotPublished { .. }
+                    | EngineCommand::SetDefaultVideoClipSlotPublished { .. }
+                    | EngineCommand::DuplicateVideoLayerPublishedWithAllocatedSlots { .. }
+                    | EngineCommand::QueueVideoClipSlotPublished { .. }
+                    | EngineCommand::CancelQueuedVideoClipSlotPublished { .. }
+                    | EngineCommand::LaunchVideoClipSlotPublished { .. }
+                    | EngineCommand::SeekVideoClipSlotPublished { .. }
                     | EngineCommand::LoadProjectSnapshotPublished { .. }
                     | EngineCommand::ApplyFixtureGroupStatePublished { .. }
                     | EngineCommand::PatchFixturesPublished { .. }
@@ -17926,33 +18612,72 @@ impl EngineRuntime {
                 // Direct runtime tests can call `apply_command` without an
                 // EngineHandle. Production `send` always converts this to the
                 // independently allocated form below.
-                let asset_id = self.next_runtime_legacy_media_asset_id();
-                let result = asset_id.and_then(|asset_id| {
-                    self.add_video_layer_with_asset(layer_id, asset_id, label, source)
-                });
+                let result = self
+                    .next_runtime_legacy_media_asset_id()
+                    .and_then(|asset_id| {
+                        self.next_runtime_legacy_video_clip_slot_id()
+                            .and_then(|clip_slot_id| {
+                                self.add_video_layer_with_asset(
+                                    layer_id,
+                                    asset_id,
+                                    clip_slot_id,
+                                    label,
+                                    source,
+                                )
+                            })
+                    });
                 self.last_error = result.err();
             }
             EngineCommand::AddVideoLayerWithAllocatedAsset {
                 layer_id,
                 asset_id,
+                clip_slot_id,
                 label,
                 source,
             } => {
-                let result = self.add_video_layer_with_asset(layer_id, asset_id, label, source);
+                let result = self.add_video_layer_with_asset(
+                    layer_id,
+                    asset_id,
+                    clip_slot_id,
+                    label,
+                    source,
+                );
                 self.last_error = result.err();
             }
-            EngineCommand::DuplicateVideoLayer {
+            EngineCommand::DuplicateVideoLayer { .. } => {
+                self.last_error = Some(
+                    "Video layer duplicate must be admitted through EngineHandle so clip slot IDs are reserved"
+                        .to_string(),
+                );
+            }
+            EngineCommand::DuplicateVideoLayerWithAllocatedSlots {
                 source_layer_id,
                 new_layer_id,
                 label,
+                expected_source_slot_ids,
+                new_clip_slot_ids,
             } => {
-                let result = self.duplicate_video_layer(source_layer_id, new_layer_id, label);
+                let result = self.duplicate_video_layer(
+                    source_layer_id,
+                    new_layer_id,
+                    label,
+                    &expected_source_slot_ids,
+                    &new_clip_slot_ids,
+                );
                 self.last_error = result.as_ref().err().cloned();
             }
-            EngineCommand::DuplicateVideoLayerPublished {
+            EngineCommand::DuplicateVideoLayerPublished { ack, .. } => {
+                let _ = ack.send(Err(
+                    "Video layer duplicate must be admitted through EngineHandle so clip slot IDs are reserved"
+                        .to_string(),
+                ));
+            }
+            EngineCommand::DuplicateVideoLayerPublishedWithAllocatedSlots {
                 source_layer_id,
                 new_layer_id,
                 label,
+                expected_source_slot_ids,
+                new_clip_slot_ids,
                 ack,
             } => {
                 let rollback = PendingCommandRollback::RestoreVideoLayersAndCompositions {
@@ -17960,7 +18685,13 @@ impl EngineRuntime {
                     video_compositions: self.video_compositions.clone(),
                     last_error: self.last_error.clone(),
                 };
-                let result = self.duplicate_video_layer(source_layer_id, new_layer_id, label);
+                let result = self.duplicate_video_layer(
+                    source_layer_id,
+                    new_layer_id,
+                    label,
+                    &expected_source_slot_ids,
+                    &new_clip_slot_ids,
+                );
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
                     ack,
@@ -18029,6 +18760,143 @@ impl EngineRuntime {
                         "Engine snapshot was busy; media asset transaction was rolled back",
                 });
             }
+            EngineCommand::VideoClipSlotImportAndAssignPublished {
+                candidate,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreMediaAssetTransaction {
+                    media_assets: self.media_assets.clone(),
+                    video_layers: self.video_layers.clone(),
+                    video_compositions: self.video_compositions.clone(),
+                    video_layer_fades: self.video_layer_fades.clone(),
+                    video_outputs: self.video_outputs.clone(),
+                    video_output_fades: self.video_output_fades.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if admission.try_admit_before(expires_at) {
+                    self.import_and_assign_video_clip_slots(candidate)
+                } else {
+                    Err("Video clip slot import-and-assign expired or was cancelled before engine admission".to_string())
+                };
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; video clip slot import-and-assign was rolled back",
+                });
+            }
+            EngineCommand::CreateVideoClipSlotPublished {
+                layer_id,
+                slot,
+                before_slot_id,
+                make_default,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.create_video_clip_slot(layer_id, slot, before_slot_id, make_default)
+            }),
+            EngineCommand::AssignVideoClipSlotAssetPublished {
+                layer_id,
+                slot_id,
+                media_asset_id,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.assign_video_clip_slot_asset(layer_id, slot_id, media_asset_id)
+            }),
+            EngineCommand::UpdateVideoClipSlotPublished {
+                layer_id,
+                slot,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.update_video_clip_slot(layer_id, slot)
+            }),
+            EngineCommand::RemoveVideoClipSlotPublished {
+                layer_id,
+                slot_id,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.remove_video_clip_slot(layer_id, slot_id)
+            }),
+            EngineCommand::ReorderVideoClipSlotsPublished {
+                layer_id,
+                slot_ids,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.reorder_video_clip_slots(layer_id, slot_ids)
+            }),
+            EngineCommand::DuplicateVideoClipSlotPublished {
+                layer_id,
+                source_slot_id,
+                new_slot_id,
+                before_slot_id,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.duplicate_video_clip_slot(
+                    layer_id,
+                    source_slot_id,
+                    new_slot_id,
+                    before_slot_id,
+                )
+            }),
+            EngineCommand::SetDefaultVideoClipSlotPublished {
+                layer_id,
+                slot_id,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.set_default_video_clip_slot(layer_id, slot_id)
+            }),
+            EngineCommand::QueueVideoClipSlotPublished {
+                layer_id,
+                slot_id,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.queue_video_clip_slot(layer_id, slot_id)
+            }),
+            EngineCommand::CancelQueuedVideoClipSlotPublished {
+                layer_id,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.cancel_queued_video_clip_slot(layer_id)
+            }),
+            EngineCommand::LaunchVideoClipSlotPublished {
+                layer_id,
+                slot_id,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.launch_video_clip_slot(layer_id, slot_id)
+            }),
+            EngineCommand::SeekVideoClipSlotPublished {
+                layer_id,
+                position_ms,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
+                runtime.seek_video_clip_slot(layer_id, position_ms)
+            }),
             EngineCommand::SetVideoLayerIsfEffect { layer_id, effect } => {
                 let result = self.set_video_layer_isf_effect(layer_id, effect);
                 self.last_error = result.as_ref().err().cloned();
@@ -18145,7 +19013,7 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|layer| layer.id == layer_id)
                 {
-                    layer.state = video::sanitize_layer_state(state);
+                    apply_legacy_authored_video_state(layer, state);
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
@@ -18189,8 +19057,7 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|layer| layer.id == layer_id)
                 {
-                    apply_video_param(&mut layer.state, &param, value);
-                    layer.state = video::sanitize_layer_state(layer.state.clone());
+                    apply_legacy_video_param(layer, &param, value);
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
@@ -18220,10 +19087,23 @@ impl EngineRuntime {
                         .iter_mut()
                         .find(|layer| layer.id == layer_id)
                     {
-                        layer.state.opacity = target_opacity;
-                        layer.state = video::sanitize_layer_state(layer.state.clone());
+                        let mut authored = layer.authored_state.clone();
+                        authored.opacity = target_opacity;
+                        apply_legacy_authored_video_state(layer, authored);
                     }
                 } else {
+                    // The target is authored immediately so persisting while
+                    // a fade is in flight cannot restore an obsolete value;
+                    // keep the rendered opacity at its animated start.
+                    if let Some(layer) = self
+                        .video_layers
+                        .iter_mut()
+                        .find(|layer| layer.id == layer_id)
+                    {
+                        layer.authored_state.opacity = target_opacity;
+                        layer.authored_state =
+                            video::sanitize_layer_state(layer.authored_state.clone());
+                    }
                     self.video_layer_fades.push(RuntimeVideoLayerFade {
                         layer_id,
                         started_at: self.last_tick,
@@ -18240,8 +19120,10 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|layer| layer.id == layer_id)
                 {
-                    layer.state.enabled = enabled;
-                    layer.state = video::sanitize_layer_state(layer.state.clone());
+                    layer.authored_state.enabled = enabled;
+                    layer.authored_state =
+                        video::sanitize_layer_state(layer.authored_state.clone());
+                    layer.state.enabled = layer.authored_state.enabled;
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
@@ -18253,8 +19135,10 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|layer| layer.id == layer_id)
                 {
-                    layer.state.solo = solo;
-                    layer.state = video::sanitize_layer_state(layer.state.clone());
+                    layer.authored_state.solo = solo;
+                    layer.authored_state =
+                        video::sanitize_layer_state(layer.authored_state.clone());
+                    layer.state.solo = layer.authored_state.solo;
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
@@ -18266,8 +19150,9 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|layer| layer.id == layer_id)
                 {
-                    layer.state.playing = playing;
-                    layer.state = video::sanitize_layer_state(layer.state.clone());
+                    let mut authored = layer.authored_state.clone();
+                    authored.playing = playing;
+                    apply_legacy_authored_video_state(layer, authored);
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
@@ -18284,14 +19169,15 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|layer| layer.id == layer_id)
                 {
-                    layer.state.loop_enabled = enabled;
+                    let mut authored = layer.authored_state.clone();
+                    authored.loop_enabled = enabled;
                     if let Some(loop_start_ms) = loop_start_ms {
-                        layer.state.loop_start_ms = loop_start_ms;
+                        authored.loop_start_ms = loop_start_ms;
                     }
                     if let Some(loop_end_ms) = loop_end_ms {
-                        layer.state.loop_end_ms = loop_end_ms;
+                        authored.loop_end_ms = loop_end_ms;
                     }
-                    layer.state = video::sanitize_layer_state(layer.state.clone());
+                    apply_legacy_authored_video_state(layer, authored);
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
@@ -18306,9 +19192,10 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|layer| layer.id == layer_id)
                 {
-                    let position_ms = position_ms.unwrap_or(layer.state.position_ms);
-                    layer.state.cue_points_ms.push(position_ms);
-                    layer.state = video::sanitize_layer_state(layer.state.clone());
+                    let mut authored = layer.authored_state.clone();
+                    let position_ms = position_ms.unwrap_or(authored.position_ms);
+                    authored.cue_points_ms.push(position_ms);
+                    apply_legacy_authored_video_state(layer, authored);
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
@@ -18323,15 +19210,14 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|layer| layer.id == layer_id)
                 {
-                    layer
-                        .state
+                    let mut authored = layer.authored_state.clone();
+                    authored
                         .cue_points_ms
                         .retain(|candidate| *candidate != position_ms);
-                    layer
-                        .state
+                    authored
                         .cue_points
                         .retain(|candidate| candidate.position_ms != position_ms);
-                    layer.state = video::sanitize_layer_state(layer.state.clone());
+                    apply_legacy_authored_video_state(layer, authored);
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Video layer {layer_id} was not found"));
@@ -18349,24 +19235,23 @@ impl EngineRuntime {
                     .iter_mut()
                     .find(|layer| layer.id == layer_id)
                 {
-                    layer.state = video::sanitize_layer_state(layer.state.clone());
-                    if cue_point_index >= layer.state.cue_points.len() {
+                    let mut authored = video::sanitize_layer_state(layer.authored_state.clone());
+                    if cue_point_index >= authored.cue_points.len() {
                         self.last_error = Some(format!(
                             "Video cue point {cue_point_index} was not found on layer {layer_id}"
                         ));
                     } else {
-                        layer.state.cue_points[cue_point_index] = VideoCuePointSummary {
+                        authored.cue_points[cue_point_index] = VideoCuePointSummary {
                             position_ms,
                             label,
                             color,
                         };
-                        layer.state.cue_points_ms = layer
-                            .state
+                        authored.cue_points_ms = authored
                             .cue_points
                             .iter()
                             .map(|cue_point| cue_point.position_ms)
                             .collect();
-                        layer.state = video::sanitize_layer_state(layer.state.clone());
+                        apply_legacy_authored_video_state(layer, authored);
                         self.last_error = None;
                     }
                 } else {
@@ -18502,13 +19387,24 @@ impl EngineRuntime {
                 let result = (|| -> Result<(), String> {
                     let mut next_asset_id = self.next_runtime_legacy_media_asset_id()?;
                     let mut allocated_layers = Vec::with_capacity(layers.len());
+                    let mut next_slot_id = self.next_runtime_legacy_video_clip_slot_id()?;
                     for (layer_id, label, source) in layers {
                         let asset_id = next_asset_id;
                         next_asset_id = asset_id
                             .checked_add(1)
                             .filter(|id| *id != 0)
                             .ok_or_else(|| "Media asset ID allocation overflow".to_string())?;
-                        allocated_layers.push((layer_id, asset_id, label, source));
+                        let clip_slot_id = next_slot_id;
+                        next_slot_id = VideoClipSlotId(
+                            clip_slot_id
+                                .0
+                                .checked_add(1)
+                                .filter(|id| *id != 0)
+                                .ok_or_else(|| {
+                                    "Video clip slot ID allocation overflow".to_string()
+                                })?,
+                        );
+                        allocated_layers.push((layer_id, asset_id, clip_slot_id, label, source));
                     }
                     self.bootstrap_vj_show_with_assets(allocated_layers, output, expires_at)
                 })();
@@ -18785,6 +19681,8 @@ impl EngineRuntime {
                         | PendingCommandRollback::RestoreFixturePatchBatch { .. }
                         | PendingCommandRollback::RestoreStageMapPresets { .. }
                         | PendingCommandRollback::RestoreMediaAssetTransaction { .. }
+                        | PendingCommandRollback::RestoreVideoLayersAndCompositions { .. }
+                        | PendingCommandRollback::RestoreVideoClipSlots { .. }
                 )
         });
         #[cfg(test)]
@@ -18986,6 +19884,13 @@ impl EngineRuntime {
                 self.video_layer_fades = video_layer_fades;
                 self.video_outputs = video_outputs;
                 self.video_output_fades = video_output_fades;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreVideoClipSlots {
+                video_layers,
+                last_error,
+            } => {
+                self.video_layers = video_layers;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreVideoLayerIsfEffect {
@@ -26744,7 +27649,63 @@ impl EngineRuntime {
 
     fn advance_video_layers(&mut self, delta: Duration) {
         let clock = self.clock.snapshot(self.last_tick);
+        let clock_stable = self.clip_clock_tracker.observe(&clock);
+        if !clock_stable {
+            for layer in &mut self.video_layers {
+                if let Some(pending) = &mut layer.pending_clip_launch {
+                    match &mut pending.boundary {
+                        RuntimeClipLaunchBoundary::GlobalBeat {
+                            held_for_clock_discontinuity,
+                            ..
+                        } => *held_for_clock_discontinuity = true,
+                    }
+                }
+            }
+        } else {
+            let mut failed_pending_launch = None;
+            for layer in &mut self.video_layers {
+                let Some(pending) = layer.pending_clip_launch else {
+                    continue;
+                };
+                let RuntimeClipLaunchBoundary::GlobalBeat {
+                    target_boundary_ordinal,
+                    clock_generation,
+                    ..
+                } = pending.boundary;
+                // A target from a previous clock generation stays held until
+                // an explicit requeue. This is the fail-closed side of the
+                // discontinuity contract: never retime to a different beat.
+                if clock_generation != self.clip_clock_tracker.generation {
+                    continue;
+                }
+                if clock.beat_counter >= target_boundary_ordinal && clock.beat_phase <= 0.1 {
+                    // A queued target is immutable; a discontinuity can only
+                    // hold it. It never recalculates this ordinal from the
+                    // current phase or beat modulo.
+                    if let Err(error) =
+                        activate_runtime_video_clip_slot(layer, pending.slot_id, &self.media_assets)
+                    {
+                        // An asset edit after admission can invalidate a
+                        // formerly launchable pending slot. Keep the current
+                        // program, but never leave an impossible action
+                        // queued indefinitely for a later boundary.
+                        layer.queued_clip_slot_id = None;
+                        layer.pending_clip_launch = None;
+                        failed_pending_launch = Some(error);
+                    }
+                }
+            }
+            if let Some(error) = failed_pending_launch {
+                self.last_error = Some(error);
+            }
+        }
         for index in 0..self.video_layers.len() {
+            if self.video_layers[index].active_clip_slot_id.is_some()
+                && self.video_layers[index].runtime_transport_dirty
+            {
+                advance_runtime_video_clip_slot(&mut self.video_layers[index], delta);
+                continue;
+            }
             let (mut effective_state, source_duration_ms) = {
                 let layer = &self.video_layers[index];
                 let mut effective_state = layer.state.clone();
@@ -26772,6 +27733,23 @@ impl EngineRuntime {
             let layer = &mut self.video_layers[index];
             layer.state.position_ms = effective_state.position_ms;
             layer.state.playing = effective_state.playing;
+            if layer.active_clip_slot_id.is_some() {
+                let speed = layer
+                    .active_clip_slot_id
+                    .and_then(|slot_id| {
+                        layer
+                            .clip_slots
+                            .iter()
+                            .find(|slot| slot.id == slot_id)
+                            .map(|slot| slot.speed)
+                    })
+                    .unwrap_or(layer.state.speed);
+                layer.clip_direction = if layer.state.playing && speed != 0.0 {
+                    RuntimeClipDirection::from_speed(speed)
+                } else {
+                    RuntimeClipDirection::Stopped
+                };
+            }
         }
     }
 
@@ -28695,6 +29673,67 @@ impl EngineRuntime {
         }
     }
 
+    fn video_clip_runtime_snapshot(&self) -> VideoClipRuntimeSnapshot {
+        let runtime = VideoClipRuntimeSnapshot {
+            layers: self
+                .video_layers
+                .iter()
+                .map(|layer| VideoClipLayerRuntimeSummary {
+                    layer_id: layer.id,
+                    active_slot_id: layer.active_clip_slot_id,
+                    queued_slot_id: layer.queued_clip_slot_id,
+                    pending_launch: layer.pending_clip_launch.map(|pending| {
+                        let RuntimeClipLaunchBoundary::GlobalBeat {
+                            target_boundary_ordinal,
+                            quantization,
+                            clock_generation,
+                            held_for_clock_discontinuity,
+                        } = pending.boundary;
+                        VideoClipPendingLaunchSummary {
+                            slot_id: pending.slot_id,
+                            quantization,
+                            target_boundary_ordinal,
+                            clock_generation,
+                            held_for_clock_discontinuity,
+                        }
+                    }),
+                    // Protocol deliberately requires idle layers to publish
+                    // zero transport truth; this keeps absent active state
+                    // unambiguous and persistence-free.
+                    playhead_ms: layer
+                        .active_clip_slot_id
+                        .map(|_| layer.state.position_ms)
+                        .unwrap_or(0),
+                    playing: layer.active_clip_slot_id.is_some() && layer.state.playing,
+                    ping_pong_reverse: layer.active_clip_slot_id.is_some()
+                        && layer.clip_direction == RuntimeClipDirection::Reverse
+                        && layer
+                            .active_clip_slot_id
+                            .and_then(|slot_id| {
+                                layer.clip_slots.iter().find(|slot| slot.id == slot_id)
+                            })
+                            .is_some_and(|slot| slot.loop_mode == VideoClipLoopMode::PingPong),
+                })
+                .collect(),
+        };
+        let authored = VideoSnapshot {
+            layers: self
+                .video_layers
+                .iter()
+                .map(|layer| authored_video_layer_summary(layer, &self.media_assets))
+                .collect(),
+            media_assets: self.media_assets.clone(),
+            ..VideoSnapshot::default()
+        };
+        // Runtime state must be independently valid before we let an
+        // operator/bridge observe it. This is a programmer error, not a
+        // recoverable project validation failure: all mutation paths validate
+        // their candidate before committing B.
+        validate_video_clip_runtime_against_authored_slots(&runtime, &authored)
+            .expect("engine video clip runtime state must match authored slot banks");
+        runtime
+    }
+
     #[cfg(test)]
     fn seed_media_asset_bootstrap_fade_sentinels_for_tests(&mut self) {
         let started_at = Instant::now();
@@ -28754,7 +29793,11 @@ impl EngineRuntime {
 
     fn authored_video_snapshot_from_rendered(&self, rendered: &VideoSnapshot) -> VideoSnapshot {
         VideoSnapshot {
-            layers: self.video_layers.iter().map(video_layer_summary).collect(),
+            layers: self
+                .video_layers
+                .iter()
+                .map(|layer| authored_video_layer_summary(layer, &self.media_assets))
+                .collect(),
             media_assets: self.media_assets.clone(),
             compositions: rendered.compositions.clone(),
             outputs: rendered.outputs.clone(),
@@ -28784,10 +29827,23 @@ impl EngineRuntime {
             .ok_or_else(|| "Media asset ID allocation overflow".to_string())
     }
 
+    fn next_runtime_legacy_video_clip_slot_id(&self) -> Result<VideoClipSlotId, String> {
+        self.video_layers
+            .iter()
+            .flat_map(|layer| layer.clip_slots.iter().map(|slot| slot.id.0))
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .filter(|id| *id != 0)
+            .map(VideoClipSlotId)
+            .ok_or_else(|| "Video clip slot ID allocation overflow".to_string())
+    }
+
     fn add_video_layer_with_asset(
         &mut self,
         layer_id: VideoLayerId,
         asset_id: MediaAssetId,
+        clip_slot_id: VideoClipSlotId,
         label: String,
         source: VideoSourceSummary,
     ) -> Result<(), String> {
@@ -28797,6 +29853,18 @@ impl EngineRuntime {
         if asset_id == 0 || self.media_assets.iter().any(|asset| asset.id == asset_id) {
             return Err(format!(
                 "Media asset {asset_id} already exists or is invalid"
+            ));
+        }
+        if clip_slot_id.0 == 0
+            || self
+                .video_layers
+                .iter()
+                .flat_map(|layer| layer.clip_slots.iter())
+                .any(|slot| slot.id == clip_slot_id)
+        {
+            return Err(format!(
+                "Video clip slot {} already exists or is invalid",
+                clip_slot_id.0
             ));
         }
         let label = sanitize_video_layer_label(label, layer_id);
@@ -28810,21 +29878,47 @@ impl EngineRuntime {
             content_hash: None,
             byte_size: None,
         });
-        self.video_layers.push(RuntimeVideoLayer {
+        let mut layer = RuntimeVideoLayer {
             id: layer_id,
             label,
             source,
             media_asset_id: asset_id,
             blend_mode: VideoBlendMode::Normal,
+            authored_state: VideoLayerState::default(),
             state: VideoLayerState::default(),
             isf_effect: None,
-        });
+            clip_slots: vec![VideoClipSlotSummary {
+                id: clip_slot_id,
+                media_asset_id: asset_id,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: VideoClipLoopMode::Once,
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: VideoClipLaunchQuantization::Immediate,
+                effect_overrides: Vec::new(),
+            }],
+            default_clip_slot_id: Some(clip_slot_id),
+            active_clip_slot_id: None,
+            queued_clip_slot_id: None,
+            pending_clip_launch: None,
+            clip_direction: RuntimeClipDirection::Stopped,
+            runtime_transport_dirty: false,
+        };
+        initialize_runtime_default_clip_slot(&mut layer);
+        self.video_layers.push(layer);
         Ok(())
     }
 
     fn bootstrap_vj_show_with_assets(
         &mut self,
-        layers: Vec<(VideoLayerId, MediaAssetId, String, VideoSourceSummary)>,
+        layers: Vec<(
+            VideoLayerId,
+            MediaAssetId,
+            VideoClipSlotId,
+            String,
+            VideoSourceSummary,
+        )>,
         output: VideoOutputSummary,
         expires_at: Instant,
     ) -> Result<(), String> {
@@ -28841,7 +29935,7 @@ impl EngineRuntime {
         if layers.is_empty() {
             return Err("First-run VJ setup requires at least one media layer".to_string());
         }
-        if layers.iter().any(|(_, _, _, source)| {
+        if layers.iter().any(|(_, _, _, _, source)| {
             source.kind != protocol::VideoSourceKind::File || source.path.is_none()
         }) {
             return Err("First-run VJ setup only accepts local File layers".to_string());
@@ -28860,19 +29954,25 @@ impl EngineRuntime {
         }
         let mut layer_ids = HashSet::new();
         let mut asset_ids = HashSet::new();
-        if layers.iter().any(|(layer_id, asset_id, _, _)| {
-            *layer_id == 0
-                || *asset_id == 0
-                || !layer_ids.insert(*layer_id)
-                || !asset_ids.insert(*asset_id)
-        }) {
+        let mut clip_slot_ids = HashSet::new();
+        if layers
+            .iter()
+            .any(|(layer_id, asset_id, clip_slot_id, _, _)| {
+                *layer_id == 0
+                    || *asset_id == 0
+                    || clip_slot_id.0 == 0
+                    || !layer_ids.insert(*layer_id)
+                    || !asset_ids.insert(*asset_id)
+                    || !clip_slot_ids.insert(*clip_slot_id)
+            })
+        {
             return Err(
                 "First-run VJ layers and media assets must have unique non-zero IDs".to_string(),
             );
         }
         let next_assets = layers
             .iter()
-            .map(|(_, asset_id, label, source)| MediaAssetSummary {
+            .map(|(_, asset_id, _, label, source)| MediaAssetSummary {
                 id: *asset_id,
                 label: label.clone(),
                 source: source.clone(),
@@ -28882,14 +29982,36 @@ impl EngineRuntime {
             .collect::<Vec<_>>();
         let next_layers = layers
             .into_iter()
-            .map(|(layer_id, asset_id, label, source)| RuntimeVideoLayer {
-                id: layer_id,
-                label: sanitize_video_layer_label(label, layer_id),
-                source,
-                media_asset_id: asset_id,
-                blend_mode: VideoBlendMode::Normal,
-                state: VideoLayerState::default(),
-                isf_effect: None,
+            .map(|(layer_id, asset_id, clip_slot_id, label, source)| {
+                let mut layer = RuntimeVideoLayer {
+                    id: layer_id,
+                    label: sanitize_video_layer_label(label, layer_id),
+                    source,
+                    media_asset_id: asset_id,
+                    blend_mode: VideoBlendMode::Normal,
+                    authored_state: VideoLayerState::default(),
+                    state: VideoLayerState::default(),
+                    isf_effect: None,
+                    clip_slots: vec![VideoClipSlotSummary {
+                        id: clip_slot_id,
+                        media_asset_id: asset_id,
+                        in_point_ms: 0,
+                        out_point_ms: None,
+                        loop_mode: VideoClipLoopMode::Once,
+                        speed: 1.0,
+                        cue_points: Vec::new(),
+                        launch_quantization: VideoClipLaunchQuantization::Immediate,
+                        effect_overrides: Vec::new(),
+                    }],
+                    default_clip_slot_id: Some(clip_slot_id),
+                    active_clip_slot_id: None,
+                    queued_clip_slot_id: None,
+                    pending_clip_launch: None,
+                    clip_direction: RuntimeClipDirection::Stopped,
+                    runtime_transport_dirty: false,
+                };
+                initialize_runtime_default_clip_slot(&mut layer);
+                layer
             })
             .collect::<Vec<_>>();
         let output = sanitize_video_output(output);
@@ -28944,7 +30066,7 @@ impl EngineRuntime {
                 next_assets.extend(candidate.assets);
                 let mut candidate_layer_summaries = next_layers
                     .iter()
-                    .map(video_layer_summary)
+                    .map(|layer| authored_video_layer_summary(layer, &next_assets))
                     .collect::<Vec<_>>();
                 candidate_layer_summaries.extend(candidate.layers);
                 let candidate_video = VideoSnapshot {
@@ -28952,7 +30074,8 @@ impl EngineRuntime {
                     media_assets: next_assets.clone(),
                     ..VideoSnapshot::default()
                 };
-                validate_engine_ready_video_media_assets(&candidate_video)?;
+                validate_engine_ready_video_clip_slots(&candidate_video)?;
+                validate_video_clip_slot_bank_limits(&candidate_video)?;
                 next_layers.extend(
                     candidate_layer_summaries
                         .iter()
@@ -29012,7 +30135,8 @@ impl EngineRuntime {
                     media_assets: candidate.assets.clone(),
                     ..VideoSnapshot::default()
                 };
-                validate_engine_ready_video_media_assets(&candidate_video)?;
+                validate_engine_ready_video_clip_slots(&candidate_video)?;
+                validate_video_clip_slot_bank_limits(&candidate_video)?;
                 let next_layers = candidate_video
                     .layers
                     .iter()
@@ -29034,17 +30158,33 @@ impl EngineRuntime {
                     return Err(format!("Media asset {} was not found", asset.id));
                 };
                 next_assets[asset_index] = asset.clone();
+                // Default projections are derived from `clip_slots` and the
+                // catalog when authored/persisted. The rendered projection is
+                // updated only if this asset is actually active; changing a
+                // default must never steal the live program source.
                 for layer in &mut next_layers {
-                    if layer.media_asset_id == asset.id {
+                    if layer.active_clip_slot_id.is_some_and(|active| {
+                        layer
+                            .clip_slots
+                            .iter()
+                            .find(|slot| slot.id == active)
+                            .is_some_and(|slot| slot.media_asset_id == asset.id)
+                    }) {
+                        layer.media_asset_id = asset.id;
                         layer.source = asset.source.clone();
                     }
                 }
                 let candidate_video = VideoSnapshot {
-                    layers: next_layers.iter().map(video_layer_summary).collect(),
+                    layers: next_layers
+                        .iter()
+                        .map(|layer| authored_video_layer_summary(layer, &next_assets))
+                        .collect(),
                     media_assets: next_assets.clone(),
                     ..VideoSnapshot::default()
                 };
-                validate_engine_ready_video_media_assets(&candidate_video)?;
+                validate_engine_ready_video_clip_slots(&candidate_video)?;
+                validate_video_clip_slot_bank_limits(&candidate_video)?;
+                validate_active_video_clip_slot_launchability(&next_layers, &next_assets)?;
             }
         }
 
@@ -29053,11 +30193,357 @@ impl EngineRuntime {
         Ok(())
     }
 
+    fn import_and_assign_video_clip_slots(
+        &mut self,
+        candidate: VideoClipSlotImportAndAssignCandidate,
+    ) -> Result<(), String> {
+        let mut next_assets = self.media_assets.clone();
+        let mut next_layers = self.video_layers.clone();
+        let mut asset_ids = next_assets
+            .iter()
+            .map(|asset| asset.id)
+            .collect::<HashSet<_>>();
+        for asset in candidate.assets {
+            if asset.id == 0 || !asset_ids.insert(asset.id) {
+                return Err(format!("Media asset {} already exists", asset.id));
+            }
+            next_assets.push(asset);
+        }
+        for assignment in candidate.assignments {
+            create_video_clip_slot_in_layers(
+                &mut next_layers,
+                assignment.layer_id,
+                assignment.slot,
+                assignment.before_slot_id,
+                assignment.make_default,
+            )?;
+        }
+        for layer in &mut next_layers {
+            sync_authored_default_projection(layer, &next_assets)?;
+        }
+        validate_runtime_video_clip_slot_candidate(&next_layers, &next_assets)?;
+        self.media_assets = next_assets;
+        self.video_layers = next_layers;
+        Ok(())
+    }
+
+    fn create_video_clip_slot(
+        &mut self,
+        layer_id: VideoLayerId,
+        slot: VideoClipSlotSummary,
+        before_slot_id: Option<VideoClipSlotId>,
+        make_default: bool,
+    ) -> Result<(), String> {
+        let mut next_layers = self.video_layers.clone();
+        create_video_clip_slot_in_layers(
+            &mut next_layers,
+            layer_id,
+            slot,
+            before_slot_id,
+            make_default,
+        )?;
+        let layer = runtime_video_layer_mut(&mut next_layers, layer_id)?;
+        sync_authored_default_projection(layer, &self.media_assets)?;
+        validate_runtime_video_clip_slot_candidate(&next_layers, &self.media_assets)?;
+        self.video_layers = next_layers;
+        Ok(())
+    }
+
+    fn assign_video_clip_slot_asset(
+        &mut self,
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+        media_asset_id: MediaAssetId,
+    ) -> Result<(), String> {
+        let mut next_layers = self.video_layers.clone();
+        let layer = runtime_video_layer_mut(&mut next_layers, layer_id)?;
+        reject_active_video_clip_slot_authored_mutation(layer, slot_id)?;
+        let slot = runtime_clip_slot_mut(layer, slot_id)?;
+        slot.media_asset_id = media_asset_id;
+        sync_authored_default_projection(layer, &self.media_assets)?;
+        validate_runtime_video_clip_slot_candidate(&next_layers, &self.media_assets)?;
+        self.video_layers = next_layers;
+        Ok(())
+    }
+
+    fn update_video_clip_slot(
+        &mut self,
+        layer_id: VideoLayerId,
+        slot: VideoClipSlotSummary,
+    ) -> Result<(), String> {
+        let mut next_layers = self.video_layers.clone();
+        let layer = runtime_video_layer_mut(&mut next_layers, layer_id)?;
+        reject_active_video_clip_slot_authored_mutation(layer, slot.id)?;
+        let previous = runtime_clip_slot_mut(layer, slot.id)?;
+        *previous = slot;
+        sync_authored_default_projection(layer, &self.media_assets)?;
+        validate_runtime_video_clip_slot_candidate(&next_layers, &self.media_assets)?;
+        self.video_layers = next_layers;
+        Ok(())
+    }
+
+    fn remove_video_clip_slot(
+        &mut self,
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+    ) -> Result<(), String> {
+        let mut next_layers = self.video_layers.clone();
+        let layer = runtime_video_layer_mut(&mut next_layers, layer_id)?;
+        if layer.clip_slots.len() <= 1 {
+            return Err(format!(
+                "Video layer {layer_id} cannot remove its last clip slot"
+            ));
+        }
+        if layer.active_clip_slot_id == Some(slot_id)
+            || layer.queued_clip_slot_id == Some(slot_id)
+            || layer
+                .pending_clip_launch
+                .is_some_and(|pending| pending.slot_id == slot_id)
+        {
+            return Err(format!(
+                "Video clip slot {} on layer {} is active, queued, or pending",
+                slot_id.0, layer_id
+            ));
+        }
+        let index = layer
+            .clip_slots
+            .iter()
+            .position(|slot| slot.id == slot_id)
+            .ok_or_else(|| {
+                format!(
+                    "Video clip slot {} was not found on layer {}",
+                    slot_id.0, layer_id
+                )
+            })?;
+        layer.clip_slots.remove(index);
+        if layer.default_clip_slot_id == Some(slot_id) {
+            // The next slot in author order wins; at the old tail choose the
+            // immediate predecessor. This is deterministic and never leaves a
+            // layer without a default projection.
+            let successor = layer
+                .clip_slots
+                .get(index)
+                .or_else(|| layer.clip_slots.get(index.saturating_sub(1)))
+                .expect("removing from a bank larger than one leaves a slot")
+                .id;
+            layer.default_clip_slot_id = Some(successor);
+        }
+        sync_authored_default_projection(layer, &self.media_assets)?;
+        validate_runtime_video_clip_slot_candidate(&next_layers, &self.media_assets)?;
+        self.video_layers = next_layers;
+        Ok(())
+    }
+
+    fn reorder_video_clip_slots(
+        &mut self,
+        layer_id: VideoLayerId,
+        slot_ids: Vec<VideoClipSlotId>,
+    ) -> Result<(), String> {
+        let mut next_layers = self.video_layers.clone();
+        let layer = runtime_video_layer_mut(&mut next_layers, layer_id)?;
+        if slot_ids.len() != layer.clip_slots.len()
+            || slot_ids.iter().collect::<HashSet<_>>().len() != slot_ids.len()
+        {
+            return Err(format!(
+                "Video layer {layer_id} clip slot order is not a full unique bank"
+            ));
+        }
+        let previous = std::mem::take(&mut layer.clip_slots);
+        let mut remaining = previous
+            .into_iter()
+            .map(|slot| (slot.id, slot))
+            .collect::<HashMap<_, _>>();
+        let mut ordered = Vec::with_capacity(slot_ids.len());
+        for slot_id in slot_ids {
+            ordered.push(remaining.remove(&slot_id).ok_or_else(|| {
+                format!(
+                    "Video clip slot {} was not found on layer {}",
+                    slot_id.0, layer_id
+                )
+            })?);
+        }
+        layer.clip_slots = ordered;
+        validate_runtime_video_clip_slot_candidate(&next_layers, &self.media_assets)?;
+        self.video_layers = next_layers;
+        Ok(())
+    }
+
+    fn duplicate_video_clip_slot(
+        &mut self,
+        layer_id: VideoLayerId,
+        source_slot_id: VideoClipSlotId,
+        new_slot_id: VideoClipSlotId,
+        before_slot_id: Option<VideoClipSlotId>,
+    ) -> Result<(), String> {
+        let source = self
+            .video_layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .and_then(|layer| {
+                layer
+                    .clip_slots
+                    .iter()
+                    .find(|slot| slot.id == source_slot_id)
+            })
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Video clip slot {} was not found on layer {}",
+                    source_slot_id.0, layer_id
+                )
+            })?;
+        if new_slot_id.0 == 0 {
+            return Err("Video clip slot IDs must be non-zero".to_string());
+        }
+        let mut duplicate = source;
+        duplicate.id = new_slot_id;
+        self.create_video_clip_slot(layer_id, duplicate, before_slot_id, false)
+    }
+
+    fn set_default_video_clip_slot(
+        &mut self,
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+    ) -> Result<(), String> {
+        let mut next_layers = self.video_layers.clone();
+        let layer = runtime_video_layer_mut(&mut next_layers, layer_id)?;
+        if !layer.clip_slots.iter().any(|slot| slot.id == slot_id) {
+            return Err(format!(
+                "Video clip slot {} was not found on layer {}",
+                slot_id.0, layer_id
+            ));
+        }
+        layer.default_clip_slot_id = Some(slot_id);
+        sync_authored_default_projection(layer, &self.media_assets)?;
+        validate_runtime_video_clip_slot_candidate(&next_layers, &self.media_assets)?;
+        self.video_layers = next_layers;
+        Ok(())
+    }
+
+    fn queue_video_clip_slot(
+        &mut self,
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+    ) -> Result<(), String> {
+        let layer = runtime_video_layer_mut(&mut self.video_layers, layer_id)?;
+        if !layer.clip_slots.iter().any(|slot| slot.id == slot_id) {
+            return Err(format!(
+                "Video clip slot {} was not found on layer {}",
+                slot_id.0, layer_id
+            ));
+        }
+        layer.queued_clip_slot_id = Some(slot_id);
+        layer.pending_clip_launch = None;
+        Ok(())
+    }
+
+    fn cancel_queued_video_clip_slot(&mut self, layer_id: VideoLayerId) -> Result<(), String> {
+        let layer = runtime_video_layer_mut(&mut self.video_layers, layer_id)?;
+        layer.queued_clip_slot_id = None;
+        layer.pending_clip_launch = None;
+        Ok(())
+    }
+
+    fn launch_video_clip_slot(
+        &mut self,
+        layer_id: VideoLayerId,
+        requested_slot_id: Option<VideoClipSlotId>,
+    ) -> Result<(), String> {
+        let clock = self.clock.snapshot(self.last_tick);
+        let (slot_id, launch_quantization) = {
+            let layer = self
+                .video_layers
+                .iter()
+                .find(|layer| layer.id == layer_id)
+                .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+            let slot_id = match (requested_slot_id, layer.queued_clip_slot_id) {
+                (Some(requested), Some(queued)) if requested != queued => {
+                    return Err(format!(
+                        "Video layer {layer_id} has queued slot {} but launch requested slot {}; cancel or launch the queued slot first",
+                        queued.0, requested.0
+                    ));
+                }
+                (Some(requested), _) => requested,
+                (None, Some(queued)) => queued,
+                (None, None) => {
+                    return Err(format!(
+                        "Video layer {layer_id} has no queued clip slot to launch"
+                    ));
+                }
+            };
+            let slot = layer
+                .clip_slots
+                .iter()
+                .find(|slot| slot.id == slot_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Video clip slot {} was not found on layer {}",
+                        slot_id.0, layer_id
+                    )
+                })?;
+            validate_video_clip_slot_launch(slot, &self.media_assets)?;
+            (slot_id, slot.launch_quantization)
+        };
+        let boundary = match launch_quantization {
+            VideoClipLaunchQuantization::Immediate => None,
+            VideoClipLaunchQuantization::NextBeat => Some(RuntimeClipLaunchBoundary::GlobalBeat {
+                target_boundary_ordinal: clock.beat_counter.saturating_add(1),
+                quantization: VideoClipLaunchQuantization::NextBeat,
+                clock_generation: self.clip_clock_tracker.generation,
+                held_for_clock_discontinuity: false,
+            }),
+            VideoClipLaunchQuantization::NextBar => Some(RuntimeClipLaunchBoundary::GlobalBeat {
+                target_boundary_ordinal: clock
+                    .beat_counter
+                    .saturating_div(4)
+                    .saturating_add(1)
+                    .saturating_mul(4),
+                quantization: VideoClipLaunchQuantization::NextBar,
+                clock_generation: self.clip_clock_tracker.generation,
+                held_for_clock_discontinuity: false,
+            }),
+        };
+        let layer = runtime_video_layer_mut(&mut self.video_layers, layer_id)?;
+        layer.queued_clip_slot_id = Some(slot_id);
+        layer.pending_clip_launch =
+            boundary.map(|boundary| RuntimePendingClipLaunch { slot_id, boundary });
+        if boundary.is_none() {
+            activate_runtime_video_clip_slot(layer, slot_id, &self.media_assets)?;
+        }
+        Ok(())
+    }
+
+    fn seek_video_clip_slot(
+        &mut self,
+        layer_id: VideoLayerId,
+        position_ms: u64,
+    ) -> Result<(), String> {
+        let layer = runtime_video_layer_mut(&mut self.video_layers, layer_id)?;
+        let slot_id = layer
+            .active_clip_slot_id
+            .ok_or_else(|| format!("Video layer {layer_id} has no active clip slot"))?;
+        let slot = layer
+            .clip_slots
+            .iter()
+            .find(|slot| slot.id == slot_id)
+            .ok_or_else(|| {
+                format!(
+                    "Video clip slot {} was not found on layer {}",
+                    slot_id.0, layer_id
+                )
+            })?;
+        layer.state.position_ms = clamp_clip_position(slot, &layer.source, position_ms);
+        layer.runtime_transport_dirty = true;
+        Ok(())
+    }
+
     fn duplicate_video_layer(
         &mut self,
         source_layer_id: VideoLayerId,
         new_layer_id: VideoLayerId,
         label: String,
+        expected_source_slot_ids: &[VideoClipSlotId],
+        new_clip_slot_ids: &[VideoClipSlotId],
     ) -> Result<(), String> {
         if source_layer_id == new_layer_id
             || self
@@ -29073,6 +30559,25 @@ impl EngineRuntime {
             .iter()
             .position(|layer| layer.id == source_layer_id)
             .ok_or_else(|| format!("Video layer {source_layer_id} was not found"))?;
+        let actual_source_slot_ids = self.video_layers[source_index]
+            .clip_slots
+            .iter()
+            .map(|slot| slot.id)
+            .collect::<Vec<_>>();
+        if actual_source_slot_ids != expected_source_slot_ids
+            || expected_source_slot_ids.len() != new_clip_slot_ids.len()
+            || new_clip_slot_ids.iter().any(|id| id.0 == 0)
+            || new_clip_slot_ids.iter().collect::<HashSet<_>>().len() != new_clip_slot_ids.len()
+            || self
+                .video_layers
+                .iter()
+                .flat_map(|layer| layer.clip_slots.iter())
+                .any(|slot| new_clip_slot_ids.contains(&slot.id))
+        {
+            return Err(format!(
+                "Video layer {source_layer_id} clip bank changed before duplicate admission"
+            ));
+        }
         let added_source_bytes = self.video_layers[source_index]
             .isf_effect
             .as_ref()
@@ -29087,6 +30592,24 @@ impl EngineRuntime {
         let mut duplicate = self.video_layers[source_index].clone();
         duplicate.id = new_layer_id;
         duplicate.label = sanitize_video_layer_label(label, new_layer_id);
+        for (slot, new_slot_id) in duplicate.clip_slots.iter_mut().zip(new_clip_slot_ids) {
+            slot.id = *new_slot_id;
+        }
+        duplicate.default_clip_slot_id =
+            duplicate.default_clip_slot_id.and_then(|source_slot_id| {
+                expected_source_slot_ids
+                    .iter()
+                    .position(|id| *id == source_slot_id)
+                    .and_then(|index| new_clip_slot_ids.get(index).copied())
+            });
+        duplicate.active_clip_slot_id = None;
+        duplicate.queued_clip_slot_id = None;
+        duplicate.pending_clip_launch = None;
+        duplicate.clip_direction = RuntimeClipDirection::Stopped;
+        duplicate.runtime_transport_dirty = false;
+        duplicate.state = duplicate.authored_state.clone();
+        project_default_clip_into_idle_runtime(&mut duplicate, &self.media_assets)?;
+        initialize_runtime_default_clip_slot(&mut duplicate);
         if let Some(effect) = &mut duplicate.isf_effect {
             clear_transient_video_isf_event_controls(effect);
         }
@@ -29275,6 +30798,7 @@ impl EngineRuntime {
         now: Instant,
     ) -> VideoLayerSummary {
         let mut summary = video_layer_summary(layer);
+        apply_active_video_clip_slot_effect_overrides(layer, &mut summary);
         self.apply_video_effects(layer, &mut summary.state, now);
         summary
     }
@@ -29558,6 +31082,7 @@ impl EngineRuntime {
             timeline: self.timeline_snapshot(),
             video: self.video_snapshot(),
             authored_video: None,
+            video_clip_runtime: self.video_clip_runtime_snapshot(),
             effects: self.effects.iter().map(effect_summary).collect(),
             node_graphs: self
                 .node_graphs
@@ -29650,6 +31175,10 @@ impl EngineRuntime {
 
     fn build_persistence_snapshot(&self) -> EngineSnapshot {
         let mut snapshot = self.build_snapshot(0);
+        // Runtime clip selection/queue/playhead is intentionally skipped by
+        // serde, and is also cleared for callers which inspect this in-memory
+        // snapshot before serializing it.
+        snapshot.video_clip_runtime = VideoClipRuntimeSnapshot::default();
         snapshot.direct_child_timeline_transports.clear();
         // T17: latched live overrides are runtime-only and never reach `.sdc`.
         snapshot.cue_live_modifiers.clear();
@@ -31020,6 +32549,585 @@ fn video_layer_summary(layer: &RuntimeVideoLayer) -> VideoLayerSummary {
         blend_mode: layer.blend_mode.clone(),
         state: layer.state.clone(),
         isf_effect: layer.isf_effect.clone(),
+        clip_slots: layer.clip_slots.clone(),
+        default_clip_slot_id: layer.default_clip_slot_id,
+    }
+}
+
+/// Persist the authored/default projection even while a different slot is
+/// active at runtime. This is deliberately separate from `video_layer_summary`
+/// because rendered snapshots must retain the live source for the decoder.
+fn authored_video_layer_summary(
+    layer: &RuntimeVideoLayer,
+    assets: &[MediaAssetSummary],
+) -> VideoLayerSummary {
+    let mut summary = video_layer_summary(layer);
+    // This is the only source of persisted layer state. Render state may be
+    // a taken/queued clip's decoder transport, including when the active slot
+    // happens to be the default one, so it must never leak into authoring.
+    summary.state = layer.authored_state.clone();
+    if let Some(default_slot_id) = layer.default_clip_slot_id {
+        if let Some(slot) = layer
+            .clip_slots
+            .iter()
+            .find(|slot| slot.id == default_slot_id)
+        {
+            summary.media_asset_id = Some(slot.media_asset_id);
+            if let Some(asset) = assets.iter().find(|asset| asset.id == slot.media_asset_id) {
+                summary.source = asset.source.clone();
+            }
+        }
+    }
+    summary
+}
+
+fn active_default_without_pending(layer: &RuntimeVideoLayer) -> bool {
+    layer.default_clip_slot_id.is_some()
+        && layer.active_clip_slot_id == layer.default_clip_slot_id
+        && layer.pending_clip_launch.is_none()
+}
+
+/// Authored mutations of the current program slot are intentionally rejected.
+/// Applying only its default projection would leave the rendered layer stale,
+/// while a full live re-projection would unexpectedly alter the operator's
+/// current program. Non-active bank slots remain safely editable.
+fn reject_active_video_clip_slot_authored_mutation(
+    layer: &RuntimeVideoLayer,
+    slot_id: VideoClipSlotId,
+) -> Result<(), String> {
+    if layer.active_clip_slot_id == Some(slot_id) {
+        return Err(format!(
+            "Video clip slot {} on layer {} is active; authored mutation is rejected while it is on program",
+            slot_id.0, layer.id
+        ));
+    }
+    Ok(())
+}
+
+fn copy_authored_visual_state_into_rendered(layer: &mut RuntimeVideoLayer) {
+    layer.state.enabled = layer.authored_state.enabled;
+    layer.state.solo = layer.authored_state.solo;
+    layer.state.opacity = layer.authored_state.opacity;
+    layer.state.transform = layer.authored_state.transform.clone();
+    layer.state.color = layer.authored_state.color.clone();
+    layer.state.fx = layer.authored_state.fx.clone();
+}
+
+/// Compatibility layer commands historically edited `VideoLayerState`
+/// directly. Keep that authoring surface truthful without allowing it to
+/// overwrite a separately active/taken slot's runtime transport.
+fn apply_legacy_authored_video_state(layer: &mut RuntimeVideoLayer, state: VideoLayerState) {
+    layer.authored_state = video::sanitize_layer_state(state);
+    sync_default_slot_from_legacy_state(layer);
+    if active_default_without_pending(layer) || layer.active_clip_slot_id.is_none() {
+        layer.state = layer.authored_state.clone();
+        layer.runtime_transport_dirty = false;
+        // A compatibility edit can narrow the default slot around an
+        // authored playhead. Persist the authored value unchanged, but clamp
+        // the rendered active projection so the runtime DTO never reports an
+        // impossible half-open playhead.
+        initialize_runtime_default_clip_slot(layer);
+    } else {
+        copy_authored_visual_state_into_rendered(layer);
+    }
+}
+
+fn apply_legacy_video_param(layer: &mut RuntimeVideoLayer, param: &VideoParam, value: f32) {
+    let mut authored = layer.authored_state.clone();
+    apply_video_param(&mut authored, param, value);
+    apply_legacy_authored_video_state(layer, authored);
+}
+
+fn sync_default_slot_from_legacy_state(layer: &mut RuntimeVideoLayer) {
+    let Some(default_slot_id) = layer.default_clip_slot_id else {
+        return;
+    };
+    let Some(slot) = layer
+        .clip_slots
+        .iter_mut()
+        .find(|slot| slot.id == default_slot_id)
+    else {
+        return;
+    };
+    slot.speed = layer.authored_state.speed;
+    slot.in_point_ms = layer.authored_state.loop_start_ms;
+    slot.out_point_ms = (layer.authored_state.loop_end_ms > slot.in_point_ms)
+        .then_some(layer.authored_state.loop_end_ms);
+    slot.loop_mode = if layer.authored_state.loop_enabled {
+        VideoClipLoopMode::Loop
+    } else {
+        VideoClipLoopMode::Once
+    };
+    let mut cue_points = layer
+        .authored_state
+        .cue_points
+        .iter()
+        .map(|cue| protocol::VideoClipCuePointSummary {
+            position_ms: cue.position_ms,
+            name: cue.label.clone(),
+        })
+        .collect::<Vec<_>>();
+    for position_ms in &layer.authored_state.cue_points_ms {
+        if !cue_points.iter().any(|cue| cue.position_ms == *position_ms) {
+            cue_points.push(protocol::VideoClipCuePointSummary {
+                position_ms: *position_ms,
+                name: String::new(),
+            });
+        }
+    }
+    cue_points.sort_by_key(|cue| cue.position_ms);
+    let mut seen_positions = HashSet::new();
+    cue_points.retain(|cue| seen_positions.insert(cue.position_ms));
+    let mut seen_names = HashSet::new();
+    for (index, cue) in cue_points.iter_mut().enumerate() {
+        let requested = cue.name.trim().to_string();
+        let mut candidate = if requested.is_empty() {
+            format!("Cue {}", index + 1)
+        } else {
+            requested
+        };
+        let mut disambiguator = 2_u64;
+        while !seen_names.insert(candidate.clone()) {
+            candidate = format!("Cue {}", index + disambiguator as usize);
+            disambiguator = disambiguator.saturating_add(1);
+        }
+        cue.name = candidate;
+    }
+    slot.cue_points = cue_points;
+}
+
+/// Refresh the durable compatibility projection from the currently authored
+/// default slot. The renderer is altered only when it is idle or when the
+/// edited default is itself the active slot; a non-default live Take remains
+/// visually and transport-wise isolated from authored bank edits.
+fn sync_authored_default_projection(
+    layer: &mut RuntimeVideoLayer,
+    assets: &[MediaAssetSummary],
+) -> Result<(), String> {
+    let default_slot_id = layer
+        .default_clip_slot_id
+        .ok_or_else(|| format!("Video layer {} has no default clip slot", layer.id))?;
+    let slot = layer
+        .clip_slots
+        .iter()
+        .find(|slot| slot.id == default_slot_id)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Video layer {} default clip slot {} was not found",
+                layer.id, default_slot_id.0
+            )
+        })?;
+    let asset = assets
+        .iter()
+        .find(|asset| asset.id == slot.media_asset_id)
+        .ok_or_else(|| format!("Media asset {} was not found", slot.media_asset_id))?;
+
+    layer.authored_state.speed = slot.speed;
+    layer.authored_state.loop_enabled = !matches!(slot.loop_mode, VideoClipLoopMode::Once);
+    layer.authored_state.loop_start_ms = slot.in_point_ms;
+    layer.authored_state.loop_end_ms = active_slot_source_end(&slot, &asset.source).unwrap_or(0);
+    layer.authored_state.cue_points = slot
+        .cue_points
+        .iter()
+        .map(|cue| VideoCuePointSummary {
+            position_ms: cue.position_ms,
+            label: cue.name.clone(),
+            color: None,
+        })
+        .collect();
+    layer.authored_state.cue_points_ms =
+        slot.cue_points.iter().map(|cue| cue.position_ms).collect();
+    layer.authored_state = video::sanitize_layer_state(layer.authored_state.clone());
+
+    if layer.active_clip_slot_id.is_none() {
+        layer.media_asset_id = asset.id;
+        layer.source = asset.source.clone();
+        layer.state = layer.authored_state.clone();
+        layer.clip_direction = RuntimeClipDirection::Stopped;
+        layer.runtime_transport_dirty = false;
+    } else if layer.active_clip_slot_id == Some(default_slot_id) {
+        // This is still the rendered active slot, so its catalog assignment
+        // must update. Preserve its current playhead/playing state instead of
+        // treating an authored edit as a hidden take or seek.
+        layer.media_asset_id = asset.id;
+        layer.source = asset.source.clone();
+        layer.state.speed = slot.speed;
+        layer.state.loop_enabled = !matches!(slot.loop_mode, VideoClipLoopMode::Once);
+        layer.state.loop_start_ms = slot.in_point_ms;
+        layer.state.loop_end_ms = active_slot_source_end(&slot, &asset.source).unwrap_or(0);
+        layer.state.cue_points = layer.authored_state.cue_points.clone();
+        layer.state.cue_points_ms = layer.authored_state.cue_points_ms.clone();
+        layer.state.position_ms =
+            clamp_clip_position(&slot, &asset.source, layer.state.position_ms);
+    }
+    Ok(())
+}
+
+fn project_default_clip_into_idle_runtime(
+    layer: &mut RuntimeVideoLayer,
+    assets: &[MediaAssetSummary],
+) -> Result<(), String> {
+    let default_slot_id = layer
+        .default_clip_slot_id
+        .ok_or_else(|| format!("Video layer {} has no default clip slot", layer.id))?;
+    let slot = layer
+        .clip_slots
+        .iter()
+        .find(|slot| slot.id == default_slot_id)
+        .ok_or_else(|| {
+            format!(
+                "Video layer {} default clip slot {} was not found",
+                layer.id, default_slot_id.0
+            )
+        })?;
+    let asset = assets
+        .iter()
+        .find(|asset| asset.id == slot.media_asset_id)
+        .ok_or_else(|| format!("Media asset {} was not found", slot.media_asset_id))?;
+    layer.media_asset_id = asset.id;
+    layer.source = asset.source.clone();
+    Ok(())
+}
+
+fn apply_active_video_clip_slot_effect_overrides(
+    layer: &RuntimeVideoLayer,
+    summary: &mut VideoLayerSummary,
+) {
+    let Some(slot_id) = layer.active_clip_slot_id else {
+        return;
+    };
+    let Some(slot) = layer.clip_slots.iter().find(|slot| slot.id == slot_id) else {
+        return;
+    };
+    let Some(effect) = summary.isf_effect.as_mut() else {
+        return;
+    };
+    for effect_override in &slot.effect_overrides {
+        let controls = if effect_override.stage_index == 0 {
+            &mut effect.controls
+        } else {
+            let Some(stage) = effect.stack.get_mut(effect_override.stage_index - 1) else {
+                continue;
+            };
+            &mut stage.controls
+        };
+        if let Some(control) = controls
+            .iter_mut()
+            .find(|control| control.name == effect_override.control_name)
+        {
+            control.value = effect_override.value;
+        }
+    }
+}
+
+fn runtime_video_layer_mut(
+    layers: &mut [RuntimeVideoLayer],
+    layer_id: VideoLayerId,
+) -> Result<&mut RuntimeVideoLayer, String> {
+    layers
+        .iter_mut()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))
+}
+
+fn runtime_clip_slot_mut(
+    layer: &mut RuntimeVideoLayer,
+    slot_id: VideoClipSlotId,
+) -> Result<&mut VideoClipSlotSummary, String> {
+    layer
+        .clip_slots
+        .iter_mut()
+        .find(|slot| slot.id == slot_id)
+        .ok_or_else(|| {
+            format!(
+                "Video clip slot {} was not found on layer {}",
+                slot_id.0, layer.id
+            )
+        })
+}
+
+fn create_video_clip_slot_in_layers(
+    layers: &mut [RuntimeVideoLayer],
+    layer_id: VideoLayerId,
+    slot: VideoClipSlotSummary,
+    before_slot_id: Option<VideoClipSlotId>,
+    make_default: bool,
+) -> Result<(), String> {
+    if slot.id.0 == 0 {
+        return Err("Video clip slot IDs must be non-zero".to_string());
+    }
+    if layers
+        .iter()
+        .flat_map(|layer| layer.clip_slots.iter())
+        .any(|candidate| candidate.id == slot.id)
+    {
+        return Err(format!("Video clip slot {} already exists", slot.id.0));
+    }
+    let layer = runtime_video_layer_mut(layers, layer_id)?;
+    let insert_at = if let Some(before_slot_id) = before_slot_id {
+        layer
+            .clip_slots
+            .iter()
+            .position(|candidate| candidate.id == before_slot_id)
+            .ok_or_else(|| {
+                format!(
+                    "Video clip slot {} was not found on layer {}",
+                    before_slot_id.0, layer_id
+                )
+            })?
+    } else {
+        layer.clip_slots.len()
+    };
+    layer.clip_slots.insert(insert_at, slot.clone());
+    if make_default || layer.default_clip_slot_id.is_none() {
+        layer.default_clip_slot_id = Some(slot.id);
+    }
+    Ok(())
+}
+
+fn validate_runtime_video_clip_slot_candidate(
+    layers: &[RuntimeVideoLayer],
+    assets: &[MediaAssetSummary],
+) -> Result<(), String> {
+    let candidate = VideoSnapshot {
+        layers: layers
+            .iter()
+            .map(|layer| authored_video_layer_summary(layer, assets))
+            .collect(),
+        media_assets: assets.to_vec(),
+        ..VideoSnapshot::default()
+    };
+    validate_engine_ready_video_clip_slots(&candidate)?;
+    validate_video_clip_slot_bank_limits(&candidate)
+}
+
+fn active_slot_source_end(slot: &VideoClipSlotSummary, source: &VideoSourceSummary) -> Option<u64> {
+    slot.out_point_ms.or_else(|| {
+        source
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.duration_ms)
+    })
+}
+
+/// An admitted launch must be executable at its selected boundary. In
+/// particular, a reverse slot needs a finite upper bound before a NextBeat or
+/// NextBar pending action is allowed to exist; otherwise the later boundary
+/// activation could fail after the queue/pending state had already changed.
+fn validate_video_clip_slot_launch(
+    slot: &VideoClipSlotSummary,
+    assets: &[MediaAssetSummary],
+) -> Result<(), String> {
+    let asset = assets
+        .iter()
+        .find(|asset| asset.id == slot.media_asset_id)
+        .ok_or_else(|| format!("Media asset {} was not found", slot.media_asset_id))?;
+    if slot.speed < 0.0 && active_slot_source_end(slot, &asset.source).is_none() {
+        return Err(format!(
+            "Video clip slot {} requires a finite source end for reverse transport",
+            slot.id.0
+        ));
+    }
+    Ok(())
+}
+
+/// Asset catalog edits may change an active slot's executable media bounds.
+/// Validate the complete next image before committing it so an on-program
+/// reverse take cannot be stranded by a source update that loses its finite
+/// end.
+fn validate_active_video_clip_slot_launchability(
+    layers: &[RuntimeVideoLayer],
+    assets: &[MediaAssetSummary],
+) -> Result<(), String> {
+    for layer in layers {
+        let Some(active_slot_id) = layer.active_clip_slot_id else {
+            continue;
+        };
+        let slot = layer
+            .clip_slots
+            .iter()
+            .find(|slot| slot.id == active_slot_id)
+            .ok_or_else(|| {
+                format!(
+                    "Video layer {} has active clip slot {} missing from its bank",
+                    layer.id, active_slot_id.0
+                )
+            })?;
+        validate_video_clip_slot_launch(slot, assets)?;
+    }
+    Ok(())
+}
+
+fn clamp_clip_position(
+    slot: &VideoClipSlotSummary,
+    source: &VideoSourceSummary,
+    position_ms: u64,
+) -> u64 {
+    let start = slot.in_point_ms;
+    match active_slot_source_end(slot, source) {
+        Some(end) if end > start => position_ms.clamp(start, end.saturating_sub(1)),
+        _ => position_ms.max(start),
+    }
+}
+
+fn activate_runtime_video_clip_slot(
+    layer: &mut RuntimeVideoLayer,
+    slot_id: VideoClipSlotId,
+    assets: &[MediaAssetSummary],
+) -> Result<(), String> {
+    let slot = layer
+        .clip_slots
+        .iter()
+        .find(|slot| slot.id == slot_id)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Video clip slot {} was not found on layer {}",
+                slot_id.0, layer.id
+            )
+        })?;
+    validate_video_clip_slot_launch(&slot, assets)?;
+    let asset = assets
+        .iter()
+        .find(|asset| asset.id == slot.media_asset_id)
+        .expect("launch validation found the referenced media asset");
+    layer.media_asset_id = slot.media_asset_id;
+    layer.source = asset.source.clone();
+    layer.state.speed = slot.speed;
+    layer.state.loop_enabled = !matches!(slot.loop_mode, VideoClipLoopMode::Once);
+    layer.state.loop_start_ms = slot.in_point_ms;
+    layer.state.loop_end_ms = active_slot_source_end(&slot, &layer.source).unwrap_or(0);
+    layer.state.cue_points = slot
+        .cue_points
+        .iter()
+        .map(|cue| VideoCuePointSummary {
+            position_ms: cue.position_ms,
+            label: cue.name.clone(),
+            color: None,
+        })
+        .collect();
+    layer.state.cue_points_ms = slot.cue_points.iter().map(|cue| cue.position_ms).collect();
+    layer.state.position_ms = if slot.speed < 0.0 {
+        active_slot_source_end(&slot, &layer.source)
+            .filter(|end| *end > slot.in_point_ms)
+            .map(|end| end - 1)
+            .unwrap_or(slot.in_point_ms)
+    } else {
+        slot.in_point_ms
+    };
+    layer.state.playing = slot.speed != 0.0;
+    layer.active_clip_slot_id = Some(slot_id);
+    layer.queued_clip_slot_id = None;
+    layer.pending_clip_launch = None;
+    layer.clip_direction = RuntimeClipDirection::from_speed(slot.speed);
+    layer.runtime_transport_dirty = true;
+    Ok(())
+}
+
+fn advance_runtime_video_clip_slot(layer: &mut RuntimeVideoLayer, delta: Duration) {
+    let Some(active_slot_id) = layer.active_clip_slot_id else {
+        return;
+    };
+    let Some(slot) = layer
+        .clip_slots
+        .iter()
+        .find(|slot| slot.id == active_slot_id)
+        .cloned()
+    else {
+        // A mutation may never remove an active slot, but treat a corrupted
+        // internal state fail-closed rather than presenting another source.
+        layer.state.playing = false;
+        layer.active_clip_slot_id = None;
+        return;
+    };
+    if !layer.state.playing || slot.speed == 0.0 {
+        layer.clip_direction = RuntimeClipDirection::Stopped;
+        return;
+    }
+    let amount = (delta.as_secs_f64() * f64::from(slot.speed.abs()) * 1000.0).round() as u64;
+    if amount == 0 {
+        return;
+    }
+    layer.runtime_transport_dirty = true;
+    let start = slot.in_point_ms;
+    let Some(end) = active_slot_source_end(&slot, &layer.source) else {
+        // Open-ended forward clips do not invent a duration. They advance
+        // monotonically and can only be stopped by the decoder/runtime.
+        if slot.speed > 0.0 {
+            layer.state.position_ms = layer.state.position_ms.saturating_add(amount).max(start);
+        }
+        return;
+    };
+    if end <= start {
+        layer.state.position_ms = start;
+        layer.state.playing = false;
+        layer.clip_direction = RuntimeClipDirection::Stopped;
+        return;
+    }
+    let span = end - start;
+    let position = clamp_clip_position(&slot, &layer.source, layer.state.position_ms);
+    let offset = position - start;
+    match slot.loop_mode {
+        VideoClipLoopMode::Once => {
+            if slot.speed < 0.0 {
+                if amount >= offset {
+                    layer.state.position_ms = start;
+                    layer.state.playing = false;
+                    layer.clip_direction = RuntimeClipDirection::Stopped;
+                } else {
+                    layer.state.position_ms = start + offset - amount;
+                    layer.clip_direction = RuntimeClipDirection::Reverse;
+                }
+            } else {
+                let next = offset.saturating_add(amount);
+                if next >= span {
+                    layer.state.position_ms = end - 1;
+                    layer.state.playing = false;
+                    layer.clip_direction = RuntimeClipDirection::Stopped;
+                } else {
+                    layer.state.position_ms = start + next;
+                    layer.clip_direction = RuntimeClipDirection::Forward;
+                }
+            }
+        }
+        VideoClipLoopMode::Loop => {
+            let next = if slot.speed < 0.0 {
+                (offset + span - amount % span) % span
+            } else {
+                offset.saturating_add(amount) % span
+            };
+            layer.state.position_ms = start + next;
+            layer.clip_direction = RuntimeClipDirection::from_speed(slot.speed);
+        }
+        VideoClipLoopMode::PingPong => {
+            if span == 1 {
+                layer.state.position_ms = start;
+                return;
+            }
+            let period = (span - 1).saturating_mul(2);
+            let phase = match layer.clip_direction {
+                RuntimeClipDirection::Forward => offset,
+                RuntimeClipDirection::Reverse => period.saturating_sub(offset),
+                RuntimeClipDirection::Stopped => {
+                    if slot.speed < 0.0 {
+                        period.saturating_sub(offset)
+                    } else {
+                        offset
+                    }
+                }
+            };
+            let next_phase = phase.saturating_add(amount) % period;
+            let (next_offset, direction) = if next_phase < span - 1 {
+                (next_phase, RuntimeClipDirection::Forward)
+            } else if next_phase == span - 1 {
+                (next_phase, RuntimeClipDirection::Reverse)
+            } else {
+                (period - next_phase, RuntimeClipDirection::Reverse)
+            };
+            layer.state.position_ms = start + next_offset;
+            layer.clip_direction = direction;
+        }
     }
 }
 
@@ -31028,7 +33136,8 @@ fn runtime_video_layer_from_summary(layer: &VideoLayerSummary) -> RuntimeVideoLa
     if let Some(effect) = &mut isf_effect {
         clear_transient_video_isf_event_controls(effect);
     }
-    RuntimeVideoLayer {
+    let authored_state = video::sanitize_layer_state(layer.state.clone());
+    let mut runtime = RuntimeVideoLayer {
         id: layer.id,
         label: sanitize_video_layer_label(layer.label.clone(), layer.id),
         source: layer.source.clone(),
@@ -31036,9 +33145,59 @@ fn runtime_video_layer_from_summary(layer: &VideoLayerSummary) -> RuntimeVideoLa
             .media_asset_id
             .expect("engine-ready video layers require a media asset ID"),
         blend_mode: layer.blend_mode.clone(),
-        state: video::sanitize_layer_state(layer.state.clone()),
+        authored_state: authored_state.clone(),
+        state: authored_state,
         isf_effect,
+        clip_slots: layer.clip_slots.clone(),
+        default_clip_slot_id: layer.default_clip_slot_id,
+        active_clip_slot_id: None,
+        queued_clip_slot_id: None,
+        pending_clip_launch: None,
+        clip_direction: RuntimeClipDirection::Stopped,
+        runtime_transport_dirty: false,
+    };
+    // A persisted project has no runtime take state. Its concrete default is
+    // therefore the deterministic initial take—not an ambiguous idle layer
+    // whose rendered source happens to be the default. This also ensures a
+    // replacement project with reused IDs cannot retain an old take, queue,
+    // pending boundary, or playhead.
+    initialize_runtime_default_clip_slot(&mut runtime);
+    runtime
+}
+
+/// Initialize a freshly materialized layer from its authored default slot.
+///
+/// The caller has already passed the engine-ready validator, so the layer
+/// source is the default slot's asset projection. Compatibility state
+/// (`playing` and playhead) stays authored until an explicit runtime
+/// launch/seek takes ownership; this lets a persisted legacy layer be active
+/// in runtime truth without silently changing its durable transport.
+fn initialize_runtime_default_clip_slot(layer: &mut RuntimeVideoLayer) {
+    let Some(default_slot_id) = layer.default_clip_slot_id else {
+        return;
+    };
+    let Some(slot) = layer
+        .clip_slots
+        .iter()
+        .find(|slot| slot.id == default_slot_id)
+        .cloned()
+    else {
+        return;
+    };
+    let end = active_slot_source_end(&slot, &layer.source);
+    if slot.speed < 0.0 && end.is_none() {
+        // Reverse open-ended media has no valid upper bound. It is still the
+        // concrete active default, but cannot be allowed to advance until an
+        // explicit finite-runtime launch succeeds.
+        layer.state.playing = false;
     }
+    layer.state.position_ms = clamp_clip_position(&slot, &layer.source, layer.state.position_ms);
+    layer.active_clip_slot_id = Some(slot.id);
+    layer.clip_direction = if layer.state.playing && slot.speed != 0.0 {
+        RuntimeClipDirection::from_speed(slot.speed)
+    } else {
+        RuntimeClipDirection::Stopped
+    };
 }
 
 const LEGACY_LIGHTING_TIMELINE_LAYER_ID: u32 = 0;
@@ -42996,6 +45155,41 @@ mod tests {
         .mutates_persistence_snapshot());
         assert!(!EngineCommand::TriggerCue(1).mutates_persistence_snapshot());
         assert!(!EngineCommand::SeekTimeline(120).mutates_persistence_snapshot());
+        let (queue_ack, _) = mpsc::sync_channel(1);
+        assert!(!EngineCommand::QueueVideoClipSlotPublished {
+            layer_id: 1,
+            slot_id: VideoClipSlotId(1),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack: queue_ack,
+        }
+        .mutates_persistence_snapshot());
+        let (cancel_ack, _) = mpsc::sync_channel(1);
+        assert!(!EngineCommand::CancelQueuedVideoClipSlotPublished {
+            layer_id: 1,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack: cancel_ack,
+        }
+        .mutates_persistence_snapshot());
+        let (launch_ack, _) = mpsc::sync_channel(1);
+        assert!(!EngineCommand::LaunchVideoClipSlotPublished {
+            layer_id: 1,
+            slot_id: Some(VideoClipSlotId(1)),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack: launch_ack,
+        }
+        .mutates_persistence_snapshot());
+        let (seek_ack, _) = mpsc::sync_channel(1);
+        assert!(!EngineCommand::SeekVideoClipSlotPublished {
+            layer_id: 1,
+            position_ms: 120,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack: seek_ack,
+        }
+        .mutates_persistence_snapshot());
 
         // Authored output mapping changes are exactly the kind of external
         // edit a coordinator poll must reconcile. Unknown/new variants
@@ -46446,6 +48640,8 @@ mod tests {
                         ..VideoLayerState::default()
                     },
                     isf_effect: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                 }],
                 media_assets: Vec::new(),
                 compositions: vec![CompositionSummary {
@@ -47638,6 +49834,8 @@ mod tests {
                         blend_mode: VideoBlendMode::Normal,
                         state: VideoLayerState::default(),
                         isf_effect: None,
+                        clip_slots: Vec::new(),
+                        default_clip_slot_id: None,
                     },
                     VideoLayerSummary {
                         id: 2,
@@ -47647,6 +49845,8 @@ mod tests {
                         blend_mode: VideoBlendMode::Add,
                         state: VideoLayerState::default(),
                         isf_effect: None,
+                        clip_slots: Vec::new(),
+                        default_clip_slot_id: None,
                     },
                     VideoLayerSummary {
                         id: 0,
@@ -47656,6 +49856,8 @@ mod tests {
                         blend_mode: VideoBlendMode::Normal,
                         state: VideoLayerState::default(),
                         isf_effect: None,
+                        clip_slots: Vec::new(),
+                        default_clip_slot_id: None,
                     },
                 ],
                 compositions: vec![
@@ -47951,6 +50153,8 @@ mod tests {
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
                     isf_effect: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                 }],
                 outputs: vec![VideoOutputSummary {
                     id: 3,
@@ -49196,6 +51400,8 @@ mod tests {
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
         }];
         snapshot.video.compositions = vec![CompositionSummary {
             id,
@@ -49382,6 +51588,53 @@ mod tests {
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
                     isf_effect: None,
+                    // Keep this boundary candidate engine-ready. Otherwise
+                    // B1's legacy normalizer would need to invent a slot ID
+                    // after the maxed layer ID and mask the VideoLayers
+                    // allocator-capacity error being exercised here.
+                    clip_slots: vec![VideoClipSlotSummary {
+                        id: VideoClipSlotId(1),
+                        media_asset_id: 1,
+                        in_point_ms: 0,
+                        out_point_ms: None,
+                        loop_mode: VideoClipLoopMode::Once,
+                        speed: 1.0,
+                        cue_points: Vec::new(),
+                        launch_quantization: VideoClipLaunchQuantization::Immediate,
+                        effect_overrides: Vec::new(),
+                    }],
+                    default_clip_slot_id: Some(VideoClipSlotId(1)),
+                }];
+            }
+            AllocatorDomain::VideoClipSlots => {
+                let source = allocator_video_source(1);
+                snapshot.video.media_assets = vec![MediaAssetSummary {
+                    id: 1,
+                    label: "Boundary slot asset".to_string(),
+                    source: source.clone(),
+                    content_hash: None,
+                    byte_size: None,
+                }];
+                snapshot.video.layers = vec![VideoLayerSummary {
+                    id: 1,
+                    label: "Boundary slot layer".to_string(),
+                    source,
+                    media_asset_id: Some(1),
+                    blend_mode: VideoBlendMode::Normal,
+                    state: VideoLayerState::default(),
+                    isf_effect: None,
+                    clip_slots: vec![VideoClipSlotSummary {
+                        id: VideoClipSlotId(candidate),
+                        media_asset_id: 1,
+                        in_point_ms: 0,
+                        out_point_ms: None,
+                        loop_mode: VideoClipLoopMode::Once,
+                        speed: 1.0,
+                        cue_points: Vec::new(),
+                        launch_quantization: VideoClipLaunchQuantization::Immediate,
+                        effect_overrides: Vec::new(),
+                    }],
+                    default_clip_slot_id: Some(VideoClipSlotId(candidate)),
                 }];
             }
             AllocatorDomain::Compositions => {
@@ -49443,6 +51696,7 @@ mod tests {
             AllocatorDomain::Automations => engine.allocate_automation_id(),
             AllocatorDomain::MediaAssets => engine.allocate_media_asset_id(),
             AllocatorDomain::VideoLayers => engine.allocate_video_layer_id(),
+            AllocatorDomain::VideoClipSlots => engine.allocate_video_clip_slot_id().0,
             AllocatorDomain::Compositions => engine.allocate_composition_id(),
             AllocatorDomain::VideoOutputs => engine.allocate_video_output_id(),
             AllocatorDomain::NodeGraphs => engine.allocate_node_graph_id(),
@@ -49470,6 +51724,9 @@ mod tests {
             AllocatorDomain::Automations => engine.next_automation_id.load(Ordering::Relaxed),
             AllocatorDomain::MediaAssets => engine.next_media_asset_id.load(Ordering::Relaxed),
             AllocatorDomain::VideoLayers => engine.next_video_layer_id.load(Ordering::Relaxed),
+            AllocatorDomain::VideoClipSlots => {
+                engine.next_video_clip_slot_id.load(Ordering::Relaxed)
+            }
             AllocatorDomain::Compositions => engine.next_composition_id.load(Ordering::Relaxed),
             AllocatorDomain::VideoOutputs => engine.next_video_output_id.load(Ordering::Relaxed),
             AllocatorDomain::NodeGraphs => engine.next_node_graph_id.load(Ordering::Relaxed),
@@ -49501,6 +51758,7 @@ mod tests {
             next_automation_id: Arc::new(AtomicU64::new(1)),
             next_media_asset_id: Arc::new(AtomicU64::new(1)),
             next_video_layer_id: Arc::new(AtomicU64::new(1)),
+            next_video_clip_slot_id: Arc::new(AtomicU64::new(1)),
             next_composition_id: Arc::new(AtomicU64::new(2)),
             next_video_output_id: Arc::new(AtomicU64::new(1)),
             next_node_graph_id: Arc::new(AtomicU64::new(1)),
@@ -49534,7 +51792,7 @@ mod tests {
     }
 
     fn concurrent_allocator_results(engine: &EngineHandle) -> Vec<(&'static str, u64)> {
-        let start = Arc::new(Barrier::new(17));
+        let start = Arc::new(Barrier::new(18));
         macro_rules! worker {
             ($label:literal, $method:ident) => {{
                 let start = Arc::clone(&start);
@@ -49542,6 +51800,16 @@ mod tests {
                 thread::spawn(move || {
                     start.wait();
                     ($label, engine.$method() as u64)
+                })
+            }};
+        }
+        macro_rules! clip_slot_worker {
+            ($label:literal) => {{
+                let start = Arc::clone(&start);
+                let engine = engine.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    ($label, engine.allocate_video_clip_slot_id().0)
                 })
             }};
         }
@@ -49559,6 +51827,7 @@ mod tests {
             worker!("automation", allocate_automation_id),
             worker!("media asset", allocate_media_asset_id),
             worker!("video layer", allocate_video_layer_id),
+            clip_slot_worker!("video clip slot"),
             worker!("composition", allocate_composition_id),
             worker!("video output", allocate_video_output_id),
             worker!("node graph", allocate_node_graph_id),
@@ -49576,7 +51845,7 @@ mod tests {
         minimum: u64,
         timeline_layer_minimum: u32,
     ) {
-        assert_eq!(results.len(), 16);
+        assert_eq!(results.len(), 17);
         for (domain, id) in results {
             let minimum = if *domain == "timeline layer" {
                 u64::from(timeline_layer_minimum)
@@ -49637,6 +51906,40 @@ mod tests {
             name: None,
             codec: None,
             metadata: None,
+        }
+    }
+
+    fn allocator_media_asset_candidate_with_clip_slot(slot_id: u64) -> MediaAssetImportCandidate {
+        let source = allocator_video_source(1);
+        MediaAssetImportCandidate {
+            assets: vec![MediaAssetSummary {
+                id: 1,
+                label: "Allocator slot asset".to_string(),
+                source: source.clone(),
+                content_hash: None,
+                byte_size: None,
+            }],
+            layers: vec![VideoLayerSummary {
+                id: 1,
+                label: "Allocator slot layer".to_string(),
+                source,
+                media_asset_id: Some(1),
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState::default(),
+                isf_effect: None,
+                clip_slots: vec![VideoClipSlotSummary {
+                    id: VideoClipSlotId(slot_id),
+                    media_asset_id: 1,
+                    in_point_ms: 0,
+                    out_point_ms: None,
+                    loop_mode: VideoClipLoopMode::Once,
+                    speed: 1.0,
+                    cue_points: Vec::new(),
+                    launch_quantization: VideoClipLaunchQuantization::Immediate,
+                    effect_overrides: Vec::new(),
+                }],
+                default_clip_slot_id: Some(VideoClipSlotId(slot_id)),
+            }],
         }
     }
 
@@ -50477,6 +52780,119 @@ mod tests {
                 }),
             ),
             deadline_case(
+                "MediaAssetTransactionPublished",
+                AllocatorDomain::MediaAssets,
+                Box::new(|id| EngineCommand::MediaAssetTransactionPublished {
+                    transaction: MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                        assets: vec![MediaAssetSummary {
+                            id,
+                            label: format!("Allocator asset {id}"),
+                            source: allocator_video_source(id),
+                            content_hash: None,
+                            byte_size: None,
+                        }],
+                        layers: Vec::new(),
+                    }),
+                    expires_at: allocator_expiry(),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "MediaAssetTransactionImportLayerClipSlot",
+                AllocatorDomain::VideoClipSlots,
+                Box::new(|id| EngineCommand::MediaAssetTransactionPublished {
+                    transaction: MediaAssetTransaction::Import(
+                        allocator_media_asset_candidate_with_clip_slot(id),
+                    ),
+                    expires_at: allocator_expiry(),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "MediaAssetTransactionBootstrapLayerClipSlot",
+                AllocatorDomain::VideoClipSlots,
+                Box::new(|id| EngineCommand::MediaAssetTransactionPublished {
+                    transaction: MediaAssetTransaction::BootstrapVjShow {
+                        candidate: allocator_media_asset_candidate_with_clip_slot(id),
+                        output: VideoOutputSummary {
+                            id: 1,
+                            label: "Allocator bootstrap output".to_string(),
+                            kind: VideoOutputKind::Display,
+                            enabled: false,
+                            composition_id: 1,
+                            fullscreen: false,
+                            monitor_id: None,
+                            width: 640,
+                            height: 480,
+                            endpoint_name: None,
+                            opacity: 1.0,
+                            blackout: true,
+                            mapping: VideoOutputMapping::default(),
+                        },
+                    },
+                    expires_at: allocator_expiry(),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "VideoClipSlotImportAndAssignPublished",
+                AllocatorDomain::VideoClipSlots,
+                Box::new(|id| EngineCommand::VideoClipSlotImportAndAssignPublished {
+                    candidate: VideoClipSlotImportAndAssignCandidate {
+                        assets: Vec::new(),
+                        assignments: vec![VideoClipSlotImportAssignment {
+                            layer_id: 1,
+                            slot: clip_slot_engine_test_slot(id, 1, VideoClipLoopMode::Loop, 1.0),
+                            before_slot_id: None,
+                            make_default: false,
+                        }],
+                    },
+                    expires_at: allocator_expiry(),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "CreateVideoClipSlotPublished",
+                AllocatorDomain::VideoClipSlots,
+                Box::new(|id| EngineCommand::CreateVideoClipSlotPublished {
+                    layer_id: 1,
+                    slot: clip_slot_engine_test_slot(id, 1, VideoClipLoopMode::Loop, 1.0),
+                    before_slot_id: None,
+                    make_default: false,
+                    expires_at: allocator_expiry(),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateVideoClipSlotPublished",
+                AllocatorDomain::VideoClipSlots,
+                Box::new(|id| EngineCommand::UpdateVideoClipSlotPublished {
+                    layer_id: 1,
+                    slot: clip_slot_engine_test_slot(id, 1, VideoClipLoopMode::Loop, 1.0),
+                    expires_at: allocator_expiry(),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "DuplicateVideoClipSlotPublished",
+                AllocatorDomain::VideoClipSlots,
+                Box::new(|id| EngineCommand::DuplicateVideoClipSlotPublished {
+                    layer_id: 1,
+                    source_slot_id: VideoClipSlotId(1),
+                    new_slot_id: VideoClipSlotId(id),
+                    before_slot_id: None,
+                    expires_at: allocator_expiry(),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
                 "AddVideoComposition",
                 AllocatorDomain::Compositions,
                 Box::new(|id| {
@@ -50651,7 +53067,7 @@ mod tests {
         }
     }
 
-    fn allocator_domains() -> [AllocatorDomain; 16] {
+    fn allocator_domains() -> [AllocatorDomain; 17] {
         [
             AllocatorDomain::Fixtures,
             AllocatorDomain::Effects,
@@ -50665,6 +53081,7 @@ mod tests {
             AllocatorDomain::Automations,
             AllocatorDomain::MediaAssets,
             AllocatorDomain::VideoLayers,
+            AllocatorDomain::VideoClipSlots,
             AllocatorDomain::Compositions,
             AllocatorDomain::VideoOutputs,
             AllocatorDomain::NodeGraphs,
@@ -50695,7 +53112,7 @@ mod tests {
     #[test]
     fn allocator_command_inventory_covers_all_domains_and_is_exhaustively_routed() {
         let cases = allocator_command_cases();
-        assert_eq!(cases.len(), 79);
+        assert_eq!(cases.len(), 86);
         for domain in allocator_domains() {
             assert!(
                 cases.iter().any(|case| case.domain == domain),
@@ -51168,26 +53585,7 @@ mod tests {
 
     #[test]
     fn project_snapshot_allocator_capacity_rejects_max_and_immediate_exhaustion_before_enqueue() {
-        let domains = [
-            AllocatorDomain::Fixtures,
-            AllocatorDomain::Effects,
-            AllocatorDomain::Cues,
-            AllocatorDomain::CueLists,
-            AllocatorDomain::Palettes,
-            AllocatorDomain::PlaybackExecutors,
-            AllocatorDomain::TimelineEvents,
-            AllocatorDomain::TimelineLayers,
-            AllocatorDomain::TimelineAudioClips,
-            AllocatorDomain::Automations,
-            AllocatorDomain::MediaAssets,
-            AllocatorDomain::VideoLayers,
-            AllocatorDomain::Compositions,
-            AllocatorDomain::VideoOutputs,
-            AllocatorDomain::NodeGraphs,
-            AllocatorDomain::StageObjects,
-        ];
-
-        for domain in domains {
+        for domain in allocator_domains() {
             for immediate_maximum in [false, true] {
                 let candidate = if domain == AllocatorDomain::TimelineLayers {
                     if immediate_maximum {
@@ -51207,12 +53605,39 @@ mod tests {
                     enabled: false,
                     ..DmxOutputConfig::default()
                 });
-                let authoritative_a = acknowledged.snapshot();
+                // Fence the test handle before capturing A: its background
+                // runtime may publish the deterministic default projection
+                // while this test is setting up, but a rejected load itself
+                // must not change that already-published A image.
+                let authoritative_a = acknowledged
+                    .persistence_snapshot()
+                    .expect("baseline persistence fence must succeed");
                 let acknowledged_error = acknowledged
                     .load_project_snapshot_and_wait(snapshot.clone())
                     .unwrap_err();
                 assert_eq!(acknowledged_error, expected);
-                assert_eq!(acknowledged.snapshot(), authoritative_a);
+                let current = acknowledged
+                    .persistence_snapshot()
+                    .expect("post-rejection persistence fence must succeed");
+                // The test runtime continues to publish clock/telemetry
+                // samples, so compare the complete authored/project surface
+                // rather than its tick-derived envelope.
+                assert_eq!(current.fixtures, authoritative_a.fixtures);
+                assert_eq!(current.cues, authoritative_a.cues);
+                assert_eq!(current.cue_lists, authoritative_a.cue_lists);
+                assert_eq!(current.palettes, authoritative_a.palettes);
+                assert_eq!(
+                    current.playback_executors,
+                    authoritative_a.playback_executors
+                );
+                assert_eq!(current.timeline, authoritative_a.timeline);
+                assert_eq!(current.video, authoritative_a.video);
+                assert_eq!(current.authored_video, authoritative_a.authored_video);
+                assert_eq!(current.effects, authoritative_a.effects);
+                assert_eq!(current.node_graphs, authoritative_a.node_graphs);
+                assert_eq!(current.stage_map, authoritative_a.stage_map);
+                assert_eq!(current.stage_map_presets, authoritative_a.stage_map_presets);
+                assert_eq!(current.stage_objects, authoritative_a.stage_objects);
                 let acknowledged_id = allocator_value(&acknowledged, domain);
                 assert_ne!(acknowledged_id, 0);
                 assert_ne!(acknowledged_id, candidate);
@@ -51235,26 +53660,7 @@ mod tests {
 
     #[test]
     fn allocator_nearest_accepted_boundary_issues_only_last_id_then_fails_closed() {
-        let domains = [
-            AllocatorDomain::Fixtures,
-            AllocatorDomain::Effects,
-            AllocatorDomain::Cues,
-            AllocatorDomain::CueLists,
-            AllocatorDomain::Palettes,
-            AllocatorDomain::PlaybackExecutors,
-            AllocatorDomain::TimelineEvents,
-            AllocatorDomain::TimelineLayers,
-            AllocatorDomain::TimelineAudioClips,
-            AllocatorDomain::Automations,
-            AllocatorDomain::MediaAssets,
-            AllocatorDomain::VideoLayers,
-            AllocatorDomain::Compositions,
-            AllocatorDomain::VideoOutputs,
-            AllocatorDomain::NodeGraphs,
-            AllocatorDomain::StageObjects,
-        ];
-
-        for domain in domains {
+        for domain in allocator_domains() {
             let maximum = if domain == AllocatorDomain::TimelineLayers {
                 u64::from(u32::MAX)
             } else {
@@ -51522,6 +53928,8 @@ mod tests {
                 controls: Vec::new(),
                 stack: Vec::new(),
             }),
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
         }];
         let error = engine
             .load_project_snapshot_and_wait(invalid_isf)
@@ -57852,6 +60260,7 @@ mod tests {
             next_automation_id: Arc::new(AtomicU64::new(1)),
             next_media_asset_id: Arc::new(AtomicU64::new(1)),
             next_video_layer_id: Arc::new(AtomicU64::new(1)),
+            next_video_clip_slot_id: Arc::new(AtomicU64::new(1)),
             next_composition_id: Arc::new(AtomicU64::new(1)),
             next_video_output_id: Arc::new(AtomicU64::new(1)),
             next_node_graph_id: Arc::new(AtomicU64::new(1)),
@@ -59369,13 +61778,15 @@ mod tests {
             }))
             .unwrap();
 
+        // `duplicate_video_layer_published` internally fences the preceding
+        // async Add/authoring commands before it reserves fresh slot IDs.
         let duplicate_layer_id = engine.allocate_video_layer_id();
         engine
-            .send(EngineCommand::DuplicateVideoLayer {
+            .duplicate_video_layer_published(
                 source_layer_id,
-                new_layer_id: duplicate_layer_id,
-                label: "  Copy  ".to_string(),
-            })
+                duplicate_layer_id,
+                "  Copy  ".to_string(),
+            )
             .unwrap();
         engine
             .send(EngineCommand::SetVideoLayerLabel {
@@ -59475,6 +61886,8 @@ mod tests {
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: effect,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
         }
     }
 
@@ -60021,8 +62434,19 @@ mod tests {
             )
             .unwrap();
 
+        let source_slot_ids = runtime.video_layers[0]
+            .clip_slots
+            .iter()
+            .map(|slot| slot.id)
+            .collect::<Vec<_>>();
         runtime
-            .duplicate_video_layer(1, 2, "Duplicate".to_string())
+            .duplicate_video_layer(
+                1,
+                2,
+                "Duplicate".to_string(),
+                &source_slot_ids,
+                &[VideoClipSlotId(9_001)],
+            )
             .unwrap();
 
         let duplicate = runtime
@@ -60056,7 +62480,7 @@ mod tests {
     }
 
     #[test]
-    fn video_layer_source_can_be_updated_without_resetting_state() {
+    fn video_layer_source_is_asset_owned_and_legacy_setter_rejects_without_mutation() {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -60107,9 +62531,12 @@ mod tests {
 
         let mut snapshot = engine.snapshot();
         for _ in 0..20 {
-            if snapshot.video.layers.iter().any(|layer| {
-                layer.id == layer_id && layer.source.codec.as_deref() == Some("prores")
-            }) {
+            if snapshot
+                .telemetry
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("source is owned by its media asset"))
+            {
                 break;
             }
             std::thread::sleep(DMX_TICK_INTERVAL);
@@ -60121,9 +62548,8 @@ mod tests {
             .iter()
             .find(|layer| layer.id == layer_id)
             .unwrap();
-        assert_eq!(layer.source.path.as_deref(), Some("memory://new.mov"));
-        assert_eq!(layer.source.codec.as_deref(), Some("prores"));
-        assert_eq!(layer.source.metadata.unwrap().duration_ms, Some(2_000));
+        assert_eq!(layer.source.path.as_deref(), Some("memory://old.mp4"));
+        assert_eq!(layer.source.codec.as_deref(), Some("H264"));
         assert_eq!(layer.state.opacity, 0.25);
         assert!(layer.state.playing);
         assert!(layer.state.position_ms >= 500);
@@ -61577,7 +64003,1063 @@ mod tests {
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
         }
+    }
+
+    fn clip_slot_engine_test_source(name: &str, duration_ms: u64) -> VideoSourceSummary {
+        VideoSourceSummary {
+            kind: VideoSourceKind::File,
+            path: Some(format!("memory://clip-slot/{name}.mp4")),
+            name: None,
+            codec: Some("H264".to_string()),
+            metadata: Some(VideoMediaMetadata {
+                duration_ms: Some(duration_ms),
+                width: Some(1_920),
+                height: Some(1_080),
+                frame_rate: Some(30.0),
+                has_audio: false,
+            }),
+        }
+    }
+
+    fn clip_slot_engine_test_slot(
+        id: u64,
+        asset_id: MediaAssetId,
+        loop_mode: VideoClipLoopMode,
+        speed: f32,
+    ) -> VideoClipSlotSummary {
+        VideoClipSlotSummary {
+            id: VideoClipSlotId(id),
+            media_asset_id: asset_id,
+            in_point_ms: 100,
+            out_point_ms: Some(1_000),
+            loop_mode,
+            speed,
+            cue_points: Vec::new(),
+            launch_quantization: VideoClipLaunchQuantization::Immediate,
+            effect_overrides: Vec::new(),
+        }
+    }
+
+    fn clip_slot_engine_test_runtime() -> EngineRuntime {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let first = clip_slot_engine_test_source("first", 1_000);
+        let second = clip_slot_engine_test_source("second", 1_000);
+        let mut layer = media_asset_test_layer(1, 10, "Slot layer", first.clone());
+        layer.clip_slots = vec![
+            clip_slot_engine_test_slot(20, 10, VideoClipLoopMode::Loop, 1.0),
+            clip_slot_engine_test_slot(21, 11, VideoClipLoopMode::PingPong, -1.0),
+        ];
+        layer.default_clip_slot_id = Some(VideoClipSlotId(20));
+        runtime.load_project_snapshot(EngineSnapshot {
+            video: VideoSnapshot {
+                layers: vec![layer],
+                media_assets: vec![
+                    media_asset_test_summary(10, "First", first),
+                    media_asset_test_summary(11, "Second", second),
+                ],
+                ..VideoSnapshot::default()
+            },
+            ..EngineSnapshot::default()
+        });
+        assert!(runtime.last_error.is_none());
+        runtime
+    }
+
+    #[test]
+    fn video_clip_slot_runtime_queue_launch_and_persistence_are_separate() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let baseline = serde_json::to_vec(
+            runtime
+                .build_persistence_snapshot()
+                .authored_video
+                .as_ref()
+                .expect("persistence snapshot must expose the authored video image"),
+        )
+        .unwrap();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        let rendered = runtime.video_snapshot();
+        assert_eq!(
+            rendered.layers[0].source.path.as_deref(),
+            Some("memory://clip-slot/second.mp4")
+        );
+        assert_eq!(rendered.layers[0].media_asset_id, Some(11));
+        let persisted = runtime.build_persistence_snapshot();
+        let authored = persisted.authored_video.as_ref().unwrap();
+        assert_eq!(authored.layers[0].media_asset_id, Some(10));
+        assert_eq!(
+            authored.layers[0].source.path.as_deref(),
+            Some("memory://clip-slot/first.mp4")
+        );
+        assert_eq!(serde_json::to_vec(authored).unwrap(), baseline);
+        let truth = runtime.video_clip_runtime_snapshot();
+        assert_eq!(truth.layers[0].active_slot_id, Some(VideoClipSlotId(21)));
+        assert!(truth.layers[0].ping_pong_reverse);
+    }
+
+    #[test]
+    fn video_clip_slot_reverse_transport_honors_half_open_once_loop_and_ping_pong() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let assets = runtime.media_assets.clone();
+        let layer = &mut runtime.video_layers[0];
+        let mut once = clip_slot_engine_test_slot(30, 10, VideoClipLoopMode::Once, 1.0);
+        once.in_point_ms = 100;
+        once.out_point_ms = Some(200);
+        layer.clip_slots = vec![once.clone()];
+        layer.default_clip_slot_id = Some(once.id);
+        activate_runtime_video_clip_slot(layer, once.id, &assets).unwrap();
+        advance_runtime_video_clip_slot(layer, Duration::from_millis(100));
+        assert_eq!(layer.state.position_ms, 199);
+        assert!(!layer.state.playing);
+
+        once.speed = -1.0;
+        layer.clip_slots = vec![once.clone()];
+        activate_runtime_video_clip_slot(layer, once.id, &assets).unwrap();
+        advance_runtime_video_clip_slot(layer, Duration::from_millis(100));
+        assert_eq!(layer.state.position_ms, 100);
+        assert!(!layer.state.playing);
+
+        let mut looping = once.clone();
+        looping.id = VideoClipSlotId(31);
+        looping.loop_mode = VideoClipLoopMode::Loop;
+        looping.speed = 1.0;
+        layer.clip_slots = vec![looping.clone()];
+        layer.default_clip_slot_id = Some(looping.id);
+        activate_runtime_video_clip_slot(layer, looping.id, &assets).unwrap();
+        advance_runtime_video_clip_slot(layer, Duration::from_millis(201));
+        assert_eq!(layer.state.position_ms, 101);
+        looping.speed = -1.0;
+        layer.clip_slots = vec![looping.clone()];
+        activate_runtime_video_clip_slot(layer, looping.id, &assets).unwrap();
+        advance_runtime_video_clip_slot(layer, Duration::from_millis(201));
+        assert_eq!(layer.state.position_ms, 198);
+
+        let mut ping_pong = looping.clone();
+        ping_pong.id = VideoClipSlotId(32);
+        ping_pong.loop_mode = VideoClipLoopMode::PingPong;
+        ping_pong.speed = 1.0;
+        layer.clip_slots = vec![ping_pong.clone()];
+        layer.default_clip_slot_id = Some(ping_pong.id);
+        activate_runtime_video_clip_slot(layer, ping_pong.id, &assets).unwrap();
+        advance_runtime_video_clip_slot(layer, Duration::from_millis(100));
+        assert_eq!(layer.state.position_ms, 198);
+        assert_eq!(layer.clip_direction, RuntimeClipDirection::Reverse);
+        ping_pong.speed = -1.0;
+        layer.clip_slots = vec![ping_pong.clone()];
+        activate_runtime_video_clip_slot(layer, ping_pong.id, &assets).unwrap();
+        advance_runtime_video_clip_slot(layer, Duration::from_millis(50));
+        assert_eq!(layer.state.position_ms, 149);
+        assert_eq!(layer.clip_direction, RuntimeClipDirection::Reverse);
+
+        let mut stopped = ping_pong;
+        stopped.id = VideoClipSlotId(33);
+        stopped.speed = 0.0;
+        layer.clip_slots = vec![stopped.clone()];
+        layer.default_clip_slot_id = Some(stopped.id);
+        activate_runtime_video_clip_slot(layer, stopped.id, &assets).unwrap();
+        advance_runtime_video_clip_slot(layer, Duration::from_millis(1_000));
+        assert_eq!(layer.state.position_ms, 100);
+        assert!(!layer.state.playing);
+        assert_eq!(layer.clip_direction, RuntimeClipDirection::Stopped);
+    }
+
+    #[test]
+    fn video_clip_slot_remove_default_chooses_successor_then_predecessor_and_rejects_busy() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        runtime
+            .create_video_clip_slot(
+                1,
+                clip_slot_engine_test_slot(22, 10, VideoClipLoopMode::Loop, 1.0),
+                None,
+                false,
+            )
+            .unwrap();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        runtime
+            .remove_video_clip_slot(1, VideoClipSlotId(20))
+            .unwrap();
+        assert_eq!(
+            runtime.video_layers[0].default_clip_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(22))
+            .unwrap();
+        assert!(runtime
+            .remove_video_clip_slot(1, VideoClipSlotId(22))
+            .is_err());
+        runtime.cancel_queued_video_clip_slot(1).unwrap();
+        runtime.video_layers[0].clip_slots[1].launch_quantization =
+            VideoClipLaunchQuantization::NextBeat;
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(22))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        assert!(runtime.video_layers[0].pending_clip_launch.is_some());
+        assert!(runtime
+            .remove_video_clip_slot(1, VideoClipSlotId(22))
+            .is_err());
+        runtime.cancel_queued_video_clip_slot(1).unwrap();
+        assert!(runtime
+            .remove_video_clip_slot(1, VideoClipSlotId(21))
+            .is_err());
+        runtime
+            .remove_video_clip_slot(1, VideoClipSlotId(22))
+            .unwrap();
+    }
+
+    #[test]
+    fn video_clip_slot_default_mutations_preserve_nondefault_rendered_take() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        let mut updated_default = runtime.video_layers[0].clip_slots[0].clone();
+        updated_default.speed = 2.0;
+        updated_default.loop_mode = VideoClipLoopMode::Once;
+        updated_default.in_point_ms = 200;
+        updated_default.out_point_ms = Some(900);
+        runtime.update_video_clip_slot(1, updated_default).unwrap();
+
+        let rendered = runtime.video_snapshot();
+        assert_eq!(rendered.layers[0].media_asset_id, Some(11));
+        assert_eq!(
+            rendered.layers[0].source.path.as_deref(),
+            Some("memory://clip-slot/second.mp4")
+        );
+        let authored = runtime.build_persistence_snapshot().authored_video.unwrap();
+        assert_eq!(authored.layers[0].media_asset_id, Some(10));
+        assert_eq!(authored.layers[0].state.speed, 2.0);
+        assert!(!authored.layers[0].state.loop_enabled);
+        assert_eq!(authored.layers[0].state.loop_start_ms, 200);
+        assert_eq!(authored.layers[0].state.loop_end_ms, 900);
+
+        // Catalog edits refresh the authored default projection without
+        // stealing a non-default live Take; the active asset refreshes the
+        // rendered projection when it is actually on program.
+        let mut default_asset = runtime.media_assets[0].clone();
+        default_asset.source = clip_slot_engine_test_source("first-revised", 1_000);
+        runtime
+            .apply_media_asset_transaction(MediaAssetTransaction::Update(default_asset))
+            .unwrap();
+        assert_eq!(runtime.video_snapshot().layers[0].media_asset_id, Some(11));
+        assert_eq!(
+            runtime
+                .build_persistence_snapshot()
+                .authored_video
+                .unwrap()
+                .layers[0]
+                .source
+                .path
+                .as_deref(),
+            Some("memory://clip-slot/first-revised.mp4")
+        );
+        let mut active_asset = runtime.media_assets[1].clone();
+        active_asset.source = clip_slot_engine_test_source("second-revised", 1_000);
+        runtime
+            .apply_media_asset_transaction(MediaAssetTransaction::Update(active_asset))
+            .unwrap();
+        assert_eq!(
+            runtime.video_snapshot().layers[0].source.path.as_deref(),
+            Some("memory://clip-slot/second-revised.mp4")
+        );
+
+        // The current program slot cannot be edited through the authored
+        // bank: reject rather than silently leaving rendered DTO/source/clock
+        // state tied to the old payload.
+        let authored_before = runtime.build_persistence_snapshot().authored_video.unwrap();
+        let rendered_before = runtime.video_snapshot();
+        let truth_before = runtime.video_clip_runtime_snapshot();
+        let assign_error = runtime
+            .assign_video_clip_slot_asset(1, VideoClipSlotId(21), 10)
+            .unwrap_err();
+        assert!(assign_error.contains("active"));
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video.unwrap(),
+            authored_before
+        );
+        assert_eq!(runtime.video_snapshot(), rendered_before);
+        assert_eq!(runtime.video_clip_runtime_snapshot(), truth_before);
+
+        let mut updated_active = runtime.video_layers[0].clip_slots[1].clone();
+        updated_active.in_point_ms = 250;
+        updated_active.out_point_ms = Some(750);
+        updated_active.speed = 2.0;
+        updated_active.effect_overrides = vec![protocol::VideoClipEffectOverrideSummary {
+            stage_index: 0,
+            control_name: "mix".to_string(),
+            value: [0.5, 0.0, 0.0, 0.0],
+        }];
+        let update_error = runtime
+            .update_video_clip_slot(1, updated_active)
+            .unwrap_err();
+        assert!(update_error.contains("active"));
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video.unwrap(),
+            authored_before
+        );
+        assert_eq!(runtime.video_snapshot(), rendered_before);
+        assert_eq!(runtime.video_clip_runtime_snapshot(), truth_before);
+    }
+
+    #[test]
+    fn video_clip_slot_active_reverse_asset_update_requires_finite_end() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        // The take is open-ended in authored transport but initially backed
+        // by a finite probed source duration.
+        runtime.video_layers[0].clip_slots[1].out_point_ms = None;
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        assert_eq!(
+            runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        assert!(runtime.video_layers[0].state.playing);
+
+        let mut invalidated_asset = runtime.media_assets[1].clone();
+        invalidated_asset.source.metadata = None;
+        let assets_before = runtime.media_assets.clone();
+        let authored_before = runtime.build_persistence_snapshot().authored_video.unwrap();
+        let rendered_before = runtime.video_snapshot();
+        let truth_before = runtime.video_clip_runtime_snapshot();
+        let direct_error = runtime
+            .apply_media_asset_transaction(MediaAssetTransaction::Update(invalidated_asset.clone()))
+            .unwrap_err();
+        assert!(direct_error.contains("finite source end"));
+        assert_eq!(runtime.media_assets, assets_before);
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video.unwrap(),
+            authored_before
+        );
+        assert_eq!(runtime.video_snapshot(), rendered_before);
+        assert_eq!(runtime.video_clip_runtime_snapshot(), truth_before);
+        assert!(runtime.video_layers[0].state.playing);
+
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::MediaAssetTransactionPublished {
+            transaction: MediaAssetTransaction::Update(invalidated_asset.clone()),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        let published_error = receiver.recv().unwrap().unwrap_err();
+        assert!(published_error.contains("finite source end"));
+        assert_eq!(runtime.media_assets, assets_before);
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video.unwrap(),
+            authored_before
+        );
+        assert_eq!(runtime.video_snapshot(), rendered_before);
+        assert_eq!(runtime.video_clip_runtime_snapshot(), truth_before);
+        assert!(runtime.video_layers[0].state.playing);
+
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .load_project_snapshot_and_wait(runtime.build_persistence_snapshot())
+            .expect("active reverse take fixture must load");
+        engine
+            .queue_video_clip_slot_published(1, VideoClipSlotId(21))
+            .expect("active reverse take queue must publish");
+        engine
+            .launch_video_clip_slot_published(1, None)
+            .expect("finite active reverse take must launch");
+        let handle_authored_before = engine
+            .persistence_snapshot()
+            .expect("persistence fence before rejected active asset update")
+            .authored_video
+            .unwrap();
+        let handle_rendered_before = engine.snapshot().video;
+        let handle_truth_before = engine.video_audio_runtime_snapshot().clip_slots;
+        let handle_error = engine
+            .media_asset_transaction_published(MediaAssetTransaction::Update(invalidated_asset))
+            .unwrap_err();
+        assert!(handle_error.contains("finite source end"));
+        assert_eq!(
+            engine
+                .persistence_snapshot()
+                .expect("persistence fence after rejected active asset update")
+                .authored_video
+                .unwrap(),
+            handle_authored_before
+        );
+        assert_eq!(engine.snapshot().video, handle_rendered_before);
+        assert_eq!(
+            engine.video_audio_runtime_snapshot().clip_slots,
+            handle_truth_before
+        );
+        assert!(engine.video_audio_runtime_snapshot().clip_slots.layers[0].playing);
+    }
+
+    #[test]
+    fn video_clip_slot_launch_rejects_unlaunchable_reverse_without_mutating_queue_or_program() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        runtime.media_assets[1].source.metadata = None;
+        let invalid = &mut runtime.video_layers[0].clip_slots[1];
+        invalid.speed = -1.0;
+        invalid.out_point_ms = None;
+
+        let authored_before = runtime.build_persistence_snapshot().authored_video.unwrap();
+        let rendered_before = runtime.video_snapshot();
+        let truth_before = runtime.video_clip_runtime_snapshot();
+        let immediate_error = runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(21)))
+            .unwrap_err();
+        assert!(immediate_error.contains("finite source end"));
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video.unwrap(),
+            authored_before
+        );
+        assert_eq!(runtime.video_snapshot(), rendered_before);
+        assert_eq!(runtime.video_clip_runtime_snapshot(), truth_before);
+
+        runtime.video_layers[0].clip_slots[1].launch_quantization =
+            VideoClipLaunchQuantization::NextBeat;
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        let authored_before_quantized =
+            runtime.build_persistence_snapshot().authored_video.unwrap();
+        let rendered_before_quantized = runtime.video_snapshot();
+        let truth_before_quantized = runtime.video_clip_runtime_snapshot();
+        let quantized_error = runtime.launch_video_clip_slot(1, None).unwrap_err();
+        assert!(quantized_error.contains("finite source end"));
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video.unwrap(),
+            authored_before_quantized
+        );
+        assert_eq!(runtime.video_snapshot(), rendered_before_quantized);
+        assert_eq!(
+            runtime.video_clip_runtime_snapshot(),
+            truth_before_quantized
+        );
+        assert_eq!(
+            runtime.video_layers[0].queued_clip_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        assert!(runtime.video_layers[0].pending_clip_launch.is_none());
+
+        // Launchability is rechecked at the boundary as a final fail-closed
+        // guard: a later catalog edit can invalidate an already-admitted
+        // pending reverse slot, which must clear rather than remain stuck.
+        let mut boundary_runtime = clip_slot_engine_test_runtime();
+        let boundary_now = boundary_runtime.last_tick;
+        boundary_runtime.clock = BpmClock::new(120.0, boundary_now);
+        boundary_runtime
+            .clip_clock_tracker
+            .reset(boundary_runtime.clock.snapshot(boundary_now));
+        boundary_runtime.video_layers[0].clip_slots[1].speed = -1.0;
+        boundary_runtime.video_layers[0].clip_slots[1].out_point_ms = None;
+        boundary_runtime.video_layers[0].clip_slots[1].launch_quantization =
+            VideoClipLaunchQuantization::NextBeat;
+        boundary_runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        boundary_runtime.launch_video_clip_slot(1, None).unwrap();
+        assert!(boundary_runtime.video_layers[0]
+            .pending_clip_launch
+            .is_some());
+        let mut invalidated_asset = boundary_runtime.media_assets[1].clone();
+        invalidated_asset.source.metadata = None;
+        boundary_runtime
+            .apply_media_asset_transaction(MediaAssetTransaction::Update(invalidated_asset))
+            .unwrap();
+        boundary_runtime.last_tick = boundary_now + Duration::from_millis(500);
+        boundary_runtime.advance_video_layers(Duration::ZERO);
+        assert_eq!(
+            boundary_runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(20))
+        );
+        assert_eq!(boundary_runtime.video_layers[0].queued_clip_slot_id, None);
+        assert!(boundary_runtime.video_layers[0]
+            .pending_clip_launch
+            .is_none());
+        assert!(boundary_runtime
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("finite source end")));
+
+        runtime.cancel_queued_video_clip_slot(1).unwrap();
+        runtime.video_layers[0].clip_slots[1].launch_quantization =
+            VideoClipLaunchQuantization::Immediate;
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let authored_before_published =
+            runtime.build_persistence_snapshot().authored_video.unwrap();
+        let rendered_before_published = runtime.video_snapshot();
+        let truth_before_published = runtime.video_clip_runtime_snapshot();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::LaunchVideoClipSlotPublished {
+            layer_id: 1,
+            slot_id: Some(VideoClipSlotId(21)),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video.unwrap(),
+            authored_before_published
+        );
+        assert_eq!(runtime.video_snapshot(), rendered_before_published);
+        assert_eq!(
+            runtime.video_clip_runtime_snapshot(),
+            truth_before_published
+        );
+        assert_eq!(runtime.video_layers[0].queued_clip_slot_id, None);
+        assert!(runtime.video_layers[0].pending_clip_launch.is_none());
+
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .load_project_snapshot_and_wait(runtime.build_persistence_snapshot())
+            .expect("invalid inactive slot remains a loadable authored bank entry");
+        let handle_authored_before = engine
+            .persistence_snapshot()
+            .expect("persistence fence before rejected launch")
+            .authored_video
+            .unwrap();
+        let handle_rendered_before = engine.snapshot().video;
+        let handle_error = engine
+            .launch_video_clip_slot_published(1, Some(VideoClipSlotId(21)))
+            .unwrap_err();
+        assert!(handle_error.contains("finite source end"));
+        assert_eq!(
+            engine
+                .persistence_snapshot()
+                .expect("persistence fence after rejected launch")
+                .authored_video
+                .unwrap(),
+            handle_authored_before
+        );
+        assert_eq!(engine.snapshot().video, handle_rendered_before);
+        let handle_truth = engine.video_audio_runtime_snapshot().clip_slots;
+        assert_eq!(
+            handle_truth.layers[0].active_slot_id,
+            Some(VideoClipSlotId(20))
+        );
+        assert_eq!(handle_truth.layers[0].queued_slot_id, None);
+        assert!(handle_truth.layers[0].pending_launch.is_none());
+    }
+
+    #[test]
+    fn video_clip_slot_runtime_commands_are_exact_ambiguous_reject_and_roll_back() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let persistence_before = serde_json::to_vec(
+            runtime
+                .build_persistence_snapshot()
+                .authored_video
+                .as_ref()
+                .unwrap(),
+        )
+        .unwrap();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(20))
+            .unwrap();
+        assert!(runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(21)))
+            .unwrap_err()
+            .contains("queued slot"));
+        runtime.cancel_queued_video_clip_slot(1).unwrap();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        runtime.seek_video_clip_slot(1, 333).unwrap();
+        assert_eq!(runtime.video_layers[0].state.position_ms, 333);
+        assert_eq!(
+            serde_json::to_vec(
+                runtime
+                    .build_persistence_snapshot()
+                    .authored_video
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap(),
+            persistence_before
+        );
+
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.fail_next_pending_publication = true;
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::QueueVideoClipSlotPublished {
+            layer_id: 1,
+            slot_id: VideoClipSlotId(20),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.video_layers[0].queued_clip_slot_id, None);
+    }
+
+    #[test]
+    fn video_clip_slot_quantization_uses_global_beats_and_holds_discontinuity() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let now = runtime.last_tick;
+        runtime.clock = BpmClock::new(120.0, now - Duration::from_millis(1_250));
+        runtime.clip_clock_tracker.last = Some(runtime.clock.snapshot(now));
+        runtime.video_layers[0].clip_slots[1].launch_quantization =
+            VideoClipLaunchQuantization::NextBar;
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        let pending = runtime.video_layers[0].pending_clip_launch.unwrap();
+        let RuntimeClipLaunchBoundary::GlobalBeat {
+            target_boundary_ordinal,
+            quantization,
+            ..
+        } = pending.boundary;
+        assert_eq!(quantization, VideoClipLaunchQuantization::NextBar);
+        assert_eq!(target_boundary_ordinal, 4);
+
+        runtime
+            .clock
+            .sync_external_clock(120.0, 0.0, ClockSource::MidiClock, now);
+        runtime.advance_video_layers(Duration::ZERO);
+        let RuntimeClipLaunchBoundary::GlobalBeat {
+            held_for_clock_discontinuity,
+            clock_generation,
+            ..
+        } = runtime.video_layers[0]
+            .pending_clip_launch
+            .unwrap()
+            .boundary;
+        assert!(held_for_clock_discontinuity);
+        assert_ne!(clock_generation, runtime.clip_clock_tracker.generation);
+        runtime.advance_video_layers(Duration::ZERO);
+        assert_eq!(
+            runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(20))
+        );
+
+        // Requeue after the discontinuity captures a new generation. NextBeat
+        // fires exactly once at its captured global ordinal, not merely when
+        // a later tick happens to have a small phase.
+        runtime.clock = BpmClock::new(120.0, now);
+        runtime.last_tick = now;
+        runtime
+            .clip_clock_tracker
+            .reset(runtime.clock.snapshot(runtime.last_tick));
+        runtime.video_layers[0].clip_slots[1].launch_quantization =
+            VideoClipLaunchQuantization::NextBeat;
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        let RuntimeClipLaunchBoundary::GlobalBeat {
+            clock_generation,
+            held_for_clock_discontinuity,
+            ..
+        } = runtime.video_layers[0]
+            .pending_clip_launch
+            .expect("requeued clip must retain its new boundary")
+            .boundary;
+        assert_eq!(clock_generation, runtime.clip_clock_tracker.generation);
+        assert!(!held_for_clock_discontinuity);
+        runtime.last_tick = now + Duration::from_millis(400);
+        runtime.advance_video_layers(Duration::ZERO);
+        assert_eq!(
+            runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(20))
+        );
+        assert!(runtime.video_layers[0].pending_clip_launch.is_some());
+        runtime.last_tick = now + Duration::from_millis(500);
+        runtime.advance_video_layers(Duration::ZERO);
+        assert_eq!(
+            runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        assert!(runtime.video_layers[0].pending_clip_launch.is_none());
+        runtime.last_tick = now + Duration::from_millis(1_000);
+        runtime.advance_video_layers(Duration::ZERO);
+        assert_eq!(
+            runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+
+        // NextBar follows the same absolute global-beat contract: it remains
+        // pending at beat three and fires once at beat four.
+        runtime.clock = BpmClock::new(120.0, now);
+        runtime.last_tick = now;
+        runtime
+            .clip_clock_tracker
+            .reset(runtime.clock.snapshot(runtime.last_tick));
+        runtime.video_layers[0].clip_slots[0].launch_quantization =
+            VideoClipLaunchQuantization::NextBar;
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(20))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        runtime.last_tick = now + Duration::from_millis(500);
+        runtime.advance_video_layers(Duration::ZERO);
+        assert_eq!(
+            runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        runtime.last_tick = now + Duration::from_millis(1_000);
+        runtime.advance_video_layers(Duration::ZERO);
+        assert_eq!(
+            runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        runtime.last_tick = now + Duration::from_millis(1_500);
+        runtime.advance_video_layers(Duration::ZERO);
+        assert_eq!(
+            runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        runtime.last_tick = now + Duration::from_millis(2_000);
+        runtime.advance_video_layers(Duration::ZERO);
+        assert_eq!(
+            runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(20))
+        );
+    }
+
+    #[test]
+    fn video_clip_slot_project_replace_and_invalid_asset_leave_runtime_fail_closed() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        let third = clip_slot_engine_test_source("replacement", 2_000);
+        let mut replacement = runtime.build_persistence_snapshot();
+        let replacement_video = replacement
+            .authored_video
+            .as_mut()
+            .expect("persistence snapshot must carry the authored video image");
+        let mut replacement_default =
+            clip_slot_engine_test_slot(20, 12, VideoClipLoopMode::Once, 1.0);
+        replacement_default.in_point_ms = 333;
+        replacement_default.out_point_ms = Some(1_777);
+        replacement_video.media_assets =
+            vec![media_asset_test_summary(12, "Replacement", third.clone())];
+        replacement_video.layers[0].source = third.clone();
+        replacement_video.layers[0].media_asset_id = Some(12);
+        replacement_video.layers[0].clip_slots = vec![replacement_default];
+        replacement_video.layers[0].default_clip_slot_id = Some(VideoClipSlotId(20));
+        replacement_video.layers[0].state.position_ms = 777;
+        replacement_video.layers[0].state.playing = false;
+        runtime.load_project_snapshot(replacement);
+        let truth = runtime.video_clip_runtime_snapshot();
+        assert_eq!(truth.layers[0].active_slot_id, Some(VideoClipSlotId(20)));
+        assert_eq!(truth.layers[0].queued_slot_id, None);
+        assert!(truth.layers[0].pending_launch.is_none());
+        assert_eq!(runtime.video_layers[0].state.position_ms, 777);
+        assert!(!runtime.video_layers[0].state.playing);
+        assert_eq!(
+            runtime.video_snapshot().layers[0].source.path.as_deref(),
+            third.path.as_deref()
+        );
+
+        let before = runtime.video_snapshot();
+        assert!(runtime
+            .assign_video_clip_slot_asset(1, VideoClipSlotId(20), 999)
+            .is_err());
+        assert_eq!(runtime.video_snapshot(), before);
+    }
+
+    #[test]
+    fn video_clip_slot_import_assign_and_duplicate_are_atomic_and_globally_unique() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let source_slots = runtime.video_layers[0]
+            .clip_slots
+            .iter()
+            .map(|slot| slot.id)
+            .collect::<Vec<_>>();
+        runtime
+            .duplicate_video_layer(
+                1,
+                2,
+                "Copy".to_string(),
+                &source_slots,
+                &[VideoClipSlotId(30), VideoClipSlotId(31)],
+            )
+            .unwrap();
+        let copy = &runtime.video_layers[1];
+        assert_eq!(
+            copy.clip_slots
+                .iter()
+                .map(|slot| slot.id.0)
+                .collect::<Vec<_>>(),
+            vec![30, 31]
+        );
+        assert_eq!(copy.active_clip_slot_id, Some(VideoClipSlotId(30)));
+        assert_eq!(copy.queued_clip_slot_id, None);
+        assert!(copy.pending_clip_launch.is_none());
+        assert_eq!(copy.state.position_ms, 100);
+
+        let before = runtime.build_persistence_snapshot();
+        let assignment = VideoClipSlotImportAssignment {
+            layer_id: 1,
+            slot: clip_slot_engine_test_slot(32, 99, VideoClipLoopMode::Loop, 1.0),
+            before_slot_id: None,
+            make_default: false,
+        };
+        let candidate = VideoClipSlotImportAndAssignCandidate {
+            assets: vec![media_asset_test_summary(
+                99,
+                "Imported",
+                clip_slot_engine_test_source("imported", 1_000),
+            )],
+            assignments: vec![assignment],
+        };
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.fail_next_pending_publication = true;
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::VideoClipSlotImportAndAssignPublished {
+            candidate,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+    }
+
+    #[test]
+    fn video_clip_slot_published_mutation_rollback_and_handle_acks_are_definitive() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let persistence_before = runtime.build_persistence_snapshot();
+        let rendered_before = runtime.video_snapshot();
+        let truth_before = runtime.video_clip_runtime_snapshot();
+        let last_error_before = runtime.last_error.clone();
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.fail_next_pending_publication = true;
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::CreateVideoClipSlotPublished {
+            layer_id: 1,
+            slot: clip_slot_engine_test_slot(22, 10, VideoClipLoopMode::Loop, 1.0),
+            before_slot_id: None,
+            make_default: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        // B has applied before publication, so the forced failure exercises
+        // the complete A restore rather than a rejected candidate shortcut.
+        assert_eq!(runtime.video_layers[0].clip_slots.len(), 3);
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.build_persistence_snapshot(), persistence_before);
+        assert_eq!(runtime.video_snapshot(), rendered_before);
+        assert_eq!(runtime.video_clip_runtime_snapshot(), truth_before);
+        assert_eq!(runtime.last_error, last_error_before);
+
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .load_project_snapshot_and_wait(persistence_before)
+            .expect("test project load must publish before allocator reservation");
+        let new_slot_id = engine.allocate_video_clip_slot_id();
+        assert_eq!(new_slot_id, VideoClipSlotId(22));
+        engine
+            .create_video_clip_slot_published(
+                1,
+                clip_slot_engine_test_slot(new_slot_id.0, 10, VideoClipLoopMode::Loop, 1.0),
+                None,
+                false,
+            )
+            .expect("authored slot command must acknowledge after publication");
+        engine
+            .queue_video_clip_slot_published(1, VideoClipSlotId(21))
+            .expect("runtime queue command must acknowledge after publication");
+        engine
+            .launch_video_clip_slot_published(1, None)
+            .expect("runtime launch command must acknowledge after publication");
+        let observed = engine.video_audio_runtime_snapshot();
+        assert_eq!(
+            observed.clip_slots.layers[0].active_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        assert_eq!(observed.layers[0].media_asset_id, Some(11));
+        let authored = engine
+            .persistence_snapshot()
+            .expect("persistence fence must observe the authored slot")
+            .authored_video
+            .expect("persistence image must carry authored video");
+        assert!(authored.layers[0]
+            .clip_slots
+            .iter()
+            .any(|slot| slot.id == new_slot_id));
+    }
+
+    #[test]
+    fn video_clip_slot_bank_limit_order_and_legacy_load_reconciles_before_reserving_allocators() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        for id in 22..=51 {
+            runtime
+                .create_video_clip_slot(
+                    1,
+                    clip_slot_engine_test_slot(id, 10, VideoClipLoopMode::Loop, 1.0),
+                    None,
+                    false,
+                )
+                .unwrap();
+        }
+        assert_eq!(runtime.video_layers[0].clip_slots.len(), 32);
+        assert!(runtime
+            .create_video_clip_slot(
+                1,
+                clip_slot_engine_test_slot(52, 10, VideoClipLoopMode::Loop, 1.0),
+                None,
+                false,
+            )
+            .is_err());
+        let reversed = runtime.video_layers[0]
+            .clip_slots
+            .iter()
+            .rev()
+            .map(|slot| slot.id)
+            .collect::<Vec<_>>();
+        runtime
+            .reorder_video_clip_slots(1, reversed.clone())
+            .unwrap();
+        assert_eq!(
+            runtime.video_layers[0]
+                .clip_slots
+                .iter()
+                .map(|slot| slot.id)
+                .collect::<Vec<_>>(),
+            reversed
+        );
+
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let ignored_zero_source = clip_slot_engine_test_source("ignored-zero", 1_000);
+        let source = clip_slot_engine_test_source("first-usable", 1_000);
+        let ignored_duplicate_source = clip_slot_engine_test_source("ignored-duplicate", 1_000);
+        let zero_layer = media_asset_test_layer(0, 90, "Ignored zero", ignored_zero_source);
+        let mut first_usable_layer = media_asset_test_layer(7, 91, "First usable", source.clone());
+        first_usable_layer.media_asset_id = None;
+        let duplicate_layer =
+            media_asset_test_layer(7, 92, "Ignored duplicate", ignored_duplicate_source);
+        engine
+            .load_project_snapshot_and_wait(EngineSnapshot {
+                video: VideoSnapshot {
+                    layers: vec![zero_layer, first_usable_layer, duplicate_layer],
+                    ..VideoSnapshot::default()
+                },
+                ..EngineSnapshot::default()
+            })
+            .unwrap();
+        let loaded = engine.persistence_snapshot().unwrap();
+        let first = loaded.authored_video.as_ref().unwrap().clone();
+        assert_eq!(first.layers.len(), 1);
+        assert_eq!(first.layers[0].id, 7);
+        assert_eq!(first.layers[0].label, "First usable");
+        assert_eq!(first.layers[0].source, source);
+        assert_eq!(first.media_assets.len(), 1);
+        assert_eq!(first.media_assets[0].id, 8);
+        assert_eq!(first.layers[0].clip_slots[0].id, VideoClipSlotId(9));
+        assert_eq!(
+            engine.video_audio_runtime_snapshot().clip_slots.layers[0].active_slot_id,
+            Some(VideoClipSlotId(9))
+        );
+        let next_asset_id = engine.allocate_media_asset_id();
+        let next_slot_id = engine.allocate_video_clip_slot_id();
+        assert!(next_asset_id > first.media_assets[0].id);
+        assert!(next_slot_id.0 > first.layers[0].clip_slots[0].id.0);
+        engine.load_project_snapshot_and_wait(loaded).unwrap();
+        assert_eq!(
+            engine
+                .persistence_snapshot()
+                .unwrap()
+                .authored_video
+                .unwrap(),
+            first
+        );
+    }
+
+    #[test]
+    fn video_clip_slot_isf_override_is_rendered_clone_only_and_switch_resets_it() {
+        let mut runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        let default_slot_id = runtime.video_layers[0].default_clip_slot_id.unwrap();
+        let default_slot = runtime.video_layers[0]
+            .clip_slots
+            .iter_mut()
+            .find(|slot| slot.id == default_slot_id)
+            .unwrap();
+        default_slot.effect_overrides = vec![protocol::VideoClipEffectOverrideSummary {
+            stage_index: 1,
+            control_name: "trigger".to_string(),
+            value: [0.75, 0.0, 0.0, 0.0],
+        }];
+        let assets = runtime.media_assets.clone();
+        activate_runtime_video_clip_slot(&mut runtime.video_layers[0], default_slot_id, &assets)
+            .unwrap();
+        assert_eq!(
+            runtime.video_snapshot().layers[0]
+                .isf_effect
+                .as_ref()
+                .unwrap()
+                .stack[0]
+                .controls[0]
+                .value[0],
+            0.75
+        );
+        assert_eq!(
+            runtime
+                .build_persistence_snapshot()
+                .authored_video
+                .as_ref()
+                .unwrap()
+                .layers[0]
+                .isf_effect
+                .as_ref()
+                .unwrap()
+                .stack[0]
+                .controls[0]
+                .value[0],
+            0.0
+        );
+        let mut alternate = runtime.video_layers[0].clip_slots[0].clone();
+        alternate.id = VideoClipSlotId(9_002);
+        alternate.effect_overrides.clear();
+        runtime
+            .create_video_clip_slot(1, alternate.clone(), None, false)
+            .unwrap();
+        activate_runtime_video_clip_slot(&mut runtime.video_layers[0], alternate.id, &assets)
+            .unwrap();
+        assert_eq!(
+            runtime.video_snapshot().layers[0]
+                .isf_effect
+                .as_ref()
+                .unwrap()
+                .stack[0]
+                .controls[0]
+                .value[0],
+            0.0
+        );
     }
 
     fn publish_test_media_asset_transaction(
@@ -61820,6 +65302,7 @@ mod tests {
 
         let asset_id = 101;
         let layer_id = 201;
+        let clip_slot_id = 401;
         let output_id = 301;
         let source = VideoSourceSummary {
             kind: VideoSourceKind::File,
@@ -61847,6 +65330,18 @@ mod tests {
                         blend_mode: VideoBlendMode::Normal,
                         state: VideoLayerState::default(),
                         isf_effect: None,
+                        clip_slots: vec![VideoClipSlotSummary {
+                            id: VideoClipSlotId(clip_slot_id),
+                            media_asset_id: asset_id,
+                            in_point_ms: 0,
+                            out_point_ms: None,
+                            loop_mode: VideoClipLoopMode::Once,
+                            speed: 1.0,
+                            cue_points: Vec::new(),
+                            launch_quantization: VideoClipLaunchQuantization::Immediate,
+                            effect_overrides: Vec::new(),
+                        }],
+                        default_clip_slot_id: Some(VideoClipSlotId(clip_slot_id)),
                     }],
                 },
                 output: VideoOutputSummary {
@@ -61883,7 +65378,34 @@ mod tests {
         // Failed publication may leave monotonic gaps, but cannot reuse an ID.
         assert!(engine.allocate_media_asset_id() > asset_id);
         assert!(engine.allocate_video_layer_id() > layer_id);
+        assert!(engine.allocate_video_clip_slot_id().0 > clip_slot_id);
         assert!(engine.allocate_video_output_id() > output_id);
+    }
+
+    #[test]
+    fn allocator_media_asset_import_reserves_explicit_layer_clip_slot_identity() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let slot_id = 101;
+        engine
+            .media_asset_transaction_published(MediaAssetTransaction::Import(
+                allocator_media_asset_candidate_with_clip_slot(slot_id),
+            ))
+            .expect("engine-ready import must publish");
+        let persisted = engine
+            .persistence_snapshot()
+            .expect("persistence fence must observe imported slot");
+        assert!(persisted
+            .authored_video
+            .as_ref()
+            .expect("import persistence carries authored video")
+            .layers[0]
+            .clip_slots
+            .iter()
+            .any(|slot| slot.id == VideoClipSlotId(slot_id)));
+        assert!(engine.allocate_video_clip_slot_id().0 > slot_id);
     }
 
     #[test]
@@ -61990,7 +65512,13 @@ mod tests {
             ))
             .unwrap();
         runtime
-            .duplicate_video_layer(1, 2, "Copy".to_string())
+            .duplicate_video_layer(
+                1,
+                2,
+                "Copy".to_string(),
+                &[VideoClipSlotId(31)],
+                &[VideoClipSlotId(32)],
+            )
             .unwrap();
         let duplicated = runtime.video_snapshot();
         assert_eq!(duplicated.media_assets.len(), 1);
