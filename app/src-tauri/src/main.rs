@@ -589,12 +589,22 @@ struct MediaAssetOperationHandle {
     generation: u64,
 }
 
+/// A reserved identity is bound to exactly one operation family. Availability
+/// is deliberately separate from mutation preparation because its Start path
+/// must capture authority without reconciling or changing project history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaAssetOperationPurpose {
+    Mutation,
+    Availability,
+}
+
 #[derive(Debug)]
 struct MediaAssetOperationEntry {
     generation: u64,
     owner_id: String,
     cancel: Arc<AtomicBool>,
     admission: Arc<MediaAssetOperationAdmission>,
+    purpose: MediaAssetOperationPurpose,
     /// `Some` while the slot is reserved and awaiting its staged prepare (the
     /// reaper may reclaim it at TTL). Adoption into a running guard clears it to
     /// `None`; from then on the guard's `Drop` owns removal.
@@ -662,10 +672,11 @@ impl MediaAssetOperationRegistry {
         }
     }
 
-    fn begin(
+    fn begin_for(
         self: &Arc<Self>,
         request_id: u64,
         owner_id: String,
+        purpose: MediaAssetOperationPurpose,
     ) -> Result<MediaAssetOperationGuard, String> {
         if request_id == 0 {
             return Err("Media asset operation request ID must be non-zero".to_string());
@@ -694,6 +705,7 @@ impl MediaAssetOperationRegistry {
                 owner_id,
                 cancel: Arc::clone(&cancel),
                 admission: Arc::clone(&admission),
+                purpose,
                 // Guard-owned from creation: `Drop` removes it, so the reaper
                 // must never reclaim it out from under an in-flight prepare.
                 expires_at: None,
@@ -710,16 +722,25 @@ impl MediaAssetOperationRegistry {
         })
     }
 
+    fn begin(
+        self: &Arc<Self>,
+        request_id: u64,
+        owner_id: String,
+    ) -> Result<MediaAssetOperationGuard, String> {
+        self.begin_for(request_id, owner_id, MediaAssetOperationPurpose::Mutation)
+    }
+
     /// Reserve an operation slot and return its exact identity *before* any
     /// hashing. The slot persists across the IPC boundary (unlike `begin`,
     /// there is no RAII guard yet) so the client can cancel the very first
     /// hashed chunk of the subsequent staged prepare. A reserved slot that is
     /// never adopted is reclaimed by the reaper at `MEDIA_ASSET_RESERVED_OPERATION_TTL`.
-    fn reserve(
+    fn reserve_for(
         self: &Arc<Self>,
         request_id: u64,
         owner_id: String,
         authority: MediaAssetPrepareAuthority,
+        purpose: MediaAssetOperationPurpose,
     ) -> Result<MediaAssetOperationHandle, String> {
         if request_id == 0 {
             return Err("Media asset operation request ID must be non-zero".to_string());
@@ -742,6 +763,7 @@ impl MediaAssetOperationRegistry {
                 owner_id,
                 cancel: Arc::new(AtomicBool::new(false)),
                 admission: Arc::new(MediaAssetOperationAdmission::new()),
+                purpose,
                 expires_at: Some(Instant::now() + MEDIA_ASSET_RESERVED_OPERATION_TTL),
                 // Bind the exact authority the client was told at Start; the
                 // staged prepare adopts it and must confirm it is still current.
@@ -752,6 +774,34 @@ impl MediaAssetOperationRegistry {
             request_id,
             generation,
         })
+    }
+
+    fn reserve(
+        self: &Arc<Self>,
+        request_id: u64,
+        owner_id: String,
+        authority: MediaAssetPrepareAuthority,
+    ) -> Result<MediaAssetOperationHandle, String> {
+        self.reserve_for(
+            request_id,
+            owner_id,
+            authority,
+            MediaAssetOperationPurpose::Mutation,
+        )
+    }
+
+    fn reserve_availability(
+        self: &Arc<Self>,
+        request_id: u64,
+        owner_id: String,
+        authority: MediaAssetPrepareAuthority,
+    ) -> Result<MediaAssetOperationHandle, String> {
+        self.reserve_for(
+            request_id,
+            owner_id,
+            authority,
+            MediaAssetOperationPurpose::Availability,
+        )
     }
 
     /// Reserve a request ID for an old IPC command which has no caller-owned
@@ -780,11 +830,11 @@ impl MediaAssetOperationRegistry {
                 .active
                 .lock()
                 .map_err(|_| "Media asset operation registry lock was poisoned".to_string())?;
-            let mut prepared = self
+            let prepared = self
                 .prepared
                 .lock()
                 .map_err(|_| "Prepared media asset store lock was poisoned".to_string())?;
-            let mut prepared_relinks = self
+            let prepared_relinks = self
                 .prepared_relinks
                 .lock()
                 .map_err(|_| "Prepared media asset relink store lock was poisoned".to_string())?;
@@ -803,12 +853,13 @@ impl MediaAssetOperationRegistry {
                 "Media asset authoritative lane store lock was poisoned".to_string()
             })?;
 
-            // Treat an expired entry as no longer reserved exactly as the
-            // ordinary lookup paths do. Retaining here also prevents an
-            // arbitrary high raw request from blocking compatibility IDs after
-            // its documented recovery window.
-            prepared.retain(|_, entry| entry.expires_at > now);
-            prepared_relinks.retain(|_, entry| entry.expires_at > now);
+            // Receipt values have no retained filesystem handles and are safe
+            // to retire inline. Prepared import/relink values are left to the
+            // dedicated reaper/lookup cleanup below: dropping one here would
+            // run its retained-handle destructor while six registry locks are
+            // held. The server-only request sequence is monotonic, so keeping
+            // an expired prepared ID occupied for this one allocation attempt
+            // cannot starve compatibility allocation.
             commit_receipts.retain(|_, entry| entry.expires_at > now);
             authoritative_receipts.retain(|_, entry| entry.expires_at > now);
 
@@ -842,6 +893,7 @@ impl MediaAssetOperationRegistry {
                     owner_id: owner_id.clone(),
                     cancel: Arc::new(AtomicBool::new(false)),
                     admission: Arc::new(MediaAssetOperationAdmission::new()),
+                    purpose: MediaAssetOperationPurpose::Mutation,
                     expires_at: Some(Instant::now() + MEDIA_ASSET_RESERVED_OPERATION_TTL),
                     reserved_authority: Some(authority.clone()),
                 },
@@ -865,15 +917,44 @@ impl MediaAssetOperationRegistry {
         )
     }
 
+    fn take_expired_prepared_imports(
+        entries: &mut HashMap<u64, PreparedMediaAssetImport>,
+        now: Instant,
+    ) -> Vec<PreparedMediaAssetImport> {
+        let expired = entries
+            .iter()
+            .filter_map(|(token, entry)| (entry.expires_at <= now).then_some(*token))
+            .collect::<Vec<_>>();
+        expired
+            .into_iter()
+            .filter_map(|token| entries.remove(&token))
+            .collect()
+    }
+
+    fn take_expired_prepared_relinks(
+        entries: &mut HashMap<u64, PreparedMediaAssetRelink>,
+        now: Instant,
+    ) -> Vec<PreparedMediaAssetRelink> {
+        let expired = entries
+            .iter()
+            .filter_map(|(token, entry)| (entry.expires_at <= now).then_some(*token))
+            .collect::<Vec<_>>();
+        expired
+            .into_iter()
+            .filter_map(|token| entries.remove(&token))
+            .collect()
+    }
+
     /// Adopt a previously reserved slot for the staged prepare. Clearing the
     /// slot's TTL hands ownership to the returned RAII guard, so the reaper no
     /// longer touches it and normal drop-on-error cleanup applies. A second
     /// adoption or an adoption of a `begin`-owned slot is rejected.
-    fn adopt_reserved(
+    fn adopt_reserved_for(
         self: &Arc<Self>,
         request_id: u64,
         generation: u64,
         owner_id: String,
+        purpose: MediaAssetOperationPurpose,
     ) -> Result<(MediaAssetOperationGuard, MediaAssetPrepareAuthority), String> {
         let owner_id = normalize_project_transaction_owner_id(owner_id)?;
         let mut active = self
@@ -887,6 +968,9 @@ impl MediaAssetOperationRegistry {
             return Err(
                 "Media asset operation reservation does not match this operation owner".to_string(),
             );
+        }
+        if entry.purpose != purpose {
+            return Err("Media asset operation reservation has a different purpose".to_string());
         }
         if entry.expires_at.is_none() {
             return Err("Media asset operation is already in progress".to_string());
@@ -916,6 +1000,34 @@ impl MediaAssetOperationRegistry {
             },
             reserved_authority,
         ))
+    }
+
+    fn adopt_reserved(
+        self: &Arc<Self>,
+        request_id: u64,
+        generation: u64,
+        owner_id: String,
+    ) -> Result<(MediaAssetOperationGuard, MediaAssetPrepareAuthority), String> {
+        self.adopt_reserved_for(
+            request_id,
+            generation,
+            owner_id,
+            MediaAssetOperationPurpose::Mutation,
+        )
+    }
+
+    fn adopt_reserved_availability(
+        self: &Arc<Self>,
+        request_id: u64,
+        generation: u64,
+        owner_id: String,
+    ) -> Result<(MediaAssetOperationGuard, MediaAssetPrepareAuthority), String> {
+        self.adopt_reserved_for(
+            request_id,
+            generation,
+            owner_id,
+            MediaAssetOperationPurpose::Availability,
+        )
     }
 
     /// Attempt to cancel an exact operation. Returns `true` only if the cancel
@@ -952,7 +1064,7 @@ impl MediaAssetOperationRegistry {
                 _ => false,
             }
         };
-        let prepared_won = {
+        let (prepared_won, retired_prepared) = {
             let mut prepared = self
                 .prepared
                 .lock()
@@ -968,17 +1080,23 @@ impl MediaAssetOperationRegistry {
                 let won = prepared
                     .get(&generation)
                     .is_some_and(|entry| entry.admission.try_cancel());
-                if won {
-                    if let Some(entry) = prepared.remove(&generation) {
+                let retired = if won {
+                    prepared.remove(&generation).map(|entry| {
                         entry.cancel.store(true, Ordering::Release);
-                    }
-                }
-                won
+                        entry
+                    })
+                } else {
+                    None
+                };
+                (won, retired)
             } else {
-                false
+                (false, None)
             }
         };
-        let prepared_relink_won = {
+        // Retained file guards must unlock only after the registry mutex is
+        // released. Keeping the owned value outside the lock scope enforces it.
+        drop(retired_prepared);
+        let (prepared_relink_won, retired_relink) = {
             let mut prepared = self
                 .prepared_relinks
                 .lock()
@@ -992,16 +1110,20 @@ impl MediaAssetOperationRegistry {
                 let won = prepared
                     .get(&generation)
                     .is_some_and(|entry| entry.admission.try_cancel());
-                if won {
-                    if let Some(entry) = prepared.remove(&generation) {
+                let retired = if won {
+                    prepared.remove(&generation).map(|entry| {
                         entry.cancel.store(true, Ordering::Release);
-                    }
-                }
-                won
+                        entry
+                    })
+                } else {
+                    None
+                };
+                (won, retired)
             } else {
-                false
+                (false, None)
             }
         };
+        drop(retired_relink);
         Ok(active_won || prepared_won || prepared_relink_won)
     }
 
@@ -1036,12 +1158,17 @@ impl MediaAssetOperationRegistry {
             .prepared
             .lock()
             .map_err(|_| "Prepared media asset store lock was poisoned".to_string())?;
-        let now = Instant::now();
-        entries.retain(|_, entry| entry.expires_at > now);
-        if entries.insert(token, prepared).is_some() {
-            return Err("Prepared media asset token collision; retry the import".to_string());
-        }
+        let retired = Self::take_expired_prepared_imports(&mut entries, Instant::now());
+        let result = if entries.contains_key(&token) {
+            Err("Prepared media asset token collision; retry the import".to_string())
+        } else {
+            entries.insert(token, prepared);
+            Ok(())
+        };
+        drop(entries);
         drop(active);
+        drop(retired);
+        result?;
         Ok(token)
     }
 
@@ -1056,12 +1183,14 @@ impl MediaAssetOperationRegistry {
             .prepared
             .lock()
             .map_err(|_| "Prepared media asset store lock was poisoned".to_string())?;
-        let now = Instant::now();
-        entries.retain(|_, entry| entry.expires_at > now);
-        let entry = entries
+        let retired = Self::take_expired_prepared_imports(&mut entries, Instant::now());
+        let result = entries
             .get(&token)
             .cloned()
-            .ok_or_else(|| "Prepared media asset import was not found or expired".to_string())?;
+            .ok_or_else(|| "Prepared media asset import was not found or expired".to_string());
+        drop(entries);
+        drop(retired);
+        let entry = result?;
         if entry.request_id != request_id
             || entry.operation_generation != operation_generation
             || entry.owner_id != owner_id
@@ -1083,17 +1212,22 @@ impl MediaAssetOperationRegistry {
         operation_generation: u64,
         owner_id: &str,
     ) {
-        let mut entries = self
-            .prepared
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if entries.get(&token).is_some_and(|entry| {
-            entry.request_id == request_id
-                && entry.operation_generation == operation_generation
-                && entry.owner_id == owner_id
-        }) {
-            entries.remove(&token);
-        }
+        let retired = {
+            let mut entries = self
+                .prepared
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if entries.get(&token).is_some_and(|entry| {
+                entry.request_id == request_id
+                    && entry.operation_generation == operation_generation
+                    && entry.owner_id == owner_id
+            }) {
+                entries.remove(&token)
+            } else {
+                None
+            }
+        };
+        drop(retired);
     }
 
     fn finalize_prepared_import_exact(
@@ -1105,28 +1239,39 @@ impl MediaAssetOperationRegistry {
         authority: &MediaAssetPrepareAuthority,
         sources: Vec<FinalizedLocalMediaSource>,
     ) -> Result<(), String> {
+        let mut incoming_sources = Some(sources);
         let mut entries = self
             .prepared
             .lock()
             .map_err(|_| "Prepared media asset store lock was poisoned".to_string())?;
-        let entry = entries
-            .get_mut(&token)
-            .ok_or_else(|| "Prepared media asset import was not found or expired".to_string())?;
-        if entry.request_id != request_id
-            || entry.operation_generation != operation_generation
-            || entry.owner_id != owner_id
-            || entry.authority != *authority
-        {
-            return Err("Prepared media asset import changed before finalization".to_string());
-        }
-        if entry.cancel.load(Ordering::Acquire) {
-            return Err("Media asset operation was cancelled".to_string());
-        }
-        if entry.expires_at <= Instant::now() {
-            return Err("Prepared media asset import expired; prepare again".to_string());
-        }
-        entry.finalized_sources = Some(sources);
-        Ok(())
+        let result = (|| {
+            let entry = entries.get_mut(&token).ok_or_else(|| {
+                "Prepared media asset import was not found or expired".to_string()
+            })?;
+            if entry.request_id != request_id
+                || entry.operation_generation != operation_generation
+                || entry.owner_id != owner_id
+                || entry.authority != *authority
+            {
+                return Err("Prepared media asset import changed before finalization".to_string());
+            }
+            if entry.cancel.load(Ordering::Acquire) {
+                return Err("Media asset operation was cancelled".to_string());
+            }
+            if entry.expires_at <= Instant::now() {
+                return Err("Prepared media asset import expired; prepare again".to_string());
+            }
+            // Concurrent exact finalizers may both complete the expensive file
+            // proof. The first stores its guards; the duplicate is a successful
+            // idempotent retry whose redundant guards are dropped after unlock.
+            if entry.finalized_sources.is_none() {
+                entry.finalized_sources = incoming_sources.take();
+            }
+            Ok(())
+        })();
+        drop(entries);
+        drop(incoming_sources);
+        result
     }
 
     fn store_prepared_relink_from_active(
@@ -1159,12 +1304,17 @@ impl MediaAssetOperationRegistry {
             .prepared_relinks
             .lock()
             .map_err(|_| "Prepared media asset relink store lock was poisoned".to_string())?;
-        let now = Instant::now();
-        entries.retain(|_, entry| entry.expires_at > now);
-        if entries.insert(token, prepared).is_some() {
-            return Err("Prepared media asset relink token collision; retry".to_string());
-        }
+        let retired = Self::take_expired_prepared_relinks(&mut entries, Instant::now());
+        let result = if entries.contains_key(&token) {
+            Err("Prepared media asset relink token collision; retry".to_string())
+        } else {
+            entries.insert(token, prepared);
+            Ok(())
+        };
+        drop(entries);
         drop(active);
+        drop(retired);
+        result?;
         Ok(token)
     }
 
@@ -1179,12 +1329,14 @@ impl MediaAssetOperationRegistry {
             .prepared_relinks
             .lock()
             .map_err(|_| "Prepared media asset relink store lock was poisoned".to_string())?;
-        let now = Instant::now();
-        entries.retain(|_, entry| entry.expires_at > now);
-        let entry = entries
+        let retired = Self::take_expired_prepared_relinks(&mut entries, Instant::now());
+        let result = entries
             .get(&token)
             .cloned()
-            .ok_or_else(|| "Prepared media asset relink was not found or expired".to_string())?;
+            .ok_or_else(|| "Prepared media asset relink was not found or expired".to_string());
+        drop(entries);
+        drop(retired);
+        let entry = result?;
         if entry.request_id != request_id
             || entry.operation_generation != operation_generation
             || entry.owner_id != owner_id
@@ -1203,17 +1355,22 @@ impl MediaAssetOperationRegistry {
         operation_generation: u64,
         owner_id: &str,
     ) {
-        let mut entries = self
-            .prepared_relinks
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if entries.get(&token).is_some_and(|entry| {
-            entry.request_id == request_id
-                && entry.operation_generation == operation_generation
-                && entry.owner_id == owner_id
-        }) {
-            entries.remove(&token);
-        }
+        let retired = {
+            let mut entries = self
+                .prepared_relinks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if entries.get(&token).is_some_and(|entry| {
+                entry.request_id == request_id
+                    && entry.operation_generation == operation_generation
+                    && entry.owner_id == owner_id
+            }) {
+                entries.remove(&token)
+            } else {
+                None
+            }
+        };
+        drop(retired);
     }
 
     fn finalize_prepared_relink_exact(
@@ -1226,29 +1383,39 @@ impl MediaAssetOperationRegistry {
         replacement_source: FinalizedLocalMediaSource,
         legacy_source: Option<FinalizedLocalMediaSource>,
     ) -> Result<(), String> {
+        let mut incoming_replacement = Some(replacement_source);
+        let mut incoming_legacy = legacy_source;
         let mut entries = self
             .prepared_relinks
             .lock()
             .map_err(|_| "Prepared media asset relink store lock was poisoned".to_string())?;
-        let entry = entries
-            .get_mut(&token)
-            .ok_or_else(|| "Prepared media asset relink was not found or expired".to_string())?;
-        if entry.request_id != request_id
-            || entry.operation_generation != operation_generation
-            || entry.owner_id != owner_id
-            || entry.authority != *authority
-        {
-            return Err("Prepared media asset relink changed before finalization".to_string());
-        }
-        if entry.cancel.load(Ordering::Acquire) {
-            return Err("Media asset operation was cancelled".to_string());
-        }
-        if entry.expires_at <= Instant::now() {
-            return Err("Prepared media asset relink expired; prepare again".to_string());
-        }
-        entry.finalized_replacement_source = Some(replacement_source);
-        entry.finalized_legacy_source = legacy_source;
-        Ok(())
+        let result = (|| {
+            let entry = entries.get_mut(&token).ok_or_else(|| {
+                "Prepared media asset relink was not found or expired".to_string()
+            })?;
+            if entry.request_id != request_id
+                || entry.operation_generation != operation_generation
+                || entry.owner_id != owner_id
+                || entry.authority != *authority
+            {
+                return Err("Prepared media asset relink changed before finalization".to_string());
+            }
+            if entry.cancel.load(Ordering::Acquire) {
+                return Err("Media asset operation was cancelled".to_string());
+            }
+            if entry.expires_at <= Instant::now() {
+                return Err("Prepared media asset relink expired; prepare again".to_string());
+            }
+            if entry.finalized_replacement_source.is_none() {
+                entry.finalized_replacement_source = incoming_replacement.take();
+                entry.finalized_legacy_source = incoming_legacy.take();
+            }
+            Ok(())
+        })();
+        drop(entries);
+        drop(incoming_replacement);
+        drop(incoming_legacy);
+        result
     }
 
     /// Look up a terminal commit receipt for an exact identity. This is the
@@ -1437,22 +1604,28 @@ impl MediaAssetOperationRegistry {
             reclaimed += before - active.len();
         }
         {
-            let mut prepared = self
-                .prepared
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let before = prepared.len();
-            prepared.retain(|_, entry| entry.expires_at > now);
-            reclaimed += before - prepared.len();
+            let retired = {
+                let mut prepared = self
+                    .prepared
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                Self::take_expired_prepared_imports(&mut prepared, now)
+            };
+            reclaimed += retired.len();
+            // UnlockFileEx / final file-handle close executes here, after the
+            // prepared-store mutex has been released.
+            drop(retired);
         }
         {
-            let mut prepared = self
-                .prepared_relinks
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let before = prepared.len();
-            prepared.retain(|_, entry| entry.expires_at > now);
-            reclaimed += before - prepared.len();
+            let retired = {
+                let mut prepared = self
+                    .prepared_relinks
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                Self::take_expired_prepared_relinks(&mut prepared, now)
+            };
+            reclaimed += retired.len();
+            drop(retired);
         }
         {
             let mut receipts = self
@@ -1542,10 +1715,23 @@ struct MediaAssetOperationReaper {
 }
 
 impl MediaAssetOperationReaper {
-    fn spawn(registry: Arc<MediaAssetOperationRegistry>) -> Self {
+    fn from_spawn_result(
+        stop: Arc<AtomicBool>,
+        result: std::io::Result<std::thread::JoinHandle<()>>,
+    ) -> Result<Self, String> {
+        let handle = result.map_err(|error| {
+            format!("Unable to start the media asset operation reaper: {error}")
+        })?;
+        Ok(Self {
+            stop,
+            handle: Some(handle),
+        })
+    }
+
+    fn spawn(registry: Arc<MediaAssetOperationRegistry>) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
-        let handle = std::thread::Builder::new()
+        let result = std::thread::Builder::new()
             .name("syndocal-media-asset-reaper".to_string())
             .spawn(move || {
                 while !worker_stop.load(Ordering::Acquire) {
@@ -1554,9 +1740,8 @@ impl MediaAssetOperationReaper {
                     // promptly and drop-time join never blocks meaningfully.
                     std::thread::park_timeout(MEDIA_ASSET_OPERATION_REAP_INTERVAL);
                 }
-            })
-            .ok();
-        Self { stop, handle }
+            });
+        Self::from_spawn_result(stop, result)
     }
 }
 
@@ -1568,6 +1753,31 @@ impl Drop for MediaAssetOperationReaper {
             let _ = handle.join();
         }
     }
+}
+
+/// Install exactly one application-owned reaper. Thread creation failure is a
+/// setup error, not a silently degraded state which could retain file locks
+/// indefinitely. Returning `false` means an already-running reaper was kept.
+fn install_media_asset_operation_reaper(
+    slot: &Mutex<Option<MediaAssetOperationReaper>>,
+    registry: Arc<MediaAssetOperationRegistry>,
+) -> Result<bool, String> {
+    install_media_asset_operation_reaper_with(slot, registry, MediaAssetOperationReaper::spawn)
+}
+
+fn install_media_asset_operation_reaper_with(
+    slot: &Mutex<Option<MediaAssetOperationReaper>>,
+    registry: Arc<MediaAssetOperationRegistry>,
+    spawn: impl FnOnce(Arc<MediaAssetOperationRegistry>) -> Result<MediaAssetOperationReaper, String>,
+) -> Result<bool, String> {
+    let mut slot = slot
+        .lock()
+        .map_err(|_| "Media asset reaper state lock was poisoned".to_string())?;
+    if slot.is_some() {
+        return Ok(false);
+    }
+    *slot = Some(spawn(registry)?);
+    Ok(true)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2101,19 +2311,30 @@ fn stream_sha256_from_open_file(
     file: &mut fs::File,
     cancel: &AtomicBool,
 ) -> Result<MediaContentHash, String> {
+    stream_sha256_from_reader(file, cancel, |_| {})
+}
+
+fn stream_sha256_from_reader(
+    reader: &mut impl Read,
+    cancel: &AtomicBool,
+    mut after_chunk: impl FnMut(usize),
+) -> Result<MediaContentHash, String> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; MEDIA_ASSET_HASH_CHUNK_BYTES];
+    let mut chunk_index = 0usize;
     loop {
         if cancel.load(Ordering::Acquire) {
             return Err("Media asset operation was cancelled".to_string());
         }
-        let read = file
+        let read = reader
             .read(&mut buffer)
             .map_err(|error| format!("Unable to read media file while hashing: {error}"))?;
         if read == 0 {
             break;
         }
         hasher.update(&buffer[..read]);
+        after_chunk(chunk_index);
+        chunk_index = chunk_index.saturating_add(1);
         if cancel.load(Ordering::Acquire) {
             return Err("Media asset operation was cancelled".to_string());
         }
@@ -2181,6 +2402,26 @@ fn sha256_local_media_file_streaming(
     ),
     String,
 > {
+    sha256_local_media_file_streaming_before_probe(path, cancel, || {}, probe)
+}
+
+/// Keep the last pre-probe cancellation boundary explicit. Production uses a
+/// no-op hook; focused tests pause at the exact hash-complete/probe-not-started
+/// point so a successful cancellation proves that no heavyweight probe began.
+fn sha256_local_media_file_streaming_before_probe(
+    path: &Path,
+    cancel: &AtomicBool,
+    before_probe: impl FnOnce(),
+    probe: impl FnOnce(&Path) -> Result<Option<protocol::VideoMediaMetadata>, String>,
+) -> Result<
+    (
+        MediaContentHash,
+        u64,
+        LocalMediaSourceFingerprint,
+        Option<protocol::VideoMediaMetadata>,
+    ),
+    String,
+> {
     if cancel.load(Ordering::Acquire) {
         return Err("Media asset operation was cancelled".to_string());
     }
@@ -2205,7 +2446,14 @@ fn sha256_local_media_file_streaming(
         // coherent, then rehash the current path. That second byte proof rejects
         // an atomic same-size A→B path replacement even if the original handle
         // still reports A's metadata after a path-based probe reopened B.
+        before_probe();
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
         let metadata = probe(path)?;
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
         let after =
             local_media_source_fingerprint(&file.metadata().map_err(|error| {
                 format!("Unable to read media metadata after hashing: {error}")
@@ -2256,7 +2504,14 @@ fn sha256_local_media_file_streaming(
         if copied != before.byte_size {
             return Err("Media changed while hashing".to_string());
         }
+        before_probe();
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
         let metadata = probe(&snapshot.path)?;
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
         // Reopen the current path and require it still names the exact image S.
         // An in-place rewrite advances ctime; an atomic rename changes the inode;
         // either fails this equality, so no (hash, metadata) pair survives a swap.
@@ -2500,6 +2755,13 @@ fn capture_media_asset_availability_inventory(
     ensure_project_transaction_owner_registered(state, owner_id)?;
     ensure_project_epoch_matches(&coordinator, expected_epoch)?;
     let checkpoint = project_checkpoint_for_coordinator(state, &coordinator)?;
+    media_asset_availability_inventory_for_checkpoint(&coordinator, &checkpoint)
+}
+
+fn media_asset_availability_inventory_for_checkpoint(
+    coordinator: &ProjectCoordinator,
+    checkpoint: &ProjectCheckpoint,
+) -> Result<(MediaAssetPrepareAuthority, Vec<MediaAssetSummary>), String> {
     if checkpoint.hash != coordinator.checkpoint_hash {
         return Err(
             "Project persistence changed outside the current authority checkpoint; retry availability inspection"
@@ -2507,7 +2769,7 @@ fn capture_media_asset_availability_inventory(
         );
     }
     let assets = media_asset_catalog_for_snapshot(&checkpoint.project.snapshot).to_vec();
-    Ok((media_asset_prepare_authority(&coordinator), assets))
+    Ok((media_asset_prepare_authority(coordinator), assets))
 }
 
 fn capture_media_asset_relink_prepare_asset(
@@ -3041,11 +3303,17 @@ fn inspect_one_media_asset_availability_before_path_fence(
         }
     };
     if !verify_hash || asset.content_hash.is_none() || asset.byte_size.is_none() {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
         if let Err(error) = before_path_fence() {
             return Ok(MediaAssetAvailability::Unreadable {
                 asset_id: asset.id,
                 error,
             });
+        }
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
         }
         if let Err(error) =
             ensure_media_asset_availability_path_current(Path::new(path), &file, &metadata)
@@ -3084,11 +3352,17 @@ fn inspect_one_media_asset_availability_before_path_fence(
             });
         }
     };
+    if cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
     if let Err(error) = before_path_fence() {
         return Ok(MediaAssetAvailability::Unreadable {
             asset_id: asset.id,
             error,
         });
+    }
+    if cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
     }
     let after_metadata = match file.metadata().and_then(|metadata| {
         if metadata.is_file() {
@@ -3122,6 +3396,9 @@ fn inspect_one_media_asset_availability_before_path_fence(
             error: "Media changed while hashing for availability inspection".to_string(),
         });
     }
+    if cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
     // Bind the hash result to the same current-path image before *either*
     // HashMismatch or AvailableVerified. The helper also compares the initial
     // Unix version, so an in-place same-size/restored-mtime rewrite fails even
@@ -3150,6 +3427,22 @@ fn inspect_media_asset_availability_batch(
     verify_hash: bool,
     cancel: &AtomicBool,
 ) -> Result<Vec<MediaAssetAvailability>, String> {
+    inspect_media_asset_availability_batch_with_entry_hook(
+        assets,
+        asset_ids,
+        verify_hash,
+        cancel,
+        |_| {},
+    )
+}
+
+fn inspect_media_asset_availability_batch_with_entry_hook(
+    assets: &[MediaAssetSummary],
+    asset_ids: &[MediaAssetId],
+    verify_hash: bool,
+    cancel: &AtomicBool,
+    mut after_entry: impl FnMut(usize),
+) -> Result<Vec<MediaAssetAvailability>, String> {
     if asset_ids.is_empty() {
         return Err("Select at least one media asset to inspect".to_string());
     }
@@ -3158,7 +3451,7 @@ fn inspect_media_asset_availability_batch(
         .map(|asset| (asset.id, asset))
         .collect::<HashMap<_, _>>();
     let mut availability = Vec::with_capacity(asset_ids.len());
-    for asset_id in asset_ids {
+    for (index, asset_id) in asset_ids.iter().enumerate() {
         if cancel.load(Ordering::Acquire) {
             return Err("Media asset operation was cancelled".to_string());
         }
@@ -3171,6 +3464,7 @@ fn inspect_media_asset_availability_batch(
             verify_hash,
             cancel,
         )?);
+        after_entry(index);
     }
     Ok(availability)
 }
@@ -15421,6 +15715,33 @@ fn start_media_asset_operation(
     })
 }
 
+/// Reserve a read-only availability inspection before any file is opened. This
+/// path intentionally uses the non-reconciling catalog capture, so reserving a
+/// long verified inspection cannot advance revision or history.
+#[tauri::command]
+fn start_media_asset_availability_operation(
+    state: State<'_, AppState>,
+    request_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetOperationStartReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let (authority, _) =
+        capture_media_asset_availability_inventory(&state, &owner_id, expected_epoch)?;
+    let handle = state.media_asset_operations.reserve_availability(
+        request_id,
+        owner_id,
+        authority.clone(),
+    )?;
+    Ok(MediaAssetOperationStartReport {
+        request_id: handle.request_id,
+        operation_generation: handle.generation,
+        project_epoch: authority.epoch,
+        project_revision: authority.revision,
+        checkpoint_hash: authority.checkpoint_hash,
+    })
+}
+
 /// Staged prepare that adopts a reserved operation. Because the reservation
 /// already exists, a `cancel_media_asset_operation` for this exact
 /// {request_id, generation, owner_id} can win before or during the first hashed
@@ -15530,6 +15851,51 @@ fn cancel_media_asset_operation(
         .cancel_exact(request_id, operation_generation, owner_id)
 }
 
+async fn run_media_asset_availability_inspection(
+    state: &AppState,
+    operation: MediaAssetOperationGuard,
+    authority: MediaAssetPrepareAuthority,
+    assets: Vec<MediaAssetSummary>,
+    asset_ids: Vec<MediaAssetId>,
+    verify_hash: bool,
+    expected_epoch: u64,
+    owner_id: &str,
+) -> Result<MediaAssetAvailabilityReport, String> {
+    let handle = operation.handle();
+    let cancel = operation.cancellation_flag();
+    let availability = tauri::async_runtime::spawn_blocking(move || {
+        inspect_media_asset_availability_batch(&assets, &asset_ids, verify_hash, cancel.as_ref())
+    })
+    .await
+    .map_err(|error| format!("Media asset availability worker failed: {error}"))??;
+    let (current_authority, _) =
+        capture_media_asset_availability_inventory(state, owner_id, expected_epoch)?;
+    if current_authority != authority {
+        return Err(
+            "Project changed while media asset availability was being inspected; retry".to_string(),
+        );
+    }
+    // Completion is the read command's linearization point. A cancel which won
+    // at any point through the final authority capture makes this CAS fail and
+    // no report is returned. Once this CAS wins, an exact cancel returns false,
+    // so cancel=true and a successful report can never coexist.
+    match operation.admission().try_admit() {
+        Ok(MediaAssetCommitAdmission::Admitted) => {}
+        Ok(MediaAssetCommitAdmission::AlreadyAdmitted) => {
+            return Err("Media asset availability operation already completed".to_string())
+        }
+        Err(()) => return Err("Media asset operation was cancelled".to_string()),
+    }
+    Ok(MediaAssetAvailabilityReport {
+        request_id: handle.request_id,
+        operation_generation: handle.generation,
+        project_epoch: authority.epoch,
+        project_revision: authority.revision,
+        checkpoint_hash: authority.checkpoint_hash,
+        availability,
+    })
+}
+
 /// Inspect machine-local availability without opening a project transaction or
 /// mutating catalog/history state. The second exact capture prevents a report
 /// for project A being presented as a report for a replaced project B.
@@ -15542,36 +15908,64 @@ async fn inspect_media_asset_availability(
     expected_epoch: u64,
     owner_id: String,
 ) -> Result<MediaAssetAvailabilityReport, String> {
+    if verify_hash {
+        return Err(
+            "Verified availability requires start_media_asset_availability_operation followed by inspect_reserved_media_asset_availability"
+                .to_string(),
+        );
+    }
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     let (authority, assets) =
         capture_media_asset_availability_inventory(&state, &owner_id, expected_epoch)?;
     let registry = Arc::clone(&state.media_asset_operations);
-    let operation = registry.begin(request_id, owner_id.clone())?;
-    let handle = operation.handle();
-    let cancel = operation.cancellation_flag();
-    let availability = tauri::async_runtime::spawn_blocking(move || {
-        inspect_media_asset_availability_batch(&assets, &asset_ids, verify_hash, cancel.as_ref())
-    })
-    .await
-    .map_err(|error| format!("Media asset availability worker failed: {error}"))??;
-    if operation.cancelled() {
-        return Err("Media asset operation was cancelled".to_string());
-    }
-    let (current_authority, _) =
-        capture_media_asset_availability_inventory(&state, &owner_id, expected_epoch)?;
-    if current_authority != authority {
-        return Err(
-            "Project changed while media asset availability was being inspected; retry".to_string(),
-        );
-    }
-    Ok(MediaAssetAvailabilityReport {
+    let operation = registry.begin_for(
         request_id,
-        operation_generation: handle.generation,
-        project_epoch: authority.epoch,
-        project_revision: authority.revision,
-        checkpoint_hash: authority.checkpoint_hash,
-        availability,
-    })
+        owner_id.clone(),
+        MediaAssetOperationPurpose::Availability,
+    )?;
+    run_media_asset_availability_inspection(
+        &state,
+        operation,
+        authority,
+        assets,
+        asset_ids,
+        false,
+        expected_epoch,
+        &owner_id,
+    )
+    .await
+}
+
+/// Adopt a purpose-bound availability reservation and run the potentially long
+/// verified inspection under its already-known cancellation identity.
+#[tauri::command]
+async fn inspect_reserved_media_asset_availability(
+    state: State<'_, AppState>,
+    request_id: u64,
+    operation_generation: u64,
+    asset_ids: Vec<MediaAssetId>,
+    verify_hash: bool,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetAvailabilityReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let (operation, reserved_authority) = state
+        .media_asset_operations
+        .adopt_reserved_availability(request_id, operation_generation, owner_id.clone())?;
+    let (current_authority, assets) =
+        capture_media_asset_availability_inventory(&state, &owner_id, expected_epoch)?;
+    ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &current_authority)?;
+    run_media_asset_availability_inspection(
+        &state,
+        operation,
+        reserved_authority,
+        assets,
+        asset_ids,
+        verify_hash,
+        expected_epoch,
+        &owner_id,
+    )
+    .await
 }
 
 /// Hash/probe a relink replacement under an already-owned operation guard,
@@ -44332,6 +44726,199 @@ mod tests {
     }
 
     #[test]
+    fn media_asset_operation_reaper_spawn_failure_is_visible_and_install_is_singleton() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let injected: std::io::Result<std::thread::JoinHandle<()>> =
+            Err(std::io::Error::other("injected spawn failure"));
+        let error = MediaAssetOperationReaper::from_spawn_result(stop, injected)
+            .err()
+            .expect("spawn failure must be returned");
+        assert!(error.contains("injected spawn failure"));
+
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let slot = Mutex::new(None);
+        let install_error =
+            install_media_asset_operation_reaper_with(&slot, Arc::clone(&registry), |_| {
+                Err("injected setup spawn failure".to_string())
+            })
+            .unwrap_err();
+        assert!(install_error.contains("injected setup spawn failure"));
+        assert!(
+            slot.lock().unwrap().is_none(),
+            "failed setup leaves no fake reaper"
+        );
+        assert!(install_media_asset_operation_reaper(&slot, Arc::clone(&registry)).unwrap());
+        assert!(!install_media_asset_operation_reaper(&slot, registry).unwrap());
+        drop(slot);
+    }
+
+    #[test]
+    fn media_asset_operation_background_reaper_expires_without_registry_traffic_and_joins_promptly()
+    {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:reaper";
+        let handle = MediaAssetOperationHandle {
+            request_id: 904,
+            generation: 904,
+        };
+        let mut prepared = media_asset_test_prepared_import(904, &handle, owner_id);
+        prepared.expires_at = Instant::now() - Duration::from_millis(1);
+        let lifetime = Arc::downgrade(&prepared.cancel);
+        registry.prepared.lock().unwrap().insert(904, prepared);
+
+        let reaper = MediaAssetOperationReaper::spawn(Arc::clone(&registry)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while lifetime.upgrade().is_some() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(
+            lifetime.upgrade().is_none(),
+            "background TTL cleanup must drop the entry without another registry call"
+        );
+
+        let shutdown_started = Instant::now();
+        drop(reaper);
+        assert!(
+            shutdown_started.elapsed() < Duration::from_secs(1),
+            "reaper Drop must unpark and join promptly"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn media_asset_operation_cancel_drops_retained_file_after_registry_unlock() {
+        let directory = unique_test_directory("media-asset-cancel-retained-unlock");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (content_hash, byte_size, fingerprint, _) =
+            sha256_local_media_file_streaming(&path, &cancel, |_| Ok(None)).unwrap();
+        let asset = PreparedLocalMediaAsset {
+            input_index: 0,
+            label: "clip".to_string(),
+            source: media_asset_commit_test_source(path.to_string_lossy().as_ref()),
+            content_hash,
+            byte_size,
+            fingerprint,
+        };
+        let sources =
+            finalize_prepared_local_media_assets(std::slice::from_ref(&asset), &cancel).unwrap();
+
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:retained";
+        let operation = registry.begin(905, owner_id.to_string()).unwrap();
+        let handle = operation.handle();
+        let mut prepared = media_asset_test_prepared_import(905, &handle, owner_id);
+        prepared.assets = vec![asset];
+        prepared.finalized_sources = Some(sources);
+        prepared.admission = operation.admission();
+        registry
+            .store_prepared_from_active(&handle, owner_id, prepared)
+            .unwrap();
+        drop(operation);
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+        assert!(registry
+            .cancel_exact(905, handle.generation, owner_id.to_string())
+            .unwrap());
+        assert!(
+            registry.prepared.try_lock().is_ok(),
+            "cancel must release the registry mutex before retained-handle Drop"
+        );
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_ok());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn media_asset_operation_shutdown_joins_reaper_and_releases_unexpired_retained_file() {
+        let directory = unique_test_directory("media-asset-shutdown-retained-unlock");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (content_hash, byte_size, fingerprint, _) =
+            sha256_local_media_file_streaming(&path, &cancel, |_| Ok(None)).unwrap();
+        let asset = PreparedLocalMediaAsset {
+            input_index: 0,
+            label: "clip".to_string(),
+            source: media_asset_commit_test_source(path.to_string_lossy().as_ref()),
+            content_hash,
+            byte_size,
+            fingerprint,
+        };
+        let sources =
+            finalize_prepared_local_media_assets(std::slice::from_ref(&asset), &cancel).unwrap();
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let handle = MediaAssetOperationHandle {
+            request_id: 906,
+            generation: 906,
+        };
+        let mut prepared = media_asset_test_prepared_import(906, &handle, "renderer:shutdown");
+        prepared.assets = vec![asset];
+        prepared.finalized_sources = Some(sources);
+        prepared.expires_at = Instant::now() + Duration::from_secs(60);
+        registry.prepared.lock().unwrap().insert(906, prepared);
+        let reaper = MediaAssetOperationReaper::spawn(Arc::clone(&registry)).unwrap();
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+
+        // Emulate AppState field teardown: the app-owned registry Arc is
+        // released, then the reaper is unparked/joined. The worker's final Arc
+        // drop releases every still-unexpired retained source.
+        drop(registry);
+        let shutdown_started = Instant::now();
+        drop(reaper);
+        assert!(shutdown_started.elapsed() < Duration::from_secs(1));
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_ok());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn media_asset_operation_background_ttl_releases_retained_file_without_registry_call() {
+        let directory = unique_test_directory("media-asset-ttl-retained-unlock");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (content_hash, byte_size, fingerprint, _) =
+            sha256_local_media_file_streaming(&path, &cancel, |_| Ok(None)).unwrap();
+        let asset = PreparedLocalMediaAsset {
+            input_index: 0,
+            label: "clip".to_string(),
+            source: media_asset_commit_test_source(path.to_string_lossy().as_ref()),
+            content_hash,
+            byte_size,
+            fingerprint,
+        };
+        let sources =
+            finalize_prepared_local_media_assets(std::slice::from_ref(&asset), &cancel).unwrap();
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let handle = MediaAssetOperationHandle {
+            request_id: 907,
+            generation: 907,
+        };
+        let mut prepared = media_asset_test_prepared_import(907, &handle, "renderer:ttl");
+        prepared.assets = vec![asset];
+        prepared.finalized_sources = Some(sources);
+        prepared.expires_at = Instant::now() - Duration::from_millis(1);
+        registry.prepared.lock().unwrap().insert(907, prepared);
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+        let reaper = MediaAssetOperationReaper::spawn(Arc::clone(&registry)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while fs::OpenOptions::new().write(true).open(&path).is_err() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(
+            fs::OpenOptions::new().write(true).open(&path).is_ok(),
+            "background reaper must release the TTL-expired retained file without an API call"
+        );
+        drop(reaper);
+        drop(registry);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn media_asset_commit_receipt_returns_recorded_result_on_exact_retry() {
         let registry = Arc::new(MediaAssetOperationRegistry::default());
         let owner_id = "renderer:test";
@@ -44497,6 +45084,22 @@ mod tests {
         let cancelled = AtomicBool::new(true);
         let error = sha256_local_media_file_streaming(&path, &cancelled, |_| Ok(None)).unwrap_err();
         assert!(error.contains("cancelled"));
+
+        let cancel_between_chunks = AtomicBool::new(false);
+        let mut two_chunks = std::io::Cursor::new(vec![0x5au8; MEDIA_ASSET_HASH_CHUNK_BYTES + 1]);
+        let error =
+            stream_sha256_from_reader(&mut two_chunks, &cancel_between_chunks, |chunk_index| {
+                if chunk_index == 0 {
+                    cancel_between_chunks.store(true, Ordering::Release);
+                }
+            })
+            .unwrap_err();
+        assert!(error.contains("cancelled"));
+        assert_eq!(
+            two_chunks.position(),
+            MEDIA_ASSET_HASH_CHUNK_BYTES as u64,
+            "cancellation after chunk one must prevent reading chunk two"
+        );
         let _ = fs::remove_dir_all(&directory);
     }
 
@@ -45759,6 +46362,154 @@ mod tests {
     }
 
     #[test]
+    fn media_asset_availability_reservation_is_purpose_bound_and_authority_read_only() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:availability";
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.revision = 17;
+        coordinator.checkpoint_hash = "availability-a".to_string();
+        coordinator.history_generation = 9;
+        let before = (
+            coordinator.epoch,
+            coordinator.revision,
+            coordinator.checkpoint_hash.clone(),
+            coordinator.history_generation,
+            coordinator.history.undo.len(),
+            coordinator.history.redo.len(),
+            coordinator.history.pending.len(),
+        );
+        let authority = media_asset_prepare_authority(&coordinator);
+        let handle = registry
+            .reserve_availability(901, owner_id.to_string(), authority.clone())
+            .unwrap();
+        assert!(registry
+            .adopt_reserved(901, handle.generation, owner_id.to_string())
+            .is_err());
+        let (operation, reserved) = registry
+            .adopt_reserved_availability(901, handle.generation, owner_id.to_string())
+            .unwrap();
+        assert_eq!(reserved, authority);
+        assert_eq!(
+            before,
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+                coordinator.history_generation,
+                coordinator.history.undo.len(),
+                coordinator.history.redo.len(),
+                coordinator.history.pending.len(),
+            ),
+            "reserving/adopting a read-only inspection must not change authority/history"
+        );
+        drop(operation);
+    }
+
+    #[test]
+    fn media_asset_availability_cancel_and_completion_are_exactly_linearized() {
+        let owner_id = "renderer:availability";
+
+        let cancelled_registry = Arc::new(MediaAssetOperationRegistry::default());
+        let cancelled = cancelled_registry
+            .reserve_availability(902, owner_id.to_string(), media_asset_test_authority())
+            .unwrap();
+        let (cancelled_operation, _) = cancelled_registry
+            .adopt_reserved_availability(902, cancelled.generation, owner_id.to_string())
+            .unwrap();
+        let cancelled_admission = cancelled_operation.admission();
+        assert!(cancelled_registry
+            .cancel_exact(902, cancelled.generation, owner_id.to_string())
+            .unwrap());
+        assert_eq!(cancelled_admission.try_admit(), Err(()));
+        drop(cancelled_operation);
+
+        let completed_registry = Arc::new(MediaAssetOperationRegistry::default());
+        let completed = completed_registry
+            .reserve_availability(903, owner_id.to_string(), media_asset_test_authority())
+            .unwrap();
+        let (completed_operation, _) = completed_registry
+            .adopt_reserved_availability(903, completed.generation, owner_id.to_string())
+            .unwrap();
+        assert_eq!(
+            completed_operation.admission().try_admit(),
+            Ok(MediaAssetCommitAdmission::Admitted)
+        );
+        assert!(!completed_registry
+            .cancel_exact(903, completed.generation, owner_id.to_string())
+            .unwrap());
+        drop(completed_operation);
+    }
+
+    #[test]
+    fn media_asset_availability_cancels_between_hash_and_probe_and_between_entries() {
+        let directory = unique_test_directory("media-asset-availability-cancel-boundaries");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("abc.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let probe_calls = std::sync::atomic::AtomicUsize::new(0);
+        let error = sha256_local_media_file_streaming_before_probe(
+            &path,
+            &cancel,
+            || cancel.store(true, Ordering::Release),
+            |_| {
+                probe_calls.fetch_add(1, Ordering::AcqRel);
+                Ok(None)
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("cancelled"));
+        assert_eq!(
+            probe_calls.load(Ordering::Acquire),
+            0,
+            "cancellation after the final hash chunk must prevent probe startup"
+        );
+
+        let availability_cancel = AtomicBool::new(false);
+        let expected = media_asset_availability_test_asset(
+            10,
+            VideoSourceKind::File,
+            Some(path.to_string_lossy().to_string()),
+            Some(MediaContentHash {
+                algorithm: MediaHashAlgorithm::Sha256,
+                hex: format!("{:x}", Sha256::digest(b"abc")),
+            }),
+            Some(3),
+        );
+        let error = inspect_one_media_asset_availability_before_path_fence(
+            &expected,
+            true,
+            &availability_cancel,
+            || {
+                availability_cancel.store(true, Ordering::Release);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("cancelled"));
+
+        let cancel = AtomicBool::new(false);
+        let assets = vec![
+            media_asset_availability_test_asset(11, VideoSourceKind::Camera, None, None, None),
+            media_asset_availability_test_asset(12, VideoSourceKind::Ndi, None, None, None),
+        ];
+        let error = inspect_media_asset_availability_batch_with_entry_hook(
+            &assets,
+            &[11, 12],
+            true,
+            &cancel,
+            |index| {
+                if index == 0 {
+                    cancel.store(true, Ordering::Release);
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("cancelled"));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn media_asset_availability_reports_typed_states_in_input_order() {
         let directory = unique_test_directory("media-asset-availability-states");
         fs::create_dir_all(&directory).unwrap();
@@ -45817,17 +46568,52 @@ mod tests {
         let mut coordinator = ProjectCoordinator::default();
         coordinator.checkpoint_hash = "checkpoint-a".to_string();
         coordinator.revision = 7;
-        let before = media_asset_prepare_authority(&coordinator);
+        coordinator.history_generation = 11;
+        let before = (
+            media_asset_prepare_authority(&coordinator),
+            coordinator.history_generation,
+            coordinator.history.undo.len(),
+            coordinator.history.redo.len(),
+            coordinator.history.pending.len(),
+        );
+        let mut project = empty_project_file();
+        project
+            .snapshot
+            .video
+            .media_assets
+            .push(media_asset_availability_test_asset(
+                5,
+                VideoSourceKind::Ndi,
+                None,
+                None,
+                None,
+            ));
+        let checkpoint = ProjectCheckpoint {
+            project,
+            mappings: ProjectControlMappings::default(),
+            epoch: coordinator.epoch,
+            revision: coordinator.revision,
+            hash: coordinator.checkpoint_hash.clone(),
+        };
+        let (captured, assets) =
+            media_asset_availability_inventory_for_checkpoint(&coordinator, &checkpoint).unwrap();
+        assert_eq!(captured, before.0);
         let cancel = AtomicBool::new(false);
-        let live = media_asset_availability_test_asset(5, VideoSourceKind::Ndi, None, None, None);
-        let report = inspect_media_asset_availability_batch(&[live], &[5], true, &cancel).unwrap();
+        let report = inspect_media_asset_availability_batch(&assets, &[5], true, &cancel).unwrap();
         assert!(matches!(
             report.as_slice(),
             [MediaAssetAvailability::LiveSource { asset_id: 5 }]
         ));
-        assert_eq!(media_asset_prepare_authority(&coordinator), before);
-        assert_eq!(coordinator.history.undo.len(), 0);
-        assert_eq!(coordinator.history.redo.len(), 0);
+        assert_eq!(
+            (
+                media_asset_prepare_authority(&coordinator),
+                coordinator.history_generation,
+                coordinator.history.undo.len(),
+                coordinator.history.redo.len(),
+                coordinator.history.pending.len(),
+            ),
+            before
+        );
     }
 
     fn media_asset_relink_test_asset(
@@ -65292,13 +66078,10 @@ fn main() {
             let state = app.state::<AppState>();
             // Install the single media-operation reaper up front so expired
             // prepared handles are released at TTL for the whole session.
-            if let Ok(mut reaper_slot) = state.media_asset_reaper.lock() {
-                if reaper_slot.is_none() {
-                    *reaper_slot = Some(MediaAssetOperationReaper::spawn(Arc::clone(
-                        &state.media_asset_operations,
-                    )));
-                }
-            }
+            install_media_asset_operation_reaper(
+                &state.media_asset_reaper,
+                Arc::clone(&state.media_asset_operations),
+            )?;
             if let Ok(mut stored_app_handle) = state.app_handle.lock() {
                 *stored_app_handle = Some(app.handle().clone());
             } else {
@@ -65610,10 +66393,12 @@ fn main() {
             seek_timeline_beat,
             sync_ltc_timecode,
             start_media_asset_operation,
+            start_media_asset_availability_operation,
             prepare_local_media_assets,
             prepare_reserved_media_assets,
             cancel_media_asset_operation,
             inspect_media_asset_availability,
+            inspect_reserved_media_asset_availability,
             relink_media_asset,
             prepare_media_asset_relink,
             prepare_reserved_media_asset_relink,
