@@ -19,6 +19,7 @@ import type {
   ExternalVideoTransportSyncReport,
   ExternalVideoTransportSyncResponse,
   MediaAssetId,
+  MediaAssetPreviewSessionTicket,
   MediaAssetImportReport,
   MediaAssetOperationPhase,
   MediaAssetRelinkOutcome,
@@ -698,6 +699,46 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     });
     return videoFrameToDataUrl(frame);
   };
+  const loadMediaAssetThumbnail = async (assetId: MediaAssetId) => {
+    const frame = await options.invoke<VideoFrame>("get_media_asset_thumbnail", {
+      assetId,
+      width: 160,
+      height: 90,
+    });
+    return videoFrameToDataUrl(frame);
+  };
+  const beginMediaAssetPreview = async (assetId: MediaAssetId) => {
+    const ticket = await options.invoke<MediaAssetPreviewSessionTicket>("begin_media_asset_preview", { assetId });
+    if (!sameProjectAuthority(ticket, options.getCurrentProjectAuthority())) {
+      void options.invoke("end_media_asset_preview", { sessionId: ticket.session_id, assetId: ticket.asset_id });
+      throw new Error("Media preview project changed before the preview session began.");
+    }
+    return ticket;
+  };
+  const loadMediaAssetPreviewFrame = async (ticket: MediaAssetPreviewSessionTicket, positionMs: number) => {
+    if (!sameProjectAuthority(ticket, options.getCurrentProjectAuthority())) {
+      throw new Error("Media preview project changed before the preview frame was requested.");
+    }
+    const frame = await options.invoke<VideoFrame>("get_media_asset_preview_frame", {
+      sessionId: ticket.session_id,
+      assetId: ticket.asset_id,
+      positionMs,
+      width: 160,
+      height: 90,
+    });
+    if (!sameProjectAuthority(ticket, options.getCurrentProjectAuthority())) {
+      throw new Error("Media preview project changed while the preview frame was decoded.");
+    }
+    return videoFrameToDataUrl(frame);
+  };
+  const endMediaAssetPreview = async (ticket: MediaAssetPreviewSessionTicket) => {
+    try {
+      await options.invoke("end_media_asset_preview", { sessionId: ticket.session_id, assetId: ticket.asset_id });
+    } catch {
+      // End is an idempotent best-effort resource release; stale owner/session
+      // rejection is already safe on the native side.
+    }
+  };
   const refreshVideoOutputRenderPlans = async (silent = false) => {
     try {
       const plans = await options.invoke<VideoOutputRenderPlan[]>("get_video_output_render_plans");
@@ -888,7 +929,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     refreshVideoLayerMetadata, relinkMediaAsset, importVideoLayerIsf, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect,
     moveVideoLayerIsfEffect, removeVideoLayerIsfEffect, setVideoLayerIsfEffectEnabled,
     resetVideoLayerIsfEffect, setVideoLayerIsfControl, triggerVideoLayerIsfEvent,
-    renderDebugVideoPreview, loadVideoLayerThumbnail, refreshVideoPreviewDiagnostics,
+    renderDebugVideoPreview, loadVideoLayerThumbnail, loadMediaAssetThumbnail, beginMediaAssetPreview, loadMediaAssetPreviewFrame, endMediaAssetPreview, refreshVideoPreviewDiagnostics,
     refreshVideoOutputRenderPlans, refreshVideoOutputWindowStatuses, refreshSnapshotAndVideoOutputRenderPlans,
     syncOpenVideoOutputWindows, closeOpenVideoOutputWindows, openAllVideoOutputWindows,
     refreshVideoRuntimeStatus, refreshExternalVideoIoPlans, syncExternalVideoTransports,

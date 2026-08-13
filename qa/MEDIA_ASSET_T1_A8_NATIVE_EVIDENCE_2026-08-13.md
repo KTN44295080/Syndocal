@@ -1,6 +1,6 @@
 # Media Asset T1 A8 native evidence — 2026-08-13
 
-Status: PASS — all 15 native workflow rows executed successfully on release executable SHA-256 `41FE507275C21916F36894A4D4E5DF4D9CEF537E5223A778302B83CCE93FAE07`. A later frontend thumbnail-grid change still requires its own rebuilt-executable native acceptance before that newer candidate can supersede this checkpoint.
+Status: PASS — all 15 native workflow rows executed successfully on release executable SHA-256 `41FE507275C21916F36894A4D4E5DF4D9CEF537E5223A778302B83CCE93FAE07`. The later Media Library thumbnail-grid and backend-owned hover-preview change, including authority-change retry, was rebuilt and received targeted native acceptance on executable SHA-256 `27D1CD18A810AD960B771B800B32E4C7353539C6E6DEF5E2B567387983CE36AD`; that executable supersedes the earlier UI checkpoint while retaining the original 15-row evidence.
 
 ## Release identity and native gate
 
@@ -148,4 +148,37 @@ Status: PASS — all 15 native workflow rows executed successfully on release ex
 - Browser/TypeScript/static gates are not substituted for the native observations above.
 - All fifteen rows have native UI outcomes plus saved-project/hash evidence. Internal coordinator revision/history-generation counters were not directly exported by the UI; where Undo menu state was visible it was consistent with one operation, but this document does not claim an unobserved counter value.
 - Screenshot evidence remains in the supervising Codex task transcript; saved `.sdc` artifacts and fixture hashes are the durable local evidence.
-- This checkpoint closes the A8 matrix for the named executable only. Any subsequent native-UI change must be rebuilt and receive targeted native acceptance before a newer executable can inherit this GO.
+- The original fifteen workflow rows are tied to executable `41FE...E07`. The targeted Media Library supplement below is tied to executable `27D1...6AD`; it does not claim that all fifteen destructive/picker rows were repeated on the latter binary.
+- Any subsequent native-UI or media-runtime change must be rebuilt and receive proportionate native acceptance before a newer executable can inherit this GO.
+
+## Targeted Media Library thumbnail and hover-preview supplement — PASS
+
+### Release identity
+
+- Build gate: `pnpm --dir app tauri build --no-bundle` exited 0 after proactively stopping only the prior process whose resolved path was this checkout's `target\release\syndocal.exe`.
+- Executable: `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`.
+- SHA-256: `27D1CD18A810AD960B771B800B32E4C7353539C6E6DEF5E2B567387983CE36AD`.
+- Size: 42,633,728 bytes. UTC last-write: `2026-08-13T15:49:36.6158852Z`.
+- Runtime gate: PID 66820 resolved to the exact executable above, remained responsive, and exposed exactly one maximized `Syndocal` window at 1920x1032 during the acceptance run.
+
+### Catalog-only grid and explicit thumbnail authorization
+
+- Project: `projects\catalog-12.sdc`, which contains 13 File assets and one referenced layer.
+- Before authorization, the actual native DOM reported 13 cards, computed columns `272.875px 272.875px 272.875px`, zero loaded images, 13 placeholders, and the explicit Load Thumbnails control visible.
+- After one explicit Load Thumbnails action and an eight-second settle, the actual native DOM reported 13 loaded thumbnails, zero unavailable cards, and no implicit video preview.
+- The first rebuilt candidate exposed a real liveness defect: the asset-thumbnail effect tracked an equivalent object-valued authority poll, continuously incremented its generation, and discarded each sequential batch. A first repair suppressed that churn but would not restart after a genuine mid-batch authority change. The final candidate tracks only a stable named E/R/H JSON scalar: equivalent object publications are equality-suppressed, while a genuine identity change starts a fresh generation; post-await authority/replacement fences remain exact.
+- Targeted race run: Load Thumbnails started at authority epoch/revision/hash `1 / 0 / f9d674...316b9`; while the first batch was in flight, an actual layer opacity edit committed and advanced authority to `1 / 1 / 172a03...b72c7`. At 1.2 seconds the retired batch had published zero cards and authorization remained active. Without another click or project reload, the fresh generation completed at 13 loaded / 0 unavailable after the settle interval. This directly proves stale rejection plus automatic retry/publication.
+- The maximized native screenshot showed a genuine three-column thumbnail grid with 16:9 contained imagery, rather than the old vertical text list or stretched media.
+
+### Hover/focus motion and single-session behavior
+
+- Catalog-only video `v12` was focused after authorization. Three consecutive backend-owned preview frames were observed with different SHA-256 values: `FABD0DA1AFADD619DB56EF8CC43EE5D6C1FE5AE8B772D9A4B689CDCDA66421C2`, `9CF10F40914E94A7997AA055AE126F8D4399DD2D5E1FE5CC04A0D7A57506F9FF`, and `1CDC8933193FE69BDA3E16B153E7C95A8595B6E9FE702A5A0255B92CD5156E53`.
+- Moving focus to `v11` left exactly one playing preview and transferred it to the new card. Dispatching the matching leave/focus-out path reduced the playing-preview count to zero.
+- Preview frames came only from the backend Begin/Frame/End session over its immutable private copy. No DOM `<video>`, `convertFileSrc`, raw source URL, or audio playback path was used.
+
+### Still image behavior and source-file purity
+
+- Project: `projects\mixed-normal.sdc`, containing 14 assets including `still-valid.png`.
+- After explicit authorization, all 14 cards had loaded thumbnails. Focusing `still-valid` kept its thumbnail visible and produced zero playing video previews locally and globally.
+- All 16 fixture files in `manifest-before.json` were recomputed after the thumbnail and hover-preview run. Length, SHA-256, and UTC last-write ticks matched exactly for all 16; changed entries: zero.
+- Project load reset authorization: the second project again exposed the explicit Load Thumbnails control and initially had zero loaded thumbnails, proving authorization remains session/project scoped.

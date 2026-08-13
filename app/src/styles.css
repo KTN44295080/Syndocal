@@ -36472,8 +36472,7 @@ a[href]:focus-visible,
 }
 
 .videoMediaLibraryActions,
-.videoMediaLibraryItem,
-.videoMediaLibraryItem > div:last-child {
+.videoMediaLibraryCardActions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -36489,29 +36488,103 @@ a[href]:focus-visible,
 
 .videoMediaLibraryList {
   display: grid;
-  gap: 4px;
+  /* The library is a genuine grid even in the narrow clip pane: cards wrap
+     internally instead of degrading to the old vertical asset list. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@media (min-width: 1500px) {
+  .videoMediaLibraryList {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .videoMediaLibraryItem {
-  justify-content: space-between;
+  display: grid;
+  grid-template-rows: auto auto auto;
+  gap: 6px;
   min-width: 0;
   border: 1px solid #30363a;
   background: #1c2124;
   padding: 6px;
 }
 
-.videoMediaLibraryItem > div:first-child {
-  display: grid;
-  flex: 1 1 auto;
-  gap: 2px;
-  min-width: 0;
+.videoMediaLibraryItem:focus,
+.videoMediaLibraryItem:focus-within {
+  border-color: var(--ray-accent);
+  outline: none;
 }
 
-.videoMediaLibraryItem > div:first-child > span {
+.videoMediaLibraryThumbnail {
+  position: relative;
+  display: grid;
+  aspect-ratio: 16 / 9;
   overflow: hidden;
-  color: #929ba1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: #14181a;
+}
+
+.videoMediaLibraryThumbnail > img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+}
+
+.videoMediaLibraryPreview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  background: #000;
+}
+
+.videoMediaLibraryThumbnailPlaceholder {
+  display: grid;
+  place-items: center;
+}
+
+.videoMediaLibraryThumbnailPlaceholder::before {
+  width: 42%;
+  height: 42%;
+  border: 1px solid #59636a;
+  background: #20272b;
+  content: "";
+}
+
+.videoMediaLibraryCardDetails {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: grid;
+  align-content: end;
+  gap: 3px;
+  overflow: hidden;
+  max-height: 46%;
+  background: #14181cd9;
+  padding: 8px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.videoMediaLibraryCardDetails span {
+  overflow-wrap: anywhere;
+  color: #b4bdc2;
+}
+
+.videoMediaLibraryItem:hover .videoMediaLibraryCardDetails,
+.videoMediaLibraryItem:focus .videoMediaLibraryCardDetails,
+.videoMediaLibraryItem:focus-within .videoMediaLibraryCardDetails {
+  opacity: 1;
+}
+
+.videoMediaLibraryCardHeading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
 .videoMediaLibraryItem small {
@@ -36520,7 +36593,7 @@ a[href]:focus-visible,
 }
 
 .videoMediaAvailability {
-  max-width: 180px;
+  flex: 1 1 100%;
   overflow: hidden;
   color: #9ba5ab;
   text-overflow: ellipsis;
@@ -36570,13 +36643,16 @@ a[href]:focus-visible,
 }
 
 @media (max-width: 900px) {
-  .videoMediaLibraryItem,
   .videoMediaLibraryActions {
     align-items: stretch;
+  }
+
+  .videoMediaLibraryActions,
+  .videoMediaLibraryCardActions {
     flex-direction: column;
   }
 
-  .videoMediaLibraryItem > div:last-child {
+  .videoMediaLibraryCardActions {
     flex-wrap: wrap;
   }
 }

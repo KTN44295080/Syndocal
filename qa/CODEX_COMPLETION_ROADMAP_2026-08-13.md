@@ -1,7 +1,7 @@
 # Syndocal complete product roadmap and frozen checkpoint
 
-Status: implementation resumed on 2026-08-13 (JST). Media Asset A1-A7 are implemented and the ordered A7 focused gate is green; A8 native workflow acceptance is in progress and the whole-product Q5 completion query still fails.
-Roadmap revision: v3, live checkpoint and A7 evidence integrated on 2026-08-13 (JST).
+Status: implementation resumed on 2026-08-13 (JST). Media Asset A1-A8 are accepted for the current Windows tranche, including the rebuilt Media Library thumbnail/hover supplement; the whole-product Q5 completion query still fails and Critical Path B is next.
+Roadmap revision: v4, current Windows Media Asset A8 evidence integrated on 2026-08-14 (JST).
 
 This document is the detailed continuation contract from the current checkout to a release candidate that can truthfully be compared with Daslight 5 and SynapseRack. It records what is committed, what is only present in the dirty worktree, what has been tested, what is still unsafe, the dependency order, file ownership, required evidence, commit boundaries, and the native completion gate.
 
@@ -92,16 +92,16 @@ There is no longer one ambiguous “overall” percentage. Report these dimensio
 | Software implementation toward the planned product target | 85% | Media terminal authority, compatibility, coherence, lifecycle, and command-level proof are implemented; Clip Slots, derived data, recording, distributed ShowClock, and cross-domain boundaries remain |
 | Product-surface coverage | 76% | Media Library and the corrected shared Edit Video grid exist; reusable slots, recording truth, distributed operation, and several operator paths remain incomplete |
 | Automated proof coverage | 78% | The complete ordered Media A7 gate is green; unified migration/security/performance and multiple external/hardware seams remain |
-| Current-source native and hardware proof | 27% | Current-source native release build and basic window/layout smoke exist; the complete Media A8 workflow and most real DMX/control/venue gates remain open |
+| Current-source native and hardware proof | 32% | Media A8's fifteen-row Windows matrix plus the rebuilt thumbnail-grid/hover supplement are accepted; most real DMX/control/venue and non-Windows gates remain open |
 | Distribution/legal/clean-machine readiness | 35% | Packaging/CI foundations exist; signing, notarization, license disposition, release artifact publication, and clean-machine acceptance remain |
-| Planning roll-up to public release candidate | 67.0% | `85*0.5 + 78*0.2 + 27*0.2 + 35*0.1`; unresolved P0-Release/P1 gates override the number |
-| Media Asset T1 overall | 97% implementation / A8 not accepted | A1-A7 are implemented and A7 is green; A8's full native workflow matrix remains |
+| Planning roll-up to public release candidate | 68.0% | `85*0.5 + 78*0.2 + 32*0.2 + 35*0.1`; unresolved P0-Release/P1 gates override the number |
+| Media Asset T1 overall | 100% for the declared Windows tranche | A1-A8 are implemented/reviewed; A7 and the native A8 matrix plus targeted rebuilt thumbnail/hover supplement are green |
 | Protocol Media Asset schema/migration/validation | 100% for T1 scope | Focused Protocol tests passed before commit |
 | Engine Media Asset runtime/allocator/Published rollback | 100% for A6 scope | Complete Bootstrap A restoration and allocator proof pass in A7 |
 | Frontend Media Asset orchestration | 100% for A2 scope | Direct authoritative Import/Add/Bootstrap/Relink with exact recovery/cancellation is implemented and the focused gate passes |
 | Backend Media Asset prepare/finalize/registry | 100% for A1-A5 implementation scope | Authoritative terminal transaction, compatibility bridge, coherence, availability, and reaper are implemented |
-| Media Asset adversarial/final review | In progress | Earlier focused reviews closed reported P0/P1; one final frozen A1-A7 review is running before A8 acceptance |
-| Native release/UI/hardware acceptance for this tranche | In progress | Current release build and one responsive/maximized window were obtained; the required A8 workflows remain |
+| Media Asset adversarial/final review | Accepted for current Windows tranche | Final thumbnail/session review returned P0=0/P1=0; remaining notes are proof/resource P2 only |
+| Native release/UI/hardware acceptance for this tranche | Accepted for current Windows tranche | Fifteen workflow rows plus rebuilt 3-column grid, explicit thumbnail authorization, moving single preview, Still fail-safe, and no-touch evidence are recorded |
 | Clip Slot T2 | design complete, implementation 0% | Transition model is accepted; code has not begun |
 | Distributed ShowClock/2PC | architecture requirements drafted, implementation 0% | Local clock and machine-local output fence exist; authenticated distributed authority does not |
 
@@ -275,11 +275,11 @@ Independent pure/read-only work may proceed earlier, but no dependent mutation m
 
 ## 5. Critical path A: finish Media Asset T1
 
-Media Asset T1 blocks Clip Slot T2 and the final Video operator comparison. Complete A1 through A8 in order.
+Media Asset T1 blocked Clip Slot T2 and the final Video operator comparison. A1 through A8 are now accepted for the declared Windows tranche, so Critical Path B may begin from this checkpoint.
 
 ### A1. Backend-owned authoritative Media Asset terminal transaction
 
-Priority: highest. Status: implemented and committed in `aad9172`; the ordered A7 proof passes. Final frozen adversarial review and A8 remain before the tranche is accepted.
+Priority: highest. Status: implemented and committed in `aad9172`; the ordered A7 proof, final frozen reviews, and Windows A8 acceptance pass.
 
 Problem:
 
@@ -402,7 +402,7 @@ Checkpoint commit A2 should own only the six frozen frontend files and any focus
 
 ### A3. Preserve old IPC names while replacing their internals
 
-Status: implemented and committed in `4173e35`. Compatibility names/shapes are retained and production tests cover authoritative owner, atomicity, hash identity, and history. Native A8 remains.
+Status: implemented and committed in `4173e35`. Compatibility names/shapes are retained, production tests cover authoritative owner, atomicity, hash identity, and history, and the declared Windows A8 tranche is accepted.
 
 Affected compatibility commands:
 
@@ -462,7 +462,7 @@ Tests:
 
 ### A5. Availability cancellation and reaper hardening
 
-Status: implemented and committed in `68a983d`; the current A7 operation and availability filters pass. Native cancellation is still an A8 acceptance item.
+Status: implemented and committed in `68a983d`; the current A7 operation and availability filters pass, and native first-hash cancellation/project-replacement rows pass in A8.
 
 - Add reserved operation identity to verified availability when the inspection can be long.
 - Allow cancellation before first read and between chunks/probe entries.
@@ -517,7 +517,7 @@ If any test filter selects zero tests, correct the command and rerun; do not cou
 
 ### A8. Media Asset native acceptance
 
-Status: PASS for release executable SHA-256 `41FE507275C21916F36894A4D4E5DF4D9CEF537E5223A778302B83CCE93FAE07`. All fifteen workflow rows are recorded as PASS in `qa/MEDIA_ASSET_T1_A8_NATIVE_EVIDENCE_2026-08-13.md`, including default mismatch refusal, all-reference matching-content Relink, restart/load with zero implicit source-file changes, and byte-identical explicit Save/reload. A subsequent Media Library thumbnail-grid frontend change is being reviewed separately and must pass a fresh native build plus targeted grid/hover/no-touch acceptance before its newer executable supersedes this A8 checkpoint.
+Status: PASS for the current Windows tranche. All fifteen workflow rows remain recorded against executable SHA-256 `41FE507275C21916F36894A4D4E5DF4D9CEF537E5223A778302B83CCE93FAE07`. The subsequent Media Library thumbnail-grid/backend-preview and authority-retry change was rebuilt as executable SHA-256 `27D1CD18A810AD960B771B800B32E4C7353539C6E6DEF5E2B567387983CE36AD` and passed targeted native grid/hover/focus/Still/no-touch acceptance, including automatic restart and 13/13 publication after a genuine same-project authority change during the initial batch. Exact evidence and claim boundaries are in `qa/MEDIA_ASSET_T1_A8_NATIVE_EVIDENCE_2026-08-13.md`.
 
 After focused/static review is P0/P1 clean:
 
@@ -1475,8 +1475,8 @@ This is the minimum domain-level inventory. Each row must be decomposed into Q1 
 
 | Domain ID | Scope | Primary section/source | Frozen status | Release-blocking remainder |
 | --- | --- | --- | --- | --- |
-| `MEDIA-T1` | MediaAsset schema, import, relink, authority | A | A1-A7 implemented/green; A8 in progress | full native workflow acceptance and macOS/Linux execution proof or narrowed support claim |
-| `MEDIA-DERIVED` | thumbnails, proxies, waveform, analysis, cache | M | Not started as one tranche | authored/cache separation, cancellation, eviction, performance |
+| `MEDIA-T1` | MediaAsset schema, import, relink, authority | A | A1-A8 accepted for current Windows tranche | macOS/Linux execution proof before any cross-platform safety claim |
+| `MEDIA-DERIVED` | thumbnails, proxies, waveform, analysis, cache | M | Asset-keyed thumbnail and immutable-copy hover-preview foundation accepted on Windows | general cache model, cancellation during Begin copy, eviction, proxies/waveform/analysis, performance |
 | `VIDEO-SLOT` | clip banks/slots, queue/Take | B | Design complete, code not started | full implementation and native acceptance |
 | `VIDEO-FX` | scoped effects and transition buses | C | Partial foundation | scope model, deterministic Take, mapping/timeline and faults |
 | `VIDEO-SOURCE` | camera, screen, NDI, Spout/Syphon, generators | L/K | Partial | authored/runtime identity, replacement fence, physical faults |
@@ -1576,9 +1576,9 @@ Initial high-severity register:
 
 | Risk ID | Severity | Boundary | Status / blocking milestone |
 | --- | --- | --- | --- |
-| `R-MEDIA-TERM-001` | P1 | media publish/history/reply loss | Code closed by `aad9172`/`14eeeb2`; final frozen review and A8 evidence pending |
+| `R-MEDIA-TERM-001` | P1 | media publish/history/reply loss | Closed for the current Windows Media T1 tranche by `aad9172`/`14eeeb2`, final reviews, and A8 evidence |
 | `R-TX-BEGIN-001` | P1 | Begin side effect with lost reply | Open; blocks generic dependent mutations |
-| `R-MEDIA-COMPAT-001` | P1 | old raw IPC authority/hash/atomicity | Code closed by `4173e35`; native compatibility evidence pending |
+| `R-MEDIA-COMPAT-001` | P1 | old raw IPC authority/hash/atomicity | Closed for current Windows Media T1 by `4173e35`, command tests, and A8 acceptance |
 | `R-FILE-ABA-001` | P1 if non-Windows supported | path/file image coherence | Code implementation closed by `8cb0459`; macOS/Linux execution and product support decision pending |
 | `R-PATCH-ATOMIC-001` | P1 | profile ancillary and Engine Patch/Repair | Open; blocks D completion |
 | `R-OUTPUT-SWAP-001` | P1 | project/Takeover replacement and external outputs | Open; blocks distributed/venue completion |
@@ -1608,7 +1608,7 @@ Current focused evidence records:
 | Evidence ID | Scope | Record | Status |
 | --- | --- | --- | --- |
 | `MEDIA-T1-A7-2026-08-13` | Ordered automated Media Asset A7 gate and current native build hash | `qa/MEDIA_ASSET_T1_A7_EVIDENCE_2026-08-13.md` | Accepted for A7 only |
-| `MEDIA-T1-A8-2026-08-13` | Full native Media Asset workflow matrix | Pending | In progress; must not be inferred from the basic Video layout smoke |
+| `MEDIA-T1-A8-2026-08-13` | Full native Media Asset workflow matrix plus rebuilt thumbnail/hover supplement | `qa/MEDIA_ASSET_T1_A8_NATIVE_EVIDENCE_2026-08-13.md` | Accepted for the declared Windows tranche; non-Windows execution remains separate |
 
 ### Q5. Completion query
 
@@ -1753,7 +1753,7 @@ No confirmed P0-Code at the last frozen reviewed checkpoint. Current dirty `main
 ### P1
 
 - Generic Begin reply-loss/liveness.
-- Media terminal reply-loss/history and old compatibility atomicity are code-closed, but remain acceptance-open until the final frozen review and A8 are recorded.
+- Media terminal reply-loss/history and old compatibility atomicity are closed for the accepted Windows Media T1 tranche; generic non-media Begin reply-loss remains open.
 - Non-Windows file coherence is implemented, but macOS/Linux execution proof and the supported-platform decision remain open.
 - Pending broader PATCH/GDTF atomic project/engine commit and raw mutation admission.
 - Remaining generic project/input/output authority boundaries identified in prior reviews must be re-audited before release.
@@ -1764,9 +1764,9 @@ No confirmed P0-Code at the last frozen reviewed checkpoint. Current dirty `main
 
 ### P2 / proof gaps
 
-- Media availability first-hash cancellation, reaper spawn failure, terminal receipt recovery, complete Bootstrap rollback, and all-six command idempotency now have automated implementation proof; their required native/external rows remain separate.
+- Media availability first-hash cancellation, reaper spawn failure, terminal receipt recovery, complete Bootstrap rollback, and all-six command idempotency have automated implementation proof; first-hash cancellation/replacement also have Windows native evidence, while non-Windows and external-platform rows remain separate.
 - non-Windows execution tests;
-- full native Media A8 workflow acceptance (the release build/basic window smoke alone is insufficient);
+- non-Windows Media A8 execution and supported-platform evidence;
 - comparative benchmark evidence.
 - media thumbnail/proxy/cache/analysis lifecycle and performance proof;
 - full migration/corruption/fuzz corpus;
@@ -1778,7 +1778,7 @@ No confirmed P0-Code at the last frozen reviewed checkpoint. Current dirty `main
 
 Do not claim:
 
-- Media Asset T1 complete;
+- cross-platform Media Asset T1 complete (the current acceptance is explicitly Windows-scoped);
 - reply-loss idempotency complete;
 - native verification complete;
 - Clip Slot model implemented;
@@ -1793,4 +1793,4 @@ Do not claim:
 - secure internet exposure of Web Remote or ShowClock without the declared TLS/authentication/fencing boundary;
 - whole-product Daslight parity from loopback, fixture count, internal schema, or the currently measured subset of tasks.
 
-The next truthful milestone is: **Media Asset A8 full native workflow acceptance on the exact current release executable, followed by the final frozen Media T1 review and evidence-led closeout**.
+The next truthful milestone is: **Critical Path B / Clip Slot T2 protocol schema and migration, followed by its Engine/backend/frontend/gates checkpoints; Media T1 remains the accepted Windows dependency baseline**.

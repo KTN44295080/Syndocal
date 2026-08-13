@@ -1620,6 +1620,15 @@ export interface ExternalVideoTransportStatus {
   ownership_error: string | null;
 }
 
+/** Renderer-scoped, exact-authority ticket for an operator-authorized Media Library preview. */
+export interface MediaAssetPreviewSessionTicket {
+  session_id: number;
+  asset_id: MediaAssetId;
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+}
+
 export interface ExternalVideoTransportSyncResponse {
   report: ExternalVideoTransportSyncReport;
   events: ExternalVideoTransportDriverEvent[];

@@ -196,12 +196,13 @@ const MEDIA_ASSET_COMMIT_RECEIPT_TTL: Duration = Duration::from_secs(10 * 60);
 /// prepared handles and finished receipts at TTL without waiting for the next
 /// registry call. One task total, owned by `AppState`; never one per item.
 const MEDIA_ASSET_OPERATION_REAP_INTERVAL: Duration = Duration::from_millis(500);
+/// Hover previews keep one verified private copy briefly, so a 4fps UI does
+/// not rehash and recopy the original media on every pointer update.
+const MEDIA_ASSET_PREVIEW_SESSION_TTL: Duration = Duration::from_secs(30);
 /// Bounded number of collision-avoidance attempts when minting a private media
 /// snapshot filename. `create_new` guarantees we never clobber an existing file;
 /// this only bounds the retry loop if the OS temp dir already holds a name.
-#[cfg(unix)]
 const MEDIA_ASSET_SNAPSHOT_NAME_ATTEMPTS: usize = 16;
-#[cfg(unix)]
 static MEDIA_ASSET_SNAPSHOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 static RDM_TRANSACTION_NUMBER: AtomicU8 = AtomicU8::new(1);
 static LIVE_VIDEO_MONITOR_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -630,6 +631,26 @@ struct MediaAssetOperationEntry {
     reserved_authority: Option<MediaAssetPrepareAuthority>,
 }
 
+#[derive(Debug)]
+struct MediaAssetPreviewSession {
+    id: u64,
+    owner_id: String,
+    window_label: String,
+    authority: MediaAssetPrepareAuthority,
+    asset: MediaAssetSummary,
+    private_copy: PrivateMediaSnapshot,
+    expires_at: Mutex<Instant>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MediaAssetPreviewSessionTicket {
+    session_id: u64,
+    asset_id: MediaAssetId,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+}
+
 #[derive(Debug, Default)]
 struct MediaAssetOperationRegistry {
     next_generation: AtomicU64,
@@ -654,6 +675,10 @@ struct MediaAssetOperationRegistry {
     authoritative_receipts:
         Mutex<HashMap<MediaAssetAuthoritativeOperationKey, MediaAssetAuthoritativeReceiptRecord>>,
     authoritative_lanes: Mutex<HashMap<MediaAssetAuthoritativeOperationKey, Arc<Mutex<()>>>>,
+    /// Short-lived hover sessions are backend-owned and bind a registered
+    /// renderer generation to one immutable private media copy. The existing
+    /// media reaper owns their TTL cleanup too.
+    preview_sessions: Mutex<HashMap<u64, Arc<MediaAssetPreviewSession>>>,
 }
 
 struct MediaAssetOperationGuard {
@@ -682,6 +707,166 @@ impl MediaAssetOperationRegistry {
                 Err(actual) => generation = actual,
             }
         }
+    }
+
+    fn insert_preview_session(
+        &self,
+        owner_id: String,
+        window_label: String,
+        authority: MediaAssetPrepareAuthority,
+        asset: MediaAssetSummary,
+        private_copy: PrivateMediaSnapshot,
+    ) -> Result<MediaAssetPreviewSessionTicket, String> {
+        let id = self.allocate_generation()?;
+        let ticket = MediaAssetPreviewSessionTicket {
+            session_id: id,
+            asset_id: asset.id,
+            project_epoch: authority.epoch,
+            project_revision: authority.revision,
+            checkpoint_hash: authority.checkpoint_hash.clone(),
+        };
+        let session = Arc::new(MediaAssetPreviewSession {
+            id,
+            owner_id,
+            window_label,
+            authority,
+            asset,
+            private_copy,
+            expires_at: Mutex::new(Instant::now() + MEDIA_ASSET_PREVIEW_SESSION_TTL),
+        });
+        let retired = {
+            let mut sessions = self.preview_sessions.lock().map_err(|_| {
+                "Media asset preview session registry lock was poisoned".to_string()
+            })?;
+            // Hovering a new card replaces this renderer generation's prior
+            // preview immediately, bounding retained private copies to one.
+            let prior = sessions
+                .iter()
+                .filter_map(|(id, current)| (current.owner_id == session.owner_id).then_some(*id))
+                .collect::<Vec<_>>();
+            let retired = prior
+                .into_iter()
+                .filter_map(|id| sessions.remove(&id))
+                .collect::<Vec<_>>();
+            sessions.insert(id, session);
+            retired
+        };
+        drop(retired);
+        Ok(ticket)
+    }
+
+    fn preview_session_for_frame(
+        &self,
+        session_id: u64,
+        owner_id: &str,
+        window_label: &str,
+        asset_id: MediaAssetId,
+        now: Instant,
+    ) -> Result<Arc<MediaAssetPreviewSession>, String> {
+        let retired = {
+            let mut sessions = self.preview_sessions.lock().map_err(|_| {
+                "Media asset preview session registry lock was poisoned".to_string()
+            })?;
+            let expired = sessions.get(&session_id).is_some_and(|session| {
+                session
+                    .expires_at
+                    .lock()
+                    .map_or(true, |expires| *expires <= now)
+            });
+            if expired {
+                sessions.remove(&session_id)
+            } else {
+                let session = sessions.get(&session_id).cloned().ok_or_else(|| {
+                    "Media asset preview session was not found or expired".to_string()
+                })?;
+                if session.owner_id != owner_id
+                    || session.window_label != window_label
+                    || session.asset.id != asset_id
+                {
+                    return Err(
+                        "Media asset preview session does not belong to this renderer".to_string(),
+                    );
+                }
+                return Ok(session);
+            }
+        };
+        drop(retired);
+        Err("Media asset preview session was not found or expired".to_string())
+    }
+
+    fn refresh_preview_session(
+        &self,
+        session: &Arc<MediaAssetPreviewSession>,
+        now: Instant,
+    ) -> Result<(), String> {
+        let sessions = self
+            .preview_sessions
+            .lock()
+            .map_err(|_| "Media asset preview session registry lock was poisoned".to_string())?;
+        let current = sessions
+            .get(&session.id)
+            .ok_or_else(|| "Media asset preview session was ended or expired".to_string())?;
+        if !Arc::ptr_eq(current, session)
+            || current.owner_id != session.owner_id
+            || current.window_label != session.window_label
+            || current.authority != session.authority
+            || current.asset != session.asset
+        {
+            return Err("Media asset preview session changed before frame delivery".to_string());
+        }
+        *current
+            .expires_at
+            .lock()
+            .map_err(|_| "Media asset preview session expiry lock was poisoned".to_string())? =
+            now + MEDIA_ASSET_PREVIEW_SESSION_TTL;
+        Ok(())
+    }
+
+    fn end_preview_session(
+        &self,
+        session_id: u64,
+        owner_id: &str,
+        window_label: &str,
+        asset_id: MediaAssetId,
+    ) -> Result<(), String> {
+        let retired = {
+            let mut sessions = self.preview_sessions.lock().map_err(|_| {
+                "Media asset preview session registry lock was poisoned".to_string()
+            })?;
+            let Some(session) = sessions.get(&session_id) else {
+                // End is best-effort cleanup; an exact retry after the first
+                // successful reply loss must be harmless.
+                return Ok(());
+            };
+            if session.owner_id != owner_id
+                || session.window_label != window_label
+                || session.asset.id != asset_id
+            {
+                return Err(
+                    "Media asset preview session does not belong to this renderer".to_string(),
+                );
+            }
+            sessions.remove(&session_id)
+        };
+        drop(retired);
+        Ok(())
+    }
+
+    fn purge_preview_sessions_for_owner(&self, owner_id: &str) {
+        let retired = {
+            let mut sessions = self
+                .preview_sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = sessions
+                .iter()
+                .filter_map(|(id, session)| (session.owner_id == owner_id).then_some(*id))
+                .collect::<Vec<_>>();
+            ids.into_iter()
+                .filter_map(|id| sessions.remove(&id))
+                .collect::<Vec<_>>()
+        };
+        drop(retired);
     }
 
     fn begin_for(
@@ -1680,6 +1865,30 @@ impl MediaAssetOperationRegistry {
             lanes.retain(|_, lane| Arc::strong_count(lane) > 1);
             reclaimed += before - lanes.len();
         }
+        {
+            let retired = {
+                let mut sessions = self
+                    .preview_sessions
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let ids = sessions
+                    .iter()
+                    .filter_map(|(id, session)| {
+                        session
+                            .expires_at
+                            .lock()
+                            .map_or(true, |expires| *expires <= now)
+                            .then_some(*id)
+                    })
+                    .collect::<Vec<_>>();
+                reclaimed += ids.len();
+                ids.into_iter()
+                    .filter_map(|id| sessions.remove(&id))
+                    .collect::<Vec<_>>()
+            };
+            // Snapshot deletion executes after the registry mutex is released.
+            drop(retired);
+        }
         reclaimed
     }
 }
@@ -1894,15 +2103,13 @@ impl UnixMediaFileVersion {
     }
 }
 
-/// A private, RAII-cleaned copy of exactly one opened source image. Off Windows
-/// we cannot deny writers/deleters on the original path through `std`, so a
-/// path-based metadata probe of the original file could observe a transient
-/// A->B->A swap and pair `metadata(B)` with `hash(A)`. Copying the single opened
-/// source into this private snapshot and probing the snapshot guarantees the
-/// hash and the probe describe one immutable image. The temp file is removed by
-/// `Drop` on every terminal path (success, error, cancel, panic), so it never
-/// leaks; it is prepare-scoped and never persisted into the registry.
-#[cfg(unix)]
+/// A private, RAII-cleaned copy of exactly one opened source image. Unix uses a
+/// `0700` directory and `0600` file sealed read-only before decoding. Windows
+/// uses `create_new` inside the process user's Temp directory (the standard
+/// library offers no DACL setter here), retains a deny-write source handle while
+/// copying, and deletes the temporary path on every terminal path. Copying the
+/// opened source means the decoder/probe reads one immutable image rather than a
+/// user-controlled catalog path; the copy is never persisted into the project.
 #[derive(Debug)]
 struct PrivateMediaSnapshot {
     path: PathBuf,
@@ -1913,7 +2120,6 @@ struct PrivateMediaSnapshot {
     file: Option<fs::File>,
 }
 
-#[cfg(unix)]
 impl Drop for PrivateMediaSnapshot {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
@@ -1921,12 +2127,11 @@ impl Drop for PrivateMediaSnapshot {
     }
 }
 
-#[cfg(unix)]
 impl PrivateMediaSnapshot {
     /// Create a fresh, collision-safe owner-only directory and snapshot file in
     /// the OS temp dir, preserving the source extension (so a container/format
-    /// probe of the copy behaves like a probe of the original). The directory is
-    /// `0700`, the file starts `0600`, and `create_new` refuses to clobber a file.
+    /// probe of the copy behaves like a probe of the original). Unix permissions
+    /// are `0700`/`0600`; every platform uses `create_new` to refuse clobbering.
     fn create(source: &Path) -> Result<Self, String> {
         let temp_dir = env::temp_dir();
         let extension = source
@@ -1945,7 +2150,15 @@ impl PrivateMediaSnapshot {
                 "syndocal-media-snapshot-{}-{token}",
                 std::process::id()
             ));
-            match fs::DirBuilder::new().mode(0o700).create(&directory) {
+            #[cfg(unix)]
+            let create_directory = fs::DirBuilder::new().mode(0o700).create(&directory);
+            #[cfg(windows)]
+            // The process user's Temp directory supplies the Windows ACL
+            // boundary. Rust's standard library cannot apply a DACL here; the
+            // file remains create_new, process-private by convention, and is
+            // deleted by RAII after this read-only IPC returns.
+            let create_directory = fs::create_dir(&directory);
+            match create_directory {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => {
@@ -1960,7 +2173,8 @@ impl PrivateMediaSnapshot {
                 name.push_str(extension);
             }
             let candidate = directory.join(name);
-            match fs::OpenOptions::new()
+            let mut options = fs::OpenOptions::new();
+            options
                 .read(true)
                 .write(true)
                 .create_new(true)
@@ -1968,9 +2182,10 @@ impl PrivateMediaSnapshot {
                 // temp directory. Start with owner-only permissions; after the
                 // copy is complete `copy_and_hash_into_snapshot` makes the
                 // snapshot read-only before any external metadata probe opens it.
-                .mode(0o600)
-                .open(&candidate)
-            {
+                ;
+            #[cfg(unix)]
+            options.mode(0o600);
+            match options.open(&candidate) {
                 Ok(file) => {
                     return Ok(Self {
                         path: candidate,
@@ -1994,7 +2209,6 @@ impl PrivateMediaSnapshot {
 /// so two snapshots minted in the same nanosecond still differ, without adding a
 /// random-number dependency. `create_new` remains the authoritative anti-clobber
 /// guard; this only makes collisions vanishingly rare.
-#[cfg(unix)]
 fn next_media_asset_snapshot_token() -> String {
     let counter = MEDIA_ASSET_SNAPSHOT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
@@ -2008,7 +2222,6 @@ fn next_media_asset_snapshot_token() -> String {
 /// the same bytes, so the returned hash describes exactly the copied image.
 /// Cancellable between chunks so an abort during the (potentially long) first
 /// hash returns promptly without finishing the copy.
-#[cfg(unix)]
 fn copy_and_hash_into_snapshot(
     source: &mut fs::File,
     snapshot: &mut PrivateMediaSnapshot,
@@ -2021,6 +2234,7 @@ fn copy_and_hash_into_snapshot(
     let mut buffer = vec![0u8; MEDIA_ASSET_HASH_CHUNK_BYTES];
     let mut copied = 0u64;
     let mut first_chunk = true;
+    #[cfg(unix)]
     let snapshot_path = snapshot.path.clone();
     {
         let file = snapshot
@@ -2053,15 +2267,18 @@ fn copy_and_hash_into_snapshot(
             .map_err(|error| format!("Unable to sync private media snapshot: {error}"))?;
         // The snapshot has finished receiving bytes. Do not leave a path in the
         // shared temp directory writable while ffprobe/image decoding opens it.
-        let mut permissions = file
-            .metadata()
-            .map_err(|error| {
-                format!("Unable to inspect private media snapshot permissions: {error}")
-            })?
-            .permissions();
-        permissions.set_mode(0o400);
-        fs::set_permissions(&snapshot_path, permissions)
-            .map_err(|error| format!("Unable to seal private media snapshot: {error}"))?;
+        #[cfg(unix)]
+        {
+            let mut permissions = file
+                .metadata()
+                .map_err(|error| {
+                    format!("Unable to inspect private media snapshot permissions: {error}")
+                })?
+                .permissions();
+            permissions.set_mode(0o400);
+            fs::set_permissions(&snapshot_path, permissions)
+                .map_err(|error| format!("Unable to seal private media snapshot: {error}"))?;
+        }
     }
     // `0400` governs new opens; dropping the existing write-capable descriptor
     // removes the remaining writer before the caller hands this path to a probe.
@@ -25761,6 +25978,7 @@ fn register_project_transaction_owner(
         .lock()
         .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
     ensure_project_transaction_owner_unique_to_window(&owners, window.label(), &owner_id)?;
+    let retired_preview_owner = owners.get(window.label()).cloned();
     // Hold both registries through recovery and the owner/session handoff. The
     // external-admission and coordinator locks already exclude concurrent
     // operator mutations; taking owners before sessions is the only nested
@@ -25788,6 +26006,16 @@ fn register_project_transaction_owner(
             cancel_pending_project_transaction_locked(&state, coordinator, pending).map(Some)
         },
     )?;
+    drop(sessions);
+    drop(owners);
+    drop(coordinator);
+    if retired_preview_owner.as_deref() != Some(owner_id.as_str()) {
+        if let Some(retired_owner) = retired_preview_owner.as_deref() {
+            state
+                .media_asset_operations
+                .purge_preview_sessions_for_owner(retired_owner);
+        }
+    }
     Ok(recovered)
 }
 
@@ -25839,6 +26067,7 @@ fn retire_project_transaction_owner_for_window(
         .project_transaction_owners
         .lock()
         .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+    let retired_preview_owner = owners.get(window_label).cloned();
     // Match registration's atomic owner/session boundary. In particular, an
     // orphan cancellation failure must leave its previous session available
     // under the still-registered owner instead of orphaning its lock state.
@@ -25864,6 +26093,14 @@ fn retire_project_transaction_owner_for_window(
             cancel_pending_project_transaction_locked(state, coordinator, pending).map(Some)
         },
     )?;
+    drop(sessions);
+    drop(owners);
+    drop(coordinator);
+    if let Some(retired_owner) = retired_preview_owner.as_deref() {
+        state
+            .media_asset_operations
+            .purge_preview_sessions_for_owner(retired_owner);
+    }
     Ok(recovered)
 }
 
@@ -37148,6 +37385,402 @@ fn get_video_layer_thumbnail(
     renderer
         .render_layer_preview(&snapshot.video, layer_id, width, height)
         .map_err(|error| format!("{error:?}"))
+}
+
+const MEDIA_ASSET_THUMBNAIL_MAX_EDGE: u32 = 512;
+const MEDIA_ASSET_PREVIEW_MAX_POSITION_MS: u64 = 24 * 60 * 60 * 1_000;
+
+fn validate_media_asset_thumbnail_dimensions(width: u32, height: u32) -> Result<(), String> {
+    if width == 0
+        || height == 0
+        || width > MEDIA_ASSET_THUMBNAIL_MAX_EDGE
+        || height > MEDIA_ASSET_THUMBNAIL_MAX_EDGE
+    {
+        return Err(format!(
+            "Media asset thumbnail dimensions must be between 1 and {MEDIA_ASSET_THUMBNAIL_MAX_EDGE} pixels"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_media_asset_preview_position(position_ms: u64) -> Result<(), String> {
+    if position_ms > MEDIA_ASSET_PREVIEW_MAX_POSITION_MS {
+        return Err(format!(
+            "Media asset preview position must not exceed {MEDIA_ASSET_PREVIEW_MAX_POSITION_MS} ms"
+        ));
+    }
+    Ok(())
+}
+
+/// Capture a media-library entry from the persistence checkpoint without
+/// reconciling it. A thumbnail is a read-only machine-local operation: it must
+/// never advance the revision/history merely to make a stale catalog appear
+/// current.
+fn capture_media_asset_thumbnail_asset(
+    state: &AppState,
+    asset_id: MediaAssetId,
+) -> Result<(MediaAssetPrepareAuthority, MediaAssetSummary), String> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let checkpoint = project_checkpoint_for_coordinator(state, &coordinator)?;
+    media_asset_thumbnail_asset_for_checkpoint(&coordinator, &checkpoint, asset_id)
+}
+
+fn capture_media_asset_preview_asset_for_window(
+    state: &AppState,
+    window: &WebviewWindow,
+    asset_id: MediaAssetId,
+) -> Result<(String, MediaAssetPrepareAuthority, MediaAssetSummary), String> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    let owner_id = {
+        let owners = state
+            .project_transaction_owners
+            .lock()
+            .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+        legacy_media_asset_compatibility_owner_for_window_label(&owners, window.label())?
+    };
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let checkpoint = project_checkpoint_for_coordinator(state, &coordinator)?;
+    let (authority, asset) =
+        media_asset_thumbnail_asset_for_checkpoint(&coordinator, &checkpoint, asset_id)?;
+    Ok((owner_id, authority, asset))
+}
+
+fn capture_media_asset_preview_owner_for_window(
+    state: &AppState,
+    window: &WebviewWindow,
+) -> Result<String, String> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let owners = state
+        .project_transaction_owners
+        .lock()
+        .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+    legacy_media_asset_compatibility_owner_for_window_label(&owners, window.label())
+}
+
+/// The Begin linearization point. The verified copy was prepared outside all
+/// project locks; this repeats the exact window-owner and E/R/H/full-asset
+/// capture then inserts the session before the admission boundary is released.
+fn insert_media_asset_preview_session_if_current(
+    state: &AppState,
+    window: &WebviewWindow,
+    expected_owner: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    expected_asset: &MediaAssetSummary,
+    private_copy: PrivateMediaSnapshot,
+) -> Result<MediaAssetPreviewSessionTicket, String> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    let owner_id = {
+        let owners = state
+            .project_transaction_owners
+            .lock()
+            .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+        legacy_media_asset_compatibility_owner_for_window_label(&owners, window.label())?
+    };
+    if owner_id != expected_owner {
+        return Err("Renderer owner changed while media preview was prepared; retry".to_string());
+    }
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let checkpoint = project_checkpoint_for_coordinator(state, &coordinator)?;
+    let (authority, asset) =
+        media_asset_thumbnail_asset_for_checkpoint(&coordinator, &checkpoint, expected_asset.id)?;
+    ensure_media_asset_thumbnail_still_authoritative(
+        expected_authority,
+        expected_asset,
+        &authority,
+        &asset,
+    )?;
+    state.media_asset_operations.insert_preview_session(
+        owner_id,
+        window.label().to_string(),
+        authority,
+        asset,
+        private_copy,
+    )
+}
+
+fn media_asset_thumbnail_asset_for_checkpoint(
+    coordinator: &ProjectCoordinator,
+    checkpoint: &ProjectCheckpoint,
+    asset_id: MediaAssetId,
+) -> Result<(MediaAssetPrepareAuthority, MediaAssetSummary), String> {
+    if checkpoint.epoch != coordinator.epoch
+        || checkpoint.revision != coordinator.revision
+        || checkpoint.hash != coordinator.checkpoint_hash
+    {
+        return Err(
+            "Project changed outside the current authority checkpoint; retry the media thumbnail"
+                .to_string(),
+        );
+    }
+    let asset = media_asset_catalog_for_snapshot(&checkpoint.project.snapshot)
+        .iter()
+        .find(|asset| asset.id == asset_id)
+        .cloned()
+        .ok_or_else(|| format!("Media asset {asset_id} was not found"))?;
+    validate_media_asset_thumbnail_contract(&asset)?;
+    Ok((media_asset_prepare_authority(coordinator), asset))
+}
+
+/// This is deliberately stricter than the generic catalog schema. Rendering a
+/// thumbnail consumes a local file, so legacy entries without a persisted
+/// byte/hash identity are not authoritative enough to race safely.
+fn validate_media_asset_thumbnail_contract(asset: &MediaAssetSummary) -> Result<(), String> {
+    if !matches!(
+        asset.source.kind,
+        VideoSourceKind::File | VideoSourceKind::StillImage
+    ) {
+        return Err(
+            "Media asset thumbnails are available for local File and Still Image sources only"
+                .to_string(),
+        );
+    }
+    if asset
+        .source
+        .path
+        .as_deref()
+        .is_none_or(|path| path.trim().is_empty())
+    {
+        return Err("Media asset thumbnail requires a local source path".to_string());
+    }
+    if asset.content_hash.is_none() || asset.byte_size.is_none() {
+        return Err(
+            "Media asset thumbnail requires the catalog's exact local content identity".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn media_asset_thumbnail_snapshot(
+    asset: &MediaAssetSummary,
+    private_path: &Path,
+    position_ms: u64,
+) -> protocol::VideoSnapshot {
+    let mut snapshot = protocol::VideoSnapshot::default();
+    let mut private_source = asset.source.clone();
+    private_source.path = Some(private_path.to_string_lossy().into_owned());
+    snapshot.layers.push(protocol::VideoLayerSummary {
+        // The layer and its source are strictly ephemeral. Do not attach the
+        // catalog ID: the renderer must decode only the private verified copy,
+        // never the user-controlled catalog path again.
+        id: asset.id,
+        label: asset.label.clone(),
+        source: private_source,
+        media_asset_id: None,
+        blend_mode: VideoBlendMode::Normal,
+        state: VideoLayerState {
+            position_ms,
+            ..VideoLayerState::default()
+        },
+        isf_effect: None,
+    });
+    snapshot
+}
+
+fn media_asset_thumbnail_prepared_matches_asset(
+    prepared: &PreparedLocalMediaAsset,
+    asset: &MediaAssetSummary,
+) -> bool {
+    asset.content_hash.as_ref() == Some(&prepared.content_hash)
+        && asset.byte_size == Some(prepared.byte_size)
+        && asset.source == prepared.source
+}
+
+fn create_media_asset_preview_private_copy(
+    asset: &MediaAssetSummary,
+) -> Result<PrivateMediaSnapshot, String> {
+    let path = asset
+        .source
+        .path
+        .clone()
+        .ok_or_else(|| "Media asset thumbnail requires a local source path".to_string())?;
+    let cancel = AtomicBool::new(false);
+    let before =
+        prepare_one_local_media_asset(0, asset.source.kind.clone(), path.clone(), &cancel)?;
+    if !media_asset_thumbnail_prepared_matches_asset(&before, asset) {
+        return Err("Media asset content no longer matches its catalog identity".to_string());
+    }
+    let mut private_copy = PrivateMediaSnapshot::create(Path::new(&path))?;
+    #[cfg(windows)]
+    let mut source = open_windows_media_file_deny_write(Path::new(&path))?;
+    #[cfg(unix)]
+    let mut source = fs::File::open(&path)
+        .map_err(|error| format!("Unable to open media source for preview copy: {error}"))?;
+    let (copy_hash, copy_size) =
+        copy_and_hash_into_snapshot(&mut source, &mut private_copy, &cancel)?;
+    if asset.content_hash.as_ref() != Some(&copy_hash) || asset.byte_size != Some(copy_size) {
+        return Err("Media asset changed while its preview copy was being created".to_string());
+    }
+    drop(source);
+    let after = prepare_one_local_media_asset(0, asset.source.kind.clone(), path, &cancel)?;
+    if !media_asset_thumbnail_prepared_matches_asset(&after, asset)
+        || !local_media_source_fingerprint_matches(&before.fingerprint, &after.fingerprint)
+    {
+        return Err("Media asset changed while its preview copy was being created".to_string());
+    }
+    Ok(private_copy)
+}
+
+fn render_media_asset_preview_from_private_copy(
+    asset: &MediaAssetSummary,
+    private_copy: &PrivateMediaSnapshot,
+    position_ms: u64,
+    width: u32,
+    height: u32,
+) -> Result<video::VideoFrame, String> {
+    let snapshot = media_asset_thumbnail_snapshot(asset, &private_copy.path, position_ms);
+    let mut renderer = new_vj_preview_renderer();
+    renderer
+        .render_layer_preview(&snapshot, asset.id, width, height)
+        .map_err(|error| format!("{error:?}"))
+}
+
+fn render_media_asset_thumbnail(
+    asset: MediaAssetSummary,
+    position_ms: u64,
+    width: u32,
+    height: u32,
+) -> Result<video::VideoFrame, String> {
+    let private_copy = create_media_asset_preview_private_copy(&asset)?;
+    render_media_asset_preview_from_private_copy(&asset, &private_copy, position_ms, width, height)
+}
+
+fn ensure_media_asset_thumbnail_still_authoritative(
+    authority: &MediaAssetPrepareAuthority,
+    asset: &MediaAssetSummary,
+    current_authority: &MediaAssetPrepareAuthority,
+    current_asset: &MediaAssetSummary,
+) -> Result<(), String> {
+    if current_authority != authority || current_asset != asset {
+        return Err(
+            "Project or media asset changed while its thumbnail was decoded; retry".to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_media_asset_thumbnail(
+    state: State<'_, AppState>,
+    asset_id: MediaAssetId,
+    width: u32,
+    height: u32,
+) -> Result<video::VideoFrame, String> {
+    validate_media_asset_thumbnail_dimensions(width, height)?;
+    let (authority, asset) = capture_media_asset_thumbnail_asset(&state, asset_id)?;
+    let render_asset = asset.clone();
+    let frame = tauri::async_runtime::spawn_blocking(move || {
+        render_media_asset_thumbnail(render_asset, 0, width, height)
+    })
+    .await
+    .map_err(|error| format!("Media asset thumbnail worker failed: {error}"))??;
+    let (current_authority, current_asset) = capture_media_asset_thumbnail_asset(&state, asset_id)?;
+    ensure_media_asset_thumbnail_still_authoritative(
+        &authority,
+        &asset,
+        &current_authority,
+        &current_asset,
+    )?;
+    Ok(frame)
+}
+
+#[tauri::command]
+async fn begin_media_asset_preview(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    asset_id: MediaAssetId,
+) -> Result<MediaAssetPreviewSessionTicket, String> {
+    let (owner_id, authority, asset) =
+        capture_media_asset_preview_asset_for_window(&state, &window, asset_id)?;
+    let copy_asset = asset.clone();
+    let private_copy = tauri::async_runtime::spawn_blocking(move || {
+        create_media_asset_preview_private_copy(&copy_asset)
+    })
+    .await
+    .map_err(|error| format!("Media asset preview setup worker failed: {error}"))??;
+    insert_media_asset_preview_session_if_current(
+        &state,
+        &window,
+        &owner_id,
+        &authority,
+        &asset,
+        private_copy,
+    )
+}
+
+#[tauri::command]
+async fn get_media_asset_preview_frame(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    session_id: u64,
+    asset_id: MediaAssetId,
+    position_ms: u64,
+    width: u32,
+    height: u32,
+) -> Result<video::VideoFrame, String> {
+    validate_media_asset_thumbnail_dimensions(width, height)?;
+    validate_media_asset_preview_position(position_ms)?;
+    let (owner_id, authority, asset) =
+        capture_media_asset_preview_asset_for_window(&state, &window, asset_id)?;
+    let session = state.media_asset_operations.preview_session_for_frame(
+        session_id,
+        &owner_id,
+        window.label(),
+        asset_id,
+        Instant::now(),
+    )?;
+    ensure_media_asset_thumbnail_still_authoritative(
+        &session.authority,
+        &session.asset,
+        &authority,
+        &asset,
+    )?;
+    let render_session = Arc::clone(&session);
+    let frame = tauri::async_runtime::spawn_blocking(move || {
+        render_media_asset_preview_from_private_copy(
+            &render_session.asset,
+            &render_session.private_copy,
+            position_ms,
+            width,
+            height,
+        )
+    })
+    .await
+    .map_err(|error| format!("Media asset preview frame worker failed: {error}"))??;
+    let (current_owner, current_authority, current_asset) =
+        capture_media_asset_preview_asset_for_window(&state, &window, asset_id)?;
+    if current_owner != owner_id {
+        return Err("Renderer owner changed while media preview was decoded; retry".to_string());
+    }
+    ensure_media_asset_thumbnail_still_authoritative(
+        &session.authority,
+        &session.asset,
+        &current_authority,
+        &current_asset,
+    )?;
+    state
+        .media_asset_operations
+        .refresh_preview_session(&session, Instant::now())?;
+    Ok(frame)
+}
+
+#[tauri::command]
+fn end_media_asset_preview(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    session_id: u64,
+    asset_id: MediaAssetId,
+) -> Result<(), String> {
+    let owner_id = capture_media_asset_preview_owner_for_window(&state, &window)?;
+    state.media_asset_operations.end_preview_session(
+        session_id,
+        &owner_id,
+        window.label(),
+        asset_id,
+    )
 }
 
 #[tauri::command]
@@ -50106,6 +50739,298 @@ mod tests {
             fixture_groups: Vec::new(),
             snapshot: EngineSnapshot::default(),
         }
+    }
+
+    fn media_asset_thumbnail_test_asset(
+        id: MediaAssetId,
+        kind: VideoSourceKind,
+    ) -> MediaAssetSummary {
+        MediaAssetSummary {
+            id,
+            label: format!("catalog-{id}"),
+            source: VideoSourceSummary {
+                kind,
+                path: Some(format!("C:/catalog/{id}.media")),
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            content_hash: Some(MediaContentHash {
+                algorithm: MediaHashAlgorithm::Sha256,
+                hex: "a".repeat(64),
+            }),
+            byte_size: Some(42),
+        }
+    }
+
+    #[test]
+    fn media_asset_thumbnail_catalog_only_file_and_still_entries_build_ephemeral_layers() {
+        for kind in [VideoSourceKind::File, VideoSourceKind::StillImage] {
+            let asset = media_asset_thumbnail_test_asset(41, kind);
+            let mut project = empty_project_file();
+            project.snapshot.video.media_assets.push(asset.clone());
+            let checkpoint = test_project_checkpoint(project, 7);
+            let mut coordinator = ProjectCoordinator::default();
+            coordinator.revision = 7;
+            coordinator.checkpoint_hash = checkpoint.hash.clone();
+            let history_before = coordinator.history.clone();
+
+            let (authority, captured) =
+                media_asset_thumbnail_asset_for_checkpoint(&coordinator, &checkpoint, asset.id)
+                    .unwrap();
+            let private_path = PathBuf::from(format!("C:/private/{}/snapshot.media", asset.id));
+            let thumbnail = media_asset_thumbnail_snapshot(&captured, &private_path, 321);
+
+            assert_eq!(authority.revision, 7);
+            assert_eq!(captured, asset);
+            assert!(thumbnail.media_assets.is_empty());
+            assert_eq!(thumbnail.layers.len(), 1);
+            assert_eq!(thumbnail.layers[0].media_asset_id, None);
+            assert_ne!(thumbnail.layers[0].source.path, asset.source.path);
+            assert_eq!(
+                thumbnail.layers[0].source.path.as_deref(),
+                private_path.to_str()
+            );
+            assert_eq!(thumbnail.layers[0].state.position_ms, 321);
+            // A catalog capture is read-only: no revision, checkpoint, or
+            // undo/redo state is changed just to obtain a thumbnail.
+            assert_eq!(coordinator.revision, 7);
+            assert_eq!(coordinator.checkpoint_hash, checkpoint.hash);
+            assert_eq!(
+                coordinator.history.pending.len(),
+                history_before.pending.len()
+            );
+            assert_eq!(coordinator.history.undo.len(), history_before.undo.len());
+            assert_eq!(coordinator.history.redo.len(), history_before.redo.len());
+        }
+    }
+
+    #[test]
+    fn media_asset_thumbnail_rejects_missing_live_and_unidentified_catalog_entries() {
+        let live = media_asset_thumbnail_test_asset(42, VideoSourceKind::Camera);
+        let mut legacy = media_asset_thumbnail_test_asset(43, VideoSourceKind::File);
+        legacy.content_hash = None;
+        legacy.byte_size = None;
+        let mut project = empty_project_file();
+        project.snapshot.video.media_assets = vec![live, legacy];
+        let checkpoint = test_project_checkpoint(project, 0);
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.checkpoint_hash = checkpoint.hash.clone();
+
+        assert!(
+            media_asset_thumbnail_asset_for_checkpoint(&coordinator, &checkpoint, 999)
+                .unwrap_err()
+                .contains("was not found")
+        );
+        assert!(
+            media_asset_thumbnail_asset_for_checkpoint(&coordinator, &checkpoint, 42)
+                .unwrap_err()
+                .contains("File and Still Image")
+        );
+        assert!(
+            media_asset_thumbnail_asset_for_checkpoint(&coordinator, &checkpoint, 43)
+                .unwrap_err()
+                .contains("exact local content identity")
+        );
+    }
+
+    #[test]
+    fn media_asset_thumbnail_rejects_stale_authority_and_same_id_changed_content() {
+        let asset = media_asset_thumbnail_test_asset(44, VideoSourceKind::File);
+        let authority = MediaAssetPrepareAuthority {
+            epoch: 3,
+            revision: 4,
+            checkpoint_hash: "checkpoint-a".to_string(),
+        };
+        let stale_authority = MediaAssetPrepareAuthority {
+            checkpoint_hash: "checkpoint-b".to_string(),
+            ..authority.clone()
+        };
+        let mut changed_content = asset.clone();
+        changed_content.content_hash.as_mut().unwrap().hex = "b".repeat(64);
+
+        assert!(ensure_media_asset_thumbnail_still_authoritative(
+            &authority,
+            &asset,
+            &stale_authority,
+            &asset,
+        )
+        .is_err());
+        // A project replacement is allowed to reuse an ID and path. The
+        // captured full catalog entry prevents a frame decoded from A being
+        // returned for that successor B.
+        assert!(ensure_media_asset_thumbnail_still_authoritative(
+            &authority,
+            &asset,
+            &authority,
+            &changed_content,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn media_asset_thumbnail_dimensions_are_bounded() {
+        assert!(validate_media_asset_thumbnail_dimensions(1, 1).is_ok());
+        assert!(validate_media_asset_thumbnail_dimensions(
+            MEDIA_ASSET_THUMBNAIL_MAX_EDGE,
+            MEDIA_ASSET_THUMBNAIL_MAX_EDGE,
+        )
+        .is_ok());
+        for (width, height) in [(0, 1), (1, 0), (513, 1), (1, 513)] {
+            assert!(validate_media_asset_thumbnail_dimensions(width, height).is_err());
+        }
+    }
+
+    fn media_asset_preview_test_private_copy() -> (PathBuf, PrivateMediaSnapshot) {
+        let directory = unique_test_directory("media-asset-preview-private-copy");
+        fs::create_dir_all(&directory).unwrap();
+        let source_path = directory.join("source.media");
+        fs::write(&source_path, b"private preview bytes").unwrap();
+        let mut source = fs::File::open(&source_path).unwrap();
+        let mut private_copy = PrivateMediaSnapshot::create(&source_path).unwrap();
+        let (hash, bytes) =
+            copy_and_hash_into_snapshot(&mut source, &mut private_copy, &AtomicBool::new(false))
+                .unwrap();
+        assert_eq!(bytes, 21);
+        assert_eq!(hash.hex.len(), 64);
+        assert_ne!(private_copy.path, source_path);
+        assert!(private_copy.path.is_file());
+        (directory, private_copy)
+    }
+
+    #[test]
+    fn media_asset_preview_sessions_bind_owner_expire_and_drop_private_copy() {
+        let registry = MediaAssetOperationRegistry::default();
+        let (directory, private_copy) = media_asset_preview_test_private_copy();
+        let private_path = private_copy.path.clone();
+        let asset = media_asset_thumbnail_test_asset(72, VideoSourceKind::File);
+        let authority = MediaAssetPrepareAuthority {
+            epoch: 8,
+            revision: 9,
+            checkpoint_hash: "preview-checkpoint".to_string(),
+        };
+        let ticket = registry
+            .insert_preview_session(
+                "renderer:preview-a".to_string(),
+                "main".to_string(),
+                authority.clone(),
+                asset.clone(),
+                private_copy,
+            )
+            .unwrap();
+        assert!(registry
+            .preview_session_for_frame(
+                ticket.session_id,
+                "renderer:preview-b",
+                "main",
+                asset.id,
+                Instant::now(),
+            )
+            .is_err());
+        let session = registry
+            .preview_session_for_frame(
+                ticket.session_id,
+                "renderer:preview-a",
+                "main",
+                asset.id,
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(session.authority, authority);
+        registry
+            .end_preview_session(ticket.session_id, "renderer:preview-a", "main", asset.id)
+            .unwrap();
+        // Exact End retries are deliberately idempotent after a lost reply.
+        registry
+            .end_preview_session(ticket.session_id, "renderer:preview-a", "main", asset.id)
+            .unwrap();
+        drop(session);
+        assert!(!private_path.exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn media_asset_preview_reaper_expires_session_and_releases_private_copy() {
+        let registry = MediaAssetOperationRegistry::default();
+        let (directory, private_copy) = media_asset_preview_test_private_copy();
+        let private_path = private_copy.path.clone();
+        let asset = media_asset_thumbnail_test_asset(73, VideoSourceKind::StillImage);
+        let ticket = registry
+            .insert_preview_session(
+                "renderer:preview-ttl".to_string(),
+                "main".to_string(),
+                MediaAssetPrepareAuthority {
+                    epoch: 1,
+                    revision: 2,
+                    checkpoint_hash: "ttl".to_string(),
+                },
+                asset,
+                private_copy,
+            )
+            .unwrap();
+        assert!(registry.reap_expired(Instant::now() + Duration::from_secs(60)) >= 1);
+        assert!(!private_path.exists());
+        assert!(registry
+            .preview_session_for_frame(
+                ticket.session_id,
+                "renderer:preview-ttl",
+                "main",
+                ticket.asset_id,
+                Instant::now(),
+            )
+            .is_err());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn media_asset_preview_private_copy_for_real_still_never_reuses_catalog_path() {
+        let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("icons")
+            .join("32x32.png");
+        let prepared = prepare_one_local_media_asset(
+            0,
+            VideoSourceKind::StillImage,
+            source_path.to_string_lossy().into_owned(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let asset = MediaAssetSummary {
+            id: 74,
+            label: "real-still".to_string(),
+            source: prepared.source.clone(),
+            content_hash: Some(prepared.content_hash),
+            byte_size: Some(prepared.byte_size),
+        };
+        let private_copy = create_media_asset_preview_private_copy(&asset).unwrap();
+        assert_ne!(private_copy.path, source_path);
+        assert!(private_copy.path.is_file());
+        let snapshot = media_asset_thumbnail_snapshot(&asset, &private_copy.path, 0);
+        assert_ne!(snapshot.layers[0].source.path, asset.source.path);
+        assert_eq!(snapshot.layers[0].media_asset_id, None);
+        drop(private_copy);
+    }
+
+    #[test]
+    fn media_asset_preview_owner_purge_drops_all_retired_private_copies() {
+        let registry = MediaAssetOperationRegistry::default();
+        let (directory, private_copy) = media_asset_preview_test_private_copy();
+        let private_path = private_copy.path.clone();
+        registry
+            .insert_preview_session(
+                "renderer:retired".to_string(),
+                "main".to_string(),
+                MediaAssetPrepareAuthority {
+                    epoch: 2,
+                    revision: 3,
+                    checkpoint_hash: "retired".to_string(),
+                },
+                media_asset_thumbnail_test_asset(75, VideoSourceKind::File),
+                private_copy,
+            )
+            .unwrap();
+        registry.purge_preview_sessions_for_owner("renderer:retired");
+        assert!(!private_path.exists());
+        let _ = fs::remove_dir_all(directory);
     }
 
     fn test_project_checkpoint(project: ProjectFile, revision: u64) -> ProjectCheckpoint {
@@ -67930,6 +68855,10 @@ fn main() {
             stop_video_output_recording,
             video_output_recording_status,
             get_video_layer_thumbnail,
+            get_media_asset_thumbnail,
+            begin_media_asset_preview,
+            get_media_asset_preview_frame,
+            end_media_asset_preview,
             get_debug_video_preview,
             get_debug_video_output_preview,
             get_vj_preview_transport,

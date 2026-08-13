@@ -481,6 +481,96 @@ const thumbnailReadIndex = requiredIndex(
 );
 assert.ok(thumbnailAuthorizationIndex < thumbnailReadIndex, "no thumbnail source read is reachable before explicit authorization");
 assert.match(thumbnailEffect, /if \(!videoThumbnailAccessAuthorized\(\)\) \{[\s\S]*?setVideoClipThumbnails\(\{\}\);[\s\S]*?return;/, "unauthorized load/restart returns with an empty projection");
+assert.match(app, /if \(!videoThumbnailAccessAuthorized\(\)\) \{[\s\S]*?setMediaAssetThumbnails\(\{\}\);[\s\S]*?return;/, "unauthorized project load/reset returns with an empty asset-thumbnail projection");
+assert.match(app, /loadMediaAssetThumbnail\(source\.id\)/, "authorized Media Library thumbnail loading uses the single backend-owned asset thumbnail path");
+assert.match(app, /hash_algorithm:[\s\S]*?hash_hex:[\s\S]*?byte_size:/, "asset thumbnail cache identity fences source path and persisted content identity");
+assert.match(app, /let videoThumbnailGeneration = 0;[\s\S]*?let mediaAssetThumbnailGeneration = 0;/, "layer and asset thumbnail work use independent generation fences");
+const mediaAssetThumbnailEffect = sliceBetween(
+  thumbnailEffect,
+  "createEffect(() => {\n    const sources = JSON.parse(mediaAssetThumbnailSourceSignature())",
+  "  const inspectMediaAssetIds = async",
+  "Media Library thumbnail effect",
+);
+assert.match(
+  app,
+  /const mediaAssetThumbnailAuthoritySignature = createMemo\(\(\) => \{[\s\S]*?const authority = projectMappingsAuthority\(\);[\s\S]*?return JSON\.stringify\(\{[\s\S]*?project_epoch: authority\.project_epoch,[\s\S]*?project_revision: authority\.project_revision,[\s\S]*?checkpoint_hash: authority\.checkpoint_hash,[\s\S]*?\}\);[\s\S]*?\}\);/,
+  "Media Library tracks a stable E/R/H scalar, not each authority object publication",
+);
+assert.match(mediaAssetThumbnailEffect, /const authority = JSON\.parse\(mediaAssetThumbnailAuthoritySignature\(\)\) as ProjectAuthorityToken;/, "a genuine E/R/H change starts one new Media Library thumbnail generation");
+assert.doesNotMatch(mediaAssetThumbnailEffect, /captureProjectAuthorityIdentity\(\)/, "Media Library thumbnail effect must not synchronously track the object-valued authority publication");
+// Model the race precisely. A poll can republish an equivalent object while a
+// source decode is in flight, but an actual E/R/H change must invalidate that
+// batch and immediately start exactly one successor. A replacement remains
+// fail-closed for the retired batch.
+const mediaAssetThumbnailAuthorityBatchModel = (initialAuthority) => {
+  let currentAuthority = { ...initialAuthority };
+  let observedSignature = null;
+  let generation = 0;
+  const batches = [];
+  const authoritySignature = (authority) => JSON.stringify({
+    project_epoch: authority.project_epoch,
+    project_revision: authority.project_revision,
+    checkpoint_hash: authority.checkpoint_hash,
+  });
+  const startIfAuthorityChanged = () => {
+    const signature = authoritySignature(currentAuthority);
+    if (signature === observedSignature) return null;
+    observedSignature = signature;
+    const batch = { generation: ++generation, authority: { ...currentAuthority } };
+    batches.push(batch);
+    return batch;
+  };
+  const setAuthority = (next) => {
+    currentAuthority = { ...next };
+    return startIfAuthorityChanged();
+  };
+  const canPublish = (batch) => batch.generation === generation
+    && authoritySignature(batch.authority) === authoritySignature(currentAuthority);
+  return { batches, startIfAuthorityChanged, setAuthority, canPublish };
+};
+
+const thumbnailEquivalentPoll = mediaAssetThumbnailAuthorityBatchModel({
+  project_epoch: 7,
+  project_revision: 11,
+  checkpoint_hash: "A",
+});
+const equivalentInitialBatch = thumbnailEquivalentPoll.startIfAuthorityChanged();
+const equivalentRepublish = thumbnailEquivalentPoll.setAuthority({
+  project_epoch: 7,
+  project_revision: 11,
+  checkpoint_hash: "A",
+});
+assert.equal(equivalentRepublish, null, "equivalent authority-object churn does not restart the in-flight Media Library thumbnail batch");
+assert.equal(thumbnailEquivalentPoll.batches.length, 1, "equivalent authority-object churn keeps exactly one thumbnail generation");
+assert.equal(thumbnailEquivalentPoll.canPublish(equivalentInitialBatch), true, "the original batch publishes after equivalent authority-object churn");
+
+const thumbnailGenuineChange = mediaAssetThumbnailAuthorityBatchModel({
+  project_epoch: 7,
+  project_revision: 11,
+  checkpoint_hash: "A",
+});
+const staleGenuineBatch = thumbnailGenuineChange.startIfAuthorityChanged();
+const freshGenuineBatch = thumbnailGenuineChange.setAuthority({
+  project_epoch: 7,
+  project_revision: 12,
+  checkpoint_hash: "B",
+});
+assert.equal(thumbnailGenuineChange.canPublish(staleGenuineBatch), false, "a genuine same-project E/R/H change rejects the stale mid-batch thumbnail result");
+assert.deepEqual(freshGenuineBatch, {
+  generation: 2,
+  authority: { project_epoch: 7, project_revision: 12, checkpoint_hash: "B" },
+}, "a genuine same-project E/R/H change starts exactly one fresh thumbnail batch");
+assert.equal(thumbnailGenuineChange.canPublish(freshGenuineBatch), true, "the fresh genuine-authority batch publishes after the stale batch is rejected");
+
+const thumbnailReplacement = mediaAssetThumbnailAuthorityBatchModel({
+  project_epoch: 7,
+  project_revision: 11,
+  checkpoint_hash: "A",
+});
+const retiredReplacementBatch = thumbnailReplacement.startIfAuthorityChanged();
+thumbnailReplacement.setAuthority({ project_epoch: 8, project_revision: 0, checkpoint_hash: "C" });
+assert.equal(thumbnailReplacement.canPublish(retiredReplacementBatch), false, "a project replacement still rejects the retired thumbnail batch fail closed");
+assert.match(app, /generation !== mediaAssetThumbnailGeneration \|\| !isProjectAuthorityIdentityCurrent\(authority\)/, "asset-thumbnail async completion is fenced by its own generation and current project authority");
 assert.match(app, /if \(mode === "mixer"\) authorizeVideoThumbnailAccess\(\);/, "an explicit Mixer selection authorizes thumbnails");
 assert.match(app, /onRequestThumbnails: authorizeVideoThumbnailAccess/, "the visible thumbnail request authorizes the same cache");
 assert.match(clipGrid, /data-vj-thumbnail-request[\s\S]*?onClick=\{props\.onRequestThumbnails\}/, "populated grid exposes an explicit source-read action");
@@ -511,6 +601,38 @@ const libraryRail = balancedElement(
 );
 assert.match(libraryRail, /props\.mediaLibrary\.assets/, "Media Library renders the authoritative snapshot catalog");
 assert.match(libraryRail, /props\.mediaLibrary\.availabilityById\[asset\.id\]/, "each catalog entry projects machine-local availability");
+assert.match(libraryRail, /props\.mediaLibrary\.thumbnails\[asset\.id\]/, "Media Library projects its asset-keyed thumbnail cache, including catalog-only entries");
+assert.match(libraryRail, /data-media-library-thumbnail-request[\s\S]*?onClick=\{props\.clipGrid\.onRequestThumbnails\}/, "catalog-only Library entries use the same explicit thumbnail authorization action as the clip grid");
+assert.match(controlPanel, /if \(!props\.clipGrid\.thumbnailsAuthorized \|\| !hasStillThumbnail \|\| asset\.source\.kind !== "File" \|\| !previewMotionAllowed\(\)\) return;/, "preview frame stream starts only after explicit authorization and a backend thumbnail");
+assert.match(controlPanel, /props\.mediaLibrary\.onPreviewStart\(asset\.id\)/, "moving preview begins through the backend-owned exact-identity session protocol");
+assert.match(controlPanel, /props\.mediaLibrary\.onPreviewFrame\(ticket, positionMs\)/, "moving preview frames use that backend-owned session ticket");
+assert.match(controlPanel, /props\.mediaLibrary\.onPreviewEnd\(ticket\)/, "moving preview ends the backend-owned session on supersession or cancellation");
+assert.match(controlPanel, /window\.setTimeout\(tick, 250\)/, "hover preview is conservatively capped at four frames per second");
+assert.match(libraryRail, /previewAssetId\(\) === asset\.id && previewFrameUrl\(\)/, "moving preview displays only an already-returned backend frame");
+assert.doesNotMatch(controlPanel, /convertFileSrc|<video/, "Media Library never exposes a raw source-file URL or DOM video reader");
+assert.match(libraryRail, /class="videoMediaLibraryList"/, "Media Library presents its catalog as a dedicated card grid");
+assert.match(libraryRail, /props\.clipGrid\.thumbnailsAuthorized && thumbnail\(\)/, "Media Library only projects source-derived thumbnails after existing explicit authorization");
+assert.match(libraryRail, /data-media-library-thumbnail=\{props\.clipGrid\.thumbnailsAuthorized \? "unavailable" : "placeholder"\}/, "Media Library keeps a non-reading placeholder before authorization");
+assert.match(libraryRail, /class="videoMediaLibraryCardDetails"/, "Media Library cards retain a title/path details surface");
+assert.match(libraryRail, /tabindex="0"/, "Media Library card details are available on keyboard focus as well as hover");
+assert.match(libraryRail, /aria-describedby=\{`media-library-source-\$\{asset\.id\}`\}/, "Media Library cards explicitly describe their source path to assistive technology");
+assert.match(libraryRail, /id=\{`media-library-source-\$\{asset\.id\}`\} class="srOnly" data-no-localize/, "Media Library source path remains semantic text outside the aria-hidden visual thumbnail");
+assert.match(libraryRail, /onMouseEnter=\{\(\) => startMediaLibraryPreview\(asset, Boolean\(thumbnail\(\)\)\)\}/, "authorized video cards start their preview on hover");
+assert.match(libraryRail, /onFocusIn=\{\(\) => startMediaLibraryPreview\(asset, Boolean\(thumbnail\(\)\)\)\}/, "authorized video cards start their preview on keyboard focus");
+assert.match(libraryRail, /onMouseLeave=\{\(event\) => stopMediaLibraryPreview\(asset\.id, event\.currentTarget\)\}/, "video card hover leave stops its preview");
+assert.match(libraryRail, /onFocusOut=\{\(event\) => stopMediaLibraryPreview\(asset\.id, event\.currentTarget\)\}/, "video card focus leave stops its preview");
+assert.match(controlPanel, /asset\.source\.kind !== "File"/, "still and live-source cards fail closed from preview playback");
+assert.match(controlPanel, /let previewSerial: Promise<void> = Promise\.resolve\(\);[\s\S]*?const enqueuePreview/, "all Begin/Frame/End requests share one serialized frontend lane");
+assert.match(controlPanel, /stopMediaLibraryPreviewNow\(\)/, "leave, blur, reset, replacement, and unmount invalidate the active backend preview stream");
+assert.match(controlPanel, /onCleanup\(stopMediaLibraryPreviewNow\)/, "component unmount cancels publication from an active preview stream");
+assert.match(controller, /begin_media_asset_preview[\s\S]*?sameProjectAuthority\(ticket, options\.getCurrentProjectAuthority\(\)\)/, "Begin reply is rejected when its project authority is stale");
+assert.match(controller, /get_media_asset_preview_frame[\s\S]*?sameProjectAuthority\(ticket, options\.getCurrentProjectAuthority\(\)\)/, "Frame request/reply is fenced against the exact current project authority");
+assert.match(controller, /end_media_asset_preview[\s\S]*?catch/, "End is a best-effort release for leave, replacement, and unmount races");
+assert.match(controlPanel, /const \[previewAssetId, setPreviewAssetId\] = createSignal<MediaAssetId \| null>\(null\);[\s\S]*?setPreviewAssetId\(asset\.id\);/, "a single active asset ID limits concurrent video playback to one card");
+assert.match(controlPanel, /const \[previewAssetIdentity, setPreviewAssetIdentity\] = createSignal<string \| null>\(null\);/, "video preview remembers the exact catalog asset identity, not only its reusable numeric ID");
+assert.match(controlPanel, /asset\.content_hash\?\.algorithm[\s\S]*?asset\.content_hash\?\.hex[\s\S]*?asset\.byte_size/, "video preview identity includes persisted content hash and byte size, not only source path");
+assert.match(controlPanel, /if \(!props\.clipGrid\.thumbnailsAuthorized \|\| !activeAsset \|\| mediaPreviewIdentity\(activeAsset\) !== previewAssetIdentity\(\)\) \{[\s\S]*?stopMediaLibraryPreviewNow\(\);/, "project replacement, authorization reset, missing asset, or changed path immediately invalidates an old preview stream");
+assert.match(controlPanel, /prefers-reduced-motion: reduce/, "reduced-motion preference fails safely to the still thumbnail");
 assert.match(libraryRail, /onVerify\(\[asset\.id\]\)/, "each asset has a dedicated Verify action");
 assert.match(libraryRail, /onRelink\(asset\.id\)/, "each local asset has a Relink picker action");
 assert.match(controlPanel, /entry\.status === "failed" \|\| entry\.status === "skipped"/, "mixed import issues retain per-entry failure truth");
@@ -534,6 +656,232 @@ const librarySurfaceStyles = cssBlock(styles, ".videoMediaLibrarySurface", "Medi
 assert.match(librarySurfaceStyles, /position: absolute;/, "open Media Library overlays instead of shrinking the clip bank");
 assert.match(librarySurfaceStyles, /overflow: hidden auto;/, "open Media Library scrolls internally");
 assert.match(librarySurfaceStyles, /max-height: min\(340px, calc\(100vh - 120px\)\);/, "Media Library remains within the one-screen viewport envelope");
+const libraryGridStyles = cssBlock(styles, ".videoMediaLibraryList", "Media Library card grid");
+assert.match(libraryGridStyles, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/, "Media Library preserves at least two responsive thumbnail columns in the clip pane");
+assert.match(styles, /@media \(min-width: 1500px\) \{[\s\S]*?\.videoMediaLibraryList \{[\s\S]*?repeat\(3, minmax\(0, 1fr\)\)/, "Media Library expands its responsive grid on wide operator screens");
+const libraryThumbnailStyles = cssBlock(styles, ".videoMediaLibraryThumbnail", "Media Library thumbnail surface");
+assert.match(libraryThumbnailStyles, /aspect-ratio: 16 \/ 9;/, "Media Library thumbnails preserve a video-safe aspect ratio");
+const libraryThumbnailImageStyles = cssBlock(styles, ".videoMediaLibraryThumbnail > img", "Media Library still thumbnail image");
+assert.match(libraryThumbnailImageStyles, /object-fit: contain;/, "Media Library never vertically stretches thumbnail media");
+const libraryPreviewStyles = cssBlock(styles, ".videoMediaLibraryPreview", "Media Library video preview");
+assert.match(libraryPreviewStyles, /object-fit: contain;/, "Media Library video preview preserves source aspect ratio");
+const libraryCardDetailsStyles = cssBlock(styles, ".videoMediaLibraryCardDetails", "Media Library card details");
+assert.match(libraryCardDetailsStyles, /pointer-events: none;/, "Media Library hover details never block Verify or Relink controls");
+assert.match(libraryCardDetailsStyles, /bottom: 0;[\s\S]*?max-height: 46%;/, "Media Library details cover only the lower caption band so an active preview remains visible");
+assert.match(styles, /\.videoMediaLibraryItem:hover \.videoMediaLibraryCardDetails,[\s\S]*?\.videoMediaLibraryItem:focus-within \.videoMediaLibraryCardDetails/, "Media Library exposes title/path details on hover and keyboard focus");
+
+// A deterministic populated two-card fixture exercises the interaction policy
+// without a native reader. It follows the exact preconditions used by the owned
+// card callbacks and explicitly checks target viewport/pane widths, focus/hover
+// start/leave stop, the single active video, and no source touch before consent.
+const computedMediaLibraryColumns = ({ viewportWidth, paneWidth }) => {
+  assert.ok(paneWidth >= 280, "fixture pane remains wide enough for two equal tracks");
+  return viewportWidth >= 1500 ? 3 : 2;
+};
+
+assert.equal(computedMediaLibraryColumns({ viewportWidth: 860, paneWidth: 380 }), 2, "860px operator viewport keeps a real two-column Library grid in its clip pane");
+assert.equal(computedMediaLibraryColumns({ viewportWidth: 1920, paneWidth: 640 }), 3, "1920px operator viewport expands the Library grid without a vertical-list fallback");
+
+const mediaLibraryCardModel = ({
+  authorized,
+  sourceKind,
+  hasAssetThumbnail,
+  reducedMotion,
+  hover,
+  focus,
+  failed,
+}) => {
+  const previewEligible = authorized
+    && sourceKind === "File"
+    && hasAssetThumbnail
+    && !reducedMotion
+    && (hover || focus);
+  return {
+    columns: 2,
+    render: authorized && hasAssetThumbnail ? "thumbnail" : "placeholder",
+    preview: previewEligible && !failed ? "playing" : "still",
+    details: hover || focus ? "visible" : "hidden",
+  };
+};
+
+const libraryPreviewSession = ({ authorized, reducedMotion, events }) => {
+  let activeAssetId = null;
+  const renderedVideos = [];
+  for (const event of events) {
+    const eligible = authorized && !reducedMotion && event.kind === "File" && event.hasAssetThumbnail;
+    if ((event.type === "hover" || event.type === "focus") && eligible) activeAssetId = event.assetId;
+    if ((event.type === "leave" || event.type === "blur") && activeAssetId === event.assetId) activeAssetId = null;
+    renderedVideos.push(activeAssetId === null ? [] : [activeAssetId]);
+  }
+  return renderedVideos;
+};
+
+const projectReplacementPreviewSession = () => {
+  let authorized = true;
+  let active = { id: 1, identity: "File\u0000C:/A.mp4\u0000sha256\u0000hashA\u0000100" };
+  const reconcile = (catalog) => {
+    const replacement = catalog.find((asset) => asset.id === active?.id);
+    if (!authorized || !replacement || replacement.identity !== active.identity) active = null;
+  };
+  reconcile([{ id: 1, identity: "File\u0000C:/A.mp4\u0000sha256\u0000hashA\u0000100" }]);
+  authorized = false;
+  reconcile([{ id: 1, identity: "File\u0000C:/B.mp4\u0000sha256\u0000hashB\u0000110" }]);
+  const afterReplacement = active;
+  authorized = true;
+  reconcile([{ id: 1, identity: "File\u0000C:/B.mp4\u0000sha256\u0000hashB\u0000110" }]);
+  const afterReauthorizeWithoutHover = active;
+  active = { id: 1, identity: "File\u0000C:/B.mp4\u0000sha256\u0000hashB\u0000110" };
+  reconcile([{ id: 1, identity: "File\u0000C:/B.mp4\u0000sha256\u0000hashB\u0000110" }]);
+  return { afterReplacement, afterReauthorizeWithoutHover, afterFreshHover: active };
+};
+
+assert.deepEqual(
+  projectReplacementPreviewSession(),
+  {
+    afterReplacement: null,
+    afterReauthorizeWithoutHover: null,
+    afterFreshHover: { id: 1, identity: "File\u0000C:/B.mp4\u0000sha256\u0000hashB\u0000110" },
+  },
+  "project B cannot replay a recycled asset ID without a fresh hover/focus after its authorization reset",
+);
+
+const adoptedSamePathPreviewSession = () => {
+  let active = { id: 1, identity: "File\u0000C:/A.mp4\u0000sha256\u0000hashA\u0000100" };
+  const authoritativeReplacement = { id: 1, identity: "File\u0000C:/A.mp4\u0000sha256\u0000hashB\u0000120" };
+  if (active.identity !== authoritativeReplacement.identity) active = null;
+  return active;
+};
+assert.equal(adoptedSamePathPreviewSession(), null, "same-path AdoptReplacement content identity changes unmount an active preview before it can keep reading stale bytes");
+
+const previewSession = libraryPreviewSession({
+  authorized: true,
+  reducedMotion: false,
+  events: [
+    { type: "hover", assetId: 41, kind: "File", hasAssetThumbnail: true },
+    { type: "focus", assetId: 42, kind: "File", hasAssetThumbnail: true },
+    { type: "blur", assetId: 42, kind: "File", hasAssetThumbnail: true },
+  ],
+});
+assert.deepEqual(previewSession, [[41], [42], []], "two catalog-only video cards with asset thumbnails start on hover/focus, replace rather than overlap, and unmount on leave/blur");
+assert.deepEqual(
+  libraryPreviewSession({
+    authorized: false,
+    reducedMotion: false,
+    events: [{ type: "hover", assetId: 41, kind: "File", hasAssetThumbnail: true }],
+  }),
+  [[]],
+  "un-authorized hover does not mount a video or touch the media source",
+);
+assert.deepEqual(
+  libraryPreviewSession({
+    authorized: true,
+    reducedMotion: false,
+    events: [
+      { type: "hover", assetId: 51, kind: "StillImage", hasAssetThumbnail: true },
+      { type: "hover", assetId: 52, kind: "File", hasAssetThumbnail: false },
+    ],
+  }),
+  [[], []],
+  "still cards never play and assets without an authorized thumbnail remain placeholders",
+);
+
+const catalogOnlyFile = mediaLibraryCardModel({
+  authorized: true,
+  sourceKind: "File",
+  hasAssetThumbnail: true,
+  reducedMotion: false,
+  hover: true,
+  focus: false,
+  failed: false,
+});
+assert.deepEqual(
+  catalogOnlyFile,
+  { columns: 2, render: "thumbnail", preview: "playing", details: "visible" },
+  "authorized catalog-only File asset renders its asset thumbnail and previews on hover without a layer reference",
+);
+const catalogOnlyStill = mediaLibraryCardModel({
+  authorized: true,
+  sourceKind: "StillImage",
+  hasAssetThumbnail: true,
+  reducedMotion: false,
+  hover: true,
+  focus: false,
+  failed: false,
+});
+assert.deepEqual(
+  catalogOnlyStill,
+  { columns: 2, render: "thumbnail", preview: "still", details: "visible" },
+  "authorized catalog-only StillImage renders its asset thumbnail and never mounts video playback",
+);
+
+const untouchedFileCard = mediaLibraryCardModel({
+  authorized: false,
+  sourceKind: "File",
+  hasAssetThumbnail: true,
+  reducedMotion: false,
+  hover: true,
+  focus: false,
+  failed: false,
+});
+assert.deepEqual(untouchedFileCard, {
+  columns: 2,
+  render: "placeholder",
+  preview: "still",
+  details: "visible",
+}, "un-authorized populated file card remains a two-column placeholder and does not read/play source media");
+
+const hoveredFileCard = mediaLibraryCardModel({
+  authorized: true,
+  sourceKind: "File",
+  hasAssetThumbnail: true,
+  reducedMotion: false,
+  hover: true,
+  focus: false,
+  failed: false,
+});
+assert.equal(hoveredFileCard.preview, "playing", "authorized asset-thumbnail file card previews on hover");
+assert.equal(hoveredFileCard.details, "visible", "hover exposes the source detail surface");
+
+const focusedFileCard = mediaLibraryCardModel({
+  authorized: true,
+  sourceKind: "File",
+  hasAssetThumbnail: true,
+  reducedMotion: false,
+  hover: false,
+  focus: true,
+  failed: false,
+});
+assert.equal(focusedFileCard.preview, "playing", "authorized asset-thumbnail file card previews on keyboard focus");
+assert.equal(focusedFileCard.details, "visible", "keyboard focus exposes the source detail surface");
+
+const leftFileCard = mediaLibraryCardModel({
+  authorized: true,
+  sourceKind: "File",
+  hasAssetThumbnail: true,
+  reducedMotion: false,
+  hover: false,
+  focus: false,
+  failed: false,
+});
+assert.equal(leftFileCard.preview, "still", "hover/focus leave restores the static thumbnail");
+
+for (const scenario of [
+  { sourceKind: "StillImage", reducedMotion: false, failed: false, label: "still image" },
+  { sourceKind: "File", reducedMotion: true, failed: false, label: "reduced motion file" },
+  { sourceKind: "File", reducedMotion: false, failed: true, label: "failed file preview" },
+]) {
+  const card = mediaLibraryCardModel({
+    authorized: true,
+    sourceKind: scenario.sourceKind,
+    hasAssetThumbnail: true,
+    reducedMotion: scenario.reducedMotion,
+    hover: true,
+    focus: false,
+    failed: scenario.failed,
+  });
+  assert.equal(card.columns, 2, `${scenario.label} remains in the non-vacuous two-column grid fixture`);
+  assert.equal(card.preview, "still", `${scenario.label} fails safely to its still thumbnail`);
+}
 
 // This deterministic model follows the exact predicates asserted above. It keeps
 // the branch proof non-vacuous without pretending that source inspection mounts Solid.
