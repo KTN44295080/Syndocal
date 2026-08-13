@@ -71,6 +71,11 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 #[cfg(windows)]
 use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+// macOS/Linux file coherence relies on the stable Unix inode identity/version
+// (dev, ino, size, mtime, ctime). Windows intentionally stays on its retained
+// deny-write/delete-handle path.
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use tauri::Emitter;
 use tauri::{Manager, State, WebviewWindow};
 use tauri_plugin_updater::UpdaterExt;
@@ -183,6 +188,13 @@ const MEDIA_ASSET_COMMIT_RECEIPT_TTL: Duration = Duration::from_secs(10 * 60);
 /// prepared handles and finished receipts at TTL without waiting for the next
 /// registry call. One task total, owned by `AppState`; never one per item.
 const MEDIA_ASSET_OPERATION_REAP_INTERVAL: Duration = Duration::from_millis(500);
+/// Bounded number of collision-avoidance attempts when minting a private media
+/// snapshot filename. `create_new` guarantees we never clobber an existing file;
+/// this only bounds the retry loop if the OS temp dir already holds a name.
+#[cfg(unix)]
+const MEDIA_ASSET_SNAPSHOT_NAME_ATTEMPTS: usize = 16;
+#[cfg(unix)]
+static MEDIA_ASSET_SNAPSHOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 static RDM_TRANSACTION_NUMBER: AtomicU8 = AtomicU8::new(1);
 static LIVE_VIDEO_MONITOR_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static PROJECT_SAVE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -1567,7 +1579,11 @@ struct LocalMediaSourceFingerprint {
 /// A finalized source is deliberately retained until its opaque token is
 /// consumed/cancelled/expired. On Windows it denies write/delete sharing and
 /// owns an exclusive byte-range lock, closing the same-size/mtime-restored
-/// replacement hole between full rehash and short transaction commit.
+/// replacement hole between full rehash and short transaction commit. On other
+/// platforms there is no OS write/delete deny primitive available through `std`,
+/// so it retains the exact stable Unix identity/version (dev, ino, size, mtime,
+/// ctime) proven at finalization; the short under-lock commit re-CASes that
+/// version instead of rehashing.
 #[derive(Debug, Clone)]
 struct FinalizedLocalMediaSource {
     path: String,
@@ -1576,6 +1592,8 @@ struct FinalizedLocalMediaSource {
     retained: Arc<Mutex<RetainedWindowsMediaFile>>,
     #[cfg(windows)]
     identity: WindowsMediaFileIdentity,
+    #[cfg(unix)]
+    version: UnixMediaFileVersion,
 }
 
 #[cfg(windows)]
@@ -1606,6 +1624,282 @@ impl Drop for RetainedWindowsMediaFile {
         // teardown; explicit unlock simply releases the exclusion promptly.
         let _ = unsafe { UnlockFileEx(handle, None, u32::MAX, u32::MAX, &mut overlapped) };
     }
+}
+
+/// The stable Unix identity/version of a media file. `dev`+`ino` identify the
+/// underlying file object (so hard links to one inode compare equal); the
+/// size/mtime/ctime tuple versions its content and metadata. `ctime` is the key
+/// defense against a same-size, restored-`mtime` replacement: user space can
+/// forge `mtime` (utimensat) but cannot set `ctime`, which advances on every
+/// data or metadata change. An atomic rename replaces the inode, changing
+/// `ino`; an in-place rewrite advances `ctime`. Either is detected by full
+/// equality, closing the A->B->A window that `std` cannot close with an OS
+/// deny-write handle off Windows.
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnixMediaFileVersion {
+    dev: u64,
+    ino: u64,
+    size: u64,
+    mtime: i64,
+    mtime_nsec: i64,
+    ctime: i64,
+    ctime_nsec: i64,
+}
+
+#[cfg(unix)]
+impl UnixMediaFileVersion {
+    fn from_metadata(metadata: &fs::Metadata) -> Result<Self, String> {
+        if !metadata.is_file() {
+            return Err("Media path must be a regular file".to_string());
+        }
+        Ok(Self {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+            size: metadata.size(),
+            mtime: metadata.mtime(),
+            mtime_nsec: metadata.mtime_nsec(),
+            ctime: metadata.ctime(),
+            ctime_nsec: metadata.ctime_nsec(),
+        })
+    }
+
+    /// True when both versions name the same underlying file object (same
+    /// device + inode), i.e. hard-link aliases of one file. Deliberately ignores
+    /// the content/metadata version so relink can recognise a same-file repair.
+    fn is_same_file(&self, other: &Self) -> bool {
+        self.dev == other.dev && self.ino == other.ino
+    }
+}
+
+/// A private, RAII-cleaned copy of exactly one opened source image. Off Windows
+/// we cannot deny writers/deleters on the original path through `std`, so a
+/// path-based metadata probe of the original file could observe a transient
+/// A->B->A swap and pair `metadata(B)` with `hash(A)`. Copying the single opened
+/// source into this private snapshot and probing the snapshot guarantees the
+/// hash and the probe describe one immutable image. The temp file is removed by
+/// `Drop` on every terminal path (success, error, cancel, panic), so it never
+/// leaks; it is prepare-scoped and never persisted into the registry.
+#[cfg(unix)]
+#[derive(Debug)]
+struct PrivateMediaSnapshot {
+    path: PathBuf,
+    directory: PathBuf,
+    /// Present only while snapshot bytes are being copied. It is explicitly
+    /// taken and dropped after sealing so metadata probing never races an open
+    /// writer owned by this process.
+    file: Option<fs::File>,
+}
+
+#[cfg(unix)]
+impl Drop for PrivateMediaSnapshot {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir(&self.directory);
+    }
+}
+
+#[cfg(unix)]
+impl PrivateMediaSnapshot {
+    /// Create a fresh, collision-safe owner-only directory and snapshot file in
+    /// the OS temp dir, preserving the source extension (so a container/format
+    /// probe of the copy behaves like a probe of the original). The directory is
+    /// `0700`, the file starts `0600`, and `create_new` refuses to clobber a file.
+    fn create(source: &Path) -> Result<Self, String> {
+        let temp_dir = env::temp_dir();
+        let extension = source
+            .extension()
+            .and_then(|value| value.to_str())
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= 16
+                    && value
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric())
+            });
+        for _ in 0..MEDIA_ASSET_SNAPSHOT_NAME_ATTEMPTS {
+            let token = next_media_asset_snapshot_token();
+            let directory = temp_dir.join(format!(
+                "syndocal-media-snapshot-{}-{token}",
+                std::process::id()
+            ));
+            match fs::DirBuilder::new().mode(0o700).create(&directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "Unable to create private media snapshot directory: {error}"
+                    ))
+                }
+            }
+            let mut name = "snapshot".to_string();
+            if let Some(extension) = extension {
+                name.push('.');
+                name.push_str(extension);
+            }
+            let candidate = directory.join(name);
+            match fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                // A generated name alone is not a privacy boundary in a shared
+                // temp directory. Start with owner-only permissions; after the
+                // copy is complete `copy_and_hash_into_snapshot` makes the
+                // snapshot read-only before any external metadata probe opens it.
+                .mode(0o600)
+                .open(&candidate)
+            {
+                Ok(file) => {
+                    return Ok(Self {
+                        path: candidate,
+                        directory,
+                        file: Some(file),
+                    })
+                }
+                Err(error) => {
+                    let _ = fs::remove_dir(&directory);
+                    return Err(format!(
+                        "Unable to create a private media snapshot: {error}"
+                    ));
+                }
+            }
+        }
+        Err("Unable to allocate a unique private media snapshot name".to_string())
+    }
+}
+
+/// Process-unique snapshot token: a monotonic counter mixed with the wall clock
+/// so two snapshots minted in the same nanosecond still differ, without adding a
+/// random-number dependency. `create_new` remains the authoritative anti-clobber
+/// guard; this only makes collisions vanishingly rare.
+#[cfg(unix)]
+fn next_media_asset_snapshot_token() -> String {
+    let counter = MEDIA_ASSET_SNAPSHOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    format!("{nanos:x}-{counter:x}")
+}
+
+/// Copy the single opened source image into the private snapshot while hashing
+/// the same bytes, so the returned hash describes exactly the copied image.
+/// Cancellable between chunks so an abort during the (potentially long) first
+/// hash returns promptly without finishing the copy.
+#[cfg(unix)]
+fn copy_and_hash_into_snapshot(
+    source: &mut fs::File,
+    snapshot: &mut PrivateMediaSnapshot,
+    cancel: &AtomicBool,
+) -> Result<(MediaContentHash, u64), String> {
+    source
+        .seek(std::io::SeekFrom::Start(0))
+        .map_err(|error| format!("Unable to rewind media source before snapshotting: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; MEDIA_ASSET_HASH_CHUNK_BYTES];
+    let mut copied = 0u64;
+    let snapshot_path = snapshot.path.clone();
+    {
+        let file = snapshot
+            .file
+            .as_mut()
+            .ok_or_else(|| "Private media snapshot writer was already closed".to_string())?;
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                return Err("Media asset operation was cancelled".to_string());
+            }
+            let read = source.read(&mut buffer).map_err(|error| {
+                format!("Unable to read media file while snapshotting: {error}")
+            })?;
+            if read == 0 {
+                break;
+            }
+            file.write_all(&buffer[..read])
+                .map_err(|error| format!("Unable to write private media snapshot: {error}"))?;
+            hasher.update(&buffer[..read]);
+            copied += read as u64;
+            if cancel.load(Ordering::Acquire) {
+                return Err("Media asset operation was cancelled".to_string());
+            }
+        }
+        file.sync_all()
+            .map_err(|error| format!("Unable to sync private media snapshot: {error}"))?;
+        // The snapshot has finished receiving bytes. Do not leave a path in the
+        // shared temp directory writable while ffprobe/image decoding opens it.
+        let mut permissions = file
+            .metadata()
+            .map_err(|error| {
+                format!("Unable to inspect private media snapshot permissions: {error}")
+            })?
+            .permissions();
+        permissions.set_mode(0o400);
+        fs::set_permissions(&snapshot_path, permissions)
+            .map_err(|error| format!("Unable to seal private media snapshot: {error}"))?;
+    }
+    // `0400` governs new opens; dropping the existing write-capable descriptor
+    // removes the remaining writer before the caller hands this path to a probe.
+    drop(snapshot.file.take());
+    Ok((
+        MediaContentHash {
+            algorithm: MediaHashAlgorithm::Sha256,
+            hex: format!("{:x}", hasher.finalize()),
+        },
+        copied,
+    ))
+}
+
+/// Whether `path` currently resolves to the exact stable version `held`. Used by
+/// availability inspection to bind verified bytes to the current path: an atomic
+/// rename during the hash leaves the held handle reading the old image while the
+/// path now names a different inode/version.
+#[cfg(unix)]
+fn unix_media_path_still_names_version(
+    path: &Path,
+    held: &UnixMediaFileVersion,
+) -> Result<bool, String> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        format!(
+            "Unable to inspect media source '{}': {error}",
+            path.display()
+        )
+    })?;
+    Ok(UnixMediaFileVersion::from_metadata(&metadata)? == *held)
+}
+
+/// Bounded, under-lock check that every finalized source still resolves to the
+/// exact image finalization proved. Called while the project admission +
+/// coordinator locks are held, immediately before the engine ACK, so it must
+/// never rehash: it only compares stable identity/version. On Windows the
+/// retained exclusive deny-write/delete handle already fences the source for the
+/// whole token lifetime, so this is a no-op there; elsewhere it is the bounded
+/// CAS that rejects a replacement between finalize and commit before any
+/// engine/history mutation.
+fn ensure_finalized_local_media_sources_current(
+    sources: &[&FinalizedLocalMediaSource],
+) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        for source in sources {
+            let metadata = fs::metadata(&source.path).map_err(|error| {
+                format!(
+                    "Finalized media source '{}' is no longer available: {error}",
+                    source.path
+                )
+            })?;
+            let current = UnixMediaFileVersion::from_metadata(&metadata)?;
+            if current != source.version {
+                return Err(format!(
+                    "Media source was replaced between finalization and commit: {}",
+                    source.path
+                ));
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = sources;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -1843,21 +2137,33 @@ fn rehash_local_media_path_exact(
     }
     let mut file = fs::File::open(path)
         .map_err(|error| format!("Unable to reopen media file '{}': {error}", path.display()))?;
-    let before =
-        local_media_source_fingerprint(&file.metadata().map_err(|error| {
-            format!("Unable to read media metadata before rehashing: {error}")
-        })?)?;
+    let before_metadata = file
+        .metadata()
+        .map_err(|error| format!("Unable to read media metadata before rehashing: {error}"))?;
+    let before = local_media_source_fingerprint(&before_metadata)?;
     if before.byte_size == 0 {
         return Err("Media files must not be empty".to_string());
     }
+    #[cfg(unix)]
+    let before_version = UnixMediaFileVersion::from_metadata(&before_metadata)?;
     let hash = stream_sha256_from_open_file(&mut file, cancel)?;
-    let after = local_media_source_fingerprint(
-        &file
-            .metadata()
-            .map_err(|error| format!("Unable to read media metadata after rehashing: {error}"))?,
-    )?;
+    let after_metadata = file
+        .metadata()
+        .map_err(|error| format!("Unable to read media metadata after rehashing: {error}"))?;
+    let after = local_media_source_fingerprint(&after_metadata)?;
     if !local_media_source_fingerprint_matches(&before, &after) {
         return Err("Media changed while hashing".to_string());
+    }
+    #[cfg(unix)]
+    {
+        // A hash of an old still-open inode is not a proof about the current
+        // path after an atomic rename. Bind both the handle and path to one
+        // exact version before returning a legacy/relink proof.
+        if UnixMediaFileVersion::from_metadata(&after_metadata)? != before_version
+            || !unix_media_path_still_names_version(path, &before_version)?
+        {
+            return Err("Media path was replaced while rehashing".to_string());
+        }
     }
     Ok((hash, before))
 }
@@ -1881,58 +2187,106 @@ fn sha256_local_media_file_streaming(
     // On Windows the handle denies write/delete for its whole lifetime, so the
     // path cannot be atomically replaced while we hash and then probe it: the
     // hash(A)/probe(B) ABA window is closed by the OS. Elsewhere we cannot deny
-    // writes through `std`, so the evidence-backed rehash below is the
-    // cross-platform equivalent.
-    #[cfg(windows)]
-    let mut file = open_windows_media_file_deny_write(path)?;
-    #[cfg(not(windows))]
-    let mut file = fs::File::open(path)
-        .map_err(|error| format!("Unable to open media file '{}': {error}", path.display()))?;
-    let before = local_media_source_fingerprint(
-        &file
-            .metadata()
-            .map_err(|error| format!("Unable to read media metadata before hashing: {error}"))?,
-    )?;
-    if before.byte_size == 0 {
-        return Err("Media files must not be empty".to_string());
-    }
-    #[cfg(windows)]
-    let guard_identity = windows_media_file_identity(&file)?;
-    let hash = stream_sha256_from_open_file(&mut file, cancel)?;
-    // Hold the original handle across the probe so its A fingerprint is
-    // coherent, then rehash the current path. That second byte proof rejects
-    // an atomic same-size A→B path replacement even if the original handle
-    // still reports A's metadata after a path-based probe reopened B.
-    let metadata = probe(path)?;
-    let after = local_media_source_fingerprint(
-        &file
-            .metadata()
-            .map_err(|error| format!("Unable to read media metadata after hashing: {error}"))?,
-    )?;
-    if !local_media_source_fingerprint_matches(&before, &after) {
-        return Err("Media changed while hashing or probing".to_string());
-    }
-    // Bind the hashed bytes AND the probed metadata to the current path
-    // identity: prove the path still resolves to the exact file we held under
-    // deny-write. Because deletion/rename was denied, this always matches; it is
-    // the explicit evidence that no A→B→A swap occurred during the probe.
+    // writes through `std`, so we snapshot the single opened image into a private
+    // temp file, probe *that* copy, and CAS the current path's stable identity.
     #[cfg(windows)]
     {
+        let mut file = open_windows_media_file_deny_write(path)?;
+        let before =
+            local_media_source_fingerprint(&file.metadata().map_err(|error| {
+                format!("Unable to read media metadata before hashing: {error}")
+            })?)?;
+        if before.byte_size == 0 {
+            return Err("Media files must not be empty".to_string());
+        }
+        let guard_identity = windows_media_file_identity(&file)?;
+        let hash = stream_sha256_from_open_file(&mut file, cancel)?;
+        // Hold the original handle across the probe so its A fingerprint is
+        // coherent, then rehash the current path. That second byte proof rejects
+        // an atomic same-size A→B path replacement even if the original handle
+        // still reports A's metadata after a path-based probe reopened B.
+        let metadata = probe(path)?;
+        let after =
+            local_media_source_fingerprint(&file.metadata().map_err(|error| {
+                format!("Unable to read media metadata after hashing: {error}")
+            })?)?;
+        if !local_media_source_fingerprint_matches(&before, &after) {
+            return Err("Media changed while hashing or probing".to_string());
+        }
+        // Bind the hashed bytes AND the probed metadata to the current path
+        // identity: prove the path still resolves to the exact file we held under
+        // deny-write. Because deletion/rename was denied, this always matches; it
+        // is the explicit evidence that no A→B→A swap occurred during the probe.
         let current = open_windows_media_file_deny_write(path)?;
         if windows_media_file_identity(&current)? != guard_identity {
             return Err("Media path was replaced while hashing or probing".to_string());
         }
+        let (current_hash, current_fingerprint) = rehash_local_media_path_exact(path, cancel)?;
+        if current_hash != hash
+            || !local_media_source_fingerprint_matches(&before, &current_fingerprint)
+        {
+            return Err("Media changed while hashing or probing".to_string());
+        }
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        return Ok((hash, before.byte_size, before, metadata));
     }
-    let (current_hash, current_fingerprint) = rehash_local_media_path_exact(path, cancel)?;
-    if current_hash != hash
-        || !local_media_source_fingerprint_matches(&before, &current_fingerprint)
+    #[cfg(unix)]
     {
-        return Err("Media changed while hashing or probing".to_string());
+        let mut source = fs::File::open(path)
+            .map_err(|error| format!("Unable to open media file '{}': {error}", path.display()))?;
+        let source_metadata = source
+            .metadata()
+            .map_err(|error| format!("Unable to read media metadata before hashing: {error}"))?;
+        let before = local_media_source_fingerprint(&source_metadata)?;
+        if before.byte_size == 0 {
+            return Err("Media files must not be empty".to_string());
+        }
+        // The exact stable version of the opened image S. Every later check binds
+        // the produced hash/metadata to this one image.
+        let version = UnixMediaFileVersion::from_metadata(&source_metadata)?;
+        // Copy the opened image into a private snapshot while hashing it, then
+        // probe ONLY the snapshot. Because both the hash and the probe read the
+        // immutable copy, a transient A->B->A on the original path can never make
+        // us pair hash(A) with metadata(B). The snapshot is removed by RAII when
+        // this scope ends (success or error).
+        let mut snapshot = PrivateMediaSnapshot::create(path)?;
+        let (hash, copied) = copy_and_hash_into_snapshot(&mut source, &mut snapshot, cancel)?;
+        if copied != before.byte_size {
+            return Err("Media changed while hashing".to_string());
+        }
+        let metadata = probe(&snapshot.path)?;
+        // Reopen the current path and require it still names the exact image S.
+        // An in-place rewrite advances ctime; an atomic rename changes the inode;
+        // either fails this equality, so no (hash, metadata) pair survives a swap.
+        let reopened_metadata = fs::metadata(path)
+            .map_err(|error| format!("Unable to read media metadata after probing: {error}"))?;
+        if UnixMediaFileVersion::from_metadata(&reopened_metadata)? != version {
+            return Err("Media path was replaced while hashing or probing".to_string());
+        }
+        // Full hash equality against the current path: prove the path's bytes
+        // equal S even on a filesystem with coarse ctime granularity. Prepare
+        // runs outside every project lock, so this second full pass is allowed.
+        let (current_hash, current_fingerprint) = rehash_local_media_path_exact(path, cancel)?;
+        if current_hash != hash
+            || !local_media_source_fingerprint_matches(&before, &current_fingerprint)
+        {
+            return Err("Media changed while hashing or probing".to_string());
+        }
+        // The full rehash opens the public path again. Rebind it after that long
+        // read too: otherwise a same-byte/same-mtime B could replace A in the
+        // tiny interval after the first version proof and inherit S=A metadata.
+        let final_path_metadata = fs::metadata(path)
+            .map_err(|error| format!("Unable to inspect media path after final rehash: {error}"))?;
+        if UnixMediaFileVersion::from_metadata(&final_path_metadata)? != version {
+            return Err("Media path was replaced while hashing or probing".to_string());
+        }
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        Ok((hash, before.byte_size, before, metadata))
     }
-    if cancel.load(Ordering::Acquire) {
-        return Err("Media asset operation was cancelled".to_string());
-    }
-    Ok((hash, before.byte_size, before, metadata))
 }
 
 fn prepare_one_local_media_asset(
@@ -2318,46 +2672,86 @@ fn finalize_one_prepared_local_media_asset(
         .as_deref()
         .ok_or_else(|| "Prepared local media asset has no source path".to_string())?;
     #[cfg(windows)]
-    let mut retained = open_windows_media_file_for_finalization(Path::new(path))?;
-    #[cfg(not(windows))]
-    let mut file = fs::File::open(path)
-        .map_err(|error| format!("Unable to open media source for finalization: {error}"))?;
-    #[cfg(windows)]
-    let file = &mut retained.file;
-    #[cfg(not(windows))]
-    let file = &mut file;
-    let before = local_media_source_fingerprint(
-        &file
-            .metadata()
-            .map_err(|error| format!("Unable to inspect media before finalization: {error}"))?,
-    )?;
-    file.seek(std::io::SeekFrom::Start(0))
-        .map_err(|error| format!("Unable to seek media before finalization hash: {error}"))?;
-    let actual_hash = stream_sha256_from_open_file(file, cancel)?;
-    let after = local_media_source_fingerprint(
-        &file
-            .metadata()
-            .map_err(|error| format!("Unable to inspect media after finalization: {error}"))?,
-    )?;
-    if actual_hash != asset.content_hash
-        || before.byte_size != asset.byte_size
-        || !local_media_source_fingerprint_matches(&asset.fingerprint, &before)
-        || !local_media_source_fingerprint_matches(&before, &after)
     {
-        return Err(format!(
-            "Media changed after preparation and before finalization: {path}"
-        ));
+        let mut retained = open_windows_media_file_for_finalization(Path::new(path))?;
+        let file = &mut retained.file;
+        let before =
+            local_media_source_fingerprint(&file.metadata().map_err(|error| {
+                format!("Unable to inspect media before finalization: {error}")
+            })?)?;
+        file.seek(std::io::SeekFrom::Start(0))
+            .map_err(|error| format!("Unable to seek media before finalization hash: {error}"))?;
+        let actual_hash = stream_sha256_from_open_file(file, cancel)?;
+        let after =
+            local_media_source_fingerprint(&file.metadata().map_err(|error| {
+                format!("Unable to inspect media after finalization: {error}")
+            })?)?;
+        if actual_hash != asset.content_hash
+            || before.byte_size != asset.byte_size
+            || !local_media_source_fingerprint_matches(&asset.fingerprint, &before)
+            || !local_media_source_fingerprint_matches(&before, &after)
+        {
+            return Err(format!(
+                "Media changed after preparation and before finalization: {path}"
+            ));
+        }
+        let identity = windows_media_file_identity(file)?;
+        Ok(FinalizedLocalMediaSource {
+            path: path.to_string(),
+            fingerprint: before,
+            retained: Arc::new(Mutex::new(retained)),
+            identity,
+        })
     }
-    #[cfg(windows)]
-    let identity = windows_media_file_identity(file)?;
-    Ok(FinalizedLocalMediaSource {
-        path: path.to_string(),
-        fingerprint: before,
-        #[cfg(windows)]
-        retained: Arc::new(Mutex::new(retained)),
-        #[cfg(windows)]
-        identity,
-    })
+    #[cfg(unix)]
+    {
+        let mut file = fs::File::open(path)
+            .map_err(|error| format!("Unable to open media source for finalization: {error}"))?;
+        let open_metadata = file
+            .metadata()
+            .map_err(|error| format!("Unable to inspect media before finalization: {error}"))?;
+        let before = local_media_source_fingerprint(&open_metadata)?;
+        // The stable version of the opened image, retained as the commit CAS
+        // baseline. No `std` deny-write handle exists off Windows, so the bounded
+        // under-lock commit re-CASes this version instead of holding a lock.
+        let version = UnixMediaFileVersion::from_metadata(&open_metadata)?;
+        file.seek(std::io::SeekFrom::Start(0))
+            .map_err(|error| format!("Unable to seek media before finalization hash: {error}"))?;
+        let actual_hash = stream_sha256_from_open_file(&mut file, cancel)?;
+        let after_metadata = file
+            .metadata()
+            .map_err(|error| format!("Unable to inspect media after finalization: {error}"))?;
+        let after = local_media_source_fingerprint(&after_metadata)?;
+        if actual_hash != asset.content_hash
+            || before.byte_size != asset.byte_size
+            || !local_media_source_fingerprint_matches(&asset.fingerprint, &before)
+            || !local_media_source_fingerprint_matches(&before, &after)
+            // The opened inode must not have been rewritten in place while we
+            // hashed it (an in-place rewrite that restores mtime still advances
+            // ctime, so this equality still catches it).
+            || UnixMediaFileVersion::from_metadata(&after_metadata)? != version
+        {
+            return Err(format!(
+                "Media changed after preparation and before finalization: {path}"
+            ));
+        }
+        // The current path must still name that exact inode/version: an atomic
+        // rename since we opened it changes the inode and fails this equality.
+        let path_version =
+            UnixMediaFileVersion::from_metadata(&fs::metadata(path).map_err(|error| {
+                format!("Unable to inspect finalized media path '{path}': {error}")
+            })?)?;
+        if path_version != version {
+            return Err(format!(
+                "Media path was replaced during finalization: {path}"
+            ));
+        }
+        Ok(FinalizedLocalMediaSource {
+            path: path.to_string(),
+            fingerprint: before,
+            version,
+        })
+    }
 }
 
 fn finalize_prepared_local_media_assets(
@@ -2388,21 +2782,20 @@ fn finalized_local_media_source_matches_path(
             })?;
         Ok(windows_media_file_identity(&path_file)? == finalized.identity)
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        let finalized_path = fs::canonicalize(&finalized.path).map_err(|error| {
-            format!(
-                "Unable to canonicalize finalized media source '{}': {error}",
-                finalized.path
-            )
-        })?;
-        let candidate = fs::canonicalize(path).map_err(|error| {
-            format!(
-                "Unable to canonicalize legacy media source '{}': {error}",
-                path.display()
-            )
-        })?;
-        Ok(finalized_path == candidate)
+        // Compare the underlying file object (device + inode), so a hard-link
+        // alias of the finalized source — a different path naming the same inode
+        // — is correctly recognised as the same file. Canonicalized path-string
+        // equality would miss that and try to lock the same inode twice.
+        let candidate =
+            UnixMediaFileVersion::from_metadata(&fs::metadata(path).map_err(|error| {
+                format!(
+                    "Unable to inspect legacy media source '{}': {error}",
+                    path.display()
+                )
+            })?)?;
+        Ok(finalized.version.is_same_file(&candidate))
     }
 }
 
@@ -2436,7 +2829,14 @@ fn finalize_legacy_media_source_for_relink(
     // exclusive LockFileEx on the same Windows file would self-conflict, so
     // reuse the already verified retained guard (also for hard-link aliases).
     if finalized_local_media_source_matches_path(replacement_source, Path::new(&identity.path))? {
-        return Ok(replacement_source.clone());
+        // Preserve the shared retained guard/version but present it at the
+        // legacy identity's exact path. A hard-link alias can be the same
+        // inode while its path string is necessarily different; returning the
+        // replacement path here would make the later paired verification reject
+        // a correct alias as an expected-path mismatch.
+        let mut alias_view = replacement_source.clone();
+        alias_view.path = identity.path.clone();
+        return Ok(alias_view);
     }
     let legacy = legacy_media_asset_prepared_for_identity(identity);
     finalize_one_prepared_local_media_asset(&legacy, cancel)
@@ -2494,11 +2894,20 @@ fn verify_finalized_local_media_asset_fingerprints(
                 ));
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         {
+            // No OS deny-write guard exists here, so this outside-lock proof is a
+            // full rehash bound to the retained stable version. The bounded
+            // under-lock CAS (`ensure_finalized_local_media_sources_current`)
+            // then closes the residual finalize->commit window.
             let (actual_hash, actual) = rehash_local_media_path_exact(Path::new(path), cancel)?;
+            let current_version =
+                UnixMediaFileVersion::from_metadata(&fs::metadata(path).map_err(|error| {
+                    format!("Unable to verify finalized media path '{path}': {error}")
+                })?)?;
             if actual_hash != asset.content_hash
                 || !local_media_source_fingerprint_matches(&expected.fingerprint, &actual)
+                || current_version != expected.version
             {
                 return Err(format!(
                     "Media changed after finalization and before commit: {path}"
@@ -2517,10 +2926,65 @@ fn is_local_media_source(kind: &VideoSourceKind) -> bool {
     matches!(kind, VideoSourceKind::File | VideoSourceKind::StillImage)
 }
 
+/// Bind a held availability-verification file to the path the caller will
+/// report. This fence is deliberately required before every success-like
+/// availability answer — unverified, mismatch, and verified — so an old open A
+/// cannot be presented as the current path after it was renamed to B.
+fn ensure_media_asset_availability_path_current(
+    path: &Path,
+    file: &fs::File,
+    _held_metadata: &fs::Metadata,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let held_identity = windows_media_file_identity(file)?;
+        let current = open_windows_media_file_deny_write(path)?;
+        if windows_media_file_identity(&current)? != held_identity {
+            return Err(
+                "Local media source path was replaced during availability verification".to_string(),
+            );
+        }
+    }
+    #[cfg(unix)]
+    {
+        let _ = file;
+        let held_version = UnixMediaFileVersion::from_metadata(_held_metadata)?;
+        let current_metadata = fs::metadata(path).map_err(|error| {
+            format!(
+                "Unable to inspect media source '{}' during availability verification: {error}",
+                path.display()
+            )
+        })?;
+        let current_version = UnixMediaFileVersion::from_metadata(&current_metadata)?;
+        if current_version != held_version {
+            let detail = if current_version.is_same_file(&held_version) {
+                "Local media source changed during availability verification"
+            } else {
+                "Local media source path was replaced during availability verification"
+            };
+            return Err(detail.to_string());
+        }
+    }
+    Ok(())
+}
+
 fn inspect_one_media_asset_availability(
     asset: &MediaAssetSummary,
     verify_hash: bool,
     cancel: &AtomicBool,
+) -> Result<MediaAssetAvailability, String> {
+    inspect_one_media_asset_availability_before_path_fence(asset, verify_hash, cancel, || Ok(()))
+}
+
+/// Core availability verifier with the final path-rebind point kept explicit.
+/// Production passes a no-op; tests use the same production body to force a
+/// deterministic replacement after a hash, or (for AvailableUnverified) after
+/// opening the held file but before its current-path fence.
+fn inspect_one_media_asset_availability_before_path_fence(
+    asset: &MediaAssetSummary,
+    verify_hash: bool,
+    cancel: &AtomicBool,
+    before_path_fence: impl FnOnce() -> Result<(), String>,
 ) -> Result<MediaAssetAvailability, String> {
     if !is_local_media_source(&asset.source.kind) {
         return Ok(MediaAssetAvailability::LiveSource { asset_id: asset.id });
@@ -2544,7 +3008,7 @@ fn inspect_one_media_asset_availability(
                 .share_mode(FILE_SHARE_READ.0)
                 .open(path)
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         {
             fs::File::open(path)
         }
@@ -2577,6 +3041,20 @@ fn inspect_one_media_asset_availability(
         }
     };
     if !verify_hash || asset.content_hash.is_none() || asset.byte_size.is_none() {
+        if let Err(error) = before_path_fence() {
+            return Ok(MediaAssetAvailability::Unreadable {
+                asset_id: asset.id,
+                error,
+            });
+        }
+        if let Err(error) =
+            ensure_media_asset_availability_path_current(Path::new(path), &file, &metadata)
+        {
+            return Ok(MediaAssetAvailability::Unreadable {
+                asset_id: asset.id,
+                error,
+            });
+        }
         return Ok(MediaAssetAvailability::AvailableUnverified { asset_id: asset.id });
     }
     let expected = asset
@@ -2606,7 +3084,13 @@ fn inspect_one_media_asset_availability(
             });
         }
     };
-    let after = match file.metadata().and_then(|metadata| {
+    if let Err(error) = before_path_fence() {
+        return Ok(MediaAssetAvailability::Unreadable {
+            asset_id: asset.id,
+            error,
+        });
+    }
+    let after_metadata = match file.metadata().and_then(|metadata| {
         if metadata.is_file() {
             Ok(metadata)
         } else {
@@ -2615,19 +3099,20 @@ fn inspect_one_media_asset_availability(
             ))
         }
     }) {
-        Ok(metadata) => match local_media_source_fingerprint(&metadata) {
-            Ok(fingerprint) => fingerprint,
-            Err(error) => {
-                return Ok(MediaAssetAvailability::Unreadable {
-                    asset_id: asset.id,
-                    error,
-                });
-            }
-        },
+        Ok(metadata) => metadata,
         Err(error) => {
             return Ok(MediaAssetAvailability::Unreadable {
                 asset_id: asset.id,
                 error: format!("Unable to inspect local media source after hashing: {error}"),
+            });
+        }
+    };
+    let after = match local_media_source_fingerprint(&after_metadata) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            return Ok(MediaAssetAvailability::Unreadable {
+                asset_id: asset.id,
+                error,
             });
         }
     };
@@ -2637,53 +3122,24 @@ fn inspect_one_media_asset_availability(
             error: "Media changed while hashing for availability inspection".to_string(),
         });
     }
+    // Bind the hash result to the same current-path image before *either*
+    // HashMismatch or AvailableVerified. The helper also compares the initial
+    // Unix version, so an in-place same-size/restored-mtime rewrite fails even
+    // when the fingerprint equality above cannot see it.
+    if let Err(error) =
+        ensure_media_asset_availability_path_current(Path::new(path), &file, &metadata)
+    {
+        return Ok(MediaAssetAvailability::Unreadable {
+            asset_id: asset.id,
+            error,
+        });
+    }
     if actual != expected || before.byte_size != expected_byte_size {
         return Ok(MediaAssetAvailability::HashMismatch {
             asset_id: asset.id,
             expected,
             actual,
         });
-    }
-    // Bind the verified bytes to the *current* path identity before returning.
-    // A path-replacement during inspection cannot leave us claiming Verified for
-    // bytes that no longer live at this path. Read-only: no lock, no project or
-    // history mutation.
-    #[cfg(windows)]
-    {
-        let held_identity = match windows_media_file_identity(&file) {
-            Ok(identity) => identity,
-            Err(error) => {
-                return Ok(MediaAssetAvailability::Unreadable {
-                    asset_id: asset.id,
-                    error,
-                })
-            }
-        };
-        let current = match open_windows_media_file_deny_write(Path::new(path)) {
-            Ok(current) => current,
-            Err(error) => {
-                return Ok(MediaAssetAvailability::Unreadable {
-                    asset_id: asset.id,
-                    error,
-                })
-            }
-        };
-        match windows_media_file_identity(&current) {
-            Ok(current_identity) if current_identity == held_identity => {}
-            Ok(_) => {
-                return Ok(MediaAssetAvailability::Unreadable {
-                    asset_id: asset.id,
-                    error: "Local media source path was replaced during availability verification"
-                        .to_string(),
-                })
-            }
-            Err(error) => {
-                return Ok(MediaAssetAvailability::Unreadable {
-                    asset_id: asset.id,
-                    error,
-                })
-            }
-        }
     }
     Ok(MediaAssetAvailability::AvailableVerified { asset_id: asset.id })
 }
@@ -3361,6 +3817,12 @@ fn commit_prepared_media_asset_layers_locked(
         }
         Err(()) => return Err("Media asset operation was cancelled".to_string()),
     }
+    // The filesystem CAS is intentionally after operation admission and directly
+    // before Published: no source check can be atomic with an external rename,
+    // but this leaves no intervening candidate/history work after its bounded
+    // identity/version comparison. A failure is terminal for this prepared token
+    // and reaches no engine/history mutation.
+    ensure_finalized_local_media_sources_current(&finalized_sources.iter().collect::<Vec<_>>())?;
     state
         .engine
         .media_asset_transaction_published(transaction)?;
@@ -15624,6 +16086,11 @@ async fn commit_prepared_media_asset_relink(
         // operation already admitted (only reachable via a different receipt key,
         // since the same key was already returned from the lane's receipt check)
         // fails closed rather than publishing a second update.
+        let mut current_sources: Vec<&FinalizedLocalMediaSource> =
+            vec![&finalized_replacement_source];
+        if let Some(legacy_source) = prepared.finalized_legacy_source.as_ref() {
+            current_sources.push(legacy_source);
+        }
         match prepared.admission.try_admit() {
             Ok(MediaAssetCommitAdmission::Admitted) => {}
             Ok(MediaAssetCommitAdmission::AlreadyAdmitted) => {
@@ -15634,6 +16101,10 @@ async fn commit_prepared_media_asset_relink(
             }
             Err(()) => return Err("Media asset operation was cancelled".to_string()),
         }
+        // Directly before the definitive ACK, compare only the bounded finalized
+        // identity/version for both replacement and legacy source. Full hashes
+        // remain outside the coordinator lock above.
+        ensure_finalized_local_media_sources_current(&current_sources)?;
         state
             .engine
             .media_asset_transaction_published(MediaAssetTransaction::Update(updated_asset))?;
@@ -15898,6 +16369,11 @@ async fn commit_prepared_media_assets(
             }
             Err(()) => return Err("Media asset operation was cancelled".to_string()),
         }
+        // Perform the only under-lock filesystem operation immediately before
+        // Published. It is an identity/version comparison, never a rehash.
+        ensure_finalized_local_media_sources_current(
+            &finalized_sources.iter().collect::<Vec<_>>(),
+        )?;
         // Engine publication validates and ACKs the complete candidate before
         // exposing it. No coordinator state is advanced here: the paired
         // `commit_project_transaction` command captures authoritative engine B.
@@ -16399,10 +16875,11 @@ fn authoritative_terminal_failure_if_admitted(
     error: String,
 ) -> Result<MediaAssetAuthoritativeTerminalResult, String> {
     if admission.is_admitted() {
-        // A Published ACK error is definitive and the engine contract has
-        // rolled back to A. Record it as terminal so exact retries/queries see
-        // the same failure and prepared handles can be released. Errors before
-        // admission remain retryable and are deliberately not recorded.
+        // A post-admission final-CAS or Published ACK error is definitive: the
+        // former crossed no engine/history mutation, and the latter is required
+        // to roll back to A. Record either as terminal so exact retries/queries
+        // see the same failure and prepared handles can be released. Errors
+        // before admission remain retryable and are deliberately not recorded.
         Ok(MediaAssetAuthoritativeTerminalResult::Failure(
             MediaAssetAuthoritativeFailureResult { message: error },
         ))
@@ -16426,6 +16903,7 @@ fn commit_authoritative_media_asset_transaction<R>(
     history_label: &str,
     history_coalesce_key: &str,
     legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
+    finalized_sources: &[&FinalizedLocalMediaSource],
     build: impl FnOnce(&EngineSnapshot) -> Result<(MediaAssetTransaction, R), String>,
 ) -> Result<(R, ProjectHistoryMutationResult), String> {
     let (_external_admission, mut coordinator) = (
@@ -16482,7 +16960,14 @@ fn commit_authoritative_media_asset_transaction<R>(
         &mut coordinator,
         admission,
         plan,
-        || state.engine.media_asset_transaction_published(transaction),
+        || {
+            // The operation has just admitted and the engine ACK is next. Full
+            // rehash/probe proof was completed outside the locks; this is the
+            // bounded final version CAS only, leaving no candidate/history work
+            // between it and Published.
+            ensure_finalized_local_media_sources_current(finalized_sources)?;
+            state.engine.media_asset_transaction_published(transaction)
+        },
     )?;
     let mutation = ProjectHistoryMutationResult {
         history_status: project_history_status_for_coordinator(&coordinator),
@@ -16542,6 +17027,14 @@ fn commit_prepared_media_assets_authoritative(
             None,
         )?;
         let entries = prepared.entries.clone();
+        let finalized_source_refs = prepared
+            .finalized_sources
+            .as_ref()
+            .ok_or_else(|| {
+                "Prepared media asset import must be finalized before committing".to_string()
+            })?
+            .iter()
+            .collect::<Vec<_>>();
         let committed = commit_authoritative_media_asset_transaction(
             &state,
             prepared.admission.as_ref(),
@@ -16551,6 +17044,7 @@ fn commit_prepared_media_assets_authoritative(
             "Import media assets",
             "",
             None,
+            &finalized_source_refs,
             |snapshot| {
                 let (candidate, results) = build_media_asset_catalog_import_candidate(
                     media_asset_catalog_for_snapshot(snapshot),
@@ -16671,6 +17165,17 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
             &expected_authority,
             legacy_operation,
         )?;
+        let replacement_source =
+            prepared
+                .finalized_replacement_source
+                .as_ref()
+                .ok_or_else(|| {
+                    "Prepared media asset relink must be finalized before committing".to_string()
+                })?;
+        let mut finalized_source_refs = vec![replacement_source];
+        if let Some(legacy_source) = prepared.finalized_legacy_source.as_ref() {
+            finalized_source_refs.push(legacy_source);
+        }
         let committed = commit_authoritative_media_asset_transaction(
             state,
             prepared.admission.as_ref(),
@@ -16680,6 +17185,7 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
             "Relink media asset",
             "",
             legacy_operation,
+            &finalized_source_refs,
             |snapshot| {
                 let current_asset = media_asset_catalog_for_snapshot(snapshot)
                     .iter()
@@ -16825,6 +17331,12 @@ fn commit_prepared_media_asset_layers_authoritative(
         if bootstrap {
             ensure_video_output_backend_available(&VideoOutputKind::Display)?;
         }
+        let finalized_source_refs = prepared
+            .finalized_sources
+            .as_ref()
+            .ok_or_else(|| format!("{history_label} media must be finalized before committing"))?
+            .iter()
+            .collect::<Vec<_>>();
         let committed = commit_authoritative_media_asset_transaction(
             state,
             prepared.admission.as_ref(),
@@ -16834,6 +17346,7 @@ fn commit_prepared_media_asset_layers_authoritative(
             history_label,
             "",
             legacy_operation,
+            &finalized_source_refs,
             |snapshot| {
                 let labels = labels.unwrap_or_else(|| {
                     prepared
@@ -43988,40 +44501,68 @@ mod tests {
     }
 
     #[test]
-    fn media_asset_hash_and_probe_reject_same_size_media_changed_during_preparation() {
+    fn media_asset_hash_and_probe_media_asset_file_coherence_keeps_one_image_across_transient_source_aba(
+    ) {
         let directory = unique_test_directory("media-asset-replace-during-probe");
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("replace.bin");
         fs::write(&path, b"abc").unwrap();
         let cancel = AtomicBool::new(false);
-        let write_denied = AtomicBool::new(false);
-        // The probe is intentionally path-based like ffprobe/image metadata
-        // probing. Attempt a same-length A->B replacement mid-probe.
+        let original_path = path.clone();
+        #[cfg(unix)]
+        let parked_original = directory.join("original-parked.bin");
+        let replacement = directory.join("replacement.bin");
+        #[cfg(unix)]
+        let saw_private_snapshot = AtomicBool::new(false);
+        // The real probe receives the private snapshot on Unix, never the
+        // mutable public source path. Force A->B->A on that public path while
+        // the probe reads S; a success is coherent A/S and a conservative
+        // version-race rejection is also safe, but hash(A)+probe(B) is not.
         let result = sha256_local_media_file_streaming(&path, &cancel, |probe_path| {
-            if fs::write(probe_path, b"xyz").is_err() {
-                write_denied.store(true, Ordering::Release);
+            #[cfg(unix)]
+            {
+                assert_ne!(probe_path, original_path.as_path());
+                assert_eq!(fs::read(probe_path).unwrap(), b"abc");
+                saw_private_snapshot.store(true, Ordering::Release);
+                fs::write(&replacement, b"xyz").unwrap();
+                fs::rename(&original_path, &parked_original).unwrap();
+                fs::rename(&replacement, &original_path).unwrap();
+                // The public path is B at this point, but the probe remains
+                // bound to immutable S=A.
+                assert_eq!(fs::read(probe_path).unwrap(), b"abc");
+                fs::rename(&original_path, &replacement).unwrap();
+                fs::rename(&parked_original, &original_path).unwrap();
+            }
+            #[cfg(windows)]
+            {
+                // Windows deliberately probes the guarded original handle/path;
+                // an attempted replacement is denied by the retained lock.
+                assert_eq!(probe_path, original_path.as_path());
+                fs::write(&replacement, b"xyz").unwrap();
+                assert!(fs::rename(&replacement, &original_path).is_err());
+                let _ = fs::remove_file(&replacement);
             }
             Ok(None)
         });
         #[cfg(windows)]
         {
-            // The deny-write/delete guard held across the probe blocks the swap
-            // entirely, so hash(A) completes and the file still holds A.
-            assert!(
-                write_denied.load(Ordering::Acquire),
-                "deny-write guard must block the in-probe replacement"
-            );
             let (hash, _, _, _) = result.unwrap();
             assert_eq!(hash.hex, format!("{:x}", Sha256::digest(b"abc")));
             assert_eq!(fs::read(&path).unwrap(), b"abc");
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         {
-            // Without an OS deny-write guard the swap succeeds; the post-probe
-            // exact rehash rejects hash(A)/probe(B).
-            let _ = write_denied;
-            let error = result.unwrap_err();
-            assert!(error.contains("changed while hashing or probing"));
+            assert!(saw_private_snapshot.load(Ordering::Acquire));
+            match result {
+                Ok((hash, _, _, _)) => {
+                    assert_eq!(hash.hex, format!("{:x}", Sha256::digest(b"abc")));
+                    assert_eq!(fs::read(&path).unwrap(), b"abc");
+                }
+                Err(error) => assert!(
+                    error.contains("replaced") || error.contains("changed"),
+                    "unexpected transient-ABA error: {error}"
+                ),
+            }
         }
         let _ = fs::remove_dir_all(&directory);
     }
@@ -44057,6 +44598,342 @@ mod tests {
         );
         drop(retained);
         assert!(fs::OpenOptions::new().write(true).open(&path).is_ok());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn media_asset_file_coherence_windows_retained_guard_cas_and_raii_are_live() {
+        // This is deliberately a current-host test: Windows does not use the
+        // Unix version CAS, because its finalized retained handle is the
+        // stronger write/delete fence. The shared publish gate must remain a
+        // harmless no-op while that guard is live, and RAII must release it.
+        let directory = unique_test_directory("media-asset-file-coherence-windows");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (content_hash, byte_size, fingerprint, _) =
+            sha256_local_media_file_streaming(&path, &cancel, |_| Ok(None)).unwrap();
+        let prepared = PreparedLocalMediaAsset {
+            input_index: 0,
+            label: "clip".to_string(),
+            source: media_asset_commit_test_source(path.to_string_lossy().as_ref()),
+            content_hash,
+            byte_size,
+            fingerprint,
+        };
+        let finalized = finalize_one_prepared_local_media_asset(&prepared, &cancel).unwrap();
+        ensure_finalized_local_media_sources_current(&[&finalized]).unwrap();
+        assert!(
+            fs::OpenOptions::new().write(true).open(&path).is_err(),
+            "the retained Windows finalization guard must fence writers through commit"
+        );
+        drop(finalized);
+        assert!(
+            fs::OpenOptions::new().write(true).open(&path).is_ok(),
+            "dropping the finalized token must release the retained guard"
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    fn set_test_file_modified_time(path: &Path, modified: SystemTime) {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    fn media_asset_file_coherence_test_asset(
+        path: &Path,
+        content_hash: Option<MediaContentHash>,
+        byte_size: Option<u64>,
+    ) -> MediaAssetSummary {
+        MediaAssetSummary {
+            id: 901,
+            label: "Coherence".to_string(),
+            source: media_asset_commit_test_source(path.to_string_lossy().as_ref()),
+            content_hash,
+            byte_size,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_asset_file_coherence_unix_snapshot_is_private_sealed_and_raii_cleaned() {
+        let directory = unique_test_directory("media-asset-file-coherence-snapshot");
+        fs::create_dir_all(&directory).unwrap();
+        let source_path = directory.join("clip.mov");
+        fs::write(&source_path, b"abc").unwrap();
+        let mut source = fs::File::open(&source_path).unwrap();
+        let mut snapshot = PrivateMediaSnapshot::create(&source_path).unwrap();
+        let snapshot_path = snapshot.path.clone();
+        let snapshot_directory = snapshot.directory.clone();
+        assert_eq!(
+            snapshot_path.extension().and_then(|value| value.to_str()),
+            Some("mov")
+        );
+        let directory_mode = fs::metadata(&snapshot_directory)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            directory_mode & 0o077,
+            0,
+            "snapshot directory must not be group/world visible"
+        );
+        let initial_mode = fs::metadata(&snapshot_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            initial_mode & 0o077,
+            0,
+            "snapshot must not be group/world visible"
+        );
+        let cancel = AtomicBool::new(false);
+        let (hash, copied) =
+            copy_and_hash_into_snapshot(&mut source, &mut snapshot, &cancel).unwrap();
+        assert_eq!(copied, 3);
+        assert_eq!(hash.hex, format!("{:x}", Sha256::digest(b"abc")));
+        assert!(
+            snapshot.file.is_none(),
+            "the snapshot writer must be closed before a probe can open the sealed path"
+        );
+        assert_eq!(fs::read(&snapshot_path).unwrap(), b"abc");
+        let sealed_mode = fs::metadata(&snapshot_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(sealed_mode & 0o077, 0, "sealed snapshot leaked permissions");
+        assert_eq!(sealed_mode & 0o222, 0, "probe snapshot must be read-only");
+        drop(snapshot);
+        assert!(
+            !snapshot_path.exists(),
+            "private snapshot must be RAII-cleaned after its prepare scope ends"
+        );
+        assert!(
+            !snapshot_directory.exists(),
+            "private snapshot directory must be removed with its snapshot"
+        );
+        let mut cancelled_source = fs::File::open(&source_path).unwrap();
+        let mut cancelled_snapshot = PrivateMediaSnapshot::create(&source_path).unwrap();
+        let cancelled_path = cancelled_snapshot.path.clone();
+        let cancelled_directory = cancelled_snapshot.directory.clone();
+        let cancelled = AtomicBool::new(true);
+        assert!(copy_and_hash_into_snapshot(
+            &mut cancelled_source,
+            &mut cancelled_snapshot,
+            &cancelled,
+        )
+        .is_err());
+        drop(cancelled_snapshot);
+        assert!(
+            !cancelled_path.exists() && !cancelled_directory.exists(),
+            "cancelled snapshot must be RAII-cleaned"
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_asset_file_coherence_unix_hardlink_alias_verifies_and_cas_matches() {
+        let directory = unique_test_directory("media-asset-file-coherence-hardlink");
+        fs::create_dir_all(&directory).unwrap();
+        let replacement_path = directory.join("replacement.bin");
+        let legacy_path = directory.join("legacy-alias.bin");
+        fs::write(&replacement_path, b"abc").unwrap();
+        fs::hard_link(&replacement_path, &legacy_path).unwrap();
+        let cancel = AtomicBool::new(false);
+        let (content_hash, byte_size, fingerprint, _) =
+            sha256_local_media_file_streaming(&replacement_path, &cancel, |_| Ok(None)).unwrap();
+        let prepared = PreparedLocalMediaAsset {
+            input_index: 0,
+            label: "replacement".to_string(),
+            source: media_asset_commit_test_source(replacement_path.to_string_lossy().as_ref()),
+            content_hash: content_hash.clone(),
+            byte_size,
+            fingerprint: fingerprint.clone(),
+        };
+        let replacement = finalize_one_prepared_local_media_asset(&prepared, &cancel).unwrap();
+        let identity = LegacyMediaAssetSourceIdentity {
+            path: legacy_path.to_string_lossy().into_owned(),
+            content_hash,
+            byte_size,
+            fingerprint,
+        };
+        let legacy =
+            finalize_legacy_media_source_for_relink(&replacement, &identity, &cancel).unwrap();
+        assert_eq!(
+            legacy.path, identity.path,
+            "alias view must retain legacy path"
+        );
+        assert_eq!(
+            replacement.version, legacy.version,
+            "aliases share one inode version"
+        );
+        let legacy_prepared = legacy_media_asset_prepared_for_identity(&identity);
+        verify_finalized_local_media_asset_fingerprints(
+            std::slice::from_ref(&prepared),
+            std::slice::from_ref(&replacement),
+            &cancel,
+        )
+        .unwrap();
+        verify_finalized_local_media_asset_fingerprints(
+            std::slice::from_ref(&legacy_prepared),
+            std::slice::from_ref(&legacy),
+            &cancel,
+        )
+        .unwrap();
+        ensure_finalized_local_media_sources_current(&[&replacement, &legacy]).unwrap();
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_asset_file_coherence_unix_finalized_version_cas_rejects_same_size_restored_mtime() {
+        let directory = unique_test_directory("media-asset-file-coherence-finalize-cas");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (content_hash, byte_size, fingerprint, _) =
+            sha256_local_media_file_streaming(&path, &cancel, |_| Ok(None)).unwrap();
+        let prepared = PreparedLocalMediaAsset {
+            input_index: 0,
+            label: "clip".to_string(),
+            source: media_asset_commit_test_source(path.to_string_lossy().as_ref()),
+            content_hash,
+            byte_size,
+            fingerprint,
+        };
+        let finalized = finalize_one_prepared_local_media_asset(&prepared, &cancel).unwrap();
+        let finalized_fingerprint = finalized.fingerprint.clone();
+        let finalized_version = finalized.version.clone();
+        let original_modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let replacement = directory.join("same-size-restored-mtime.bin");
+        fs::write(&replacement, b"xyz").unwrap();
+        set_test_file_modified_time(&replacement, original_modified);
+        fs::rename(&replacement, &path).unwrap();
+        let current_metadata = fs::metadata(&path).unwrap();
+        let current_fingerprint = local_media_source_fingerprint(&current_metadata).unwrap();
+        assert!(
+            local_media_source_fingerprint_matches(&finalized_fingerprint, &current_fingerprint),
+            "test setup must restore the old size/mtime fingerprint"
+        );
+        let current_version = UnixMediaFileVersion::from_metadata(&current_metadata).unwrap();
+        assert_ne!(
+            current_version, finalized_version,
+            "inode/ctime version must distinguish the replacement"
+        );
+        let error = ensure_finalized_local_media_sources_current(&[&finalized]).unwrap_err();
+        assert!(error.contains("replaced between finalization and commit"));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_asset_file_coherence_unix_availability_rejects_rename_before_hash_mismatch() {
+        let directory = unique_test_directory("media-asset-file-coherence-availability-mismatch");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        let replacement = directory.join("replacement.bin");
+        fs::write(&path, b"abc").unwrap();
+        let asset = media_asset_file_coherence_test_asset(
+            &path,
+            Some(media_asset_commit_test_hash('f')),
+            Some(3),
+        );
+        let cancel = AtomicBool::new(false);
+        let result =
+            inspect_one_media_asset_availability_before_path_fence(&asset, true, &cancel, || {
+                fs::write(&replacement, b"xyz")
+                    .map_err(|error| format!("unable to create replacement: {error}"))?;
+                fs::rename(&replacement, &path)
+                    .map_err(|error| format!("unable to replace source: {error}"))?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            matches!(result, MediaAssetAvailability::Unreadable { .. }),
+            "held A renamed to B must not become a HashMismatch for B: {result:?}"
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_asset_file_coherence_unix_availability_rejects_rename_before_unverified() {
+        let directory = unique_test_directory("media-asset-file-coherence-availability-unverified");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        let replacement = directory.join("replacement.bin");
+        fs::write(&path, b"abc").unwrap();
+        let asset = media_asset_file_coherence_test_asset(&path, None, None);
+        let cancel = AtomicBool::new(false);
+        let result =
+            inspect_one_media_asset_availability_before_path_fence(&asset, true, &cancel, || {
+                fs::write(&replacement, b"xyz")
+                    .map_err(|error| format!("unable to create replacement: {error}"))?;
+                fs::rename(&replacement, &path)
+                    .map_err(|error| format!("unable to replace source: {error}"))?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            matches!(result, MediaAssetAvailability::Unreadable { .. }),
+            "held A renamed to B must not become AvailableUnverified: {result:?}"
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_asset_file_coherence_unix_availability_rejects_same_size_restored_mtime_rewrite() {
+        let directory = unique_test_directory("media-asset-file-coherence-availability-ctime");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        fs::write(&path, b"abc").unwrap();
+        let initial_metadata = fs::metadata(&path).unwrap();
+        let original_modified = initial_metadata.modified().unwrap();
+        let initial_fingerprint = local_media_source_fingerprint(&initial_metadata).unwrap();
+        let initial_version = UnixMediaFileVersion::from_metadata(&initial_metadata).unwrap();
+        let asset = media_asset_file_coherence_test_asset(
+            &path,
+            Some(MediaContentHash {
+                algorithm: MediaHashAlgorithm::Sha256,
+                hex: format!("{:x}", Sha256::digest(b"abc")),
+            }),
+            Some(3),
+        );
+        let rewrite_path = path.clone();
+        let cancel = AtomicBool::new(false);
+        let result = inspect_one_media_asset_availability_before_path_fence(
+            &asset,
+            true,
+            &cancel,
+            move || {
+                fs::write(&rewrite_path, b"xyz")
+                    .map_err(|error| format!("unable to rewrite source: {error}"))?;
+                set_test_file_modified_time(&rewrite_path, original_modified);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let current_metadata = fs::metadata(&path).unwrap();
+        let current_fingerprint = local_media_source_fingerprint(&current_metadata).unwrap();
+        assert!(
+            local_media_source_fingerprint_matches(&initial_fingerprint, &current_fingerprint),
+            "test setup must restore the old size/mtime fingerprint"
+        );
+        assert_ne!(
+            UnixMediaFileVersion::from_metadata(&current_metadata).unwrap(),
+            initial_version,
+            "ctime must distinguish an in-place same-size/restored-mtime rewrite"
+        );
+        assert!(
+            matches!(result, MediaAssetAvailability::Unreadable { .. }),
+            "same-inode rewrite must not be reported as AvailableVerified: {result:?}"
+        );
         let _ = fs::remove_dir_all(&directory);
     }
 
@@ -45208,7 +46085,7 @@ mod tests {
             finalize_legacy_media_source_for_relink(&replacement, &identity, &cancel).unwrap();
         #[cfg(windows)]
         assert!(Arc::ptr_eq(&replacement.retained, &legacy.retained));
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         assert_eq!(replacement.path, legacy.path);
         drop(legacy);
         drop(replacement);
