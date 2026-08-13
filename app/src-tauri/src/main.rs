@@ -35204,8 +35204,82 @@ fn get_vj_preview_transport(
 fn stage_vj_preview_layer(
     state: State<'_, AppState>,
     layer_id: VideoLayerId,
+    expected_epoch: Option<u64>,
+    expected_revision: Option<u64>,
+    expected_checkpoint_hash: Option<String>,
 ) -> Result<VjPreviewTransportSummary, String> {
+    let expected_authority = vj_preview_project_authority_expectation(
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    if let Some(expected_authority) = expected_authority {
+        // Project replacement takes the same admission -> coordinator order.
+        // Keep both guards through snapshot selection and staging so C cannot
+        // publish between the exact B check and this runtime-only side effect.
+        let _external_admission = lock_project_external_command_admission(&state)?;
+        let mut coordinator = lock_project_coordinator(&state)?;
+        ensure_no_pending_project_transaction(&coordinator)?;
+        reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
+        return with_exact_vj_preview_project_authority(&coordinator, &expected_authority, || {
+            let snapshot = state.engine.snapshot();
+            stage_vj_preview_layer_from_snapshot(&state, &snapshot, layer_id)
+        });
+    }
+
     let snapshot = state.engine.snapshot();
+    stage_vj_preview_layer_from_snapshot(&state, &snapshot, layer_id)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VjPreviewProjectAuthorityExpectation {
+    epoch: u64,
+    revision: u64,
+    checkpoint_hash: String,
+}
+
+fn vj_preview_project_authority_expectation(
+    expected_epoch: Option<u64>,
+    expected_revision: Option<u64>,
+    expected_checkpoint_hash: Option<String>,
+) -> Result<Option<VjPreviewProjectAuthorityExpectation>, String> {
+    match (expected_epoch, expected_revision, expected_checkpoint_hash) {
+        (None, None, None) => Ok(None),
+        (Some(epoch), Some(revision), Some(checkpoint_hash))
+            if !checkpoint_hash.trim().is_empty() =>
+        {
+            Ok(Some(VjPreviewProjectAuthorityExpectation {
+                epoch,
+                revision,
+                checkpoint_hash,
+            }))
+        }
+        _ => Err(
+            "VJ Preview authority requires epoch, revision, and checkpoint hash together"
+                .to_string(),
+        ),
+    }
+}
+
+fn with_exact_vj_preview_project_authority<T>(
+    coordinator: &ProjectCoordinator,
+    expected: &VjPreviewProjectAuthorityExpectation,
+    stage: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    if coordinator.epoch != expected.epoch
+        || coordinator.revision != expected.revision
+        || coordinator.checkpoint_hash != expected.checkpoint_hash
+    {
+        return Err("Project changed before VJ Preview staging; nothing was staged".to_string());
+    }
+    stage()
+}
+
+fn stage_vj_preview_layer_from_snapshot(
+    state: &State<'_, AppState>,
+    snapshot: &EngineSnapshot,
+    layer_id: VideoLayerId,
+) -> Result<VjPreviewTransportSummary, String> {
     let layer = snapshot
         .video
         .layers
@@ -35224,7 +35298,7 @@ fn stage_vj_preview_layer(
     let summary = transport.stage_at(layer, Instant::now(), vj_preview_timestamp_ms())?;
     drop(transport);
     if reset_renderer {
-        reset_vj_preview_renderer(&state)?;
+        reset_vj_preview_renderer(state)?;
     }
     Ok(summary)
 }
@@ -35709,6 +35783,56 @@ mod vj_preview_transport_tests {
         let mut snapshot = EngineSnapshot::default();
         snapshot.video.layers.push(layer);
         snapshot
+    }
+
+    #[test]
+    fn authoritative_preview_stage_rejects_stale_or_partial_authority_before_effect() {
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.epoch = 4;
+        coordinator.revision = 9;
+        coordinator.checkpoint_hash = "checkpoint-b".to_string();
+        let exact = VjPreviewProjectAuthorityExpectation {
+            epoch: 4,
+            revision: 9,
+            checkpoint_hash: "checkpoint-b".to_string(),
+        };
+        let stale = VjPreviewProjectAuthorityExpectation {
+            epoch: 5,
+            ..exact.clone()
+        };
+        let mut staged = 0_u8;
+
+        let stale_error = with_exact_vj_preview_project_authority(&coordinator, &stale, || {
+            staged += 1;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(staged, 0);
+        assert!(stale_error.contains("nothing was staged"));
+
+        with_exact_vj_preview_project_authority(&coordinator, &exact, || {
+            staged += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(staged, 1);
+
+        assert!(vj_preview_project_authority_expectation(None, None, None)
+            .unwrap()
+            .is_none());
+        assert!(vj_preview_project_authority_expectation(
+            Some(4),
+            Some(9),
+            Some("checkpoint-b".to_string()),
+        )
+        .unwrap()
+        .is_some());
+        assert!(vj_preview_project_authority_expectation(
+            Some(4),
+            None,
+            Some("checkpoint-b".to_string()),
+        )
+        .is_err());
     }
 
     #[test]
