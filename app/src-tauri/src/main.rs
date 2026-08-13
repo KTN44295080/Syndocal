@@ -175,6 +175,14 @@ const STANDBY_SYNC_RETENTION: usize = 5;
 const MIDI_FEEDBACK_REFRESH_INTERVAL: Duration =
     Duration::from_micros(1_000_000 / TELEMETRY_DMX_TARGET_FRAME_RATE_HZ as u64);
 const MEDIA_ASSET_HASH_CHUNK_BYTES: usize = 1024 * 1024;
+/// Disabled-by-default native QA seam. An explicit duration pauses each source
+/// after its first hash chunk while continuing to poll that operation's exact
+/// cancellation flag. Native acceptance uses a one-file operation and can
+/// therefore exercise Cancel or project replacement during a real hash without
+/// filesystem markers or timing luck. Multiple/batch operations all pause
+/// independently; the seam never injects a synthetic per-entry failure.
+const MEDIA_ASSET_QA_HASH_PAUSE_MS_ENV: &str = "SYNDOCAL_QA_MEDIA_HASH_PAUSE_MS";
+const MEDIA_ASSET_QA_HASH_PAUSE_MAX_MS: u64 = 30_000;
 const MAX_LOCAL_MEDIA_ASSET_IMPORT_FILES: usize = 64;
 const MEDIA_ASSET_PREPARED_IMPORT_TTL: Duration = Duration::from_secs(10 * 60);
 /// A reserved-but-not-yet-prepared operation only holds a registry slot (no
@@ -2012,6 +2020,7 @@ fn copy_and_hash_into_snapshot(
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; MEDIA_ASSET_HASH_CHUNK_BYTES];
     let mut copied = 0u64;
+    let mut first_chunk = true;
     let snapshot_path = snapshot.path.clone();
     {
         let file = snapshot
@@ -2032,6 +2041,10 @@ fn copy_and_hash_into_snapshot(
                 .map_err(|error| format!("Unable to write private media snapshot: {error}"))?;
             hasher.update(&buffer[..read]);
             copied += read as u64;
+            if first_chunk {
+                first_chunk = false;
+                maybe_pause_media_asset_hash_for_qa(cancel)?;
+            }
             if cancel.load(Ordering::Acquire) {
                 return Err("Media asset operation was cancelled".to_string());
             }
@@ -2311,17 +2324,56 @@ fn local_media_source_fingerprint_matches(
     expected.byte_size == actual.byte_size && expected.modified == actual.modified
 }
 
+fn wait_at_media_asset_qa_hash_pause(cancel: &AtomicBool, pause: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + pause;
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        if Instant::now() >= deadline {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn media_asset_qa_hash_pause_duration(
+    raw_pause_ms: Option<&OsStr>,
+) -> Result<Option<Duration>, String> {
+    let Some(raw_pause_ms) = raw_pause_ms else {
+        return Ok(None);
+    };
+    let pause_ms = raw_pause_ms
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| (1..=MEDIA_ASSET_QA_HASH_PAUSE_MAX_MS).contains(value))
+        .ok_or_else(|| {
+            format!(
+                "{MEDIA_ASSET_QA_HASH_PAUSE_MS_ENV} must be an integer from 1 through {MEDIA_ASSET_QA_HASH_PAUSE_MAX_MS}"
+            )
+        })?;
+    Ok(Some(Duration::from_millis(pause_ms)))
+}
+
+fn maybe_pause_media_asset_hash_for_qa(cancel: &AtomicBool) -> Result<(), String> {
+    let raw_pause_ms = env::var_os(MEDIA_ASSET_QA_HASH_PAUSE_MS_ENV);
+    let Some(pause) = media_asset_qa_hash_pause_duration(raw_pause_ms.as_deref())? else {
+        return Ok(());
+    };
+    wait_at_media_asset_qa_hash_pause(cancel, pause)
+}
+
 fn stream_sha256_from_open_file(
     file: &mut fs::File,
     cancel: &AtomicBool,
 ) -> Result<MediaContentHash, String> {
-    stream_sha256_from_reader(file, cancel, |_| {})
+    stream_sha256_from_reader(file, cancel, |_| Ok(()))
 }
 
 fn stream_sha256_from_reader(
     reader: &mut impl Read,
     cancel: &AtomicBool,
-    mut after_chunk: impl FnMut(usize),
+    mut after_chunk: impl FnMut(usize) -> Result<(), String>,
 ) -> Result<MediaContentHash, String> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; MEDIA_ASSET_HASH_CHUNK_BYTES];
@@ -2337,7 +2389,7 @@ fn stream_sha256_from_reader(
             break;
         }
         hasher.update(&buffer[..read]);
-        after_chunk(chunk_index);
+        after_chunk(chunk_index)?;
         chunk_index = chunk_index.saturating_add(1);
         if cancel.load(Ordering::Acquire) {
             return Err("Media asset operation was cancelled".to_string());
@@ -2445,7 +2497,12 @@ fn sha256_local_media_file_streaming_before_probe(
             return Err("Media files must not be empty".to_string());
         }
         let guard_identity = windows_media_file_identity(&file)?;
-        let hash = stream_sha256_from_open_file(&mut file, cancel)?;
+        let hash = stream_sha256_from_reader(&mut file, cancel, |chunk_index| {
+            if chunk_index == 0 {
+                maybe_pause_media_asset_hash_for_qa(cancel)?;
+            }
+            Ok(())
+        })?;
         // Hold the original handle across the probe so its A fingerprint is
         // coherent, then rehash the current path. That second byte proof rejects
         // an atomic same-size A→B path replacement even if the original handle
@@ -46315,6 +46372,7 @@ mod tests {
                 if chunk_index == 0 {
                     cancel_between_chunks.store(true, Ordering::Release);
                 }
+                Ok(())
             })
             .unwrap_err();
         assert!(error.contains("cancelled"));
@@ -46324,6 +46382,58 @@ mod tests {
             "cancellation after chunk one must prevent reading chunk two"
         );
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn media_asset_qa_hash_pause_is_cancellable_and_concurrent_without_synthetic_failure() {
+        assert_eq!(media_asset_qa_hash_pause_duration(None).unwrap(), None);
+        assert_eq!(
+            media_asset_qa_hash_pause_duration(Some(OsStr::new("1"))).unwrap(),
+            Some(Duration::from_millis(1))
+        );
+        assert_eq!(
+            media_asset_qa_hash_pause_duration(Some(OsStr::new("30000"))).unwrap(),
+            Some(Duration::from_millis(30_000))
+        );
+        for invalid in ["", "0", "30001", "-1", "not-a-number"] {
+            assert!(media_asset_qa_hash_pause_duration(Some(OsStr::new(invalid))).is_err());
+        }
+
+        let started = Instant::now();
+        wait_at_media_asset_qa_hash_pause(&AtomicBool::new(false), Duration::from_millis(25))
+            .unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(20));
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancelled_thread = {
+            let cancel = Arc::clone(&cancel);
+            std::thread::spawn(move || {
+                wait_at_media_asset_qa_hash_pause(&cancel, Duration::from_secs(2))
+            })
+        };
+        std::thread::sleep(Duration::from_millis(25));
+        cancel.store(true, Ordering::Release);
+        assert!(cancelled_thread
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .contains("cancelled"));
+
+        let concurrent_started = Instant::now();
+        let threads = (0..2)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    wait_at_media_asset_qa_hash_pause(
+                        &AtomicBool::new(false),
+                        Duration::from_millis(30),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        for thread in threads {
+            thread.join().unwrap().unwrap();
+        }
+        assert!(concurrent_started.elapsed() < Duration::from_millis(80));
     }
 
     #[test]
