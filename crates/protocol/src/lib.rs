@@ -1578,14 +1578,16 @@ pub fn normalize_legacy_video_clip_slots(
         })?;
         let slot_id = VideoClipSlotId(next_slot_id);
         let layer = &mut candidate.layers[layer_index];
+        let (in_point_ms, out_point_ms, loop_mode, speed, cue_points) =
+            legacy_video_layer_transport_to_clip_slot(&layer.state, layer.id)?;
         layer.clip_slots.push(VideoClipSlotSummary {
             id: slot_id,
             media_asset_id,
-            in_point_ms: 0,
-            out_point_ms: None,
-            loop_mode: VideoClipLoopMode::Once,
-            speed: default_video_clip_speed(),
-            cue_points: Vec::new(),
+            in_point_ms,
+            out_point_ms,
+            loop_mode,
+            speed,
+            cue_points,
             launch_quantization: VideoClipLaunchQuantization::Immediate,
             effect_overrides: Vec::new(),
         });
@@ -1597,6 +1599,90 @@ pub fn normalize_legacy_video_clip_slots(
     validate_engine_ready_video_clip_slots(&candidate)?;
     *video = candidate;
     Ok(report)
+}
+
+/// Translate the authored portion of the old layer transport into a default
+/// slot. The layer state itself remains untouched because `position_ms` and
+/// `playing` are legacy runtime truth, not new persisted slot state.
+fn legacy_video_layer_transport_to_clip_slot(
+    state: &VideoLayerState,
+    layer_id: VideoLayerId,
+) -> Result<
+    (
+        u64,
+        Option<u64>,
+        VideoClipLoopMode,
+        f32,
+        Vec<VideoClipCuePointSummary>,
+    ),
+    String,
+> {
+    if !state.speed.is_finite() || !(-4.0..=4.0).contains(&state.speed) {
+        return Err(format!(
+            "Video layer {layer_id} has legacy speed outside finite -4.0..=4.0"
+        ));
+    }
+    let (in_point_ms, out_point_ms, loop_mode) = if state.loop_enabled {
+        if state.loop_end_ms == 0 || state.loop_start_ms >= state.loop_end_ms {
+            return Err(format!(
+                "Video layer {layer_id} has invalid legacy loop bounds"
+            ));
+        }
+        (
+            state.loop_start_ms,
+            Some(state.loop_end_ms),
+            VideoClipLoopMode::Loop,
+        )
+    } else {
+        (0, None, VideoClipLoopMode::Once)
+    };
+
+    let named_positions: Vec<u64> = state
+        .cue_points
+        .iter()
+        .map(|cue_point| cue_point.position_ms)
+        .collect();
+    if !state.cue_points.is_empty()
+        && !state.cue_points_ms.is_empty()
+        && named_positions != state.cue_points_ms
+    {
+        return Err(format!(
+            "Video layer {layer_id} has disagreeing legacy cue point positions"
+        ));
+    }
+    let cue_points: Vec<VideoClipCuePointSummary> = if !state.cue_points.is_empty() {
+        state
+            .cue_points
+            .iter()
+            .map(|cue_point| VideoClipCuePointSummary {
+                position_ms: cue_point.position_ms,
+                // Legacy labels have no canonicalization contract. Normalizing
+                // their surrounding whitespace here makes the new persisted
+                // slot names canonical; blank/colliding labels still fail the
+                // same candidate before commit.
+                name: cue_point.label.trim().to_string(),
+            })
+            .collect()
+    } else {
+        state
+            .cue_points_ms
+            .iter()
+            .enumerate()
+            .map(|(index, position_ms)| VideoClipCuePointSummary {
+                position_ms: *position_ms,
+                name: format!("Cue {}", index + 1),
+            })
+            .collect()
+    };
+    validate_video_clip_cue_points(layer_id, in_point_ms, out_point_ms, &cue_points)?;
+
+    Ok((
+        in_point_ms,
+        out_point_ms,
+        loop_mode,
+        state.speed,
+        cue_points,
+    ))
 }
 
 fn validate_video_media_asset_catalog(
@@ -1695,8 +1781,6 @@ fn validate_video_clip_slots(
             .default_clip_slot_id
             .ok_or_else(|| format!("Video layer {} is missing its default clip slot", layer.id))?;
         let mut default_slot = None;
-        let mut cue_names = BTreeMap::new();
-        let mut cue_positions = BTreeMap::new();
         let mut override_identities = BTreeMap::new();
 
         for slot in &layer.clip_slots {
@@ -1730,34 +1814,12 @@ fn validate_video_clip_slots(
                 ));
             }
 
-            cue_names.clear();
-            cue_positions.clear();
-            for cue_point in &slot.cue_points {
-                let name = cue_point.name.trim();
-                if name.is_empty() {
-                    return Err(format!(
-                        "Video clip slot {} on layer {} has an unnamed cue point",
-                        slot.id.0, layer.id
-                    ));
-                }
-                if cue_names.insert(name, ()).is_some() {
-                    return Err(format!(
-                        "Video clip slot {} on layer {} has duplicate cue point name {name:?}",
-                        slot.id.0, layer.id
-                    ));
-                }
-                if cue_positions.insert(cue_point.position_ms, ()).is_some()
-                    || cue_point.position_ms < slot.in_point_ms
-                    || slot
-                        .out_point_ms
-                        .is_some_and(|out| cue_point.position_ms >= out)
-                {
-                    return Err(format!(
-                        "Video clip slot {} on layer {} has an invalid cue point",
-                        slot.id.0, layer.id
-                    ));
-                }
-            }
+            validate_video_clip_cue_points(
+                layer.id,
+                slot.in_point_ms,
+                slot.out_point_ms,
+                &slot.cue_points,
+            )?;
 
             override_identities.clear();
             for effect_override in &slot.effect_overrides {
@@ -1796,6 +1858,38 @@ fn validate_video_clip_slots(
             return Err(format!(
                 "Video layer {} media asset projection does not match its default clip slot",
                 layer.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_video_clip_cue_points(
+    layer_id: VideoLayerId,
+    in_point_ms: u64,
+    out_point_ms: Option<u64>,
+    cue_points: &[VideoClipCuePointSummary],
+) -> Result<(), String> {
+    let mut cue_names = BTreeMap::new();
+    let mut cue_positions = BTreeMap::new();
+    for cue_point in cue_points {
+        let name = cue_point.name.as_str();
+        if name.is_empty() || name.trim() != name {
+            return Err(format!(
+                "Video layer {layer_id} has an unnamed or non-canonical clip cue point"
+            ));
+        }
+        if cue_names.insert(name, ()).is_some() {
+            return Err(format!(
+                "Video layer {layer_id} has duplicate clip cue point name {name:?}"
+            ));
+        }
+        if cue_positions.insert(cue_point.position_ms, ()).is_some()
+            || cue_point.position_ms < in_point_ms
+            || out_point_ms.is_some_and(|out| cue_point.position_ms >= out)
+        {
+            return Err(format!(
+                "Video layer {layer_id} has an invalid clip cue point"
             ));
         }
     }
@@ -6100,8 +6194,13 @@ mod tests {
         assert_eq!(layer.default_clip_slot_id, Some(super::VideoClipSlotId(6)));
         assert_eq!(layer.clip_slots.len(), 1);
         assert_eq!(layer.clip_slots[0].media_asset_id, 5);
-        assert_eq!(layer.clip_slots[0].in_point_ms, 0);
-        assert_eq!(layer.clip_slots[0].out_point_ms, None);
+        assert_eq!(layer.clip_slots[0].in_point_ms, 100);
+        assert_eq!(layer.clip_slots[0].out_point_ms, Some(900));
+        assert_eq!(
+            layer.clip_slots[0].loop_mode,
+            super::VideoClipLoopMode::Loop
+        );
+        assert_eq!(layer.clip_slots[0].speed, 1.25);
         assert_eq!(video.compositions[0].layer_ids, vec![4]);
         super::validate_engine_ready_video_clip_slots(&video).unwrap();
     }
@@ -6149,6 +6248,161 @@ mod tests {
         let before = invalid.clone();
         assert!(super::normalize_legacy_video_clip_slots(&mut invalid).is_err());
         assert_eq!(invalid, before);
+    }
+
+    #[test]
+    fn video_clip_slot_migration_preserves_legacy_transport_semantics_across_json() {
+        let mut layer = media_asset_test_layer(4, "Legacy Transport", "C:/show/transport.mp4");
+        layer.media_asset_id = Some(10);
+        layer.state.speed = -1.5;
+        layer.state.loop_enabled = true;
+        layer.state.loop_start_ms = 120;
+        layer.state.loop_end_ms = 840;
+        layer.state.position_ms = 777;
+        layer.state.playing = true;
+        layer.state.cue_points = vec![
+            super::VideoCuePointSummary {
+                position_ms: 200,
+                label: " Intro ".to_string(),
+                color: Some("#00ff00".to_string()),
+            },
+            super::VideoCuePointSummary {
+                position_ms: 600,
+                label: "Break".to_string(),
+                color: None,
+            },
+        ];
+        layer.state.cue_points_ms = vec![200, 600];
+        let legacy_state = layer.state.clone();
+        let mut video = super::VideoSnapshot {
+            layers: vec![layer],
+            media_assets: vec![media_asset_test_asset(
+                10,
+                "Transport",
+                "C:/show/transport.mp4",
+            )],
+            ..super::VideoSnapshot::default()
+        };
+
+        super::normalize_legacy_video_clip_slots(&mut video).unwrap();
+        let migrated = &video.layers[0];
+        assert_eq!(migrated.state, legacy_state);
+        let slot = &migrated.clip_slots[0];
+        assert_eq!(slot.speed, -1.5);
+        assert_eq!(slot.loop_mode, super::VideoClipLoopMode::Loop);
+        assert_eq!(slot.in_point_ms, 120);
+        assert_eq!(slot.out_point_ms, Some(840));
+        assert_eq!(
+            slot.cue_points,
+            vec![
+                super::VideoClipCuePointSummary {
+                    position_ms: 200,
+                    name: "Intro".to_string(),
+                },
+                super::VideoClipCuePointSummary {
+                    position_ms: 600,
+                    name: "Break".to_string(),
+                },
+            ]
+        );
+        let encoded = serde_json::to_vec(&video).unwrap();
+        let decoded: super::VideoSnapshot = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, video);
+
+        let mut numeric_only = decoded.clone();
+        numeric_only.layers[0].clip_slots.clear();
+        numeric_only.layers[0].default_clip_slot_id = None;
+        numeric_only.layers[0].state.loop_enabled = false;
+        numeric_only.layers[0].state.cue_points.clear();
+        numeric_only.layers[0].state.cue_points_ms = vec![1, 2];
+        super::normalize_legacy_video_clip_slots(&mut numeric_only).unwrap();
+        assert_eq!(
+            numeric_only.layers[0].clip_slots[0].loop_mode,
+            super::VideoClipLoopMode::Once
+        );
+        assert_eq!(numeric_only.layers[0].clip_slots[0].in_point_ms, 0);
+        assert_eq!(numeric_only.layers[0].clip_slots[0].out_point_ms, None);
+        assert_eq!(
+            numeric_only.layers[0].clip_slots[0].cue_points,
+            vec![
+                super::VideoClipCuePointSummary {
+                    position_ms: 1,
+                    name: "Cue 1".to_string(),
+                },
+                super::VideoClipCuePointSummary {
+                    position_ms: 2,
+                    name: "Cue 2".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn video_clip_slot_migration_rejects_invalid_legacy_transport_atomically() {
+        let base = || {
+            let mut layer = media_asset_test_layer(1, "Legacy", "C:/show/a.mp4");
+            layer.media_asset_id = Some(10);
+            super::VideoSnapshot {
+                layers: vec![layer],
+                media_assets: vec![media_asset_test_asset(10, "A", "C:/show/a.mp4")],
+                ..super::VideoSnapshot::default()
+            }
+        };
+        let mut cases = Vec::new();
+
+        let mut invalid_loop = base();
+        invalid_loop.layers[0].state.loop_enabled = true;
+        invalid_loop.layers[0].state.loop_start_ms = 100;
+        invalid_loop.layers[0].state.loop_end_ms = 100;
+        cases.push(invalid_loop);
+
+        let mut zero_loop_end = base();
+        zero_loop_end.layers[0].state.loop_enabled = true;
+        zero_loop_end.layers[0].state.loop_start_ms = 0;
+        zero_loop_end.layers[0].state.loop_end_ms = 0;
+        cases.push(zero_loop_end);
+
+        let mut invalid_speed = base();
+        invalid_speed.layers[0].state.speed = f32::INFINITY;
+        cases.push(invalid_speed);
+
+        let mut disagreeing_cues = base();
+        disagreeing_cues.layers[0].state.cue_points = vec![super::VideoCuePointSummary {
+            position_ms: 10,
+            label: "Ten".to_string(),
+            color: None,
+        }];
+        disagreeing_cues.layers[0].state.cue_points_ms = vec![11];
+        cases.push(disagreeing_cues);
+
+        let mut invalid_named_cue = base();
+        invalid_named_cue.layers[0].state.cue_points = vec![super::VideoCuePointSummary {
+            position_ms: 10,
+            label: "   ".to_string(),
+            color: None,
+        }];
+        cases.push(invalid_named_cue);
+
+        let mut duplicate_trimmed_names = base();
+        duplicate_trimmed_names.layers[0].state.cue_points = vec![
+            super::VideoCuePointSummary {
+                position_ms: 10,
+                label: "Cue".to_string(),
+                color: None,
+            },
+            super::VideoCuePointSummary {
+                position_ms: 20,
+                label: " Cue ".to_string(),
+                color: None,
+            },
+        ];
+        cases.push(duplicate_trimmed_names);
+
+        for mut invalid in cases {
+            let before = invalid.clone();
+            assert!(super::normalize_legacy_video_clip_slots(&mut invalid).is_err());
+            assert_eq!(invalid, before);
+        }
     }
 
     #[test]
