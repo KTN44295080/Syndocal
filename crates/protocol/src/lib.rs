@@ -5346,6 +5346,12 @@ pub struct EngineSnapshot {
     pub programmer: ProgrammerSnapshot,
     pub timeline: TimelineSnapshot,
     pub video: VideoSnapshot,
+    /// Runtime-only Clip Slot transport truth published atomically with the
+    /// rendered engine image. This field is deliberately excluded in both
+    /// serialization directions: project files cannot persist or inject
+    /// active, queued, pending, or playhead state.
+    #[serde(skip, default)]
+    pub video_clip_runtime: VideoClipRuntimeSnapshot,
     /// Raw authored layer state before ephemeral Effect/Node Graph modulation.
     /// Project and cue writers consume this value, then strip it from persisted data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5393,6 +5399,7 @@ impl Default for EngineSnapshot {
             programmer: ProgrammerSnapshot::default(),
             timeline: TimelineSnapshot::default(),
             video: VideoSnapshot::default(),
+            video_clip_runtime: VideoClipRuntimeSnapshot::default(),
             authored_video: None,
             effects: Vec::new(),
             node_graphs: Vec::new(),
@@ -6460,8 +6467,14 @@ mod tests {
             );
         }
 
-        let authored_json = serde_json::to_string(&clip_slot_runtime_test_video()).unwrap();
-        let engine_json = serde_json::to_string(&super::EngineSnapshot::default()).unwrap();
+        let authored_json = serde_json::to_value(clip_slot_runtime_test_video()).unwrap();
+        let mut engine = super::EngineSnapshot::default();
+        engine.video_clip_runtime = runtime.clone();
+        let engine_clone = engine.clone();
+        assert_eq!(engine_clone.video_clip_runtime, runtime);
+        let engine_json = serde_json::to_value(&engine).unwrap();
+        assert!(engine_json.get("video_clip_runtime").is_none());
+        assert!(authored_json.get("video_clip_runtime").is_none());
         for runtime_field in [
             "active_slot_id",
             "queued_slot_id",
@@ -6469,9 +6482,21 @@ mod tests {
             "playhead_ms",
             "ping_pong_reverse",
         ] {
-            assert!(!authored_json.contains(runtime_field));
-            assert!(!engine_json.contains(runtime_field));
+            assert!(!authored_json.to_string().contains(runtime_field));
+            assert!(!engine_json.to_string().contains(runtime_field));
         }
+
+        let mut injected_engine_json = engine_json;
+        injected_engine_json.as_object_mut().unwrap().insert(
+            "video_clip_runtime".to_string(),
+            serde_json::to_value(&runtime).unwrap(),
+        );
+        let decoded_engine: super::EngineSnapshot =
+            serde_json::from_value(injected_engine_json).unwrap();
+        assert_eq!(
+            decoded_engine.video_clip_runtime,
+            super::VideoClipRuntimeSnapshot::default()
+        );
     }
 
     #[test]
