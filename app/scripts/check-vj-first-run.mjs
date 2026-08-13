@@ -1,5 +1,28 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import ts from "typescript";
+
+function balancedSourceBlock(source, start, label) {
+  const open = source.indexOf("{", start);
+  assert.ok(open >= start, `${label} opening brace is missing`);
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  assert.fail(`${label} closing brace is missing`);
+}
+
+async function importTsSource(source, fileName) {
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    fileName,
+  });
+  return import(`data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`);
+}
 
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
@@ -12,6 +35,12 @@ const workflowStart = app.indexOf("const createFirstRunVjShow = async () => {");
 const workflowEnd = app.indexOf("const videoThumbnailSourceSignature", workflowStart);
 assert.ok(workflowStart >= 0 && workflowEnd > workflowStart, "first-run VJ workflow is missing");
 const workflow = app.slice(workflowStart, workflowEnd);
+const firstRunLeaseStart = app.indexOf("export function createVjFirstRunOperationLease()");
+assert.ok(firstRunLeaseStart >= 0, "first-run operation lease is missing from the production App");
+const firstRunLease = await importTsSource(
+  balancedSourceBlock(app, firstRunLeaseStart, "first-run operation lease"),
+  "App.first-run-operation-lease.ts",
+);
 assert.ok(
   workflow.indexOf("preflightAndBeginMediaAssetOperation") < workflow.indexOf('"select_video_source_files"'),
   "first-run must flush mappings and only then register its AbortController before the picker",
@@ -19,6 +48,16 @@ assert.ok(
 assert.ok(
   workflow.indexOf('"select_video_source_files"') < workflow.indexOf("prepareFinalizeAndCommitMediaAssets"),
   "first-run selection must happen before handing the batch to staged preparation",
+);
+assert.ok(
+  workflow.includes('() => beginMediaAssetOperation("Set up first VJ show", "picker")'),
+  "first-run picker exposes a cancellable active Media operation before opening the dialog",
+);
+assert.ok(workflow.includes("onPhase: mediaOperation.setPhase"), "first-run publishes truthful prepare/hash/finalize/commit phases");
+assert.match(workflow, /onReport: \(report\) => \{[\s\S]*?isProjectAuthorityIdentityCurrent[\s\S]*?setLastMediaAssetImportReport\(report\)/, "mixed first-run Prepare truth reaches the per-entry UI only while its exact E\/R\/H remains current");
+assert.ok(
+  workflow.indexOf("if (!terminalIsCurrent()) return;") < workflow.indexOf("setLastMediaAssetImportReport(staged.report)"),
+  "first-run cannot republish a completed B report after project C replaced its authority",
 );
 const startMediaAssetOperation = mediaAuthority.indexOf('"start_media_asset_operation"');
 const prepareReservedMediaAssets = mediaAuthority.indexOf('"prepare_reserved_media_assets"');
@@ -32,6 +71,19 @@ assert.ok(
   "first-run reserves, prepares, and finalizes before its one authoritative project mutation",
 );
 assert.ok(workflow.includes("if (vjFirstRunBusy()) return;"), "double activation must be ignored");
+assert.ok(workflow.includes("const firstRunLease = vjFirstRunOperationLease.begin();"), "each first-run operation owns a monotonic busy lease");
+assert.ok(workflow.includes("vjFirstRunOperationLease.isCurrent(firstRunLease)"), "only the owning first-run finally may clear busy");
+assert.ok(workflow.includes("setVjFirstRunAwaitingSyncForLease(firstRunLease, true)"), "only the owning first-run operation may enter awaiting-sync");
+assert.ok(
+  !workflow.includes("setVjFirstRunAwaitingSync(false)")
+    && (workflow.match(/setVjFirstRunAwaitingSyncForLease\(firstRunLease, false\)/g) ?? []).length >= 4,
+  "every post-commit refresh/Preview exit clears awaiting-sync through the initiating first-run lease",
+);
+assert.match(
+  app,
+  /resetMediaAssetUiForProjectReplacement[\s\S]*?vjFirstRunOperationLease\.reset\(\)[\s\S]*?vjFirstRunAwaitingSyncLease = null;[\s\S]*?setVjFirstRunBusy\(false\)[\s\S]*?setVjFirstRunAwaitingSync\(false\)/,
+  "project replacement revokes first-run leases before clearing busy and awaiting-sync UI",
+);
 assert.ok(workflow.includes("if (paths.length === 0)"), "cancel must return before setup mutation");
 assert.ok(workflow.includes("if (!refreshed)"), "post-commit snapshot refresh failure must be reconciled separately");
 assert.ok(
@@ -129,5 +181,35 @@ assert.ok(liveMonitors.includes("props.onSetPreviewPlaying"));
 assert.ok(liveMonitors.includes("props.onSeekPreview"));
 assert.ok(liveMonitors.includes("props.onSetPreviewSpeed"));
 assert.ok(liveMonitors.includes("props.onClearPreview"));
+
+// Execute the production lease rather than a parallel state model. A same-show
+// Abort keeps its lease current, so finally clears busy; reset revokes A before
+// C begins, and A's delayed finally cannot clear C's busy state.
+{
+  const lease = firstRunLease.createVjFirstRunOperationLease();
+  const sameProjectAbort = lease.begin();
+  assert.equal(lease.isCurrent(sameProjectAbort), true, "a same-project abort owns its finally and clears busy");
+  const oldA = lease.begin();
+  lease.reset();
+  const newC = lease.begin();
+  assert.equal(lease.isCurrent(oldA), false, "replacement reset revokes the old first-run finally");
+  assert.equal(lease.isCurrent(newC), true, "the new project run owns its busy state after replacement");
+
+  let awaitingSync = false;
+  const setAwaitingForLease = (owner, value) => lease.applyIfCurrent(owner, () => {
+    awaitingSync = value;
+  });
+  // Old A reaches its post-commit refresh after reset/C has started. Its clear
+  // is a no-op, while C can clear its own awaiting state. A's delayed finally
+  // is similarly unable to clear a later C awaiting state.
+  setAwaitingForLease(newC, true);
+  setAwaitingForLease(oldA, false);
+  assert.equal(awaitingSync, true, "old A refresh/Preview completion cannot clear C awaiting-sync");
+  setAwaitingForLease(newC, false);
+  assert.equal(awaitingSync, false, "the current C run can clear its own awaiting-sync");
+  setAwaitingForLease(newC, true);
+  setAwaitingForLease(oldA, false);
+  assert.equal(awaitingSync, true, "old A finally cannot clear a later C awaiting-sync state");
+}
 
 console.log("safe first-run VJ workflow and independent Preview transport ok");

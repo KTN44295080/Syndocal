@@ -195,9 +195,9 @@ const setupTabs = [
   { area: "I/O", tab: null, id: "io" },
 ];
 const controlTabs = [
-  { id: "edit", label: "Live Edit" },
+  { id: "edit", label: "Lighting" },
   { id: "live", label: "Timeline" },
-  { id: "mixer", label: "VJ Desk" },
+  { id: "mixer", label: "Video" },
 ];
 const viewportRecentProjects = [
   "C:/shows/front-room.sdc",
@@ -2001,6 +2001,18 @@ async function clickVisibleSelector(client, selector) {
   }
 }
 
+const workspaceOptionSelector = (workspace) => `[data-workspace-option="${workspace}"]`;
+const controlModeOptionSelector = (mode) =>
+  `[data-edit-domain-navigation] [data-control-mode-option="${mode}"]`;
+
+async function clickWorkspaceOption(client, workspace) {
+  await clickVisibleSelector(client, workspaceOptionSelector(workspace));
+}
+
+async function clickControlModeOption(client, mode) {
+  await clickVisibleSelector(client, controlModeOptionSelector(mode));
+}
+
 async function selectVisibleOption(client, selector, value) {
   const selected = await client.evaluate(`(() => {
     const wanted = ${JSON.stringify(value)};
@@ -2093,18 +2105,24 @@ async function readTimelineRulerBounds(client) {
 }
 
 async function checkWorkspaceLayoutPersistence(client) {
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Playback");
   await sleep(100);
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
   const restored = await client.evaluate(`(() => ({
-    workspace: (document.querySelector('.workspaceTabs button.active')?.textContent || '').trim(),
-    controlMode: (document.querySelector('.controlModeTabs button.active')?.textContent || '').trim(),
+    workspace: document.querySelector('[data-workspace-option][aria-pressed="true"]')?.getAttribute('data-workspace-option') || '',
+    workspaceLabel: (document.querySelector('[data-workspace-option][aria-pressed="true"]')?.textContent || '').trim(),
+    controlMode: document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '',
+    controlModeLabel: (document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.textContent || '').trim(),
     desk: document.querySelector('.timelineDeskTabs button.active')?.getAttribute('data-timeline-desk-surface') || '',
   }))()`);
-  if (restored.workspace !== "Control" || restored.controlMode !== "Timeline" || restored.desk !== "playback") {
+  if (
+    restored.workspace !== "control" || restored.workspaceLabel !== "Edit" ||
+    restored.controlMode !== "live" || restored.controlModeLabel !== "Timeline" ||
+    restored.desk !== "playback"
+  ) {
     throw new Error(`Workspace layout did not restore: ${JSON.stringify(restored)}`);
   }
 
@@ -2114,13 +2132,15 @@ async function checkWorkspaceLayoutPersistence(client) {
   const reset = await client.evaluate(`(() => {
     const stored = JSON.parse(window.localStorage.getItem('syndocal.workspaceLayout.v1') || '{}');
     return {
-      workspace: (document.querySelector('.workspaceTabs button.active')?.textContent || '').trim(),
+      workspace: document.querySelector('[data-workspace-option][aria-pressed="true"]')?.getAttribute('data-workspace-option') || '',
+      workspaceLabel: (document.querySelector('[data-workspace-option][aria-pressed="true"]')?.textContent || '').trim(),
       setupTab: (document.querySelector('.setupModeTabs button.active')?.textContent || '').trim(),
       stored,
     };
   })()`);
   if (
-    reset.workspace !== "Setup" ||
+    reset.workspace !== "setup" ||
+    reset.workspaceLabel !== "Setup" ||
     reset.setupTab !== "Patch" ||
     reset.stored.workspace_tab !== "setup" ||
     reset.stored.setup_sub_tab !== "patch" ||
@@ -2133,8 +2153,7 @@ async function checkWorkspaceLayoutPersistence(client) {
 
 async function checkKeyboardNavigation(client) {
   const firstWorkspaceFocus = await client.evaluate(`(() => {
-    const button = [...document.querySelectorAll('.workspaceTabs button')]
-      .find((candidate) => (candidate.textContent || '').trim() === 'Setup');
+    const button = document.querySelector('[data-workspace-option="setup"]');
     button?.focus();
     return (document.activeElement?.textContent || '').trim();
   })()`);
@@ -2144,6 +2163,7 @@ async function checkKeyboardNavigation(client) {
     const style = active ? getComputedStyle(active) : null;
     return {
       label: (active?.textContent || '').trim(),
+      workspace: active?.getAttribute('data-workspace-option') ?? '',
       outlineStyle: style?.outlineStyle ?? '',
       outlineWidth: Number.parseFloat(style?.outlineWidth ?? '0'),
     };
@@ -2185,33 +2205,73 @@ async function checkKeyboardNavigation(client) {
       return !element.disabled && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
     const input = [...document.querySelectorAll('.layoutControl input:not([type="checkbox"]), .layoutControl select')].find(visible);
-    const activeModeBefore = (document.querySelector('.controlModeTabs button.active')?.textContent || '').trim();
+    const activeModeBefore = document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '';
     input?.focus();
     input?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, code: 'KeyL', key: 'l' }));
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
-    const activeModeAfter = (document.querySelector('.controlModeTabs button.active')?.textContent || '').trim();
+    const activeModeAfter = document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '';
     return {
       found: Boolean(input),
-      modePreserved: activeModeBefore === 'Live Edit' && activeModeAfter === activeModeBefore,
+      modePreserved: activeModeBefore === 'edit' && activeModeAfter === activeModeBefore,
     };
   })()`);
+
+  await client.evaluate("document.activeElement?.blur()");
+  await pressKey(client, "KeyL", "l");
+  await sleep(60);
+  const modeAfterL = await client.evaluate(
+    "document.querySelector('[data-control-mode-option][aria-pressed=\"true\"]')?.getAttribute('data-control-mode-option') || ''",
+  );
+  await pressKey(client, "KeyM", "m");
+  await sleep(60);
+  const modeAfterM = await client.evaluate(
+    "document.querySelector('[data-control-mode-option][aria-pressed=\"true\"]')?.getAttribute('data-control-mode-option') || ''",
+  );
+  await pressKey(client, "KeyE", "e");
+  await sleep(60);
+  const modeAfterE = await client.evaluate(
+    "document.querySelector('[data-control-mode-option][aria-pressed=\"true\"]')?.getAttribute('data-control-mode-option') || ''",
+  );
+  await pressKey(client, "F3");
+  await sleep(60);
+  const workspaceAfterF3 = await client.evaluate(
+    "document.querySelector('[data-workspace-option][aria-pressed=\"true\"]')?.getAttribute('data-workspace-option') || ''",
+  );
+  await pressKey(client, "F1");
+  await sleep(60);
+  const workspaceAfterF1 = await client.evaluate(
+    "document.querySelector('[data-workspace-option][aria-pressed=\"true\"]')?.getAttribute('data-workspace-option') || ''",
+  );
+  await pressKey(client, "F2");
+  await sleep(60);
+  const workspaceAfterF2 = await client.evaluate(
+    "document.querySelector('[data-workspace-option][aria-pressed=\"true\"]')?.getAttribute('data-workspace-option') || ''",
+  );
 
   const result = {
     firstWorkspaceFocus,
     tabOrder,
     setupEditableGuard,
     controlEditableGuard,
+    shortcutNavigation: { modeAfterE, modeAfterL, modeAfterM, workspaceAfterF1, workspaceAfterF2, workspaceAfterF3 },
   };
   result.passed =
     firstWorkspaceFocus === "Setup" &&
-    tabOrder.label === "Control" &&
+    tabOrder.label === "Edit" &&
+    tabOrder.workspace === "control" &&
     tabOrder.outlineStyle !== "none" &&
     tabOrder.outlineWidth >= 1 &&
     setupEditableGuard.found &&
     setupEditableGuard.setupModePreserved &&
     setupEditableGuard.mappingToolPreserved &&
     controlEditableGuard.found &&
-    controlEditableGuard.modePreserved;
+    controlEditableGuard.modePreserved &&
+    modeAfterL === "live" &&
+    modeAfterM === "mixer" &&
+    modeAfterE === "edit" &&
+    workspaceAfterF3 === "touch" &&
+    workspaceAfterF1 === "setup" &&
+    workspaceAfterF2 === "control";
   await client.evaluate(`(() => {
     window.__syndocalKeyboardNavigationCheck = ${JSON.stringify(result)};
   })()`);
@@ -2383,7 +2443,7 @@ async function measureTimelinePaneExpansionState(client) {
       ? [...windowControls.querySelectorAll(':scope > [data-window-control]')].filter(isVisible)
       : [];
     const controlContextHeader = [...document.querySelectorAll('[data-control-context-header]')].find(isVisible);
-    const controlModeSegment = controlContextHeader?.querySelector('[data-control-mode-segment]') ?? null;
+    const editDomainNavigation = [...document.querySelectorAll('[data-edit-domain-navigation]')].find(isVisible) ?? null;
     const controlContextFaders = [...document.querySelectorAll('.controlContextPane > .faders')].find(isVisible);
     const timelineOperatorBar = [...document.querySelectorAll('[data-timeline-operator-bar]')].find(isVisible);
     const timelineOperatorControls = controlContextHeader
@@ -2408,7 +2468,7 @@ async function measureTimelinePaneExpansionState(client) {
     const topbarTapRect = measuredRect('[data-topbar-tap]');
     const windowControlsRect = measuredRect('[data-window-controls]');
     const controlContextHeaderRect = measuredRect('[data-control-context-header]');
-    const controlModeSegmentRect = measuredRect('[data-control-context-header] > [data-control-mode-segment]');
+    const editDomainNavigationRect = measuredRect('[data-edit-domain-navigation]');
     const controlContextFadersRect = measuredRect('.controlContextPane > .faders');
     const requiredTopbarDragRegionSelectors = [
       ':scope',
@@ -2557,19 +2617,25 @@ async function measureTimelinePaneExpansionState(client) {
         topbarMasterClusterContained: rectContained(topbarMasterClusterRect, topbarRect),
         topbarTapContained: rectContained(topbarTapRect, topbarRect),
         controlBreadcrumbRowCount: document.querySelectorAll('.controlWorkspaceHeader').length,
-        chromeControlModeRowCount: document.querySelectorAll('.workspaceChrome > .controlModeTabs').length,
+        chromeEditDomainNavigationCount: document.querySelectorAll('.workspaceChrome > [data-edit-domain-navigation]').length,
+        visibleChromeEditDomainNavigationCount: [...document.querySelectorAll('.workspaceChrome > [data-edit-domain-navigation]')].filter(isVisible).length,
+        editDomainNavigationDirectlyAfterTopbar: editDomainNavigation?.previousElementSibling?.classList.contains('topbar') ?? false,
+        editDomainNavigationRect,
+        editDomainModeIds: [...(editDomainNavigation?.querySelectorAll('[data-control-mode-option]') ?? [])]
+          .map((button) => button.getAttribute('data-control-mode-option')),
+        editDomainModeLabels: [...(editDomainNavigation?.querySelectorAll('[data-control-mode-option]') ?? [])]
+          .map((button) => (button.textContent || '').trim()),
+        oldLowerControlModeNavigationCount: document.querySelectorAll(
+          '[data-control-context-header] [data-control-mode-segment], [data-control-context-header] [data-control-mode-option]'
+        ).length,
         liveMasterRowCount: document.querySelectorAll('.liveControlPanel > .liveMasterGrid').length,
         liveBpmInputCount: document.querySelectorAll('.liveControlPanel input[type="number"]').length,
         directContextModeRowCount: document.querySelectorAll('.controlContextPane > .contextModeTabs').length,
         controlContextHeaderRect,
-        controlModeSegmentRect,
         controlContextFadersRect,
-        controlModeSegmentCount: controlContextHeader?.querySelectorAll(':scope > [data-control-mode-segment]').length ?? 0,
-        controlModeButtonCount: controlModeSegment?.querySelectorAll('button').length ?? 0,
-        controlModeSemanticButtonCount: controlModeSegment?.querySelectorAll('[data-control-mode-option]').length ?? 0,
-        controlModeSemanticButtonWidths: [...(controlModeSegment?.querySelectorAll('[data-control-mode-option]') ?? [])]
+        editDomainButtonCount: editDomainNavigation?.querySelectorAll('[data-control-mode-option]').length ?? 0,
+        editDomainButtonWidths: [...(editDomainNavigation?.querySelectorAll('[data-control-mode-option]') ?? [])]
           .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
-        controlModeSegmentContained: rectContained(controlModeSegmentRect, controlContextHeaderRect),
         contextBodyFollowsSharedHeader: Boolean(
           controlContextHeaderRect &&
           controlContextFadersRect &&
@@ -2606,8 +2672,8 @@ async function measureTimelinePaneExpansionState(client) {
 }
 
 async function runTimelinePaneExpansionCheck(client, viewport) {
-  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
-  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await clickWorkspaceOption(client, 'control');
+  await clickControlModeOption(client, 'live');
   await sleep(120);
   const before = await measureTimelinePaneExpansionState(client);
   const mixerDisclosureOpened = await client.evaluate(`(() => {
@@ -2721,17 +2787,17 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     normalDensity.topbarTapRect?.height >= 40 &&
     normalDensity.liveBpmInputCount === 0
   );
-  const contextModeSegmentSharesHeader = Boolean(
+  const chromeEditDomainNavigationIsCanonical = Boolean(
     normalDensity.directContextModeRowCount === 0 &&
-    normalDensity.controlContextHeaderRect &&
-    normalDensity.controlContextHeaderRect.height <= 36 &&
-    normalDensity.controlModeSegmentCount === 1 &&
-    normalDensity.controlModeButtonCount >= 5 &&
-    normalDensity.controlModeSemanticButtonCount === 3 &&
-    normalDensity.controlModeSemanticButtonWidths.length === 3 &&
-    normalDensity.controlModeSemanticButtonWidths.every((width) => width > 0 && width <= 86) &&
-    normalDensity.controlModeSegmentContained &&
-    normalDensity.contextBodyFollowsSharedHeader
+    normalDensity.chromeEditDomainNavigationCount === 1 &&
+    normalDensity.visibleChromeEditDomainNavigationCount === 1 &&
+    normalDensity.editDomainNavigationDirectlyAfterTopbar &&
+    normalDensity.oldLowerControlModeNavigationCount === 0 &&
+    JSON.stringify(normalDensity.editDomainModeIds) === JSON.stringify(['edit', 'live', 'mixer']) &&
+    JSON.stringify(normalDensity.editDomainModeLabels) === JSON.stringify(['Lighting', 'Timeline', 'Video']) &&
+    normalDensity.editDomainButtonCount === 3 &&
+    normalDensity.editDomainButtonWidths.length === 3 &&
+    normalDensity.editDomainButtonWidths.every((width) => width > 0)
   );
   const splitterAriaMatchesRendered = (state) => Boolean(
     state &&
@@ -2772,12 +2838,14 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
       normalDensity.windowControlsRect?.height === 40 &&
       normalDensity.windowControlCenterSpread <= 1
     )],
-    ['t25ControlBreadcrumbRowRemoved', () => Boolean(
+    ['t25ChromeSecondaryNavigationIsUniqueInEdit', () => Boolean(
       normalDensity.controlBreadcrumbRowCount === 0 &&
-      normalDensity.chromeControlModeRowCount === 0
+      normalDensity.chromeEditDomainNavigationCount === 1 &&
+      normalDensity.visibleChromeEditDomainNavigationCount === 1
     )],
     ['t25LiveMasterRowRemoved', () => normalDensity.liveMasterRowCount === 0],
-    ['t25ControlModeSegmentSharesPaneHeader', () => contextModeSegmentSharesHeader],
+    ['t25OldLowerModeNavigationRemoved', () => normalDensity.oldLowerControlModeNavigationCount === 0],
+    ['t25ChromeSecondaryNavigationUsesStableEditDomains', () => chromeEditDomainNavigationIsCanonical],
     ['t25DSceneMatrixUsesReleasedHeaderHeight', () => Boolean(
       normalDensity.sceneMatrixRect?.height > 0 &&
       normalDensity.liveControlPanelRect?.height > 0 &&
@@ -3184,8 +3252,8 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   await seedViewportLocalStorage(client);
   await client.send("Page.navigate", { url: fixtureUrl("timeline") });
   await waitForApp(client);
-  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
-  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await clickWorkspaceOption(client, 'control');
+  await clickControlModeOption(client, 'live');
   await sleep(120);
   const matrix = await measureLiveDeskHeaderState(client);
   await client.evaluate(`(() => {
@@ -3578,7 +3646,7 @@ async function ensureMappingSelectionDrawerOpen(client) {
 }
 
 async function runStageSettingsCheck(client, viewport) {
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
@@ -3606,8 +3674,8 @@ async function runStageSettingsCheck(client, viewport) {
   await sleep(160);
   const restored = await measureStageSettingsState(client);
 
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleSelector(client, '[data-control-stage-mapping-link]');
   await sleep(160);
   const mappingLinkReturn = await measureStageSettingsState(client);
@@ -3697,7 +3765,7 @@ async function runStageSettingsViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
   await sleep(160);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await sleep(120);
   const legacyStoredRoute = await measureStageSettingsState(client);
   await clickByText(client, "Lighting");
@@ -3765,6 +3833,13 @@ async function installSetupIoInvokeMock(client) {
       last_applied_generation: null,
       last_error: null,
     };
+    const ownershipStatus = {
+      role: "Both",
+      lighting_allowed: true,
+      video_allowed: true,
+      lighting_reason: "OwnedByMachineRole",
+      video_reason: "OwnedByMachineRole",
+    };
     const remoteStatus = {
       running: true,
       active_connections: 0,
@@ -3792,6 +3867,8 @@ async function installSetupIoInvokeMock(client) {
         if (command === "remote_access_urls") return ["http://127.0.0.1:9100/?pin=123456"];
         if (command === "remote_control_status") return remoteStatus;
         if (command === "standby_sync_status") return standbyStatus;
+        if (command === "get_output_ownership_status") return ownershipStatus;
+        if (command === "set_output_ownership_role") return ownershipStatus;
         return undefined;
       },
     };
@@ -4032,7 +4109,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   });
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await installSetupIoInvokeMock(client);
   await clickByText(client, "I/O");
 
@@ -4137,7 +4214,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
   }
 
-  const expectedControlCounts = { dmx: 28, midi: 6, osc: 4, remote: 9 };
+  const expectedControlCounts = { dmx: 28, midi: 6, osc: 4, remote: 10 };
   const expectedDisclosureCounts = { dmx: 4, midi: 2, osc: 1, remote: 3 };
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
@@ -4193,7 +4270,7 @@ async function runSetupStageBandSequenceViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
 
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(160);
@@ -4399,7 +4476,7 @@ async function runControlStageChromeViewport(client, viewport) {
   await client.evaluate(`window.__syndocalSetControlFixtureSelection?.([], null, '')`);
   await sleep(40);
 
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
@@ -4457,8 +4534,8 @@ async function runControlStageChromeViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
 
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await sleep(120);
   const interactions = await exerciseControlStageInteractions(client);
   const controlLayerToggle = await client.evaluate(`(async () => {
@@ -4503,8 +4580,8 @@ async function runControlStageChromeViewport(client, viewport) {
     beamTopStripTogglePressed: document.querySelector('.setupStageContext [data-mapping-layer-toggle="beams"]')
       ?.getAttribute('aria-pressed') ?? null,
   }))()`);
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await sleep(120);
   const controlAfterHotkey = await client.evaluate(`(() => ({
     beamTogglePressed: document.querySelector('[data-control-stage-layer-toggle="beams"]')
@@ -5729,8 +5806,8 @@ async function runStageMiddlePanViewport(client, viewport) {
   await waitForApp(client);
   await client.evaluate(`(${installControlStageEditMockInPage.toString()})()`);
 
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleSelector(client, '[data-control-stage-tool-icon="select"]');
   await sleep(80);
 
@@ -5978,8 +6055,8 @@ async function runContextMenuViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("control-stage-edit") });
   await waitForApp(client);
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await sleep(80);
   const points = await installContextMenuProbe(client);
   if (!points) throw new Error("Context-menu probe targets are unavailable");
@@ -6039,8 +6116,8 @@ async function runControlStageFixtureEditViewport(client, viewport) {
   await waitForApp(client);
   await client.evaluate(`(${installControlStageEditMockInPage.toString()})()`);
 
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await sleep(100);
   await clickVisibleSelector(client, "[data-control-stage-mapping-link]");
   await waitForClientCondition(
@@ -6059,8 +6136,8 @@ async function runControlStageFixtureEditViewport(client, viewport) {
       summary: (control?.querySelector("summary")?.textContent ?? "").replace(/\\s+/g, " ").trim(),
     };
   })()`);
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleSelector(client, '[data-control-stage-tool-icon="select"]');
   await sleep(100);
 
@@ -6199,7 +6276,7 @@ async function runControlStageFixtureEditViewport(client, viewport) {
       ?.filter((call) => call.command === "set_fixture_transform").length ?? -1,
   }))()`);
 
-  await clickByText(client, "Timeline");
+  await clickControlModeOption(client, "live");
   await clickByText(client, "Show");
   await waitForClientCondition(
     client,
@@ -6519,8 +6596,8 @@ async function measureLayeredTimelineDeskState(client) {
 async function runLayeredTimelineDeskCheck(client, viewport) {
   await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
   await waitForApp(client);
-  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
-  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await clickWorkspaceOption(client, 'control');
+  await clickControlModeOption(client, 'live');
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await sleep(120);
   const before = await measureLayeredTimelineDeskState(client);
@@ -6654,8 +6731,8 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
 
   await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
   await waitForApp(client);
-  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
-  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await clickWorkspaceOption(client, 'control');
+  await clickControlModeOption(client, 'live');
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await sleep(120);
   await client.evaluate(`document.querySelector('[data-timeline-stretch-mode="WINDOW"]')?.click()`);
@@ -8243,7 +8320,7 @@ async function measure(client, label) {
       remoteServerDeskWidth: remoteServerDeskRect ? Math.round(remoteServerDeskRect.width) : 0,
       remoteEndpointDeskWidth: remoteEndpointDeskRect ? Math.round(remoteEndpointDeskRect.width) : 0,
       visibleStandbySyncDeskCount: visibleCount('.setupMode-io [data-io-zone="remote"] .standbySyncDesk'),
-      visibleStandbyRoleOptionCount: document.querySelectorAll('.setupMode-io [data-io-zone="remote"] .standbySyncDesk select option').length,
+      visibleStandbyRoleOptionCount: document.querySelectorAll('.setupMode-io [data-io-zone="remote"] [data-io-control="remote-standby-role"] option').length,
       visibleStandbyActionButtonCount: visibleCount('.setupMode-io [data-io-zone="remote"] .standbySyncDesk > .buttonRow button'),
       visibleDmxGridSummaryCount: visibleCount('[data-dmx-grid-usage]'),
       visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
@@ -8255,23 +8332,38 @@ async function measure(client, label) {
       visibleRightPatchExecutionFormCount: visibleCount('.fixtureSetupContextPane [data-patch-minimal-form]'),
       visibleDuplicateFixtureButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'duplicate fixture').length,
-      controlModeTabCount: document.querySelectorAll('.controlModeTabs button').length,
-      controlModeSemanticTabCount: visibleCount('[data-control-mode-option]'),
-      controlModeSemanticTabWidths: [...document.querySelectorAll('[data-control-mode-option]')]
+      controlModeTabCount: document.querySelectorAll('[data-edit-domain-navigation] [data-control-mode-option]').length,
+      controlModeSemanticTabCount: visibleCount('[data-edit-domain-navigation] [data-control-mode-option]'),
+      controlModeSemanticTabWidths: [...document.querySelectorAll('[data-edit-domain-navigation] [data-control-mode-option]')]
         .filter((button) => {
           const rect = button.getBoundingClientRect();
           const style = getComputedStyle(button);
           return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
         })
         .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
-      controlModeSemanticTabLabels: [...document.querySelectorAll('[data-control-mode-option]')]
+      controlModeSemanticTabLabels: [...document.querySelectorAll('[data-edit-domain-navigation] [data-control-mode-option]')]
         .filter((button) => button.getBoundingClientRect().width > 0)
         .map((button) => (button.textContent || '').trim()),
-      controlModeSegmentWidth: Math.round(
-        ([...document.querySelectorAll('[data-control-mode-segment]')]
+      controlModeSemanticTabIds: [...document.querySelectorAll('[data-edit-domain-navigation] [data-control-mode-option]')]
+        .filter((button) => button.getBoundingClientRect().width > 0)
+        .map((button) => button.getAttribute('data-control-mode-option')),
+      editDomainNavigationCount: visibleCount('[data-edit-domain-navigation]'),
+      oldLowerControlModeNavigationCount: document.querySelectorAll(
+        '[data-control-context-header] [data-control-mode-segment], [data-control-context-header] [data-control-mode-option]'
+      ).length,
+      editDomainNavigationDirectlyAfterTopbar: document.querySelector('[data-edit-domain-navigation]')
+        ?.previousElementSibling?.classList.contains('topbar') ?? false,
+      editDomainNavigationRect: (() => {
+        const element = [...document.querySelectorAll('[data-edit-domain-navigation]')]
           .find((element) => element.getBoundingClientRect().width > 0)
-          ?.getBoundingClientRect().width ?? 0) * 100
-      ) / 100,
+        const rect = element?.getBoundingClientRect();
+        return rect ? {
+          x: Math.round(rect.x * 100) / 100,
+          y: Math.round(rect.y * 100) / 100,
+          width: Math.round(rect.width * 100) / 100,
+          height: Math.round(rect.height * 100) / 100,
+        } : null;
+      })(),
       controlSharedHeaderHeight: Math.round(
         ([...document.querySelectorAll(
           '[data-control-context-header], .videoControlPanelMixer > .panelHeader'
@@ -9605,7 +9697,13 @@ function hasExpectedControlModeSurface(result) {
   if (
     result.controlModeSemanticTabCount !== 3 ||
     result.controlModeSemanticTabWidths.length !== 3 ||
-    result.controlModeSemanticTabWidths.some((width) => width <= 0 || width > 86) ||
+    result.controlModeSemanticTabWidths.some((width) => width <= 0) ||
+    JSON.stringify(result.controlModeSemanticTabIds) !== JSON.stringify(['edit', 'live', 'mixer']) ||
+    JSON.stringify(result.controlModeSemanticTabLabels) !== JSON.stringify(['Lighting', 'Timeline', 'Video']) ||
+    result.editDomainNavigationCount !== 1 ||
+    result.oldLowerControlModeNavigationCount !== 0 ||
+    !result.editDomainNavigationDirectlyAfterTopbar ||
+    !result.editDomainNavigationRect ||
     result.controlSharedHeaderRowCount !== 1 ||
     result.controlSharedHeaderHeight <= 0 ||
     result.controlSharedHeaderHeight > 36
@@ -10056,6 +10154,15 @@ function hasExpectedControlModeSurface(result) {
   return true;
 }
 
+function editDomainNavigationPlacementIsStable(results) {
+  const primaryModes = results.filter((result) => /^control-(edit|live|mixer)-\d+x\d+$/.test(result.label));
+  if (primaryModes.length !== 3) return false;
+  const [reference, ...rest] = primaryModes.map((result) => result.editDomainNavigationRect);
+  if (!reference || rest.some((rect) => !rect)) return false;
+  return rest.every((rect) => ['x', 'y', 'width', 'height']
+    .every((key) => Math.abs(rect[key] - reference[key]) <= 1));
+}
+
 function hasExpectedContinuousPatchGrid(result) {
   const metrics = result.patchGridMetrics;
   if (!metrics) return false;
@@ -10274,8 +10381,8 @@ function hasExpectedSetupSurface(result) {
       result.ioVisibleZoneCount === 4 &&
       JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx", "midi", "osc", "remote"]) &&
       result.ioAllZoneRectsPositive &&
-      JSON.stringify(result.ioZoneVisibleControlCounts) === JSON.stringify({ dmx: 28, midi: 6, osc: 4, remote: 9 }) &&
-      result.ioVisibleControlCount === 47 &&
+      JSON.stringify(result.ioZoneVisibleControlCounts) === JSON.stringify({ dmx: 28, midi: 6, osc: 4, remote: 10 }) &&
+      result.ioVisibleControlCount === 48 &&
       JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 4, midi: 2, osc: 1, remote: 3 }) &&
       JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0, midi: 0, osc: 0, remote: 0 }) &&
       result.ioDisclosureCount === 10 &&
@@ -11154,8 +11261,8 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, full
   await waitForApp(client);
   // Reset persisted UI state before applying the locale. A prior iteration's
   // acceptance run persists controlMode "mixer"; booting straight into the
-  // full VJ-desk layout replaces the shared workspace band, so its
-  // "VJ Desk"/"VJデスク" context tab would not exist for the click below.
+  // full Video layout replaces the shared workspace band; select it through
+  // the persistent Edit-domain navigation's stable internal mode ID.
   await client.evaluate(
     "window.localStorage.clear();" +
       "window.localStorage.setItem('syndocal.uiLocale.v1'," + JSON.stringify(locale) + ")",
@@ -11164,7 +11271,7 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, full
   await waitForApp(client);
   await pressKey(client, "F2");
   await sleep(120);
-  await clickByText(client, locale === "ja" ? "VJデスク" : "VJ Desk");
+  await clickControlModeOption(client, "mixer");
   await sleep(120);
   if (fullscreen) {
     await client.evaluate("document.documentElement.setAttribute('data-window-mode','fullscreen')");
@@ -11360,9 +11467,7 @@ async function runTopbarPulseViewport(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const setup = [...document.querySelectorAll('.workspaceTabs button')].find((button) =>
-        button.getAttribute('aria-pressed') === 'true' && (button.textContent ?? '').trim() === 'Setup'
-      );
+      const setup = document.querySelector('[data-workspace-option="setup"][aria-pressed="true"]');
       const outputs = [...document.querySelectorAll('.setupModeTabs button')].find((button) =>
         button.getAttribute('aria-pressed') === 'true' && (button.textContent ?? '').trim() === 'Outputs'
       );
@@ -11376,9 +11481,7 @@ async function runTopbarPulseViewport(client, viewport) {
     const settings = document.querySelector('#setup-output-audio-input');
     const rect = settings?.getBoundingClientRect();
     return {
-      setupActive: [...document.querySelectorAll('.workspaceTabs button')].some((button) =>
-        button.getAttribute('aria-pressed') === 'true' && (button.textContent ?? '').trim() === 'Setup'
-      ),
+      setupActive: Boolean(document.querySelector('[data-workspace-option="setup"][aria-pressed="true"]')),
       outputsActive: [...document.querySelectorAll('.setupModeTabs button')].some((button) =>
         button.getAttribute('aria-pressed') === 'true' && (button.textContent ?? '').trim() === 'Outputs'
       ),
@@ -12584,7 +12687,7 @@ async function runViewport(client, viewport) {
     await clickVisibleByText(client, ".appMenuButton", "...");
     await pressKey(client, "F2");
     await sleep(120);
-    await clickByText(client, "VJデスク");
+    await clickControlModeOption(client, "mixer");
     await sleep(120);
     const japaneseLiveAudioAcceptance = await runLiveAudioAcceptance(
       client,
@@ -12596,7 +12699,7 @@ async function runViewport(client, viewport) {
     await client.send("Page.navigate", { url: appUrl });
     await waitForApp(client);
   }
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   let setupStageBandContainment = null;
   for (const setupTab of setupTabs) {
     await clickByText(client, setupTab.area);
@@ -12620,16 +12723,16 @@ async function runViewport(client, viewport) {
     }
     traceViewport(`setup ${setupTab.id} measured ${viewport.width}x${viewport.height}`);
   }
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
   const persistentSetupBefore = await measurePersistentBand(client, `persistent-band-setup-before-${viewport.width}x${viewport.height}`);
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await sleep(120);
   const persistentControl = await measurePersistentBand(client, `persistent-band-control-${viewport.width}x${viewport.height}`);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
@@ -12654,9 +12757,9 @@ async function runViewport(client, viewport) {
     layeredTimelineDesk,
   });
   traceViewport(`persistent band compared ${viewport.width}x${viewport.height}`);
-  await clickByText(client, "Control");
+  await clickWorkspaceOption(client, "control");
   for (const controlTab of controlTabs) {
-    await clickByText(client, controlTab.label);
+    await clickControlModeOption(client, controlTab.id);
     await sleep(320);
     if (shouldCaptureViewport(viewport)) {
       mkdirSync(screenshotDir, { recursive: true });
@@ -12794,7 +12897,7 @@ async function runViewport(client, viewport) {
       await waitForApp(client);
       await pressKey(client, "F2");
       await sleep(100);
-      await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickControlModeOption(client, "live");
       await sleep(100);
       await clickVisibleByText(client, ".liveDeskViewToggle button", "Matrix");
       await clickVisibleSelector(client, "[data-scene-matrix-edit-strip]");
@@ -12824,7 +12927,7 @@ async function runViewport(client, viewport) {
       }
     }
   }
-  await clickByText(client, "Touch");
+  await clickWorkspaceOption(client, "touch");
   await sleep(180);
   await checkEditableTouchSurface(client, "Default Desk", true);
   if (shouldCaptureViewport(viewport)) {
@@ -12846,7 +12949,7 @@ async function runComposedTouchViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("touch-composed") });
   await waitForApp(client);
-  await clickByText(client, "Touch");
+  await clickWorkspaceOption(client, "touch");
   await sleep(180);
   await checkEditableTouchSurface(client, "Viewport Touch", false, true);
   return measure(client, `touch-composed-${viewport.width}x${viewport.height}`);
@@ -12916,7 +13019,7 @@ async function runTouchViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  await clickByText(client, "Touch");
+  await clickWorkspaceOption(client, "touch");
   await sleep(180);
   await checkEditableTouchSurface(client, "Default Desk", true);
   if (shouldCaptureViewport(viewport)) {
@@ -13291,7 +13394,7 @@ async function checkPatchZoning(client) {
 async function checkPatchFixtureFamilySweep(client) {
   await client.send("Page.navigate", { url: fixtureUrl("mapping-live-color") });
   await waitForApp(client);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
@@ -13371,7 +13474,7 @@ async function checkVerifiedRgbParColorQuickPaths(client, viewport) {
   url.searchParams.set("syndocalViewportProfile", "verified-rgb-par");
   await client.send("Page.navigate", { url: url.toString() });
   await waitForApp(client);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   if (viewportTraceEnabled) {
@@ -13433,8 +13536,8 @@ async function checkVerifiedRgbParColorQuickPaths(client, viewport) {
     `${selectedThroughStage} && document.querySelector('.setupStageContext [data-stage-fixture-id="${selectedFixtureId}"].selected')`,
     "verified RGB PAR stage selection",
   );
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleByText(client, ".attributeCategoryRail button", "Color");
   await waitForClientCondition(client, "document.querySelector('.colorControlPanel')", "verified RGB color panel");
   await sleep(80);
@@ -13473,7 +13576,7 @@ async function checkVerifiedRgbParColorQuickPaths(client, viewport) {
     };
   })()`);
 
-  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await clickWorkspaceOption(client, "touch");
   await waitForClientCondition(
     client,
     "document.querySelector('.touchPlacedColorPalette .colorSwatch')",
@@ -13537,7 +13640,7 @@ async function runFixtureGroupsViewport(client, viewport) {
   await seedViewportLocalStorage(client);
   await client.send("Page.navigate", { url: fixtureUrl("patch") });
   await waitForApp(client);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(160);
@@ -13743,7 +13846,7 @@ async function runPatchViewport(client, viewport) {
   await seedViewportLocalStorage(client);
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(180);
@@ -13789,7 +13892,7 @@ async function runPatchDndViewport(client, viewport) {
   await seedViewportLocalStorage(client);
   await client.send("Page.navigate", { url: fixtureUrl("patch") });
   await waitForApp(client);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
@@ -14153,7 +14256,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
   await seedViewportLocalStorage(client);
   await client.send("Page.navigate", { url });
   await waitForApp(client);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(100);
@@ -14909,7 +15012,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
   await seedViewportLocalStorage(client);
   await client.send("Page.navigate", { url: fixtureUrl("none") });
   await waitForApp(client);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(180);
@@ -15452,8 +15555,8 @@ async function readWorkspaceSplitState(client) {
         Boolean(groupRect && leftRect && Math.abs(groupRect.x - leftRect.x) <= 1 && Math.abs(groupRect.width - leftRect.width) <= 1),
       topRatio: Number(layout?.getAttribute("data-upper-lower-ratio") ?? NaN),
       lowerRatio: Number(layout?.getAttribute("data-lower-left-right-ratio") ?? NaN),
-      workspace: (document.querySelector(".workspaceTabs button.active")?.textContent || "").trim(),
-      controlMode: (document.querySelector(".controlModeTabs button.active")?.textContent || "").trim(),
+      workspace: document.querySelector('[data-workspace-option][aria-pressed="true"]')?.getAttribute('data-workspace-option') || '',
+      controlMode: document.querySelector('[data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '',
       timelineExpanded: document.querySelector('.mappingPersistentWorkspaceBand')?.getAttribute('data-timeline-pane-expanded') === 'true',
       liveStatus: {
         expanded: livePanel?.getAttribute('data-live-status-expanded') === 'true',
@@ -15814,13 +15917,13 @@ async function runWorkspaceSplitViewport(client, viewport) {
   await seedViewportLocalStorage(client);
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
   const setupInitial = await readWorkspaceSplitState(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await sleep(160);
 
   const initial = await readWorkspaceSplitState(client);
@@ -15976,7 +16079,7 @@ async function runWorkspaceSplitViewport(client, viewport) {
   // Commit non-default ratios for reload, workspace-switch and T8 restoration.
   await dragWorkspaceSplitter(client, "upper-lower", { deltaY: -42 });
   await dragWorkspaceSplitter(client, "lower-left-right", { deltaX: 54 });
-  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
@@ -16017,7 +16120,7 @@ async function runWorkspaceSplitViewport(client, viewport) {
   const beforeReload = await readWorkspaceSplitState(client);
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(160);
@@ -16029,16 +16132,16 @@ async function runWorkspaceSplitViewport(client, viewport) {
     workspaceRectClose(afterReload.lowerSplitter?.rect, beforeReload.lowerSplitter?.rect);
   checks.reloadKeepsOuterScrollZero = afterReload.outerScrollZero;
 
-  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
   const setupBefore = await readWorkspaceSplitState(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await sleep(120);
   const control = await readWorkspaceSplitState(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
@@ -16116,16 +16219,16 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
 
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
   const setupBefore = await measurePersistentBand(client, `persistent-band-setup-before-${viewport.width}x${viewport.height}`);
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await sleep(120);
   const control = await measurePersistentBand(client, `persistent-band-control-${viewport.width}x${viewport.height}`);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
@@ -16181,8 +16284,8 @@ async function openCueFixture(client, viewport, fixture) {
   });
   await client.send("Page.navigate", { url: fixtureUrl(fixture) });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await clickVisibleByText(client, ".liveDeskViewToggle button", "Matrix");
   const hasExistingCue = await client.evaluate(`(() => {
     const strip = document.querySelector('[data-scene-matrix-edit-strip]');
@@ -16691,7 +16794,7 @@ async function runFixtureCatalogViewport(client, viewport) {
   await client.evaluate(`localStorage.removeItem('syndocal.fixtureCatalogFavorites.v1')`);
   await client.send("Page.navigate", { url });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickVisibleByText(client, ".setupModeTabs button", "Library");
   await waitForClientCondition(
     client,
@@ -16771,8 +16874,8 @@ async function runGroupStrobeViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await waitForClientCondition(
     client,
     "document.querySelector('.groupLiveMixerStrip input[aria-label=\"Group strobe rate\"]')",
@@ -16831,7 +16934,7 @@ async function runGroupStrobeViewport(client, viewport) {
   await sleep(80);
   const cleared = await readState("desktop-cleared");
 
-  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await clickWorkspaceOption(client, "touch");
   await waitForClientCondition(
     client,
     "document.querySelector('.touchGroupStrobeControl input')",
@@ -17595,17 +17698,15 @@ async function runPaneWindowViewport(client, viewport) {
   })()`);
   const timelineWinAfterInteractions = await readState();
   const poppedMain = await measureState("syndocalPoppedPanes=stage", async () => {
-    await clickVisibleByText(client, ".workspaceTabs button", "Control");
-    await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   });
   const poppedTimelineMain = await measureState("syndocalPoppedPanes=timeline", async () => {
-    await clickVisibleByText(client, ".workspaceTabs button", "Control");
-    // The entire Timeline context pane is intentionally hidden in this state,
-    // so select its exact (hidden) mode tab without the global text helper;
-    // the new visible rejoin button carries the same "Timeline" text.
+  await clickWorkspaceOption(client, "control");
+    // The Timeline context pane is intentionally hidden in this state, while
+    // the chrome Edit-domain navigation remains available.
     const selectedTimelineMode = await client.evaluate(`(() => {
-      const button = [...document.querySelectorAll('.controlModeTabs button')]
-        .find((candidate) => (candidate.textContent || '').trim() === 'Timeline');
+      const button = document.querySelector('[data-edit-domain-navigation] [data-control-mode-option="live"]');
       button?.click();
       return Boolean(button);
     })()`);
@@ -17730,8 +17831,8 @@ async function runSceneMatrixPaneCheck(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const before = await measureSceneMatrixPane(client);
@@ -18278,16 +18379,16 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const initialPane = await measureSceneMatrixPane(client);
   const reorder = await exerciseSceneMatrixStripReorder(client, 302, 301);
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const crossBank = await exerciseSceneMatrixCrossBankMoveAndUndo(client);
@@ -18938,8 +19039,8 @@ async function runSceneSettingsViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
 
@@ -19292,8 +19393,8 @@ async function runSceneSettingsViewport(client, viewport) {
   // the measured operation is the single synthetic click on COLOR FX.
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(80);
   const oneClickStripGesture = await clickSceneSettingsStrip(
@@ -20804,8 +20905,8 @@ async function runTimelineSlimViewport(client, viewport) {
   // contract on both data shapes.
   await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
   await waitForApp(client);
-  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
-  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await clickWorkspaceOption(client, 'control');
+  await clickControlModeOption(client, 'live');
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await setTimelineToolsDisclosureOpen(client, true);
   await sleep(120);
@@ -20820,8 +20921,8 @@ async function runTimelineSlimViewport(client, viewport) {
   const escapePriority = await exerciseTimelineSlimEscapePriority(client);
   await client.send('Page.navigate', { url: fixtureUrl('timeline') });
   await waitForApp(client);
-  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
-  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await clickWorkspaceOption(client, 'control');
+  await clickControlModeOption(client, 'live');
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await setTimelineToolsDisclosureOpen(client, true);
   await sleep(120);
@@ -21213,8 +21314,8 @@ async function openTimelineShowFixture(client, viewport, fixture) {
   });
   await client.send("Page.navigate", { url: fixtureUrl(fixture) });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(180);
 }
@@ -22265,8 +22366,8 @@ async function runSceneBlockLargeViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("scene-block-large") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(180);
   await openSceneBlockBrowser(client);
@@ -23348,7 +23449,7 @@ async function runMappingLiveSnapshotViewport(client, viewport) {
     "mapping snapshot delta Amber fixture",
   );
   const setup = await readMappingLiveColorSurface(client, ".setupStageContext");
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickWorkspaceOption(client, "control");
   await waitForClientCondition(
     client,
     `document.querySelector('.controlStageContext [data-stage-fixture-id="7"] [data-stage-fixture-shape]')?.getAttribute('fill') === 'rgb(31, 38, 46)'`,
@@ -23396,7 +23497,7 @@ async function runMappingLiveColorViewport(client, viewport) {
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
   })()`);
-  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await clickWorkspaceOption(client, "touch");
   await waitForClientCondition(
     client,
     "document.querySelectorAll('.touchStagePanel [data-stage-fixture-id]').length === 9",
@@ -23435,7 +23536,7 @@ async function runMappingLiveColorViewport(client, viewport) {
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
   })()`);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickWorkspaceOption(client, "control");
   await sleep(120);
   const attributeControl = await readMappingLiveColorSurface(client, ".controlStageContext");
   await client.evaluate(`window.__syndocalSetMappingLiveDmx?.({})`);
@@ -23445,14 +23546,14 @@ async function runMappingLiveColorViewport(client, viewport) {
     "mapping all-zero preview overrides attribute fallback",
   );
   const zeroPreviewControl = await readMappingLiveColorSurface(client, ".controlStageContext");
-  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await clickWorkspaceOption(client, "touch");
   await waitForClientCondition(
     client,
     `document.querySelector('.touchStagePanel [data-stage-fixture-id="6"]')?.getAttribute('data-live-color-source') === 'preview'`,
     "StagePreview2D all-zero preview source",
   );
   const zeroPreviewStage = await readMappingLiveColorSurface(client, ".touchStagePanel");
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickWorkspaceOption(client, "control");
   await client.evaluate(`window.__syndocalSetMappingLiveDmx?.(${JSON.stringify({
     1: 128,
     2: 255,
@@ -23491,14 +23592,14 @@ async function runMappingLiveColorViewport(client, viewport) {
     "mapping live-color DMX injection",
   );
   const control = await readMappingLiveColorSurface(client, ".controlStageContext");
-  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await clickWorkspaceOption(client, "touch");
   await waitForClientCondition(
     client,
     `document.querySelector('.touchStagePanel [data-stage-fixture-id="9"] [data-stage-fixture-shape]')?.getAttribute('fill') === 'rgb(128, 128, 128)'`,
     "StagePreview2D dimmerless live fixture",
   );
   const stagePreviewLit = await readMappingLiveColorSurface(client, ".touchStagePanel");
-  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickWorkspaceOption(client, "setup");
   await waitForClientCondition(
     client,
     `document.querySelector('.setupStageContext [data-stage-fixture-id="1"] [data-stage-fixture-segment="1"]')?.getAttribute('fill') === 'rgb(128, 0, 0)'`,
@@ -23537,8 +23638,8 @@ async function runBarBeamsViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, "[data-control-mode-segment] button", "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await waitForClientCondition(
     client,
     "document.querySelectorAll('.controlStageContext [data-stage-fixture-id]').length === 9",
@@ -23745,8 +23846,8 @@ async function runEmptyVjViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  await clickByText(client, "Control");
-  await clickByText(client, "VJ Desk");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "mixer");
   await sleep(180);
   if (shouldCaptureViewport(viewport)) {
     mkdirSync(screenshotDir, { recursive: true });
@@ -24118,7 +24219,7 @@ async function runSceneLiveModifierViewport(client, viewport) {
   await client.evaluate("window.localStorage.setItem('syndocal.uiLocale.v1','ja')");
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "コントロール");
+  await clickWorkspaceOption(client, "control");
   await sleep(64);
   const failed = [];
 
@@ -24258,7 +24359,7 @@ async function runSceneLiveModifierViewport(client, viewport) {
   if (flashUp.activeCardIds.includes("320")) failed.push("flash-still-active-on-up");
   if (!flashUp.containmentZero) failed.push("matrix-containment");
 
-  await clickVisibleByText(client, ".workspaceTabs button", "タッチ");
+  await clickWorkspaceOption(client, "touch");
   await sleep(96);
   // The matrix flash release cleared the active cue; bring the latched-strip
   // scene back through the Touch pad so both surfaces prove the same path.
@@ -24305,8 +24406,8 @@ async function runFxVisualViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("fx-visual") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   const stripGesture = await clickSceneSettingsStrip(
     client,
@@ -24633,10 +24734,15 @@ async function runWorkspaceOperatorViewport(client, viewport) {
   await client.send("Page.navigate", { url: partialUrl.toString() });
   await waitForApp(client);
   await sleep(80);
+  await pressKey(client, "KeyE", "e");
+  await sleep(80);
   const partial = await client.evaluate(`(() => ({
     overlayCount: document.querySelectorAll('.operatorLockOverlay').length,
-    workspace: document.querySelector('.workspaceTabs button.active')?.textContent?.trim() || '',
-    setupDisabled: document.querySelector('.workspaceTabs button[title="Setup workspace"]')?.disabled === true,
+    workspace: document.querySelector('[data-workspace-option][aria-pressed="true"]')?.getAttribute('data-workspace-option') || '',
+    workspaceLabel: document.querySelector('[data-workspace-option][aria-pressed="true"]')?.textContent?.trim() || '',
+    setupDisabled: document.querySelector('[data-workspace-option="setup"]')?.disabled === true,
+    lightingDisabled: document.querySelector('[data-control-mode-option="edit"]')?.disabled === true,
+    activeMode: document.querySelector('[data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '',
     lockLabel: document.querySelector('.workspaceOperationsButton')?.textContent?.trim() || '',
     appOverflow: (() => { const app = document.querySelector('.app'); return app ? Math.max(0, app.scrollWidth - app.clientWidth) : 0; })(),
   }))()`);
@@ -24696,7 +24802,8 @@ async function runWorkspaceOperatorViewport(client, viewport) {
     unlockedContainment: menu.bodyOverflow <= 1 && menu.appOverflow <= 1,
     fullOverlay: full.visible && full.emergencyButtons === 3 && full.passwordInputs === 1,
     fullDisclosure: full.text.includes('Show output continues') && full.text.includes('no plaintext password stored'),
-    partialMain: partial.overlayCount === 0 && partial.workspace === 'Control' && partial.setupDisabled && partial.lockLabel === 'Partial Lock',
+    partialMain: partial.overlayCount === 0 && partial.workspace === 'control' && partial.workspaceLabel === 'Edit' &&
+      partial.setupDisabled && partial.lightingDisabled && partial.activeMode === 'live' && partial.lockLabel === 'Partial Lock',
     partialContainment: partial.appOverflow <= 1,
     partialProgrammingPaneGuard: partialPane.overlayCount === 1 && partialPane.restrictedText,
     sevenPaneWindows: paneWindows.length === 7 && paneWindows.every((pane) =>
@@ -24891,8 +24998,8 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("live-edit-types") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
   await sleep(120);
 
@@ -25335,7 +25442,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   }
   await clickVisibleByText(client, ".attributeCategoryRail button", "Beam");
   await sleep(80);
-  await clickByText(client, "Setup");
+  await clickWorkspaceOption(client, "setup");
   await clickByText(client, "I/O");
   const dmxDiagnosticsDisclosureFound = await client.evaluate(`(() => {
     const disclosure = document.querySelector('[data-io-disclosure="dmx-diagnostics"]');
@@ -25366,8 +25473,8 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       ),
     };
   })()`);
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleByText(client, ".editDeskTabs button", "Faders");
   await sleep(80);
   const allFixtureIds = Array.from({ length: 41 }, (_, index) => index + 1);
@@ -25718,8 +25825,8 @@ async function runAttributeCategoriesViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("live-edit-types") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
   await sleep(120);
 
@@ -26816,8 +26923,8 @@ async function runEditLiveViewport(client, viewport) {
   editLiveUrl.searchParams.set("viewportRun", `${viewport.width}x${viewport.height}`);
   await client.send("Page.navigate", { url: editLiveUrl.toString() });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
   await sleep(120);
 
@@ -26896,7 +27003,7 @@ async function runEditLiveViewport(client, viewport) {
         deskRect &&
         Math.abs(deskRect.top - editorBodyRect.top) <= 1
       ),
-      modeTabWidths: [...document.querySelectorAll('[data-control-mode-option]')]
+      modeTabWidths: [...document.querySelectorAll('[data-edit-domain-navigation] [data-control-mode-option]')]
         .filter((button) => button.getBoundingClientRect().width > 0)
         .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
       editDeskTabWidths: [...document.querySelectorAll('.editDeskTabs button')]
@@ -26946,8 +27053,8 @@ async function runEditLiveViewport(client, viewport) {
   operatorUrl.searchParams.set("viewportRun", `${viewport.width}x${viewport.height}`);
   await client.send("Page.navigate", { url: operatorUrl.toString() });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleByText(client, ".editDeskTabs button", "Faders");
   await client.evaluate(`window.__syndocalSetControlFixtureSelection?.([1], 1, '')`);
   await sleep(120);
@@ -26955,8 +27062,8 @@ async function runEditLiveViewport(client, viewport) {
 
   await client.send("Page.navigate", { url: editLiveUrl.toString() });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
-  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
   await sleep(120);
   initial = await readState();
@@ -27211,8 +27318,8 @@ async function runControlEditPositionViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
 
-  await clickByText(client, "Control");
-  await clickByText(client, "Live Edit");
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
   await clickVisibleByText(client, ".attributeCategoryRail button", "Position");
   await sleep(120);
 
@@ -27613,7 +27720,7 @@ async function main() {
       }
       const failures = positionResults.filter((result) => !result.passed);
       if (failures.length > 0) {
-        throw new Error(`Control Live Edit Position console failed: ${JSON.stringify(failures)}`);
+        throw new Error(`Edit Lighting Position console failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
@@ -27686,7 +27793,7 @@ async function main() {
       }
       const failures = liveEditTypeResults.filter((result) => !result.passed);
       if (failures.length > 0) {
-        throw new Error(`Live Edit fixture-type columns failed: ${JSON.stringify(failures)}`);
+        throw new Error(`Lighting fixture-type columns failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
@@ -28197,11 +28304,16 @@ async function main() {
     }
     if (controlModeSurfaceOnlyMode) {
       const controlModeResults = [];
+      const editDomainPlacementFailures = [];
       for (const viewport of viewports) {
         const viewportControlResults = (await runViewport(client, viewport))
           .filter((result) => result.label.startsWith("control-"));
         controlModeResults.push(...viewportControlResults);
         const failures = viewportControlResults.filter((result) => !hasExpectedControlModeSurface(result));
+        const editDomainPlacementStable = editDomainNavigationPlacementIsStable(viewportControlResults);
+        if (!editDomainPlacementStable) {
+          editDomainPlacementFailures.push(`control-edit-domain-placement-${viewport.width}x${viewport.height}`);
+        }
         const liveContracts = viewportControlResults
           .filter((result) => result.label.startsWith("control-live-"))
           .map((result) => ({
@@ -28225,8 +28337,9 @@ async function main() {
           legacySummary: result.legacyAttributeTargetSummaryCount,
         } : null]));
         console.log(
-          `${failures.length === 0 ? "pass" : "fail"} control-mode-surface-${viewport.width}x${viewport.height} ` +
+          `${failures.length === 0 && editDomainPlacementStable ? "pass" : "fail"} control-mode-surface-${viewport.width}x${viewport.height} ` +
             `phases=${viewportControlResults.length} ` +
+            `editDomainPlacement=${editDomainPlacementStable ? "stable" : "moved"} ` +
             `focus=${JSON.stringify(focusMetrics)} ` +
             `liveContracts=${liveContracts.every((contract) =>
               contract.allAssertionsTrue && contract.liveDeskToolbarControlsShareOneRow) ? "all-pass" : JSON.stringify(liveContracts)} ` +
@@ -28296,8 +28409,11 @@ async function main() {
         );
       }
       const failures = controlModeResults.filter((result) => !hasExpectedControlModeSurface(result));
-      if (failures.length > 0) {
-        throw new Error(`Control mode surface focus failed: ${JSON.stringify(failures.map((result) => result.label))}`);
+      if (failures.length > 0 || editDomainPlacementFailures.length > 0) {
+        throw new Error(`Control mode surface focus failed: ${JSON.stringify([
+          ...failures.map((result) => result.label),
+          ...editDomainPlacementFailures,
+        ])}`);
       }
       return;
     }
@@ -29758,7 +29874,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchDndFailures.length} PATCH DnD check(s), ${patchGdtfShareFailures.length} PATCH GDTF Share check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${sceneSettingsFailures.length} Scene Settings check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Lighting fixture-type check(s), ${patchDndFailures.length} PATCH DnD check(s), ${patchGdtfShareFailures.length} PATCH GDTF Share check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${sceneSettingsFailures.length} Scene Settings check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

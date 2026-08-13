@@ -14,8 +14,8 @@ import type {
   ProjectHistoryStatus,
   OperatorLockMode,
 } from "../types";
-import { setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
-import type { SetupSubTab, WorkspaceTab } from "../uiModes";
+import { controlModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
+import type { ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
 import type { UiLocale } from "../uiLocalization";
 import { TopbarPulseMeter } from "./TopbarPulseMeter";
 import {
@@ -26,6 +26,7 @@ import {
 type WorkspaceChromeProps = {
   workspaceTab: WorkspaceTab;
   setupSubTab: SetupSubTab;
+  controlMode: ControlMode;
   blackout: boolean;
   videoBlackout: boolean;
   lightingMaster: number;
@@ -72,6 +73,7 @@ type WorkspaceChromeProps = {
   operations: JSX.Element;
   onWorkspaceTab: (tab: WorkspaceTab) => void;
   onSetupSubTab: (tab: SetupSubTab) => void;
+  onControlMode: (mode: ControlMode) => void;
   onBack: () => void;
   onGo: () => void;
   onToggleFade: () => void;
@@ -472,7 +474,10 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           <nav class="workspaceTabs" aria-label="Workspace">
             <button
               class={props.workspaceTab === "setup" ? "active" : ""}
+              data-workspace-option="setup"
+              data-no-localize
               title="Setup workspace"
+              aria-label="Setup workspace"
               aria-keyshortcuts="F1"
               onClick={() => props.onWorkspaceTab("setup")}
               aria-pressed={props.workspaceTab === "setup"}
@@ -482,21 +487,27 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             </button>
             <button
               class={props.workspaceTab === "control" ? "active" : ""}
-              title="Control workspace"
+              data-workspace-option="control"
+              data-no-localize
+              title="Edit workspace"
+              aria-label="Edit workspace"
               aria-keyshortcuts="F2"
               onClick={() => props.onWorkspaceTab("control")}
               aria-pressed={props.workspaceTab === "control"}
             >
-              Control
+              Edit
             </button>
             <button
               class={props.workspaceTab === "touch" ? "active" : ""}
-              title="Touch workspace"
+              data-workspace-option="touch"
+              data-no-localize
+              title="Control workspace"
+              aria-label="Control workspace"
               aria-keyshortcuts="F3"
               onClick={() => props.onWorkspaceTab("touch")}
               aria-pressed={props.workspaceTab === "touch"}
             >
-              Touch
+              Control
             </button>
           </nav>
         </div>
@@ -741,6 +752,34 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
         </div>
         <WindowControls />
       </header>
+      <Show when={props.workspaceTab === "control"}>
+        <nav
+          class="controlModeTabs contextModeTabs editDomainNavigation"
+          aria-label="Edit domain"
+          data-edit-domain-navigation
+        >
+          <For each={controlModes}>
+            {(mode) => {
+              const shortcut = mode.id === "edit" ? "E" : mode.id === "live" ? "L" : "M";
+              return (
+                <button
+                  class={props.controlMode === mode.id ? "active" : ""}
+                  data-control-mode-option={mode.id}
+                  data-no-localize
+                  title={`${mode.label}: ${mode.description}`}
+                  aria-label={mode.label}
+                  aria-keyshortcuts={shortcut}
+                  aria-pressed={props.controlMode === mode.id}
+                  disabled={props.operatorLockMode === "Partial" && mode.id === "edit"}
+                  onClick={() => props.onControlMode(mode.id)}
+                >
+                  {mode.label}
+                </button>
+              );
+            }}
+          </For>
+        </nav>
+      </Show>
       <Show when={props.controlLearnMode}>
         {(mode) => (
           <div

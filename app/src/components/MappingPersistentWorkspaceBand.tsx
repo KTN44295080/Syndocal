@@ -1,7 +1,5 @@
-import { createEffect, createSignal, For, onCleanup, Show, type ComponentProps, type JSX } from "solid-js";
-import type { OperatorLockMode } from "../types";
+import { createEffect, createSignal, onCleanup, Show, type ComponentProps, type JSX } from "solid-js";
 import type { ControlMode } from "../uiModes";
-import { controlModes } from "../uiModes";
 import { defaultWorkspaceLayout } from "../workspaceLayoutStorage";
 import { MappingEditableStageShell } from "./MappingEditableStageShell";
 import { MappingGroupRibbon, type MappingFilterStripsProps } from "./MappingFilterStrips";
@@ -25,7 +23,6 @@ type MappingPersistentWorkspaceBandProps = {
   controlMode: ControlMode;
   controlHeaderTitle: JSX.Element;
   controlHeaderTools?: JSX.Element;
-  operatorLockMode: OperatorLockMode | null;
   filters: MappingFilterStripsProps;
   toolRail: ComponentProps<typeof MappingToolRail>;
   viewportControls: ComponentProps<typeof MappingViewportControls>;
@@ -40,46 +37,10 @@ type MappingPersistentWorkspaceBandProps = {
   onTogglePaneWindow: (pane: "stage" | "timeline") => void;
   onLowerSplitRatio: (ratio: number) => void;
   onSelectionsDrawerOpen: (open: boolean) => void;
-  onControlMode: (mode: ControlMode) => void;
   onCloseHotkeyHelp: () => void;
   onOpenMapping: () => void;
   children?: JSX.Element;
 };
-
-type ControlModeSegmentProps = {
-  controlMode: ControlMode;
-  operatorLockMode: OperatorLockMode | null;
-  class?: string;
-  onControlMode: (mode: ControlMode) => void;
-  children?: JSX.Element;
-};
-
-export function ControlModeSegment(props: ControlModeSegmentProps) {
-  return (
-    <nav
-      class={`controlModeTabs contextModeTabs${props.class ? ` ${props.class}` : ""}`}
-      aria-label="Control mode"
-      data-control-mode-segment
-    >
-      <For each={controlModes}>
-        {(mode) => (
-          <button
-            class={props.controlMode === mode.id ? "active" : ""}
-            data-control-mode-option={mode.id}
-            title={mode.description}
-            aria-keyshortcuts={mode.id === "mixer" ? "M" : mode.label[0]}
-            onClick={() => props.onControlMode(mode.id)}
-            aria-pressed={props.controlMode === mode.id}
-            disabled={props.operatorLockMode === "Partial" && mode.id === "edit"}
-          >
-            {mode.label}
-          </button>
-        )}
-      </For>
-      {props.children}
-    </nav>
-  );
-}
 
 export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspaceBandProps) {
   const [timelinePaneExpanded, setTimelinePaneExpanded] = createSignal(false);
@@ -116,13 +77,6 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
       props.toolRail.onStageTool("select");
     }
   });
-
-  const selectControlMode = (mode: ControlMode) => {
-    if (mode !== "live") {
-      setTimelinePaneExpanded(false);
-    }
-    props.onControlMode(mode);
-  };
 
   return (
     <section
@@ -282,11 +236,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                     {props.controlHeaderTools}
                   </div>
                   <Show when={props.workspace === "control"}>
-                    <ControlModeSegment
-                      controlMode={props.controlMode}
-                      operatorLockMode={props.operatorLockMode}
-                      onControlMode={selectControlMode}
-                    >
+                    <div class="controlContextHeaderTools controlContextHeaderPaneActions" aria-label="Workspace pane controls">
                       <Show when={props.controlMode === "live"}>
                         <button
                           type="button"
@@ -327,8 +277,8 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <path d="M2 6h12M2 6v6h12V6M6 3h7v3" />
                       </svg>
-                    </button>
-                    </ControlModeSegment>
+                        </button>
+                    </div>
                   </Show>
                 </header>
                 {props.children}

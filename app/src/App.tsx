@@ -67,7 +67,7 @@ import {
   type EffectRecipeFamily,
 } from "./components/EffectFamilyChooser";
 import { SetupMappingWorkspace } from "./components/SetupMappingWorkspace";
-import { ControlModeSegment, MappingPersistentWorkspaceBand } from "./components/MappingPersistentWorkspaceBand";
+import { MappingPersistentWorkspaceBand } from "./components/MappingPersistentWorkspaceBand";
 import { SetupVideoPanel } from "./components/SetupVideoPanel";
 import { StagePreview2D } from "./components/StagePreview2D";
 import { VideoControlPanel } from "./components/VideoControlPanel";
@@ -272,7 +272,12 @@ import type {
   LfoEffectRequest,
   MappingEffectDirection,
   MappingEffectRequest,
+  MediaAssetActiveOperation,
+  MediaAssetAvailability,
   MediaAssetAuthoritativeTerminalEnvelope,
+  MediaAssetId,
+  MediaAssetImportReport,
+  MediaAssetOperationPhase,
   MidiControlAction,
   MidiControlMapping,
   MidiControlMessage,
@@ -456,6 +461,7 @@ import { createTimelineKeyframeController } from "./createTimelineKeyframeContro
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
 import {
+  inspectMediaAssetAvailability,
   mediaAssetImportReportMessage,
   preflightAndBeginMediaAssetOperation,
   prepareFinalizeAndCommitMediaAssets,
@@ -936,6 +942,172 @@ const mediaAssetTerminalRecoveryCommands = new Set([
   "cancel_media_asset_operation",
 ]);
 
+// Availability reads only inspect the local machine's copies of project media.
+// They carry the backend's owner/E/R/H fence but never begin a project mutation,
+// so Full/Partial operator locks keep them available for diagnosis.
+const mediaAssetAvailabilityReadOnlyCommands = new Set([
+  "start_media_asset_availability_operation",
+  "inspect_reserved_media_asset_availability",
+]);
+
+/**
+ * Availability is machine-local UI state, but overlapping inspections still
+ * need a per-asset latest-request-wins fence. A later Verify for asset 1 must
+ * not discard a non-overlapping asset 2 result from an earlier Verify All.
+ * Reset advances the generation and clears ownership so every prior project
+ * operation is rejected, even if a new project reuses the same asset ID.
+ */
+export function createMediaAssetAvailabilityApplyFence() {
+  let nextGeneration = 0;
+  let latestStatusGeneration = 0;
+  const latestGenerationByAsset = new Map<number, number>();
+  const allocateGeneration = () => {
+    if (nextGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Media availability request generations are exhausted; restart Syndocal before verifying again.");
+    }
+    nextGeneration += 1;
+    return nextGeneration;
+  };
+  const reserveAssetsAtGeneration = (assetIds: readonly number[], generation: number) => {
+    const reservation = new Map<number, number>();
+    for (const assetId of assetIds) {
+      latestGenerationByAsset.set(assetId, generation);
+      reservation.set(assetId, generation);
+    }
+    return reservation;
+  };
+  return {
+    // A verification owns both per-asset application and the aggregate status
+    // line. Relink deliberately has no reservation here: a successful Relink
+    // decides whether to clear its row from the row's terminal E/R/H, rather
+    // than cancelling a concurrently completing Verify request by invocation
+    // order alone.
+    reserveVerification: (assetIds: readonly number[]) => {
+      const generation = allocateGeneration();
+      // A verification reports one aggregate status line as well as individual
+      // asset values.  The aggregate has stricter ownership than the entries:
+      // a later Verify [1] may leave A's asset 2 applicable, but A must never
+      // replace B's status line after B has begun.
+      latestStatusGeneration = generation;
+      return {
+        assets: reserveAssetsAtGeneration(assetIds, generation),
+        statusGeneration: generation,
+      };
+    },
+    canApply: (reservation: ReadonlyMap<number, number>, assetId: number) => {
+      const generation = reservation.get(assetId);
+      return generation !== undefined && latestGenerationByAsset.get(assetId) === generation;
+    },
+    canPublishStatus: (reservation: { statusGeneration: number }) => {
+      return latestStatusGeneration === reservation.statusGeneration;
+    },
+    reset: () => {
+      latestStatusGeneration = allocateGeneration();
+      latestGenerationByAsset.clear();
+    },
+  };
+}
+
+/**
+ * Verify and Relink share the Media Library's single aggregate status line.
+ * Row availability remains deliberately per-asset above, but this lease makes
+ * the visible status line latest-invocation-wins across both operations. A
+ * reset revokes every prior project operation before an ID can be reused.
+ */
+export function createMediaLibraryStatusLease() {
+  let generation = 0;
+  const advance = () => {
+    if (generation >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Media Library status generations are exhausted; restart Syndocal before trying again.");
+    }
+    generation += 1;
+    return generation;
+  };
+  return {
+    begin: () => advance(),
+    reset: () => advance(),
+    isCurrent: (lease: number) => generation === lease,
+  };
+}
+
+type MediaAssetAvailabilityAuthority = {
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+};
+
+/**
+ * A machine-local availability row has its own authoritative terminal result.
+ * Keep that E/R/H beside, rather than inside, the serializable availability
+ * payload so Relink can clear only a row that did not already verify the exact
+ * same post-relink project image.
+ */
+export function createMediaAssetAvailabilityRowAuthority() {
+  const terminalAuthorityByAsset = new Map<number, MediaAssetAvailabilityAuthority>();
+  const matches = (left: MediaAssetAvailabilityAuthority, right: MediaAssetAvailabilityAuthority) =>
+    left.project_epoch === right.project_epoch
+    && left.project_revision === right.project_revision
+    && left.checkpoint_hash === right.checkpoint_hash;
+  return {
+    record: (assetId: number, authority: MediaAssetAvailabilityAuthority) => {
+      terminalAuthorityByAsset.set(assetId, { ...authority });
+    },
+    shouldClearAfterRelink: (assetId: number, relinkAuthority: MediaAssetAvailabilityAuthority) => {
+      const recorded = terminalAuthorityByAsset.get(assetId);
+      if (recorded && matches(recorded, relinkAuthority)) return false;
+      terminalAuthorityByAsset.delete(assetId);
+      return true;
+    },
+    reset: () => terminalAuthorityByAsset.clear(),
+  };
+}
+
+/**
+ * Bootstrap busy state is a local lease, not an authority-derived boolean.
+ * Project replacement revokes the old lease before making its UI visible, so a
+ * delayed A finally cannot clear a newer C setup in the same empty show.
+ */
+export function createVjFirstRunOperationLease() {
+  let generation = 0;
+  const advance = () => {
+    if (!Number.isSafeInteger(generation) || generation >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("First-run VJ operation generations are exhausted; restart Syndocal before trying again.");
+    }
+    generation += 1;
+    return generation;
+  };
+  return {
+    begin: () => advance(),
+    reset: () => advance(),
+    isCurrent: (lease: number) => generation === lease,
+    applyIfCurrent: (lease: number, apply: () => void): boolean => {
+      if (generation !== lease) return false;
+      apply();
+      return true;
+    },
+  };
+}
+
+/**
+ * Mapping preflight never guesses that a same-epoch revision is ours. The
+ * result is admissible only when it is the original exact E/R/H or the exact
+ * terminal E/R/H returned by this renderer's successful mapping CAS ACK.
+ */
+export function mediaAssetMappingPreflightProvenance(
+  expected: MediaAssetAvailabilityAuthority,
+  current: MediaAssetAvailabilityAuthority,
+  ownAcknowledgements: readonly MediaAssetAvailabilityAuthority[],
+): "unchanged" | "own_mapping_ack" | null {
+  const matches = (left: MediaAssetAvailabilityAuthority, right: MediaAssetAvailabilityAuthority) =>
+    left.project_epoch === right.project_epoch
+    && left.project_revision === right.project_revision
+    && left.checkpoint_hash === right.checkpoint_hash;
+  if (matches(expected, current)) return "unchanged";
+  return ownAcknowledgements.some((acknowledgement) => matches(acknowledgement, current))
+    ? "own_mapping_ack"
+    : null;
+}
+
 const projectHistoryMutationFromUnknown = (value: unknown): ProjectHistoryMutationResult | null => {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Record<string, unknown>;
@@ -992,7 +1164,9 @@ const invoke = async <T,>(command: string, args?: Record<string, unknown>): Prom
   const serverAuthoritativeMutation = serverAuthoritativeProjectMutationCommands.has(command);
   const projectMutation = rendererTicketedMutation || serverAuthoritativeMutation;
   const terminalRecovery = mediaAssetTerminalRecoveryCommands.has(command);
-  if (!terminalRecovery && !operatorCommandAllowed(activeOperatorLockMode, command, projectMutation)) {
+  const mediaAssetAvailabilityReadOnly = mediaAssetAvailabilityReadOnlyCommands.has(command);
+  if (!terminalRecovery && !mediaAssetAvailabilityReadOnly
+    && !operatorCommandAllowed(activeOperatorLockMode, command, projectMutation)) {
     throw new Error(
       activeOperatorLockMode === "Full"
         ? "Operator Full Lock allows only status reads and emergency blackout controls."
@@ -1518,6 +1692,18 @@ type ProjectControlMappingsAuthority = {
   mapping_runtimes_retired?: boolean;
 };
 
+type ProjectControlMappingsPersistResult =
+  | { kind: "acknowledged"; authority: ProjectAuthorityToken }
+  | { kind: "untrusted"; authority: ProjectAuthorityToken };
+
+type ProjectControlMappingsFlushResult = {
+  authority: ProjectAuthorityToken;
+  /** Exact terminal E/R/H values returned by successful local CAS writes. */
+  ownAcknowledgements: ProjectAuthorityToken[];
+  /** False after CAS recovery/read, a stale request, or an incomplete flush. */
+  trusted: boolean;
+};
+
 type ProjectTransactionTicket = {
   transaction_id: number;
   project_epoch: number;
@@ -1826,7 +2012,7 @@ export default function App() {
   let authorityDispositionInitialized = false;
   let savedProjectAuthorityBaseline: SavedProjectAuthorityBaseline | null = null;
   let projectDirtyUsesAuthorityBaseline = false;
-  let mappingPersistPromise: Promise<void> | null = null;
+  let mappingPersistPromise: Promise<ProjectControlMappingsPersistResult> | null = null;
   let mappingObservedSignature: string | null = null;
   const [oscMapAddress, setOscMapAddress] = createSignal("/touchosc/fader1");
   const [oscMapAction, setOscMapAction] = createSignal<OscControlAction>("FixtureAttribute");
@@ -1920,31 +2106,63 @@ export default function App() {
   // A Browse selection belongs to the project identity visible before its
   // native picker opened. One Add consumes the fence; manually editing the
   // path intentionally starts a fresh operation from the current identity.
-  const [videoSourceSelectionEpoch, setVideoSourceSelectionEpoch] = createSignal<number | null>(null);
+  const [videoSourceSelectionAuthority, setVideoSourceSelectionAuthority] =
+    createSignal<ProjectAuthorityToken | null>(null);
   const setVideoPathFromOperator = (path: string) => {
     setVideoPath(path);
-    setVideoSourceSelectionEpoch(null);
+    setVideoSourceSelectionAuthority(null);
   };
   // Media operations may span a native picker, hashing, and a short project
-  // ticket. Keep their AbortControllers outside view state so an authority
-  // replacement or component teardown can stop every still-active operation
-  // without adding a permanent UI control.
-  const activeMediaAssetOperationControllers = new Set<AbortController>();
-  const beginMediaAssetOperation = () => {
+  // ticket. The controller stays outside view state, while its exact phase is
+  // projected into the VJ desk so Cancel always aborts the real operation.
+  const [activeMediaAssetOperations, setActiveMediaAssetOperations] =
+    createSignal<MediaAssetActiveOperation[]>([]);
+  const [mediaAssetAvailabilityById, setMediaAssetAvailabilityById] =
+    createSignal<Record<number, MediaAssetAvailability>>({});
+  const mediaAssetAvailabilityApplyFence = createMediaAssetAvailabilityApplyFence();
+  const mediaAssetAvailabilityRowAuthority = createMediaAssetAvailabilityRowAuthority();
+  const [lastMediaAssetImportReport, setLastMediaAssetImportReport] =
+    createSignal<MediaAssetImportReport | null>(null);
+  let nextMediaAssetUiOperationId = 0;
+  const activeMediaAssetOperationControllers = new Map<number, AbortController>();
+  const beginMediaAssetOperation = (
+    label: string,
+    initialPhase: MediaAssetOperationPhase,
+  ) => {
     const controller = new AbortController();
-    activeMediaAssetOperationControllers.add(controller);
+    nextMediaAssetUiOperationId += 1;
+    const id = nextMediaAssetUiOperationId;
+    activeMediaAssetOperationControllers.set(id, controller);
+    setActiveMediaAssetOperations((current) => [...current, { id, label, phase: initialPhase }]);
     let released = false;
     return {
       signal: controller.signal,
+      setPhase: (phase: MediaAssetOperationPhase) => {
+        if (released || controller.signal.aborted) return;
+        setActiveMediaAssetOperations((current) => current.map((operation) =>
+          operation.id === id ? { ...operation, phase } : operation));
+      },
       release: () => {
         if (released) return;
         released = true;
-        activeMediaAssetOperationControllers.delete(controller);
+        activeMediaAssetOperationControllers.delete(id);
+        setActiveMediaAssetOperations((current) => current.filter((operation) => operation.id !== id));
       },
     };
   };
+  const cancelMediaAssetOperation = (id: number) => {
+    const controller = activeMediaAssetOperationControllers.get(id);
+    if (!controller || controller.signal.aborted) return;
+    controller.abort();
+    setActiveMediaAssetOperations((current) => current.map((operation) =>
+      operation.id === id ? { ...operation, phase: "cancelling" } : operation));
+  };
   const abortActiveMediaAssetOperations = () => {
-    for (const controller of activeMediaAssetOperationControllers) controller.abort();
+    for (const controller of activeMediaAssetOperationControllers.values()) controller.abort();
+    setActiveMediaAssetOperations((current) => current.map((operation) => ({
+      ...operation,
+      phase: "cancelling",
+    })));
   };
   onCleanup(() => abortActiveMediaAssetOperations());
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
@@ -1959,8 +2177,42 @@ export default function App() {
   const [vjFirstRunBusy, setVjFirstRunBusy] = createSignal(false);
   const [vjFirstRunError, setVjFirstRunError] = createSignal<string | null>(null);
   const [vjFirstRunAwaitingSync, setVjFirstRunAwaitingSync] = createSignal(false);
+  const vjFirstRunOperationLease = createVjFirstRunOperationLease();
+  let vjFirstRunAwaitingSyncLease: number | null = null;
+  const setVjFirstRunAwaitingSyncForLease = (lease: number, awaiting: boolean) => {
+    return vjFirstRunOperationLease.applyIfCurrent(lease, () => {
+      vjFirstRunAwaitingSyncLease = awaiting ? lease : null;
+      setVjFirstRunAwaitingSync(awaiting);
+    });
+  };
+  const mediaLibraryStatusLease = createMediaLibraryStatusLease();
   const [autoVjBusy, setAutoVjBusy] = createSignal(false);
   const [videoClipThumbnails, setVideoClipThumbnails] = createSignal<Record<number, string>>({});
+  const [videoThumbnailAccessAuthorized, setVideoThumbnailAccessAuthorized] = createSignal(false);
+  let videoThumbnailGeneration = 0;
+  let videoThumbnailUrlCache: Record<number, string> = {};
+  const videoThumbnailSignatures = new Map<number, string>();
+  const authorizeVideoThumbnailAccess = () => setVideoThumbnailAccessAuthorized(true);
+  const resetMediaAssetUiForProjectReplacement = () => {
+    videoThumbnailGeneration += 1;
+    videoThumbnailUrlCache = {};
+    videoThumbnailSignatures.clear();
+    setVideoThumbnailAccessAuthorized(false);
+    setVideoClipThumbnails({});
+    mediaAssetAvailabilityApplyFence.reset();
+    mediaLibraryStatusLease.reset();
+    mediaAssetAvailabilityRowAuthority.reset();
+    setMediaAssetAvailabilityById({});
+    setLastMediaAssetImportReport(null);
+    // A failed A bootstrap must not leave a retry error on a newly admitted B
+    // or C project.  The old operation is already aborted by the authority
+    // transition; its guarded finally block cannot clear a newer busy state.
+    vjFirstRunOperationLease.reset();
+    vjFirstRunAwaitingSyncLease = null;
+    setVjFirstRunBusy(false);
+    setVjFirstRunError(null);
+    setVjFirstRunAwaitingSync(false);
+  };
   const [videoAudioMonitorStatus, setVideoAudioMonitorStatus] = createSignal<VideoAudioMonitorStatus>({
     output_open: false,
     active_layer_ids: [],
@@ -10102,21 +10354,38 @@ export default function App() {
       setMessage("Named network/GPU sources do not use a local file picker.");
       return;
     }
+    const initiatingAuthority = captureProjectAuthorityIdentity();
+    let sideEffectAuthority = initiatingAuthority;
+    const sideEffectsAreCurrent = () => isProjectAuthorityIdentityCurrent(sideEffectAuthority);
+    let mediaOperation: ReturnType<typeof beginMediaAssetOperation> | null = null;
     try {
-      const expectedEpoch = captureProjectAuthorityIdentity().project_epoch;
+      const preparedStart = await preflightAndBeginMediaAssetOperation(
+        initiatingAuthority,
+        prepareMediaAssetOperationStart,
+        () => beginMediaAssetOperation("Choose video source", "picker"),
+      );
+      sideEffectAuthority = preparedStart.authority;
+      mediaOperation = preparedStart.operation;
       const path = await invoke<string | null>("select_video_source_file", { kind: sourceKind });
+      if (!sideEffectsAreCurrent()) return;
+      if (mediaOperation.signal.aborted) {
+        setMessage("Video source selection canceled.");
+        return;
+      }
       if (!path) {
         setMessage("Video source selection canceled.");
         return;
       }
       setVideoPath(path);
-      setVideoSourceSelectionEpoch(expectedEpoch);
+      setVideoSourceSelectionAuthority(sideEffectAuthority);
       if (shouldReplaceVideoLayerDraftLabel(videoLabel())) {
         setVideoLabel(mediaLabelFromPath(path));
       }
       setMessage(`Selected ${path}`);
     } catch (error) {
-      setMessage(String(error));
+      if (sideEffectsAreCurrent()) setMessage(String(error));
+    } finally {
+      mediaOperation?.release();
     }
   };
 
@@ -12204,16 +12473,20 @@ export default function App() {
     return true;
   };
 
-  const persistProjectControlMappings = (): Promise<void> => {
+  const persistProjectControlMappings = (): Promise<ProjectControlMappingsPersistResult> => {
+    const untrusted = (): ProjectControlMappingsPersistResult => ({
+      kind: "untrusted",
+      authority: captureProjectAuthorityIdentity(),
+    });
     if (
       mappingSyncDisposed
       || !isTauriRuntime()
       || !projectMappingsAuthorityReady()
     ) {
-      return Promise.resolve();
+      return Promise.resolve(untrusted());
     }
     if (mappingSyncInFlight) {
-      return mappingPersistPromise ?? Promise.resolve();
+      return mappingPersistPromise ?? Promise.resolve(untrusted());
     }
 
     const sentGeneration = projectAuthoritySync.localGeneration;
@@ -12222,7 +12495,7 @@ export default function App() {
     const authority = projectMappingsAuthority();
     const sentMappings = currentProjectControlMappings();
     mappingSyncInFlight = true;
-    const request = (async () => {
+    const request = (async (): Promise<ProjectControlMappingsPersistResult> => {
       try {
         const next = await tauriInvoke<ProjectControlMappingsAuthority>("set_project_control_mappings", {
           expectedEpoch: authority.project_epoch,
@@ -12249,12 +12522,17 @@ export default function App() {
             // MIDI Clock visible because it remains live by design.
             resetRetiredMappingDrivenProjectControlInputUi();
           }
+          const acknowledged = authorityToken(next);
+          if (projectAuthorityTokenIsCurrent(acknowledged, projectMappingsAuthority())) {
+            return { kind: "acknowledged", authority: acknowledged };
+          }
         }
+        return untrusted();
       } catch (error) {
         // A CAS rejection gets a fresh authoritative token. It is still bound
         // to the original identity/request: an A recovery reply cannot reset
         // arrays or tokens after B has hydrated.
-        if (!mappingResponseIsCurrent(started.request)) return;
+        if (!mappingResponseIsCurrent(started.request)) return untrusted();
         const recoveryStarted = beginProjectAuthorityRequest(projectAuthoritySync);
         projectAuthoritySync = recoveryStarted.state;
         try {
@@ -12278,11 +12556,14 @@ export default function App() {
             setMessage(`Unable to update project control mappings: ${String(error)}`);
           }
         }
+        // A recovery read proves only that a different authority was observed;
+        // it is never evidence that this media gesture may rebase onto it.
+        return untrusted();
       }
     })();
-    mappingPersistPromise = request;
-    void request.finally(() => {
-      if (mappingPersistPromise === request) {
+    let settled: Promise<ProjectControlMappingsPersistResult>;
+    settled = request.finally(() => {
+      if (mappingPersistPromise === settled) {
         mappingPersistPromise = null;
         mappingSyncInFlight = false;
       }
@@ -12296,39 +12577,59 @@ export default function App() {
         scheduleProjectControlMappingsPersist(0);
       }
     });
-    return request;
+    mappingPersistPromise = settled;
+    return settled;
   };
 
-  const flushProjectControlMappingsAuthority = async () => {
+  const flushProjectControlMappingsAuthority = async (): Promise<ProjectControlMappingsFlushResult> => {
     if (mappingSyncTimer !== null) {
       window.clearTimeout(mappingSyncTimer);
       mappingSyncTimer = null;
     }
+    const ownAcknowledgements: ProjectAuthorityToken[] = [];
+    let trusted = true;
     while (
       !mappingSyncDisposed
       && projectMappingsAuthorityReady()
       && projectAuthorityHasDirtyMappings(projectAuthoritySync)
     ) {
       const identityGeneration = projectAuthoritySync.identityGeneration;
-      await persistProjectControlMappings();
+      const persisted = await persistProjectControlMappings();
+      if (persisted.kind === "acknowledged") {
+        ownAcknowledgements.push(persisted.authority);
+      } else {
+        trusted = false;
+        break;
+      }
       if (identityGeneration !== projectAuthoritySync.identityGeneration || mappingSyncInFlight) {
-        return;
+        trusted = false;
+        break;
       }
       // A rejected latest edit is hydrated above and marks itself current; a
       // newer local edit loops with the newly adopted CAS token.
-      if (!projectAuthorityHasDirtyMappings(projectAuthoritySync)) return;
+      if (!projectAuthorityHasDirtyMappings(projectAuthoritySync)) break;
     }
+    return {
+      authority: captureProjectAuthorityIdentity(),
+      ownAcknowledgements,
+      trusted: trusted
+        && !mappingSyncDisposed
+        && !mappingSyncInFlight
+        && !projectAuthorityHasDirtyMappings(projectAuthoritySync),
+    };
   };
   const flushProjectControlMappingsBeforeMutation = async (): Promise<number> => {
     const expectedEpoch = projectMappingsAuthority().project_epoch;
-    await flushProjectControlMappingsAuthority();
-    if (projectMappingsAuthority().project_epoch !== expectedEpoch) {
+    const flushed = await flushProjectControlMappingsAuthority();
+    if (!flushed.trusted || projectMappingsAuthority().project_epoch !== expectedEpoch) {
       throw new Error("Project changed while synchronizing control mappings; retry the edit.");
     }
     return expectedEpoch;
   };
   flushProjectControlMappingsBeforeProjectMutation = flushProjectControlMappingsBeforeMutation;
-  const prepareMediaAssetOperationStart = async (expectedEpoch: number): Promise<number> => {
+  const prepareMediaAssetOperationStart = async (
+    expectedAuthority: ProjectAuthorityToken,
+  ): Promise<{ authority: ProjectAuthorityToken; provenance: "unchanged" | "own_mapping_ack" }> => {
     const mode = operatorLockMode();
     if (!operatorCommandAllowed(mode, "start_media_asset_operation", true)) {
       throw new Error(
@@ -12339,11 +12640,29 @@ export default function App() {
     }
     // No new Media AbortController exists yet. Publishing a dirty mapping may
     // abort older operations, but cannot self-abort the operation being started.
-    const currentEpoch = await flushProjectControlMappingsBeforeMutation();
-    if (currentEpoch !== expectedEpoch) {
+    const flushed = await flushProjectControlMappingsAuthority();
+    const authority = captureProjectAuthorityIdentity();
+    if (authority.project_epoch !== expectedAuthority.project_epoch || !flushed.trusted) {
       throw new Error("Project changed while the media operation was starting; nothing was applied.");
     }
-    return currentEpoch;
+    const provenance = mediaAssetMappingPreflightProvenance(
+      expectedAuthority,
+      authority,
+      flushed.ownAcknowledgements,
+    );
+    if (!provenance) {
+      throw new Error("Project control mappings changed outside this media operation; choose the media action again.");
+    }
+    return { authority, provenance };
+  };
+  const prepareMediaAssetAvailabilityInspection = async (
+    expectedAuthority: ProjectAuthorityToken,
+  ): Promise<{ authority: ProjectAuthorityToken; provenance: "read_only" }> => {
+    const authority = captureProjectAuthorityIdentity();
+    if (authority.project_epoch !== expectedAuthority.project_epoch) {
+      throw new Error("Project changed while media availability verification was starting; nothing was applied.");
+    }
+    return { authority, provenance: "read_only" };
   };
 
   createEffect(() => {
@@ -12545,6 +12864,7 @@ export default function App() {
     // from one admission+coordinator capture and therefore become visible as
     // one B (or C) image to the UI.
     batch(() => {
+      if (replacement) resetMediaAssetUiForProjectReplacement();
       if (preparedMappings) {
         commitPreparedProjectControlMappings(preparedMappings);
       } else {
@@ -14514,7 +14834,7 @@ export default function App() {
     stopOscInput,
   } = createControlInputController({
     invoke,
-    flushProjectControlMappingsAuthority,
+    flushProjectControlMappingsAuthority: async () => { await flushProjectControlMappingsAuthority(); },
     captureProjectAuthorityIdentity,
     isProjectAuthorityIdentityCurrent,
     setMessage,
@@ -16084,6 +16404,7 @@ export default function App() {
     moveVideoLayer,
     setVideoLayerLabel,
     refreshVideoLayerMetadata,
+    relinkMediaAsset,
     importVideoLayerIsf,
     applyBuiltinVideoIsfEffect,
     setVideoLayerIsfEffect,
@@ -16122,15 +16443,27 @@ export default function App() {
     refreshSnapshot,
     setMessage,
     videoSourceKind,
-    getCurrentProjectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
+    getCurrentProjectAuthority: captureProjectAuthorityIdentity,
     prepareMediaAssetOperationStart,
     isProjectAuthorityCurrent: isProjectAuthorityIdentityCurrent,
-    consumeVideoSourceExpectedEpoch: () => {
-      const expectedEpoch = videoSourceSelectionEpoch();
-      setVideoSourceSelectionEpoch(null);
-      return expectedEpoch ?? captureProjectAuthorityIdentity().project_epoch;
+    consumeVideoSourceExpectedAuthority: () => {
+      const expectedAuthority = videoSourceSelectionAuthority();
+      setVideoSourceSelectionAuthority(null);
+      return expectedAuthority ?? captureProjectAuthorityIdentity();
     },
     beginMediaAssetOperation,
+    setMediaAssetImportReport: (report) => {
+      if (report === null || isProjectAuthorityIdentityCurrent({
+        project_epoch: report.project_epoch,
+        project_revision: report.project_revision,
+        checkpoint_hash: report.checkpoint_hash,
+      })) {
+        setLastMediaAssetImportReport(report);
+      }
+    },
+    confirmMediaAssetAdoption: (assetId, replacementPath) => globalThis.confirm(uiLocale() === "ja"
+      ? `メディア素材 ${assetId} の置換コンテンツを採用しますか？\n\n${replacementPath}\n\n保存済みのコンテンツ識別子を変更し、この素材へのすべての参照を更新します。`
+      : `Adopt replacement content for media asset ${assetId}?\n\n${replacementPath}\n\nThis changes the saved content identity and updates every reference to this asset.`),
     projectTransactionOwnerId,
     videoLabel,
     setVideoLabel,
@@ -16331,7 +16664,8 @@ export default function App() {
       vjFirstRunAwaitingSync() &&
       (snapshot().video.layers.length > 0 || snapshot().video.outputs.length > 0)
     ) {
-      setVjFirstRunAwaitingSync(false);
+      const awaitingLease = vjFirstRunAwaitingSyncLease;
+      if (awaitingLease !== null) setVjFirstRunAwaitingSyncForLease(awaitingLease, false);
     }
   });
   const createFirstRunVjShow = async () => {
@@ -16340,6 +16674,10 @@ export default function App() {
       setMessage("First-run VJ setup is only available for an empty video show.");
       return;
     }
+    const initiatingAuthority = captureProjectAuthorityIdentity();
+    const firstRunLease = vjFirstRunOperationLease.begin();
+    let sideEffectAuthority = initiatingAuthority;
+    const sideEffectsAreCurrent = () => isProjectAuthorityIdentityCurrent(sideEffectAuthority);
     setVjFirstRunBusy(true);
     setVjFirstRunError(null);
     let mediaOperation: ReturnType<typeof beginMediaAssetOperation> | null = null;
@@ -16347,14 +16685,15 @@ export default function App() {
       // Capture before opening the picker. The staged helper passes this
       // identity into Prepare/Finalize and the authoritative Commit. Flush
       // mappings before registering this operation so it cannot self-abort.
-      const expectedEpoch = captureProjectAuthorityIdentity().project_epoch;
       const preparedStart = await preflightAndBeginMediaAssetOperation(
-        expectedEpoch,
+        initiatingAuthority,
         prepareMediaAssetOperationStart,
-        beginMediaAssetOperation,
+        () => beginMediaAssetOperation("Set up first VJ show", "picker"),
       );
+      sideEffectAuthority = preparedStart.authority;
       mediaOperation = preparedStart.operation;
       const paths = await invoke<string[]>("select_video_source_files", { kind: "File" });
+      if (!sideEffectsAreCurrent()) return;
       if (paths.length === 0) {
         setMessage("VJ setup canceled. No project changes were made.");
         return;
@@ -16363,9 +16702,20 @@ export default function App() {
         invoke,
         kind: "File",
         paths,
-        expectedEpoch: preparedStart.expectedEpoch,
+        expectedEpoch: sideEffectAuthority.project_epoch,
+        expectedAuthority: sideEffectAuthority,
         ownerId: projectTransactionOwnerId,
         signal: mediaOperation.signal,
+        onPhase: mediaOperation.setPhase,
+        onReport: (report) => {
+          if (isProjectAuthorityIdentityCurrent({
+            project_epoch: report.project_epoch,
+            project_revision: report.project_revision,
+            checkpoint_hash: report.checkpoint_hash,
+          })) {
+            setLastMediaAssetImportReport(report);
+          }
+        },
         commitCommand: "commit_prepared_bootstrap_vj_show_authoritative",
         requireAllPrepared: true,
         commitArgs: {
@@ -16373,33 +16723,34 @@ export default function App() {
         },
       });
       const result = staged.committed;
-      if (!result) {
-        if (!isProjectAuthorityIdentityCurrent(staged.terminalAuthority)) return;
-        setMessage(mediaAssetImportReportMessage(staged.report));
-        return;
-      }
+      sideEffectAuthority = staged.terminalAuthority;
       const terminalIsCurrent = () =>
         staged.applicationCurrent && isProjectAuthorityIdentityCurrent(staged.terminalAuthority);
       if (!terminalIsCurrent()) return;
+      setLastMediaAssetImportReport(staged.report);
+      if (!result) {
+        setMessage(mediaAssetImportReportMessage(staged.report));
+        return;
+      }
       // The staged media commit settled. Preview/snapshot reconciliation below
       // is no longer part of the cancellable picker/hash/ticket operation.
       mediaOperation.release();
-      setVjFirstRunAwaitingSync(true);
+      setVjFirstRunAwaitingSyncForLease(firstRunLease, true);
       const refreshed = await refreshSnapshot();
       if (!terminalIsCurrent()) {
-        setVjFirstRunAwaitingSync(false);
+        setVjFirstRunAwaitingSyncForLease(firstRunLease, false);
         return;
       }
       const firstLayerId = result.layer_ids[0] ?? null;
       if (!terminalIsCurrent()) {
-        setVjFirstRunAwaitingSync(false);
+        setVjFirstRunAwaitingSyncForLease(firstRunLease, false);
         return;
       }
       const previewStaged = firstLayerId === null
         ? false
         : await stageVjPreviewLayer(firstLayerId, staged.terminalAuthority);
       if (!terminalIsCurrent()) {
-        setVjFirstRunAwaitingSync(false);
+        setVjFirstRunAwaitingSyncForLease(firstRunLease, false);
         return;
       }
       setSelectedVideoOutputId(result.output_id);
@@ -16412,7 +16763,7 @@ export default function App() {
         setMessage(detail);
         return;
       }
-      setVjFirstRunAwaitingSync(false);
+      setVjFirstRunAwaitingSyncForLease(firstRunLease, false);
       if (!previewStaged) {
         const detail = uiLocale() === "ja"
           ? "VJショーは安全に作成されましたが、最初のクリップをPREVIEWへ送れませんでした。Pボタンで再試行できます。"
@@ -16426,12 +16777,13 @@ export default function App() {
         `VJ show ready with ${result.layer_ids.length} clip(s). VJ Program remains Off and Blackout until you enable it explicitly.${failures > 0 ? ` ${mediaAssetImportReportMessage(staged.report)}` : ""}`,
       );
     } catch (error) {
+      if (!sideEffectsAreCurrent()) return;
       const detail = String(error);
       setVjFirstRunError(uiLocale() === "ja" ? `VJセットアップに失敗しました。${detail}` : detail);
       setMessage(detail);
     } finally {
       mediaOperation?.release();
-      setVjFirstRunBusy(false);
+      if (vjFirstRunOperationLease.isCurrent(firstRunLease)) setVjFirstRunBusy(false);
     }
   };
   const videoThumbnailSourceSignature = createMemo(() => JSON.stringify(
@@ -16442,9 +16794,6 @@ export default function App() {
       name: layer.source.name ?? null,
     })),
   ));
-  let videoThumbnailGeneration = 0;
-  let videoThumbnailUrlCache: Record<number, string> = {};
-  const videoThumbnailSignatures = new Map<number, string>();
   createEffect(() => {
     const sources = JSON.parse(videoThumbnailSourceSignature()) as Array<{
       id: number;
@@ -16453,6 +16802,10 @@ export default function App() {
       name: string | null;
     }>;
     const generation = ++videoThumbnailGeneration;
+    if (!videoThumbnailAccessAuthorized()) {
+      setVideoClipThumbnails({});
+      return;
+    }
     const activeIds = new Set(sources.map((source) => source.id));
     for (const layerId of videoThumbnailSignatures.keys()) {
       if (!activeIds.has(layerId)) videoThumbnailSignatures.delete(layerId);
@@ -16488,6 +16841,90 @@ export default function App() {
       setVideoClipThumbnails(nextUrls);
     })();
   });
+  const inspectMediaAssetIds = async (assetIds: MediaAssetId[]) => {
+    const statusLease = mediaLibraryStatusLease.begin();
+    const setMediaLibraryStatus = (message: string) => {
+      if (mediaLibraryStatusLease.isCurrent(statusLease)) setMessage(message);
+    };
+    const knownIds = new Set(snapshot().video.media_assets.map((asset) => asset.id));
+    const requested = [...new Set(assetIds)].filter((assetId) => knownIds.has(assetId));
+    if (requested.length === 0) {
+      setMediaLibraryStatus("No Media Library assets are available to verify.");
+      return;
+    }
+    const initiatingAuthority = captureProjectAuthorityIdentity();
+    let sideEffectAuthority = initiatingAuthority;
+    const availabilityReservation = mediaAssetAvailabilityApplyFence.reserveVerification(requested);
+    const statusIsCurrent = () => isProjectAuthorityIdentityCurrent(sideEffectAuthority)
+      && mediaAssetAvailabilityApplyFence.canPublishStatus(availabilityReservation)
+      && mediaLibraryStatusLease.isCurrent(statusLease);
+    let mediaOperation: ReturnType<typeof beginMediaAssetOperation> | null = null;
+    try {
+      const preparedStart = await preflightAndBeginMediaAssetOperation(
+        initiatingAuthority,
+        prepareMediaAssetAvailabilityInspection,
+        () => beginMediaAssetOperation(
+          requested.length === 1 ? `Verify media asset ${requested[0]}` : `Verify ${requested.length} media assets`,
+          "preparing",
+        ),
+      );
+      sideEffectAuthority = preparedStart.authority;
+      mediaOperation = preparedStart.operation;
+      if (!isProjectAuthorityIdentityCurrent(sideEffectAuthority)) return;
+      const inspected = await inspectMediaAssetAvailability({
+        invoke,
+        assetIds: requested,
+        verifyHash: true,
+        expectedEpoch: sideEffectAuthority.project_epoch,
+        expectedAuthority: sideEffectAuthority,
+        ownerId: projectTransactionOwnerId,
+        signal: mediaOperation.signal,
+        onPhase: mediaOperation.setPhase,
+      });
+      if (!isProjectAuthorityIdentityCurrent(inspected.terminalAuthority)) return;
+      const applicableAvailability = inspected.report.availability.filter((availability) =>
+        mediaAssetAvailabilityApplyFence.canApply(availabilityReservation.assets, availability.asset_id));
+      if (applicableAvailability.length === 0) {
+        if (statusIsCurrent()) setMessage("Media availability result was superseded by a newer verification.");
+        return;
+      }
+      setMediaAssetAvailabilityById((current) => {
+        const next = { ...current };
+        for (const availability of applicableAvailability) {
+          next[availability.asset_id] = availability;
+          mediaAssetAvailabilityRowAuthority.record(availability.asset_id, inspected.terminalAuthority);
+        }
+        return next;
+      });
+      const verified = applicableAvailability.filter((entry) => entry.kind === "available_verified").length;
+      const attention = applicableAvailability.length - verified;
+      if (statusIsCurrent()) {
+        setMessage(
+          `Media availability: ${verified} verified${attention > 0 ? `, ${attention} need attention` : ""}. Project history was not changed.`,
+        );
+      }
+    } catch (error) {
+      if (statusIsCurrent()) {
+        setMessage(error instanceof DOMException && error.name === "AbortError"
+          ? "Media availability verification canceled."
+          : String(error));
+      }
+    } finally {
+      mediaOperation?.release();
+    }
+  };
+  const relinkMediaLibraryAsset = async (assetId: MediaAssetId) => {
+    const statusLease = mediaLibraryStatusLease.begin();
+    const result = await relinkMediaAsset(assetId, (message) => {
+      if (mediaLibraryStatusLease.isCurrent(statusLease)) setMessage(message);
+    });
+    if (result?.outcome.kind !== "relinked") return;
+    if (!isProjectAuthorityIdentityCurrent(result.terminalAuthority)) return;
+    if (!mediaAssetAvailabilityRowAuthority.shouldClearAfterRelink(assetId, result.terminalAuthority)) return;
+    setMediaAssetAvailabilityById((current) => Object.fromEntries(
+      Object.entries(current).filter(([id]) => Number(id) !== assetId),
+    ));
+  };
   const videoLayerHasMonitorableAudio = (layerId: number) => {
     const layer = snapshot().video.layers.find((candidate) => candidate.id === layerId);
     return layer?.source.kind === "File" && layer.source.metadata?.has_audio !== false;
@@ -19584,6 +20021,7 @@ export default function App() {
 
   const selectControlMode = (mode: ControlMode) => {
     if (paneWindow === "timeline" && mode !== "live") return;
+    if (mode === "mixer") authorizeVideoThumbnailAccess();
     setControlMode(mode);
     if (mode === "edit") {
       setEditDeskSurface("attributes");
@@ -19593,6 +20031,11 @@ export default function App() {
       setTimelineDeskSurface("show");
       setTimelineContextDrawer((current) => current === "cue" ? "cue" : "none");
     }
+  };
+
+  const selectWorkspaceTab = (tab: WorkspaceTab) => {
+    if (tab === "control" && controlMode() === "mixer") authorizeVideoThumbnailAccess();
+    setWorkspaceTab(tab);
   };
 
   const selectEditDeskSurface = (surface: EditDeskSurface) => {
@@ -20056,6 +20499,7 @@ export default function App() {
       <WorkspaceChrome
         workspaceTab={workspaceTab()}
         setupSubTab={setupSubTab()}
+        controlMode={controlMode()}
         blackout={snapshot().blackout}
         videoBlackout={snapshot().video.blackout}
         lightingMaster={snapshot().lighting_master}
@@ -20121,8 +20565,9 @@ export default function App() {
             onUnlock={unlockOperator}
           />
         }
-        onWorkspaceTab={setWorkspaceTab}
+        onWorkspaceTab={selectWorkspaceTab}
         onSetupSubTab={selectSetupMode}
+        onControlMode={selectControlMode}
         onBack={() => void triggerPreviousCue()}
         onGo={() => void triggerNextCue()}
         onToggleFade={() => void setCueFadePaused(!snapshot().active_fade?.paused)}
@@ -21127,14 +21572,6 @@ export default function App() {
         <VideoControlPanel
           mixer={controlMode() === "mixer"}
           layerCount={snapshot().video.layers.length}
-          modeTabs={
-            <ControlModeSegment
-              class="mixerContextModeTabs"
-              controlMode={controlMode()}
-              operatorLockMode={operatorLockMode()}
-              onControlMode={selectControlMode}
-            />
-          }
           previewDiagnostics={{
             get layerCount() { return snapshot().video.layers.length; },
             get info() { return videoPreviewInfo(); },
@@ -21231,6 +21668,7 @@ export default function App() {
           clipGrid={{
             get layers() { return snapshot().video.layers; },
             get thumbnails() { return videoClipThumbnails(); },
+            get thumbnailsAuthorized() { return videoThumbnailAccessAuthorized(); },
             get fadeMs() { return videoOutputFadeMs(); },
             get audioMonitorVolume() { return videoAudioMonitorVolume(); },
             get audioMonitorLayerIds() { return videoAudioMonitorStatus().active_layer_ids; },
@@ -21293,6 +21731,17 @@ export default function App() {
             onStop: stopVideoClipFromGrid,
             onMonitorAudio: (layerId, volume) => playVideoLayerAudioMonitor(layerId, volume, selectedAudioOutputDevice()),
             onStopAudio: stopVideoLayerAudioMonitor,
+            onRequestThumbnails: authorizeVideoThumbnailAccess,
+          }}
+          mediaLibrary={{
+            get assets() { return snapshot().video.media_assets; },
+            get availabilityById() { return mediaAssetAvailabilityById(); },
+            get activeOperations() { return activeMediaAssetOperations(); },
+            get lastImportReport() { return lastMediaAssetImportReport(); },
+            backendAvailable: isTauriRuntime(),
+            onVerify: inspectMediaAssetIds,
+            onRelink: relinkMediaLibraryAsset,
+            onCancelOperation: cancelMediaAssetOperation,
           }}
           autoVj={{
             get snapshot() { return snapshot().video.auto_vj ?? emptyAutoVjSnapshot; },
@@ -21558,8 +22007,6 @@ export default function App() {
               </Show>
             </>
           }
-          operatorLockMode={operatorLockMode()}
-          onControlMode={selectControlMode}
           stageConfig={{
             stageMap: snapshot().stage_map,
             stageWorldBounds: stageWorldBounds(),

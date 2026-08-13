@@ -4,6 +4,8 @@ import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLa
 import {
   mediaAssetImportReportMessage,
   mediaAssetRelinkOutcomeMessage,
+  type MediaAssetOperationPreflight,
+  type MediaAssetOperationLease,
   preflightAndBeginMediaAssetOperation,
   prepareFinalizeAndCommitMediaAssetRelink,
   prepareFinalizeAndCommitMediaAssets,
@@ -16,6 +18,10 @@ import type {
   ExternalVideoTransportStatus,
   ExternalVideoTransportSyncReport,
   ExternalVideoTransportSyncResponse,
+  MediaAssetId,
+  MediaAssetImportReport,
+  MediaAssetOperationPhase,
+  MediaAssetRelinkOutcome,
   VideoBlendMode,
   VideoAudioMonitorStatus,
   VideoFrame,
@@ -39,16 +45,24 @@ interface VideoRuntimeControllerOptions {
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
   setMessage: (message: string) => unknown;
   videoSourceKind: Accessor<VideoSourceKind>;
-  /** Captured before any picker/prepare so A cannot commit into a later B. */
-  getCurrentProjectEpoch: Accessor<number>;
-  /** Operator-gated mapping flush; called before registering this operation. */
-  prepareMediaAssetOperationStart: (expectedEpoch: number) => Promise<number>;
+  /** Captured before any picker/prepare so A cannot commit or report into B. */
+  getCurrentProjectAuthority: Accessor<ProjectAuthorityToken>;
+  /**
+   * Operator-gated mapping flush before registration. Returns the exact
+   * post-flush E/R/H for same-project terminal side effects.
+   */
+  prepareMediaAssetOperationStart: (expectedAuthority: ProjectAuthorityToken) => Promise<MediaAssetOperationPreflight>;
   /** Live E/R/H check immediately before any terminal UI side effect. */
   isProjectAuthorityCurrent: (authority: ProjectAuthorityToken) => boolean;
-  /** Uses the epoch captured before Browse, then clears that one-shot fence. */
-  consumeVideoSourceExpectedEpoch: () => number;
+  /** Uses the full E/R/H captured before Browse, then clears that one-shot fence. */
+  consumeVideoSourceExpectedAuthority: () => ProjectAuthorityToken;
   /** Registers one picker/hash/commit operation for replacement/unmount abort. */
-  beginMediaAssetOperation: () => { signal: AbortSignal; release: () => void };
+  beginMediaAssetOperation: (
+    label: string,
+    phase: MediaAssetOperationPhase,
+  ) => MediaAssetOperationLease;
+  setMediaAssetImportReport: (report: MediaAssetImportReport | null) => void;
+  confirmMediaAssetAdoption: (assetId: MediaAssetId, replacementPath: string) => boolean;
   projectTransactionOwnerId: string;
   videoLabel: Accessor<string>;
   setVideoLabel: Setter<string>;
@@ -74,13 +88,27 @@ interface VideoRuntimeControllerOptions {
   setVideoOutputPreviewMode: Setter<"output" | "test">;
 }
 
+type MediaAssetRelinkUiResult = {
+  outcome: MediaAssetRelinkOutcome;
+  terminalAuthority: ProjectAuthorityToken;
+};
+
+const sameProjectAuthority = (left: ProjectAuthorityToken, right: ProjectAuthorityToken): boolean =>
+  left.project_epoch === right.project_epoch
+  && left.project_revision === right.project_revision
+  && left.checkpoint_hash === right.checkpoint_hash;
+
 export function createVideoRuntimeController(options: VideoRuntimeControllerOptions) {
+  const setMessageIfAuthorityCurrent = (authority: ProjectAuthorityToken, message: string) => {
+    if (options.isProjectAuthorityCurrent(authority)) options.setMessage(message);
+  };
   const canMutateVideoIsf = () => {
     if (!options.isIsfEventPulseBusy()) return true;
     options.setMessage("Wait for the active FX Event pulse to finish.");
     return false;
   };
   const addVideoLayer = async () => {
+    let sideEffectAuthority = options.getCurrentProjectAuthority();
     try {
       const sourceKind = options.videoSourceKind();
       if (sourceKind === "File" || sourceKind === "StillImage") {
@@ -89,30 +117,39 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
           options.setMessage("Choose a local media file before adding a layer.");
           return;
         }
-        const expectedEpoch = options.consumeVideoSourceExpectedEpoch();
+        const initiatingAuthority = options.consumeVideoSourceExpectedAuthority();
+        sideEffectAuthority = initiatingAuthority;
         const preparedStart = await preflightAndBeginMediaAssetOperation(
-          expectedEpoch,
+          initiatingAuthority,
           options.prepareMediaAssetOperationStart,
-          options.beginMediaAssetOperation,
+          () => options.beginMediaAssetOperation(`Add ${sourceKind === "StillImage" ? "still" : "video"} layer`, "preparing"),
         );
+        const operationAuthority = preparedStart.authority;
+        sideEffectAuthority = operationAuthority;
         const mediaOperation = preparedStart.operation;
         try {
+          if (!options.isProjectAuthorityCurrent(operationAuthority)) return;
           const staged = await prepareFinalizeAndCommitMediaAssets({
             invoke: options.invoke,
             kind: sourceKind,
             paths: [path],
-            expectedEpoch: preparedStart.expectedEpoch,
+            expectedEpoch: operationAuthority.project_epoch,
+            expectedAuthority: operationAuthority,
             ownerId: options.projectTransactionOwnerId,
             signal: mediaOperation.signal,
+            onPhase: mediaOperation.setPhase,
+            onReport: options.setMediaAssetImportReport,
             commitCommand: sourceKind === "StillImage"
               ? "commit_prepared_still_image_layer_authoritative"
               : "commit_prepared_video_file_layer_authoritative",
             commitArgs: { label: options.videoLabel() },
           });
           const layerId = staged.committed;
+          sideEffectAuthority = staged.terminalAuthority;
           if (!staged.applicationCurrent || !options.isProjectAuthorityCurrent(staged.terminalAuthority)) {
             return;
           }
+          options.setMediaAssetImportReport(staged.report);
           if (layerId === null) {
             options.setMessage(mediaAssetImportReportMessage(staged.report));
             return;
@@ -134,7 +171,11 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       options.setVideoLabel(`Layer ${options.snapshot().video.layers.length + 2}`);
       options.setMessage(`Added video layer ${layerId}`);
       await options.refreshSnapshot();
-    } catch (error) { options.setMessage(String(error)); }
+    } catch (error) {
+      // A picker/add error from A is not an error of a replacement B/C show.
+      // The actual current operation owns the status line after its E/R/H wins.
+      setMessageIfAuthorityCurrent(sideEffectAuthority, String(error));
+    }
   };
   const importMediaFiles = async () => {
     const kind = options.videoSourceKind();
@@ -142,18 +183,22 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       options.setMessage("Batch import supports local video files and still images only.");
       return;
     }
+    const initiatingAuthority = options.getCurrentProjectAuthority();
+    let sideEffectAuthority = initiatingAuthority;
     try {
       // Fence before the native picker: dialog A, hashing A, and commit A all
       // use this identity. App's mutation wrapper rejects a later project B.
-      const expectedEpoch = options.getCurrentProjectEpoch();
       const preparedStart = await preflightAndBeginMediaAssetOperation(
-        expectedEpoch,
+        initiatingAuthority,
         options.prepareMediaAssetOperationStart,
-        options.beginMediaAssetOperation,
+        () => options.beginMediaAssetOperation("Import media", "picker"),
       );
+      const operationAuthority = preparedStart.authority;
+      sideEffectAuthority = operationAuthority;
       const mediaOperation = preparedStart.operation;
       try {
         const paths = await options.invoke<string[]>("select_video_source_files", { kind });
+        if (!options.isProjectAuthorityCurrent(operationAuthority)) return;
         if (paths.length === 0) {
           options.setMessage("Media import canceled.");
           return;
@@ -162,15 +207,20 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
           invoke: options.invoke,
           kind,
           paths,
-          expectedEpoch: preparedStart.expectedEpoch,
+          expectedEpoch: operationAuthority.project_epoch,
+          expectedAuthority: operationAuthority,
           ownerId: options.projectTransactionOwnerId,
           signal: mediaOperation.signal,
+          onPhase: mediaOperation.setPhase,
+          onReport: options.setMediaAssetImportReport,
           commitCommand: "commit_prepared_media_assets_authoritative",
         });
         const report = staged.committed ?? staged.report;
+        sideEffectAuthority = staged.terminalAuthority;
         if (!staged.applicationCurrent || !options.isProjectAuthorityCurrent(staged.terminalAuthority)) {
           return;
         }
+        options.setMediaAssetImportReport(report);
         // Normal library import never creates layers: one selected file becomes
         // one catalog entry (or a dedupe reuse), preserving the operator's mix.
         options.setMessage(mediaAssetImportReportMessage(report));
@@ -178,7 +228,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       } finally {
         mediaOperation.release();
       }
-    } catch (error) { options.setMessage(String(error)); }
+    } catch (error) { setMessageIfAuthorityCurrent(sideEffectAuthority, String(error)); }
   };
   const launchVideoClip = async (layerId: number, fadeMs: number) => {
     try {
@@ -309,6 +359,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     } catch (error) { options.setMessage(String(error)); }
   };
   const refreshVideoLayerMetadata = async (layerId: number) => {
+    let sideEffectAuthority = options.getCurrentProjectAuthority();
     try {
       const layer = options.snapshot().video.layers.find((candidate) => candidate.id === layerId);
       const assetId = layer?.media_asset_id;
@@ -317,23 +368,30 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
         options.setMessage("This layer has no relinkable Media Library source.");
         return;
       }
-      const expectedEpoch = options.getCurrentProjectEpoch();
+      const initiatingAuthority = options.getCurrentProjectAuthority();
+      sideEffectAuthority = initiatingAuthority;
       const preparedStart = await preflightAndBeginMediaAssetOperation(
-        expectedEpoch,
+        initiatingAuthority,
         options.prepareMediaAssetOperationStart,
-        options.beginMediaAssetOperation,
+        () => options.beginMediaAssetOperation("Refresh media metadata", "preparing"),
       );
+      const operationAuthority = preparedStart.authority;
+      sideEffectAuthority = operationAuthority;
       const mediaOperation = preparedStart.operation;
       try {
+        if (!options.isProjectAuthorityCurrent(operationAuthority)) return;
         const staged = await prepareFinalizeAndCommitMediaAssetRelink({
           invoke: options.invoke,
           assetId,
           replacementPath: path,
           policy: "RequireContentMatch",
-          expectedEpoch: preparedStart.expectedEpoch,
+          expectedEpoch: operationAuthority.project_epoch,
+          expectedAuthority: operationAuthority,
           ownerId: options.projectTransactionOwnerId,
           signal: mediaOperation.signal,
+          onPhase: mediaOperation.setPhase,
         });
+        sideEffectAuthority = staged.terminalAuthority;
         if (!staged.applicationCurrent || !options.isProjectAuthorityCurrent(staged.terminalAuthority)) {
           return;
         }
@@ -341,12 +399,168 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
           options.setMessage("Media metadata refresh did not return a result.");
           return;
         }
-        options.setMessage(mediaAssetRelinkOutcomeMessage(staged.outcome));
         await options.refreshSnapshot();
+        // Refresh itself awaits. A later project C can therefore replace the
+        // asset ID while B's refresh is still returning; do not report B.
+        if (!options.isProjectAuthorityCurrent(staged.terminalAuthority)) return;
+        options.setMessage(mediaAssetRelinkOutcomeMessage(staged.outcome));
       } finally {
         mediaOperation.release();
       }
-    } catch (error) { options.setMessage(String(error)); }
+    } catch (error) { setMessageIfAuthorityCurrent(sideEffectAuthority, String(error)); }
+  };
+  const runMediaAssetRelink = async (
+    assetId: MediaAssetId,
+    replacementPath: string,
+    policy: "RequireContentMatch" | "AdoptReplacement",
+    label: string,
+    decisionAuthority?: ProjectAuthorityToken,
+    onOperationAuthority?: (authority: ProjectAuthorityToken) => void,
+  ) => {
+    if (decisionAuthority && !options.isProjectAuthorityCurrent(decisionAuthority)) {
+      throw new Error("Project changed after replacement approval was requested; choose the replacement again.");
+    }
+    const expectedAuthority = decisionAuthority ?? options.getCurrentProjectAuthority();
+    if (!options.isProjectAuthorityCurrent(expectedAuthority)) {
+      throw new Error("Project changed before replacement approval completed. Choose the replacement again.");
+    }
+    const preparedStart = await preflightAndBeginMediaAssetOperation(
+      expectedAuthority,
+      options.prepareMediaAssetOperationStart,
+      () => options.beginMediaAssetOperation(label, "preparing"),
+    );
+    const operationAuthority = preparedStart.authority;
+    onOperationAuthority?.(operationAuthority);
+    const mediaOperation = preparedStart.operation;
+    try {
+      // A RequireContentMatch decision is a one-shot decision for exact E/R/H.
+      // Even a successful local mapping ACK during the confirmation window is
+      // a different project image, so require a fresh confirmation rather than
+      // silently adopting into that newer image.
+      if (decisionAuthority && !sameProjectAuthority(decisionAuthority, operationAuthority)) {
+        throw new Error("Project changed while replacement approval was being confirmed; choose the replacement again.");
+      }
+      if (!options.isProjectAuthorityCurrent(operationAuthority)) {
+        throw new Error("Project changed while replacement approval was being confirmed; nothing was applied.");
+      }
+      return await prepareFinalizeAndCommitMediaAssetRelink({
+        invoke: options.invoke,
+        assetId,
+        replacementPath,
+        policy,
+        expectedEpoch: operationAuthority.project_epoch,
+        expectedAuthority: operationAuthority,
+        ownerId: options.projectTransactionOwnerId,
+        signal: mediaOperation.signal,
+        onPhase: mediaOperation.setPhase,
+      });
+    } finally {
+      mediaOperation.release();
+    }
+  };
+  const relinkMediaAsset = async (
+    assetId: MediaAssetId,
+    setRelinkMessage: (message: string) => unknown = options.setMessage,
+  ): Promise<MediaAssetRelinkUiResult | null> => {
+    const setRelinkMessageIfAuthorityCurrent = (authority: ProjectAuthorityToken, message: string) => {
+      if (options.isProjectAuthorityCurrent(authority)) setRelinkMessage(message);
+    };
+    const initiatingAuthority = options.getCurrentProjectAuthority();
+    let sideEffectAuthority = initiatingAuthority;
+    try {
+      const asset = options.snapshot().video.media_assets.find((candidate) => candidate.id === assetId);
+      if (!asset || (asset.source.kind !== "File" && asset.source.kind !== "StillImage")) {
+        setRelinkMessageIfAuthorityCurrent(initiatingAuthority, `Media asset ${assetId} is not a relinkable local file.`);
+        return null;
+      }
+
+      const preparedStart = await preflightAndBeginMediaAssetOperation(
+        initiatingAuthority,
+        options.prepareMediaAssetOperationStart,
+        () => options.beginMediaAssetOperation(`Relink ${asset.label}`, "picker"),
+      );
+      const operationAuthority = preparedStart.authority;
+      sideEffectAuthority = operationAuthority;
+      const pickerOperation = preparedStart.operation;
+      let replacementPath: string | null = null;
+      let firstOutcome: MediaAssetRelinkOutcome | null = null;
+      let decisionAuthority: ProjectAuthorityToken | null = null;
+      try {
+        replacementPath = await options.invoke<string | null>("select_video_source_file", {
+          kind: asset.source.kind,
+        });
+        if (!options.isProjectAuthorityCurrent(operationAuthority)) return null;
+        if (!replacementPath) {
+          setRelinkMessage("Media relink canceled. No project changes were made.");
+          return null;
+        }
+        const first = await prepareFinalizeAndCommitMediaAssetRelink({
+          invoke: options.invoke,
+          assetId,
+          replacementPath,
+          policy: "RequireContentMatch",
+          expectedEpoch: operationAuthority.project_epoch,
+          expectedAuthority: operationAuthority,
+          ownerId: options.projectTransactionOwnerId,
+          signal: pickerOperation.signal,
+          onPhase: pickerOperation.setPhase,
+        });
+        if (!first.applicationCurrent || !options.isProjectAuthorityCurrent(first.terminalAuthority)) return null;
+        sideEffectAuthority = first.terminalAuthority;
+        firstOutcome = first.outcome;
+        decisionAuthority = first.terminalAuthority;
+        if (first.committed) {
+          await options.refreshSnapshot();
+          // The refresh can cross an authority replacement.  Its asset IDs may
+          // be reused by C, so do not return a B outcome for App to clear.
+          if (!options.isProjectAuthorityCurrent(first.terminalAuthority)) return null;
+          if (firstOutcome) setRelinkMessage(mediaAssetRelinkOutcomeMessage(firstOutcome));
+          return firstOutcome
+            ? { outcome: firstOutcome, terminalAuthority: first.terminalAuthority }
+            : null;
+        }
+      } finally {
+        pickerOperation.release();
+      }
+
+      // Adoption is never inferred from a generic mismatch. The backend must
+      // first return the dedicated decision, then the operator must approve it.
+      if (!replacementPath || !decisionAuthority || firstOutcome?.kind !== "needs_explicit_adoption") {
+        if (!options.isProjectAuthorityCurrent(sideEffectAuthority)) return null;
+        if (firstOutcome) setRelinkMessage(mediaAssetRelinkOutcomeMessage(firstOutcome));
+        return firstOutcome ? { outcome: firstOutcome, terminalAuthority: sideEffectAuthority } : null;
+      }
+      if (!options.confirmMediaAssetAdoption(assetId, replacementPath)) {
+        setRelinkMessageIfAuthorityCurrent(decisionAuthority, "Replacement adoption canceled. The existing content identity was kept.");
+        return options.isProjectAuthorityCurrent(decisionAuthority)
+          ? { outcome: firstOutcome, terminalAuthority: decisionAuthority }
+          : null;
+      }
+      if (!options.isProjectAuthorityCurrent(decisionAuthority)) {
+        setRelinkMessage("Project changed before replacement approval completed. Choose the replacement again.");
+        return null;
+      }
+
+      const adopted = await runMediaAssetRelink(
+        assetId,
+        replacementPath,
+        "AdoptReplacement",
+        `Adopt replacement for ${asset.label}`,
+        decisionAuthority,
+        (authority) => { sideEffectAuthority = authority; },
+      );
+      if (!adopted.applicationCurrent || !options.isProjectAuthorityCurrent(adopted.terminalAuthority)) return null;
+      sideEffectAuthority = adopted.terminalAuthority;
+      if (adopted.committed) await options.refreshSnapshot();
+      if (!options.isProjectAuthorityCurrent(adopted.terminalAuthority)) return null;
+      if (adopted.outcome) setRelinkMessage(mediaAssetRelinkOutcomeMessage(adopted.outcome));
+      return adopted.outcome
+        ? { outcome: adopted.outcome, terminalAuthority: adopted.terminalAuthority }
+        : null;
+    } catch (error) {
+      setRelinkMessageIfAuthorityCurrent(sideEffectAuthority, String(error));
+      return null;
+    }
   };
   const setVideoLayerIsfEffect = async (layerId: number, effect: VideoIsfEffectSummary | null) => {
     if (!canMutateVideoIsf()) return;
@@ -671,7 +885,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     refreshAudioOutputDevices,
     startVideoOutputRecording, stopVideoOutputRecording, refreshVideoRecordingStatus,
     removeVideoLayer, duplicateVideoLayer, moveVideoLayer, setVideoLayerLabel,
-    refreshVideoLayerMetadata, importVideoLayerIsf, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect,
+    refreshVideoLayerMetadata, relinkMediaAsset, importVideoLayerIsf, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect,
     moveVideoLayerIsfEffect, removeVideoLayerIsfEffect, setVideoLayerIsfEffectEnabled,
     resetVideoLayerIsfEffect, setVideoLayerIsfControl, triggerVideoLayerIsfEvent,
     renderDebugVideoPreview, loadVideoLayerThumbnail, refreshVideoPreviewDiagnostics,

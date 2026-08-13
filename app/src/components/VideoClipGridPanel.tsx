@@ -10,6 +10,7 @@ export interface VideoClipGridPanelProps extends LiveAudioInputRailProps {
   compact?: boolean;
   layers: VideoLayerSummary[];
   thumbnails: Record<number, string>;
+  thumbnailsAuthorized: boolean;
   fadeMs: number;
   audioMonitorVolume: number;
   audioMonitorLayerIds: number[];
@@ -26,6 +27,7 @@ export interface VideoClipGridPanelProps extends LiveAudioInputRailProps {
   previewBusy: boolean;
   previewError: string | null;
   previewBackendAvailable: boolean;
+  sourceCreateVisible?: boolean;
   firstRunAvailable: boolean;
   firstRunBusy: boolean;
   firstRunError: string | null;
@@ -49,6 +51,7 @@ export interface VideoClipGridPanelProps extends LiveAudioInputRailProps {
   onStop: (layerId: number, fadeMs: number) => void | Promise<void>;
   onMonitorAudio: (layerId: number, volume: number) => void | Promise<void>;
   onStopAudio: (layerId: number) => void | Promise<void>;
+  onRequestThumbnails: () => void;
 }
 
 const CLIPS_PER_BANK = 12;
@@ -76,6 +79,9 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
   const recordingStatusText = createMemo(() => props.recordingStatus.active
     ? `${props.recordingStatus.dropped_frames} dropped · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.width}x${props.recordingStatus.height} @ ${props.recordingStatus.frame_rate}fps · ${props.recordingStatus.audio_included ? `${props.recordingStatus.audio_track_count} audio` : "silent"}`
     : props.recordingStatus.last_error ?? `Records H.264 MP4${props.programAudioEnabled ? " and active Program audio" : " without audio"}.`);
+  const firstRunGuarded = () =>
+    props.layers.length === 0 &&
+    (props.firstRunBusy || props.firstRunAvailable || Boolean(props.firstRunError));
 
   createEffect(() => {
     const layerCount = props.layers.length;
@@ -95,6 +101,15 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
           <h3>Clip Grid</h3>
           <span>{props.layers.length} clip(s)</span>
         </div>
+        <Show when={props.layers.length > 0 && !props.thumbnailsAuthorized}>
+          <button
+            data-vj-thumbnail-request
+            title="Read local media only after this explicit request"
+            onClick={props.onRequestThumbnails}
+          >
+            Load Thumbnails
+          </button>
+        </Show>
         <details class={`videoClipUtilities ${props.compact ? "compact" : ""}`} open={!props.compact}>
           <summary>Audio &amp; Capture</summary>
           <div class="videoClipGridSettings">
@@ -241,23 +256,35 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
         when={props.layers.length > 0}
         fallback={
           <Show
-            when={props.firstRunAvailable}
+            when={firstRunGuarded()}
             fallback={
-              <div class="emptyState emptyStateAction">
-                <span>Import video or still images to populate the clip grid.</span>
-                <button class="primary" onClick={() => void props.onImportMedia()}>
-                  Import Media
-                </button>
-              </div>
+              <Show when={!props.sourceCreateVisible}>
+                <div class="emptyState emptyStateAction" data-vj-media-state="empty-import">
+                  <span>Import video or still images to populate the clip grid.</span>
+                  <button
+                    class="primary"
+                    data-vj-media-import-entry="empty-import"
+                    onClick={() => void props.onImportMedia()}
+                  >
+                    Import Media
+                  </button>
+                </div>
+              </Show>
             }
           >
-            <div class="emptyState emptyStateAction vjFirstRunEmptyState" aria-busy={props.firstRunBusy} aria-live="polite">
+            <div
+              class="emptyState emptyStateAction vjFirstRunEmptyState"
+              data-vj-media-state="first-run"
+              aria-busy={props.firstRunBusy}
+              aria-live="polite"
+            >
               <h4>Start your first VJ show</h4>
               <span>Choose local video files to build the clip grid and stage the first clip.</span>
               <small class="vjFirstRunSafety">VJ Program is created Off and Blackout. No output window opens automatically.</small>
               <button
                 class="primary"
-                disabled={props.firstRunBusy || !props.firstRunBackendAvailable}
+                data-vj-media-import-entry="first-run"
+                disabled={props.firstRunBusy || !props.firstRunAvailable || !props.firstRunBackendAvailable}
                 title={props.firstRunBackendAvailable ? "Choose media and set up the VJ show" : "Desktop required"}
                 onClick={() => void props.onCreateFirstRunShow()}
               >

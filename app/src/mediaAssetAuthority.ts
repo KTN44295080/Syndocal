@@ -5,8 +5,10 @@ import type {
   MediaAssetAuthoritativeLayerResult,
   MediaAssetAuthoritativeRelinkResult,
   MediaAssetAuthoritativeTerminalEnvelope,
+  MediaAssetAvailabilityReport,
   MediaAssetImportReport,
   MediaAssetId,
+  MediaAssetOperationPhase,
   MediaAssetOperationStartReport,
   MediaAssetRelinkOutcome,
   MediaAssetRelinkPolicy,
@@ -55,9 +57,12 @@ export type MediaAssetImportEntryStatus = "prepared" | "imported" | "reused" | "
 type MediaAssetOperationOptions = {
   invoke: MediaAssetInvoke;
   expectedEpoch: number;
+  /** Exact renderer preflight E/R/H; Start must echo this before hash/commit. */
+  expectedAuthority?: ProjectAuthorityToken;
   ownerId: string;
   requestId?: number;
   signal?: AbortSignal;
+  onPhase?: (phase: MediaAssetOperationPhase) => void;
 };
 
 export type MediaAssetAuthoritativeCommitCommand =
@@ -99,6 +104,8 @@ export type PreparedMediaAssetCommitOptions<C extends MediaAssetAuthoritativeCom
    * leaves this false so valid assets can land with per-input failure truth.
    */
   requireAllPrepared?: boolean;
+  /** Publishes Prepare truth even when an all-or-nothing caller rejects it. */
+  onReport?: (report: MediaAssetImportReport) => void;
   };
 
 export type PreparedMediaAssetCommitResult<C extends MediaAssetAuthoritativeCommitCommand> = {
@@ -126,7 +133,23 @@ export type PreparedMediaAssetRelinkResult = {
 
 export type MediaAssetOperationLease = {
   signal: AbortSignal;
+  setPhase: (phase: MediaAssetOperationPhase) => void;
   release: () => void;
+};
+
+export type MediaAssetOperationPreflight = {
+  authority: ProjectAuthorityToken;
+  provenance: string;
+};
+
+export type InspectMediaAssetAvailabilityOptions = MediaAssetOperationOptions & {
+  assetIds: MediaAssetId[];
+  verifyHash: boolean;
+};
+
+export type InspectMediaAssetAvailabilityResult = {
+  report: MediaAssetAvailabilityReport;
+  terminalAuthority: ProjectAuthorityToken;
 };
 
 /**
@@ -135,15 +158,21 @@ export type MediaAssetOperationLease = {
  * the operation being started must not exist yet or it would cancel itself.
  */
 export const preflightAndBeginMediaAssetOperation = async (
-  expectedEpoch: number,
-  preflight: (expectedEpoch: number) => Promise<number>,
+  expectedAuthority: ProjectAuthorityToken,
+  preflight: (expectedAuthority: ProjectAuthorityToken) => Promise<MediaAssetOperationPreflight>,
   begin: () => MediaAssetOperationLease,
-): Promise<{ expectedEpoch: number; operation: MediaAssetOperationLease }> => {
-  const currentEpoch = await preflight(expectedEpoch);
-  if (currentEpoch !== expectedEpoch) {
+): Promise<{ authority: ProjectAuthorityToken; provenance: string; operation: MediaAssetOperationLease }> => {
+  // A picker gesture is fenced by its original project epoch: a replacement
+  // project can never create an operation after the preflight.  A mapping
+  // flush in that same project may legitimately advance revision/hash, so
+  // callers must bind every subsequent side effect to the returned full token
+  // rather than retaining their preflight E/R/H snapshot.
+  const preflightResult = await preflight(expectedAuthority);
+  const authority = preflightResult.authority;
+  if (authority.project_epoch !== expectedAuthority.project_epoch) {
     throw new Error("Project changed before the media operation started; nothing was applied.");
   }
-  return { expectedEpoch: currentEpoch, operation: begin() };
+  return { authority, provenance: preflightResult.provenance, operation: begin() };
 };
 
 const authoritativeApplicationCurrentProperty = "__syndocalAuthoritativeApplicationCurrent";
@@ -180,6 +209,19 @@ const exactPositiveInteger = (value: unknown, label: string): number => {
   const normalized = exactNonNegativeInteger(value, label);
   if (normalized === 0) throw new Error(`${label} must be non-zero.`);
   return normalized;
+};
+
+const assertStartAuthorityMatchesPreflight = (
+  label: string,
+  started: MediaAssetOperationAuthority,
+  expected: ProjectAuthorityToken | undefined,
+) => {
+  if (!expected) return;
+  if (started.projectEpoch !== expected.project_epoch
+    || started.projectRevision !== expected.project_revision
+    || started.checkpointHash !== expected.checkpoint_hash) {
+    throw new Error(`${label} returned a different project authority; no media changes were made.`);
+  }
 };
 
 const knownOperationFromReport = (report: {
@@ -541,6 +583,7 @@ export async function prepareFinalizeAndCommitMediaAssets<C extends MediaAssetAu
     () => knownOperation,
   );
   try {
+    options.onPhase?.("preparing");
     assertOperationNotAborted(options.signal);
     const started = await options.invoke<MediaAssetOperationStartReport>("start_media_asset_operation", {
       requestId,
@@ -559,8 +602,10 @@ export async function prepareFinalizeAndCommitMediaAssets<C extends MediaAssetAu
     if (startedAuthority.projectEpoch !== options.expectedEpoch) {
       throw new Error("Start returned a different project epoch; no project changes were made.");
     }
+    assertStartAuthorityMatchesPreflight("Start", startedAuthority, options.expectedAuthority);
     assertOperationNotAborted(options.signal);
 
+    options.onPhase?.("hashing");
     const prepared = await options.invoke<MediaAssetImportReport>("prepare_reserved_media_assets", {
       requestId: knownOperation.requestId,
       operationGeneration: knownOperation.operationGeneration,
@@ -570,6 +615,7 @@ export async function prepareFinalizeAndCommitMediaAssets<C extends MediaAssetAu
       ownerId: options.ownerId,
     });
     assertReportContinuity("Reserved Prepare", prepared, knownOperation, startedAuthority);
+    options.onReport?.(prepared);
     assertOperationNotAborted(options.signal);
 
     if (options.requireAllPrepared
@@ -590,6 +636,7 @@ export async function prepareFinalizeAndCommitMediaAssets<C extends MediaAssetAu
       };
     }
 
+    options.onPhase?.("finalizing");
     const finalized = await options.invoke<MediaAssetImportReport>("finalize_prepared_media_assets", {
       preparedImportToken: token,
       requestId: knownOperation.requestId,
@@ -598,8 +645,10 @@ export async function prepareFinalizeAndCommitMediaAssets<C extends MediaAssetAu
       ownerId: options.ownerId,
     });
     assertReportContinuity("Finalize", finalized, knownOperation, startedAuthority);
+    options.onReport?.(finalized);
     assertOperationNotAborted(options.signal);
 
+    options.onPhase?.("committing");
     const response = await invokeAuthoritativeCommit(
       options.invoke,
       options.commitCommand,
@@ -646,6 +695,7 @@ export async function prepareFinalizeAndCommitMediaAssetRelink(
     () => knownOperation,
   );
   try {
+    options.onPhase?.("preparing");
     assertOperationNotAborted(options.signal);
     const started = await options.invoke<MediaAssetOperationStartReport>("start_media_asset_operation", {
       requestId,
@@ -663,8 +713,10 @@ export async function prepareFinalizeAndCommitMediaAssetRelink(
     if (startedAuthority.projectEpoch !== options.expectedEpoch) {
       throw new Error("Relink Start returned a different project epoch; no project changes were made.");
     }
+    assertStartAuthorityMatchesPreflight("Relink Start", startedAuthority, options.expectedAuthority);
     assertOperationNotAborted(options.signal);
 
+    options.onPhase?.("hashing");
     const prepared = await options.invoke<MediaAssetRelinkPrepareReport>("prepare_reserved_media_asset_relink", {
       requestId: knownOperation.requestId,
       operationGeneration: knownOperation.operationGeneration,
@@ -687,6 +739,7 @@ export async function prepareFinalizeAndCommitMediaAssetRelink(
       };
     }
 
+    options.onPhase?.("finalizing");
     const finalized = await options.invoke<MediaAssetRelinkPrepareReport>(
       "finalize_prepared_media_asset_relink",
       {
@@ -700,6 +753,7 @@ export async function prepareFinalizeAndCommitMediaAssetRelink(
     assertReportContinuity("Relink Finalize", finalized, knownOperation, startedAuthority);
     assertOperationNotAborted(options.signal);
 
+    options.onPhase?.("committing");
     const response = await invokeAuthoritativeCommit(
       options.invoke,
       "commit_prepared_media_asset_relink_authoritative",
@@ -718,6 +772,72 @@ export async function prepareFinalizeAndCommitMediaAssetRelink(
       committed: true,
       applicationCurrent: authoritativeApplicationCurrent(response),
       terminalAuthority: projectAuthorityFromResponse(response),
+    };
+  } catch (error) {
+    await cancellation.cancelKnownAfterError();
+    throw error;
+  } finally {
+    cancellation.dispose();
+  }
+}
+
+/**
+ * Availability is a read-only, purpose-bound operation. Start captures exact
+ * E/R/H before the first byte is read; the reserved inspect must echo the same
+ * request/generation/authority tuple. A returned report means the backend's
+ * completion CAS won, so a late renderer abort cannot turn it into a false
+ * cancellation.
+ */
+export async function inspectMediaAssetAvailability(
+  options: InspectMediaAssetAvailabilityOptions,
+): Promise<InspectMediaAssetAvailabilityResult> {
+  const requestId = options.requestId ?? allocateMediaAssetRequestId();
+  let knownOperation: MediaAssetOperationIdentity | null = null;
+  const cancellation = installKnownOperationCancellation(
+    options.invoke,
+    options.ownerId,
+    options.signal,
+    () => knownOperation,
+  );
+  try {
+    options.onPhase?.("preparing");
+    assertOperationNotAborted(options.signal);
+    const started = await options.invoke<MediaAssetOperationStartReport>(
+      "start_media_asset_availability_operation",
+      {
+        requestId,
+        expectedEpoch: options.expectedEpoch,
+        ownerId: options.ownerId,
+      },
+    );
+    const startedOperation = knownOperationFromReport(started, "Availability Start");
+    knownOperation = startedOperation;
+    if (startedOperation.requestId !== requestId) {
+      throw new Error("Availability Start returned a different media operation request_id; no report was applied.");
+    }
+    const startedAuthority = authorityFromReport(started, "Availability Start");
+    if (startedAuthority.projectEpoch !== options.expectedEpoch) {
+      throw new Error("Availability Start returned a different project epoch; no report was applied.");
+    }
+    assertStartAuthorityMatchesPreflight("Availability Start", startedAuthority, options.expectedAuthority);
+    assertOperationNotAborted(options.signal);
+
+    options.onPhase?.("hashing");
+    const report = await options.invoke<MediaAssetAvailabilityReport>(
+      "inspect_reserved_media_asset_availability",
+      {
+        requestId: knownOperation.requestId,
+        operationGeneration: knownOperation.operationGeneration,
+        assetIds: options.assetIds,
+        verifyHash: options.verifyHash,
+        expectedEpoch: options.expectedEpoch,
+        ownerId: options.ownerId,
+      },
+    );
+    assertReportContinuity("Reserved Availability Inspect", report, knownOperation, startedAuthority);
+    return {
+      report,
+      terminalAuthority: projectAuthorityFromOperation(startedAuthority),
     };
   } catch (error) {
     await cancellation.cancelKnownAfterError();

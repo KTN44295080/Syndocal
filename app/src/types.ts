@@ -1189,6 +1189,21 @@ export interface MediaAssetAvailabilityReport {
   availability: MediaAssetAvailability[];
 }
 
+/** Renderer-visible progress for one cancellable local-media operation. */
+export type MediaAssetOperationPhase =
+  | "picker"
+  | "preparing"
+  | "hashing"
+  | "finalizing"
+  | "committing"
+  | "cancelling";
+
+export interface MediaAssetActiveOperation {
+  id: number;
+  label: string;
+  phase: MediaAssetOperationPhase;
+}
+
 /** Start/Reserved Relink Prepare/Finalize report; tokenless outcomes are read-only. */
 export interface MediaAssetRelinkPrepareReport {
   request_id: number;

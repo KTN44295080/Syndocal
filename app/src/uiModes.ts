@@ -25,9 +25,9 @@ export const setupAreaForSubTab = (tab: SetupSubTab): SetupArea =>
 export const setupSubTabsForArea = (area: SetupArea) => setupSubTabs.filter((tab) => tab.area === area);
 
 export const controlModes: { id: ControlMode; label: string; description: string }[] = [
-  { id: "edit", label: "Live Edit", description: "Fixture attributes, visual controls, and presets" },
+  { id: "edit", label: "Lighting", description: "Lighting editing, fixture attributes, visual controls, and presets" },
   { id: "live", label: "Timeline", description: "Cue playback, timeline, and blackout controls" },
-  { id: "mixer", label: "VJ Desk", description: "Clip launch, preview/program mixing, layers, and outputs" },
+  { id: "mixer", label: "Video", description: "Video clip launch, preview/program mixing, layers, and outputs" },
 ];
 
 export const controlCategories: { id: ControlCategory; label: string }[] = [
