@@ -1,7 +1,8 @@
-import { For, Show } from "solid-js";
+import { For, Show, type ComponentProps } from "solid-js";
 import { clampRange } from "../numericHelpers";
 import type { VideoLayerState, VideoLayerSummary, VideoOutputSummary } from "../types";
 import { formatDuration, formatVideoTime } from "../videoHelpers";
+import { VideoClipSlotBankPanel } from "./VideoClipSlotBankPanel";
 
 interface TouchVideoPanelProps {
   layers: VideoLayerSummary[];
@@ -16,6 +17,8 @@ interface TouchVideoPanelProps {
   onSetOutputOpacity: (outputId: number, opacity: number) => void | Promise<void>;
   onFadeOutputOpacity: (outputId: number, opacity: number) => void | Promise<void>;
   onOpenOutputWindow: (outputId: number, testPattern?: boolean) => void | Promise<void>;
+  clipSlotBank: ComponentProps<typeof VideoClipSlotBankPanel>;
+  clipSlotTake: { enabled: boolean; onTake: () => void | Promise<void> };
 }
 
 export function TouchVideoPanel(props: TouchVideoPanelProps) {
@@ -25,6 +28,17 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
         <h2>Touch Video</h2>
         <span>{props.layers.length} video layer(s) / {props.outputs.length} video output(s)</span>
       </div>
+      <div class="touchVideoClipBankHeader">
+        <span>Clip control</span>
+        <button
+          type="button"
+          class="primary videoClipSlotTake"
+          data-video-clip-slot-take
+          disabled={!props.clipSlotTake.enabled}
+          onClick={() => void props.clipSlotTake.onTake()}
+        >Take</button>
+      </div>
+      <VideoClipSlotBankPanel {...props.clipSlotBank} />
       <Show when={props.outputs.length > 0}>
         <div class="touchVideoOutputGrid">
           <For each={props.outputs}>

@@ -71,6 +71,7 @@ import { MappingPersistentWorkspaceBand } from "./components/MappingPersistentWo
 import { SetupVideoPanel } from "./components/SetupVideoPanel";
 import { StagePreview2D } from "./components/StagePreview2D";
 import { VideoControlPanel } from "./components/VideoControlPanel";
+import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspectorPanel";
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
@@ -340,6 +341,9 @@ import type {
   VideoBlendMode,
   VideoBitmapMaskImportResult,
   VideoDecoderDiagnostics,
+  VideoClipRuntimeSnapshot,
+  VideoClipSlotId,
+  VideoClipSlotSummary,
   VideoFrame,
   VideoEffectTarget,
   VideoLayerSummary,
@@ -460,6 +464,7 @@ import { createTimelineOverviewAutomationController } from "./createTimelineOver
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
+import { videoClipSlotDropTarget, videoClipSlotReorderedIds } from "./videoClipSlotBankModel";
 import {
   inspectMediaAssetAvailability,
   mediaAssetImportReportMessage,
@@ -932,6 +937,14 @@ const serverAuthoritativeProjectMutationCommands = new Set([
   "commit_prepared_still_image_layer_authoritative",
   "commit_prepared_local_media_layers_authoritative",
   "commit_prepared_bootstrap_vj_show_authoritative",
+  "create_video_clip_slot_authoritative",
+  "assign_video_clip_slot_asset_authoritative",
+  "update_video_clip_slot_authoritative",
+  "remove_video_clip_slot_authoritative",
+  "reorder_video_clip_slots_authoritative",
+  "duplicate_video_clip_slot_authoritative",
+  "set_default_video_clip_slot_authoritative",
+  "import_and_assign_video_clip_slots_authoritative",
 ]);
 
 // These owner-scoped operations cannot create a project mutation. Full Lock
@@ -939,6 +952,7 @@ const serverAuthoritativeProjectMutationCommands = new Set([
 // and allow a not-yet-admitted operation to release its retained file handles.
 const mediaAssetTerminalRecoveryCommands = new Set([
   "get_media_asset_operation_terminal_result",
+  "get_video_clip_slot_operation_terminal_result",
   "cancel_media_asset_operation",
 ]);
 
@@ -948,6 +962,7 @@ const mediaAssetTerminalRecoveryCommands = new Set([
 const mediaAssetAvailabilityReadOnlyCommands = new Set([
   "start_media_asset_availability_operation",
   "inspect_reserved_media_asset_availability",
+  "get_video_clip_slot_runtime",
 ]);
 
 /**
@@ -1146,6 +1161,12 @@ const markAuthoritativeApplicationCurrent = (value: unknown, current: boolean) =
   }
 };
 
+const authoritativeApplicationIsCurrent = (value: unknown): boolean => Boolean(
+  value
+  && typeof value === "object"
+  && (value as Record<string, unknown>)[authoritativeApplicationCurrentProperty] === true,
+);
+
 const projectMutationCoalesceKey = (command: string, args?: Record<string, unknown>) => {
   if (!/^(set|update|move|fade|refresh)_/.test(command) || !args) {
     return "";
@@ -1177,6 +1198,10 @@ const invoke = async <T,>(command: string, args?: Record<string, unknown>): Prom
     const result = await tauriInvoke<T>(command, args);
     if (command === "get_media_asset_operation_terminal_result") {
       const current = dispatchProjectHistoryMutationFromUnknown(result as MediaAssetAuthoritativeTerminalEnvelope | null);
+      markAuthoritativeApplicationCurrent(result, current);
+    }
+    if (command === "get_video_clip_slot_operation_terminal_result") {
+      const current = dispatchProjectHistoryMutationFromUnknown(result);
       markAuthoritativeApplicationCurrent(result, current);
     }
     return result;
@@ -1290,6 +1315,7 @@ const listen = <T,>(event: string, handler: (event: { payload: T }) => void) => 
 
 const isSyndocalProjectPath = (path: string) => path.trim().toLowerCase().endsWith(".sdc");
 const timelineAudioFileExtensions = ["wav", "mp3", "m4a", "aac", "flac", "aiff", "aif", "ogg", "opus"];
+const visualMediaFileExtensions = ["mp4", "mov", "mxf", "avi", "mkv", "webm", "gif", "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"];
 const isTimelineAudioFilePath = (path: string) => {
   const normalized = path.trim().toLowerCase();
   return timelineAudioFileExtensions.some((extension) => normalized.endsWith(`.${extension}`));
@@ -1691,6 +1717,10 @@ type ProjectControlMappingsAuthority = {
   dmx_mappings: DmxControlMapping[];
   mapping_runtimes_retired?: boolean;
 };
+const isVisualMediaFilePath = (path: string) => {
+  const normalized = path.trim().toLowerCase();
+  return visualMediaFileExtensions.some((extension) => normalized.endsWith(`.${extension}`));
+};
 
 type ProjectControlMappingsPersistResult =
   | { kind: "acknowledged"; authority: ProjectAuthorityToken }
@@ -1806,6 +1836,7 @@ export default function App() {
   );
   const [timelineChildCueId, setTimelineChildCueId] = createSignal<number | null>(null);
   const [controlLiveView, setControlLiveView] = createSignal<"matrix" | "pads">("matrix");
+  const [touchControlDomain, setTouchControlDomain] = createSignal<"lighting" | "video">("lighting");
   const [liveStatusExpanded, setLiveStatusExpanded] = createSignal(false);
   const [editDeskSurface, setEditDeskSurface] = createSignal<EditDeskSurface>(initialWorkspaceLayout.edit_desk_surface);
   const [revealedSourceCueId, setRevealedSourceCueId] = createSignal<number | null>(null);
@@ -2168,6 +2199,13 @@ export default function App() {
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
   const [videoPreviewLayerId, setVideoPreviewLayerId] = createSignal<number | null>(null);
+  // Authored bank selection is shared by Edit and Control. Runtime transport
+  // is a separate signal because it must never become project snapshot state.
+  const [selectedVideoClipSlotLayerId, setSelectedVideoClipSlotLayerId] = createSignal<number | null>(null);
+  const [selectedVideoClipSlotId, setSelectedVideoClipSlotId] = createSignal<VideoClipSlotId | null>(null);
+  const [videoClipRuntime, setVideoClipRuntime] = createSignal<VideoClipRuntimeSnapshot>({ layers: [] });
+  const [videoClipSlotInspectorOpen, setVideoClipSlotInspectorOpen] = createSignal(false);
+  const [videoClipSlotInspectorTrigger, setVideoClipSlotInspectorTrigger] = createSignal<HTMLElement | null>(null);
   const [isfEventPulseBusy, setIsfEventPulseBusy] = createSignal(false);
   const [vjPreviewTransport, setVjPreviewTransport] = createSignal<VjPreviewTransportSummary>(
     emptyVjPreviewTransport(),
@@ -2212,6 +2250,12 @@ export default function App() {
     mediaAssetAvailabilityRowAuthority.reset();
     setMediaAssetAvailabilityById({});
     setLastMediaAssetImportReport(null);
+    setProjectDropState(null);
+    resetVideoClipSlotRuntimeFence();
+    setSelectedVideoClipSlotLayerId(null);
+    setSelectedVideoClipSlotId(null);
+    setVideoClipSlotInspectorOpen(false);
+    setVideoClipSlotInspectorTrigger(null);
     // A failed A bootstrap must not leave a retry error on a newly admitted B
     // or C project.  The old operation is already aborted by the authority
     // transition; its guarded finally block cannot clear a newer busy state.
@@ -3465,15 +3509,71 @@ export default function App() {
     const layers = structuredClone(viewportFixtureData.vjBankLayers);
     const composition = structuredClone(viewportFixtureData.vjBankComposition);
     const outputs = structuredClone(viewportFixtureData.vjBankOutputs);
+    const mediaAssets = Array.from({ length: 32 }, (_, index) => ({
+      id: 4_001 + index,
+      label: `Viewport Clip ${index + 1}`,
+      source: {
+        kind: "File" as const,
+        path: `viewport://vj-bank/slot-${index + 1}.mp4`,
+        name: `Viewport Clip ${index + 1}`,
+        codec: "H264",
+        metadata: {
+          duration_ms: 8_000 + index * 250,
+          width: 1_920,
+          height: 1_080,
+          frame_rate: 60,
+          has_audio: index % 4 === 0,
+        },
+      },
+      content_hash: { algorithm: "Sha256" as const, hex: (index + 1).toString(16).padStart(64, "0") },
+      byte_size: 1_000_000 + index,
+    }));
+    layers[0] = {
+      ...layers[0],
+      media_asset_id: mediaAssets[0].id,
+      clip_slots: mediaAssets.map((asset, index) => ({
+        id: 5_001 + index,
+        media_asset_id: asset.id,
+        in_point_ms: index * 25,
+        out_point_ms: 6_000 + index * 100,
+        loop_mode: index % 3 === 0 ? "Loop" : "Once",
+        speed: 1,
+        cue_points: [{ position_ms: 1_000, name: "Hit" }],
+        launch_quantization: index === 1 ? "NextBar" : "Immediate",
+        effect_overrides: [],
+      })),
+      default_clip_slot_id: 5_001,
+    };
     setWorkspaceTab("control");
     setControlMode("mixer");
+    setTouchControlDomain("video");
     setSelectedVideoOutputId(outputs[0]?.id ?? null);
+    setSelectedVideoClipSlotLayerId(layers[0]?.id ?? null);
+    setSelectedVideoClipSlotId(5_002);
+    setVideoClipRuntime({
+      layers: [{
+        layer_id: layers[0].id,
+        active_slot_id: 5_001,
+        queued_slot_id: 5_002,
+        pending_launch: {
+          slot_id: 5_002,
+          quantization: "NextBar",
+          target_boundary_ordinal: 12,
+          clock_generation: 3,
+          held_for_clock_discontinuity: false,
+        },
+        playhead_ms: 2_400,
+        playing: true,
+        ping_pong_reverse: false,
+      }],
+    });
     setVideoProgramAudioEnabled(true);
     setSnapshot((current) => ({
       ...current,
       video: {
         ...current.video,
         layers,
+        media_assets: mediaAssets,
         compositions: [composition],
         outputs,
       },
@@ -7715,7 +7815,7 @@ export default function App() {
     workspaceTab() === "setup"
       ? `layoutSharedWorkspace layoutSetup setupMode-${setupSubTab()}`
       : workspaceTab() === "touch"
-        ? "layoutSharedWorkspace layoutControl layoutTouch controlModeEdit editDesk-faders"
+        ? `layoutSharedWorkspace layoutControl layoutTouch controlModeEdit editDesk-faders touchDomain${touchControlDomain() === "video" ? "Video" : "Lighting"}`
         : `${controlMode() === "mixer" ? "" : "layoutSharedWorkspace "}layoutControl controlMode${controlMode()[0].toUpperCase()}${controlMode().slice(1)}${
             controlMode() === "edit" ? ` editDesk-${editDeskSurface()}` : ""
           }`,
@@ -10213,11 +10313,17 @@ export default function App() {
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === "enter") {
-          if (event.payload.paths.some(isTimelineAudioFilePath)) {
+          if (event.payload.paths.some(isTimelineAudioFilePath) || event.payload.paths.some(isVisualMediaFilePath)) {
             setProjectDropState(null);
             return;
           }
-          setProjectDropState(event.payload.paths.some(isSyndocalProjectPath) ? "project" : "invalid");
+          const scale = Math.max(1, window.devicePixelRatio || 1);
+          const target = document.elementFromPoint(
+            event.payload.position.x / scale,
+            event.payload.position.y / scale,
+          );
+          const onProjectSurface = Boolean(target?.closest("[data-project-drop-surface]"));
+          setProjectDropState(event.payload.paths.some(isSyndocalProjectPath) && onProjectSurface ? "project" : "invalid");
           return;
         }
         if (event.payload.type === "leave") {
@@ -10228,11 +10334,21 @@ export default function App() {
           return;
         }
         setProjectDropState(null);
+        // `.sdc` is always a project-surface operation. It never becomes a
+        // Media Library entry or a Clip Slot source, even in a mixed drop.
+        const scale = Math.max(1, window.devicePixelRatio || 1);
+        const dropTarget = document.elementFromPoint(
+          event.payload.position.x / scale,
+          event.payload.position.y / scale,
+        );
+        const projectPath = event.payload.paths.find(isSyndocalProjectPath);
+        if (projectPath && dropTarget?.closest("[data-project-drop-surface]")) {
+          void loadProjectPath(projectPath);
+          return;
+        }
         const audioPath = event.payload.paths.find(isTimelineAudioFilePath);
         if (audioPath) {
-          const scale = Math.max(1, window.devicePixelRatio || 1);
-          const target = document
-            .elementFromPoint(event.payload.position.x / scale, event.payload.position.y / scale)
+          const target = dropTarget
             ?.closest<HTMLElement>("[data-timeline-audio-layer-id], [data-timeline-layer-kind='Audio'][data-timeline-layer-id]");
           const layerId = Number(
             target?.dataset.timelineAudioLayerId
@@ -10245,14 +10361,28 @@ export default function App() {
           void addTimelineAudioClipPath(layerId, audioPath);
           return;
         }
-        const projectPath = event.payload.paths.find(isSyndocalProjectPath);
-        if (!projectPath) {
-          if (event.payload.paths.length > 0) {
-            setMessage("Drop a .sdc project file to open it.");
+        const visualPaths = event.payload.paths.filter(isVisualMediaFilePath);
+        if (visualPaths.length > 0) {
+          const target = dropTarget;
+          const clipTarget = videoClipSlotDropTarget(target);
+          if (clipTarget) {
+            void importAndAssignVideoClipSlots(visualPaths, clipTarget.layerId, clipTarget.beforeSlotId);
+            return;
           }
+          if (target?.closest("[data-media-library-rail]")) {
+            void importMediaFilesFromPaths(visualPaths);
+            return;
+          }
+          setMessage("Drop visual media on Media Library, a Video layer, or an exact Clip Slot.");
           return;
         }
-        void loadProjectPath(projectPath);
+        if (projectPath) {
+          setMessage("Drop .sdc projects on the Project menu button.");
+          return;
+        }
+        if (event.payload.paths.length > 0) {
+          setMessage("Drop a .sdc project, visual media, or Audio clip on its matching surface.");
+        }
       })
       .then((unlisten) => {
         if (disposed) {
@@ -16405,9 +16535,24 @@ export default function App() {
   const {
     addVideoLayer,
     importMediaFiles,
+    importMediaFilesFromPaths,
     launchVideoClip,
     takeVideoClip,
     stopVideoClip,
+    createVideoClipSlot,
+    assignVideoClipSlotAsset,
+    updateVideoClipSlot,
+    removeVideoClipSlot,
+    duplicateVideoClipSlot,
+    setDefaultVideoClipSlot,
+    reorderVideoClipSlots,
+    queueVideoClipSlot,
+    cancelQueuedVideoClipSlot,
+    launchVideoClipSlot,
+    seekVideoClipSlot,
+    importAndAssignVideoClipSlots,
+    refreshVideoClipSlotRuntime,
+    resetVideoClipSlotRuntimeFence,
     playVideoLayerAudioMonitor,
     stopVideoLayerAudioMonitor,
     setVideoLayerAudioMonitorVolume,
@@ -16467,6 +16612,7 @@ export default function App() {
     getCurrentProjectAuthority: captureProjectAuthorityIdentity,
     prepareMediaAssetOperationStart,
     isProjectAuthorityCurrent: isProjectAuthorityIdentityCurrent,
+    authoritativeApplicationIsCurrent,
     consumeVideoSourceExpectedAuthority: () => {
       const expectedAuthority = videoSourceSelectionAuthority();
       setVideoSourceSelectionAuthority(null);
@@ -16500,6 +16646,7 @@ export default function App() {
     setVideoAudioMonitorStatus,
     setAudioOutputDevices,
     setVideoRecordingStatus,
+    setVideoClipRuntime,
     setExternalVideoIoPlans,
     setExternalVideoTransportStatus,
     setExternalVideoTransportReport,
@@ -16627,6 +16774,94 @@ export default function App() {
       return false;
     }
     return true;
+  };
+  const selectedVideoClipSlotLayer = createMemo(() => {
+    const layerId = selectedVideoClipSlotLayerId();
+    return snapshot().video.layers.find((layer) => layer.id === layerId)
+      ?? snapshot().video.layers[0]
+      ?? null;
+  });
+  const selectedVideoClipSlotRuntime = createMemo(() => {
+    const layer = selectedVideoClipSlotLayer();
+    return layer
+      ? videoClipRuntime().layers.find((runtime) => runtime.layer_id === layer.id) ?? null
+      : null;
+  });
+  createEffect(() => {
+    if (!isTauriRuntime()) {
+      if (viewportFixture !== "vj-bank") setVideoClipRuntime({ layers: [] });
+      return;
+    }
+    const editVideoVisible = workspaceTab() === "control" && controlMode() === "mixer";
+    const controlVideoVisible = workspaceTab() === "touch";
+    if (!editVideoVisible && !controlVideoVisible) return;
+    void refreshVideoClipSlotRuntime(true);
+    const intervalId = window.setInterval(() => void refreshVideoClipSlotRuntime(), 250);
+    onCleanup(() => window.clearInterval(intervalId));
+  });
+  createEffect(() => {
+    const layer = selectedVideoClipSlotLayer();
+    if (layer && selectedVideoClipSlotLayerId() !== layer.id) setSelectedVideoClipSlotLayerId(layer.id);
+    if (!layer) {
+      if (selectedVideoClipSlotLayerId() !== null) setSelectedVideoClipSlotLayerId(null);
+      if (selectedVideoClipSlotId() !== null) setSelectedVideoClipSlotId(null);
+      return;
+    }
+    if (selectedVideoClipSlotId() !== null && !layer.clip_slots?.some((slot) => slot.id === selectedVideoClipSlotId())) {
+      setSelectedVideoClipSlotId(null);
+    }
+  });
+  const selectVideoClipSlot = (slotId: VideoClipSlotId | null) => setSelectedVideoClipSlotId(slotId);
+  const selectVideoClipSlotLayer = (layerId: number) => {
+    setSelectedVideoClipSlotLayerId(layerId);
+    setSelectedVideoClipSlotId(null);
+    setVideoClipSlotInspectorOpen(false);
+    setVideoClipSlotInspectorTrigger(null);
+  };
+  const openVideoClipSlotInspector = (slotId: VideoClipSlotId | null, trigger: HTMLButtonElement) => {
+    setSelectedVideoClipSlotId(slotId);
+    setVideoClipSlotInspectorTrigger(trigger);
+    setVideoClipSlotInspectorOpen(true);
+  };
+  const previewVideoClipSlot = async (slotId: VideoClipSlotId) => {
+    // B3 has no isolated clip-slot preview transport. Selecting the pad reveals
+    // its catalog thumbnail without staging or claiming the whole layer.
+    authorizeVideoThumbnailAccess();
+    setSelectedVideoClipSlotId(slotId);
+  };
+  const takeSelectedVideoClipSlot = async () => {
+    const layer = selectedVideoClipSlotLayer();
+    if (!layer) return;
+    const result = await launchVideoClipSlot(layer.id, null);
+    if (result && videoProgramAudioEnabled() && videoLayerHasMonitorableAudio(layer.id)) {
+      await refreshVideoAudioMonitorStatus(true);
+    }
+  };
+  const reorderVideoClipSlotByDirection = async (slotId: VideoClipSlotId, direction: -1 | 1) => {
+    const layer = selectedVideoClipSlotLayer();
+    if (!layer) return;
+    const ids = (layer.clip_slots ?? []).map((slot) => slot.id);
+    const currentIndex = ids.indexOf(slotId);
+    if (currentIndex < 0) return;
+    const destination = Math.max(0, Math.min(ids.length - 1, currentIndex + direction));
+    if (destination === currentIndex) return;
+    await reorderVideoClipSlots(layer.id, videoClipSlotReorderedIds(ids, slotId, destination));
+  };
+  const updateVideoClipSlotQuantization = async (slotId: VideoClipSlotId, launchQuantization: VideoClipSlotSummary["launch_quantization"]) => {
+    const layer = selectedVideoClipSlotLayer();
+    const slot = layer?.clip_slots?.find((candidate) => candidate.id === slotId);
+    if (!layer || !slot) return;
+    await updateVideoClipSlot(layer.id, { ...slot, launch_quantization: launchQuantization });
+  };
+  const videoClipSlotRemoveDisabledReason = (slotId: VideoClipSlotId): string | null => {
+    const layer = selectedVideoClipSlotLayer();
+    const runtime = selectedVideoClipSlotRuntime();
+    if (!layer || (layer.clip_slots?.length ?? 0) <= 1) return "The last Clip Slot cannot be removed.";
+    if (!runtime) return "Runtime state is unavailable; removal is disabled.";
+    if (runtime?.active_slot_id === slotId) return "The active Clip Slot cannot be removed.";
+    if (runtime?.queued_slot_id === slotId) return "The queued Clip Slot cannot be removed.";
+    if (runtime?.pending_launch?.slot_id === slotId) return "A pending Clip Slot cannot be removed.";
+    return null;
   };
   const clearVjPreview = async () => {
     const summary = await runVjPreviewTransportCommand("clear_vj_preview");
@@ -21142,6 +21377,22 @@ export default function App() {
         </section>
         </Show>
         <Show when={workspaceTab() === "touch"}>
+        <nav class="touchControlDomainTabs" aria-label="Control domain">
+          <button
+            type="button"
+            data-control-domain="lighting"
+            class={touchControlDomain() === "lighting" ? "active" : ""}
+            aria-pressed={touchControlDomain() === "lighting"}
+            onClick={() => setTouchControlDomain("lighting")}
+          >Lighting</button>
+          <button
+            type="button"
+            data-control-domain="video"
+            class={touchControlDomain() === "video" ? "active" : ""}
+            aria-pressed={touchControlDomain() === "video"}
+            onClick={() => setTouchControlDomain("video")}
+          >Video</button>
+        </nav>
         <EditableTouchSurface
           snapshot={snapshot()}
           surface={snapshot().touch_surface}
@@ -21386,7 +21637,72 @@ export default function App() {
           onSetOutputOpacity={setVideoOutputOpacity}
           onFadeOutputOpacity={fadeVideoOutputOpacity}
           onOpenOutputWindow={openVideoOutputWindow}
+          clipSlotBank={{
+            mode: "control",
+            get layers() { return snapshot().video.layers; },
+            get layer() { return selectedVideoClipSlotLayer(); },
+            get runtime() { return selectedVideoClipSlotRuntime(); },
+            get assets() { return snapshot().video.media_assets; },
+            get thumbnails() { return mediaAssetThumbnails(); },
+            get selectedSlotId() { return selectedVideoClipSlotId(); },
+            onSelectLayer: selectVideoClipSlotLayer,
+            onSelect: selectVideoClipSlot,
+            onQueue: (slotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? queueVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+            },
+            onPreview: previewVideoClipSlot,
+            onMore: openVideoClipSlotInspector,
+            onImport: () => importMediaFiles("File"),
+            onCancelQueue: () => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? cancelQueuedVideoClipSlot(layer.id) : Promise.resolve(null);
+            },
+            onSetQuantization: updateVideoClipSlotQuantization,
+          }}
+          clipSlotTake={{
+            get enabled() { return selectedVideoClipSlotRuntime()?.queued_slot_id != null; },
+            onTake: takeSelectedVideoClipSlot,
+          }}
         />
+        <Show when={videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
+          <VideoClipSlotInspectorPanel
+            layer={selectedVideoClipSlotLayer()}
+            slotId={selectedVideoClipSlotId()}
+            assets={snapshot().video.media_assets}
+            returnFocus={videoClipSlotInspectorTrigger()}
+            removeDisabledReason={selectedVideoClipSlotId() === null ? "Select a Clip Slot to remove." : videoClipSlotRemoveDisabledReason(selectedVideoClipSlotId()!)}
+            onClose={() => {
+              setVideoClipSlotInspectorTrigger(null);
+              setVideoClipSlotInspectorOpen(false);
+            }}
+            onCreate={(assetId, beforeSlotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? createVideoClipSlot(layer.id, assetId, beforeSlotId) : Promise.resolve(null);
+            }}
+            onAssign={(slotId, assetId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? assignVideoClipSlotAsset(layer.id, slotId, assetId) : Promise.resolve(null);
+            }}
+            onUpdate={(slot) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? updateVideoClipSlot(layer.id, slot) : Promise.resolve(null);
+            }}
+            onRemove={(slotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? removeVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+            }}
+            onDuplicate={(slotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? duplicateVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+            }}
+            onSetDefault={(slotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? setDefaultVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+            }}
+            onReorder={reorderVideoClipSlotByDirection}
+          />
+        </Show>
         </Show>
         <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
         <aside
@@ -21828,6 +22144,33 @@ export default function App() {
             onStopAudio: stopVideoLayerAudioMonitor,
             onRequestThumbnails: authorizeVideoThumbnailAccess,
           }}
+          clipSlotBank={{
+            mode: "edit",
+            get layers() { return snapshot().video.layers; },
+            get layer() { return selectedVideoClipSlotLayer(); },
+            get runtime() { return selectedVideoClipSlotRuntime(); },
+            get assets() { return snapshot().video.media_assets; },
+            get thumbnails() { return mediaAssetThumbnails(); },
+            get selectedSlotId() { return selectedVideoClipSlotId(); },
+            onSelectLayer: selectVideoClipSlotLayer,
+            onSelect: selectVideoClipSlot,
+            onQueue: (slotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? queueVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+            },
+            onPreview: previewVideoClipSlot,
+            onMore: openVideoClipSlotInspector,
+            onImport: () => importMediaFiles("File"),
+            onCancelQueue: () => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? cancelQueuedVideoClipSlot(layer.id) : Promise.resolve(null);
+            },
+            onSetQuantization: updateVideoClipSlotQuantization,
+          }}
+          clipSlotTake={{
+            get enabled() { return selectedVideoClipSlotRuntime()?.queued_slot_id != null; },
+            onTake: takeSelectedVideoClipSlot,
+          }}
           mediaLibrary={{
             get assets() { return snapshot().video.media_assets; },
             get thumbnails() { return mediaAssetThumbnails(); },
@@ -21919,6 +22262,44 @@ export default function App() {
             onRemoveAutomation: removeTimelineAutomation,
           }}
         />
+        <Show when={videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
+          <VideoClipSlotInspectorPanel
+            layer={selectedVideoClipSlotLayer()}
+            slotId={selectedVideoClipSlotId()}
+            assets={snapshot().video.media_assets}
+            returnFocus={videoClipSlotInspectorTrigger()}
+            removeDisabledReason={selectedVideoClipSlotId() === null ? "Select a Clip Slot to remove." : videoClipSlotRemoveDisabledReason(selectedVideoClipSlotId()!)}
+            onClose={() => {
+              setVideoClipSlotInspectorTrigger(null);
+              setVideoClipSlotInspectorOpen(false);
+            }}
+            onCreate={(assetId, beforeSlotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? createVideoClipSlot(layer.id, assetId, beforeSlotId) : Promise.resolve(null);
+            }}
+            onAssign={(slotId, assetId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? assignVideoClipSlotAsset(layer.id, slotId, assetId) : Promise.resolve(null);
+            }}
+            onUpdate={(slot) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? updateVideoClipSlot(layer.id, slot) : Promise.resolve(null);
+            }}
+            onRemove={(slotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? removeVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+            }}
+            onDuplicate={(slotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? duplicateVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+            }}
+            onSetDefault={(slotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? setDefaultVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+            }}
+            onReorder={reorderVideoClipSlotByDirection}
+          />
+        </Show>
         </Show>
 
         <Show when={sharedWorkspaceVisible() && !paneWindow}>

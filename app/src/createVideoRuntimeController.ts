@@ -11,6 +11,7 @@ import {
   prepareFinalizeAndCommitMediaAssets,
 } from "./mediaAssetAuthority";
 import type { ProjectAuthorityToken } from "./projectAuthority";
+import { videoClipSlotCommandKindMatches, videoClipSlotRuntimeGenerationCanApply } from "./videoClipSlotBankModel";
 import type {
   EngineSnapshot,
   ExternalVideoIoPlans,
@@ -35,6 +36,14 @@ import type {
   VideoPreviewDiagnostics,
   VideoRuntimeStatus,
   VideoRecordingStatus,
+  VideoClipRuntimeSnapshot,
+  VideoClipRuntimeReport,
+  VideoClipSlotAuthoritativeAuthoredResult,
+  VideoClipSlotAuthoritativeCommitKind,
+  VideoClipSlotAuthoritativeRuntimeResult,
+  VideoClipSlotAuthoritativeTerminalEnvelope,
+  VideoClipSlotId,
+  VideoClipSlotSummary,
   VideoSourceKind,
 } from "./types";
 
@@ -55,6 +64,8 @@ interface VideoRuntimeControllerOptions {
   prepareMediaAssetOperationStart: (expectedAuthority: ProjectAuthorityToken) => Promise<MediaAssetOperationPreflight>;
   /** Live E/R/H check immediately before any terminal UI side effect. */
   isProjectAuthorityCurrent: (authority: ProjectAuthorityToken) => boolean;
+  /** Result marker set only after App applies the authoritative mutation/history bundle. */
+  authoritativeApplicationIsCurrent: (value: unknown) => boolean;
   /** Uses the full E/R/H captured before Browse, then clears that one-shot fence. */
   consumeVideoSourceExpectedAuthority: () => ProjectAuthorityToken;
   /** Registers one picker/hash/commit operation for replacement/unmount abort. */
@@ -79,6 +90,7 @@ interface VideoRuntimeControllerOptions {
   setVideoAudioMonitorStatus: Setter<VideoAudioMonitorStatus>;
   setAudioOutputDevices: Setter<string[]>;
   setVideoRecordingStatus: Setter<VideoRecordingStatus>;
+  setVideoClipRuntime: Setter<VideoClipRuntimeSnapshot>;
   setExternalVideoIoPlans: Setter<ExternalVideoIoPlans | null>;
   setExternalVideoTransportStatus: Setter<ExternalVideoTransportStatus | null>;
   setExternalVideoTransportReport: Setter<ExternalVideoTransportSyncReport | null>;
@@ -100,6 +112,13 @@ const sameProjectAuthority = (left: ProjectAuthorityToken, right: ProjectAuthori
   && left.checkpoint_hash === right.checkpoint_hash;
 
 export function createVideoRuntimeController(options: VideoRuntimeControllerOptions) {
+  // B4: these operation IDs deliberately live in the renderer that owns the
+  // stable project-transaction owner.  The backend retains the definitive
+  // terminal receipt and rejects a duplicate ID with a different shape.
+  let videoClipSlotRequestId = Math.max(1, Date.now());
+  let appliedRuntimeEpoch: number | null = null;
+  let appliedRuntimeGeneration = -1;
+  const nextVideoClipSlotRequestId = () => ++videoClipSlotRequestId;
   const setMessageIfAuthorityCurrent = (authority: ProjectAuthorityToken, message: string) => {
     if (options.isProjectAuthorityCurrent(authority)) options.setMessage(message);
   };
@@ -107,6 +126,359 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     if (!options.isIsfEventPulseBusy()) return true;
     options.setMessage("Wait for the active FX Event pulse to finish.");
     return false;
+  };
+  const recoverVideoClipSlotTerminal = async (
+    preparedImportToken: number,
+    requestId: number,
+    operationGeneration: number,
+    authority: ProjectAuthorityToken,
+  ) => options.invoke<VideoClipSlotAuthoritativeTerminalEnvelope | null>(
+    "get_video_clip_slot_operation_terminal_result",
+    {
+      preparedImportToken,
+      requestId,
+      operationGeneration,
+      expectedEpoch: authority.project_epoch,
+      expectedRevision: authority.project_revision,
+      expectedCheckpointHash: authority.checkpoint_hash,
+      ownerId: options.projectTransactionOwnerId,
+    },
+  );
+  const expectedKindByCommand: Readonly<Record<string, VideoClipSlotAuthoritativeCommitKind>> = {
+    create_video_clip_slot_authoritative: "create",
+    assign_video_clip_slot_asset_authoritative: "assign",
+    update_video_clip_slot_authoritative: "update",
+    remove_video_clip_slot_authoritative: "remove",
+    reorder_video_clip_slots_authoritative: "reorder",
+    duplicate_video_clip_slot_authoritative: "duplicate",
+    set_default_video_clip_slot_authoritative: "set_default",
+    import_and_assign_video_clip_slots_authoritative: "import_and_assign",
+    queue_video_clip_slot_authoritative: "queue",
+    cancel_queued_video_clip_slot_authoritative: "cancel_queue",
+    launch_video_clip_slot_authoritative: "launch",
+    seek_video_clip_slot_authoritative: "seek",
+  };
+  const expectedKind = (command: string) => {
+    const kind = expectedKindByCommand[command];
+    if (!kind) throw new Error(`Unknown Clip Slot command: ${command}`);
+    return kind;
+  };
+  const requireCommandKind = (
+    actual: VideoClipSlotAuthoritativeCommitKind,
+    expected: VideoClipSlotAuthoritativeCommitKind,
+  ) => {
+    if (!videoClipSlotCommandKindMatches(actual, expected)) {
+      throw new Error(`Clip Slot receipt kind mismatch: expected ${expected}, received ${actual}.`);
+    }
+  };
+  const requireTerminalEnvelope = (
+    envelope: VideoClipSlotAuthoritativeTerminalEnvelope,
+    expected: VideoClipSlotAuthoritativeCommitKind,
+  ) => {
+    requireCommandKind(envelope.command_kind, expected);
+    if (typeof envelope.shape_fingerprint !== "string" || envelope.shape_fingerprint.length === 0) {
+      throw new Error("Clip Slot terminal receipt omitted its request-shape fingerprint.");
+    }
+  };
+  const applyVideoClipSlotRuntime = (result: VideoClipRuntimeReport | VideoClipSlotAuthoritativeRuntimeResult) => {
+    const generationCanApply = videoClipSlotRuntimeGenerationCanApply(
+      appliedRuntimeEpoch, appliedRuntimeGeneration, result.project_epoch, result.runtime_generation,
+    );
+    if (!options.isProjectAuthorityCurrent({
+      project_epoch: result.project_epoch,
+      project_revision: result.project_revision,
+      checkpoint_hash: result.checkpoint_hash,
+    })) return false;
+    if (!generationCanApply) return false;
+    appliedRuntimeEpoch = result.project_epoch;
+    appliedRuntimeGeneration = result.runtime_generation;
+    options.setVideoClipRuntime(result.runtime);
+    return true;
+  };
+  const resetVideoClipSlotRuntimeFence = () => {
+    appliedRuntimeEpoch = null;
+    appliedRuntimeGeneration = -1;
+    options.setVideoClipRuntime({ layers: [] });
+  };
+  const refreshVideoClipSlotRuntime = async (showError = false) => {
+    const authority = options.getCurrentProjectAuthority();
+    try {
+      const result = await options.invoke<VideoClipRuntimeReport>("get_video_clip_slot_runtime", {
+        expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+        ownerId: options.projectTransactionOwnerId,
+      });
+      return applyVideoClipSlotRuntime(result) ? result : null;
+    } catch (error) {
+      if (showError) setMessageIfAuthorityCurrent(authority, String(error));
+      return null;
+    }
+  };
+  const runVideoClipSlotAuthored = async <T extends Record<string, unknown>>(
+    command: string,
+    request: T,
+  ): Promise<VideoClipSlotAuthoritativeAuthoredResult | null> => {
+    const authority = options.getCurrentProjectAuthority();
+    const requestId = nextVideoClipSlotRequestId();
+    const kind = expectedKind(command);
+    const args = {
+      request,
+      requestId,
+      expectedEpoch: authority.project_epoch,
+      expectedRevision: authority.project_revision,
+      expectedCheckpointHash: authority.checkpoint_hash,
+      ownerId: options.projectTransactionOwnerId,
+    };
+    try {
+      const result = await options.invoke<VideoClipSlotAuthoritativeAuthoredResult>(command, args);
+      requireCommandKind(result.command_kind, kind);
+      if (!options.authoritativeApplicationIsCurrent(result)) return null;
+      await options.refreshSnapshot();
+      if (!options.isProjectAuthorityCurrent(result.mutation.authority)) return null;
+      return result;
+    } catch (initialError) {
+      const terminal = await recoverVideoClipSlotTerminal(0, requestId, 0, authority).catch(() => null);
+      if (terminal) requireTerminalEnvelope(terminal, kind);
+      if (terminal?.terminal.kind === "authored") {
+        requireCommandKind(terminal.terminal.result.command_kind, kind);
+        if (!options.authoritativeApplicationIsCurrent(terminal)) return null;
+        await options.refreshSnapshot();
+        if (!options.isProjectAuthorityCurrent(terminal.terminal.result.mutation.authority)) return null;
+        return terminal.terminal.result;
+      }
+      if (terminal?.terminal.kind === "failure") throw new Error(terminal.terminal.result.message);
+      throw initialError;
+    }
+  };
+  const runVideoClipSlotRuntime = async <T extends Record<string, unknown>>(
+    command: string,
+    request: T,
+  ): Promise<VideoClipSlotAuthoritativeRuntimeResult | null> => {
+    const authority = options.getCurrentProjectAuthority();
+    const requestId = nextVideoClipSlotRequestId();
+    const kind = expectedKind(command);
+    const args = {
+      request,
+      requestId,
+      expectedEpoch: authority.project_epoch,
+      expectedRevision: authority.project_revision,
+      expectedCheckpointHash: authority.checkpoint_hash,
+      ownerId: options.projectTransactionOwnerId,
+    };
+    try {
+      const result = await options.invoke<VideoClipSlotAuthoritativeRuntimeResult>(command, args);
+      requireCommandKind(result.command_kind, kind);
+      return applyVideoClipSlotRuntime(result) ? result : null;
+    } catch (initialError) {
+      const terminal = await recoverVideoClipSlotTerminal(0, requestId, 0, authority).catch(() => null);
+      if (terminal) requireTerminalEnvelope(terminal, kind);
+      if (terminal?.terminal.kind === "runtime") {
+        requireCommandKind(terminal.terminal.result.command_kind, kind);
+        if (!terminal.runtime) throw new Error("Clip Slot runtime recovery omitted the fresh runtime report.");
+        requireCommandKind(terminal.runtime.command_kind, kind);
+        return applyVideoClipSlotRuntime(terminal.runtime) ? terminal.runtime : null;
+      }
+      if (terminal?.terminal.kind === "failure") throw new Error(terminal.terminal.result.message);
+      throw initialError;
+    }
+  };
+  const createVideoClipSlot = async (layerId: number, mediaAssetId: number, beforeSlotId: VideoClipSlotId | null) => {
+    try {
+      const result = await runVideoClipSlotAuthored("create_video_clip_slot_authoritative", {
+        layer_id: layerId, media_asset_id: mediaAssetId, in_point_ms: 0, out_point_ms: null,
+        loop_mode: "Once", speed: 1, cue_points: [], launch_quantization: "Immediate",
+        effect_overrides: [], before_slot_id: beforeSlotId, make_default: false,
+      });
+      if (result) options.setMessage(`Created video clip slot ${result.focus_slot_id ?? ""}.`);
+      return result;
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const assignVideoClipSlotAsset = async (layerId: number, slotId: VideoClipSlotId, mediaAssetId: number) => {
+    try {
+      const result = await runVideoClipSlotAuthored("assign_video_clip_slot_asset_authoritative", {
+        layer_id: layerId, slot_id: slotId, media_asset_id: mediaAssetId,
+      });
+      if (result) options.setMessage(`Assigned media to video clip slot ${slotId}.`);
+      return result;
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const updateVideoClipSlot = async (layerId: number, slot: VideoClipSlotSummary) => {
+    try {
+      const result = await runVideoClipSlotAuthored("update_video_clip_slot_authoritative", { layer_id: layerId, slot });
+      if (result) options.setMessage(`Updated video clip slot ${slot.id}.`);
+      return result;
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const removeVideoClipSlot = async (layerId: number, slotId: VideoClipSlotId) => {
+    try {
+      const result = await runVideoClipSlotAuthored("remove_video_clip_slot_authoritative", {
+        layer_id: layerId, slot_id: slotId,
+      });
+      if (result) options.setMessage(`Removed video clip slot ${slotId}.`);
+      return result;
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const duplicateVideoClipSlot = async (layerId: number, sourceSlotId: VideoClipSlotId) => {
+    try {
+      const result = await runVideoClipSlotAuthored("duplicate_video_clip_slot_authoritative", {
+        layer_id: layerId, source_slot_id: sourceSlotId, before_slot_id: null,
+      });
+      if (result) options.setMessage(`Duplicated video clip slot ${sourceSlotId}.`);
+      return result;
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const setDefaultVideoClipSlot = async (layerId: number, slotId: VideoClipSlotId) => {
+    try {
+      const result = await runVideoClipSlotAuthored("set_default_video_clip_slot_authoritative", { layer_id: layerId, slot_id: slotId });
+      if (result) options.setMessage(`Set video clip slot ${slotId} as the default.`);
+      return result;
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const reorderVideoClipSlots = async (layerId: number, slotIds: VideoClipSlotId[]) => {
+    try {
+      const result = await runVideoClipSlotAuthored("reorder_video_clip_slots_authoritative", { layer_id: layerId, slot_ids: slotIds });
+      if (result) options.setMessage("Reordered video clip slots.");
+      return result;
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const queueVideoClipSlot = async (layerId: number, slotId: VideoClipSlotId) => {
+    try {
+      const result = await runVideoClipSlotRuntime("queue_video_clip_slot_authoritative", { layer_id: layerId, slot_id: slotId });
+      if (result) options.setMessage(`Queued video clip slot ${slotId}.`);
+      return result;
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const cancelQueuedVideoClipSlot = async (layerId: number) => {
+    try {
+      const result = await runVideoClipSlotRuntime("cancel_queued_video_clip_slot_authoritative", { layer_id: layerId });
+      if (result) options.setMessage("Canceled queued video clip slot.");
+      return result;
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const launchVideoClipSlot = async (layerId: number, slotId: VideoClipSlotId | null = null) => {
+    try {
+      const result = await runVideoClipSlotRuntime("launch_video_clip_slot_authoritative", { layer_id: layerId, slot_id: slotId });
+      if (result) options.setMessage(`Launched video clip slot ${slotId ?? "default"}.`);
+      return result;
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const seekVideoClipSlot = async (layerId: number, positionMs: number) => {
+    try {
+      return await runVideoClipSlotRuntime("seek_video_clip_slot_authoritative", {
+        layer_id: layerId, position_ms: Math.max(0, Math.round(positionMs)),
+      });
+    } catch (error) { options.setMessage(String(error)); return null; }
+  };
+  const importAndAssignVideoClipSlots = async (
+    paths: readonly string[],
+    targetLayerId: number,
+    beforeSlotId: VideoClipSlotId | null,
+  ) => {
+    const normalizedPaths = paths.map((path) => path.trim()).filter(Boolean);
+    if (normalizedPaths.length === 0) return null;
+    const initialAuthority = options.getCurrentProjectAuthority();
+    let authority = initialAuthority;
+    const requestId = nextVideoClipSlotRequestId();
+    let operation: MediaAssetOperationLease | null = null;
+    let preparedToken: number | null = null;
+    let operationGeneration = 0;
+    let reservationStarted = false;
+    try {
+      const preflight = await options.prepareMediaAssetOperationStart(initialAuthority);
+      authority = preflight.authority;
+      if (!options.isProjectAuthorityCurrent(authority)) return null;
+      operation = options.beginMediaAssetOperation("Import and assign clip slots", "preparing");
+      const startReport = await options.invoke<{
+        request_id: number;
+        operation_generation: number;
+        project_epoch: number;
+        project_revision: number;
+        checkpoint_hash: string;
+      }>("start_media_asset_operation", {
+        requestId,
+        expectedEpoch: authority.project_epoch,
+        ownerId: options.projectTransactionOwnerId,
+      });
+      if (startReport.request_id !== requestId || startReport.project_epoch !== authority.project_epoch
+        || startReport.project_revision !== authority.project_revision || startReport.checkpoint_hash !== authority.checkpoint_hash) {
+        throw new Error("Clip import was superseded before preparation; no project changes were made.");
+      }
+      reservationStarted = true;
+      operationGeneration = startReport.operation_generation;
+      operation.setPhase("hashing");
+      const prepared = await options.invoke<MediaAssetImportReport>("prepare_reserved_media_assets", {
+        requestId,
+        operationGeneration,
+        kind: "File",
+        paths: normalizedPaths,
+        expectedEpoch: authority.project_epoch,
+        ownerId: options.projectTransactionOwnerId,
+      });
+      options.setMediaAssetImportReport(prepared);
+      preparedToken = prepared.prepared_import_token ?? null;
+      // Direct target drops are all-or-nothing: do not create a partial bank
+      // after a picker supplied multiple visual files.
+      if (preparedToken === null || prepared.prepared !== normalizedPaths.length || prepared.failed > 0 || prepared.skipped > 0) {
+        throw new Error("Every dropped media file must prepare before Clip Bank assignment; no project changes were made.");
+      }
+      operation.setPhase("finalizing");
+      const finalized = await options.invoke<MediaAssetImportReport>("finalize_prepared_media_assets", {
+        preparedImportToken: preparedToken,
+        requestId,
+        operationGeneration,
+        expectedEpoch: authority.project_epoch,
+        ownerId: options.projectTransactionOwnerId,
+      });
+      options.setMediaAssetImportReport(finalized);
+      operation.setPhase("committing");
+      const args = {
+        request: { target_layer_id: targetLayerId, before_slot_id: beforeSlotId, make_default: false },
+        preparedImportToken: preparedToken,
+        requestId,
+        operationGeneration,
+        expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+        ownerId: options.projectTransactionOwnerId,
+      };
+      let result: VideoClipSlotAuthoritativeAuthoredResult;
+      let applicationCurrent = false;
+      try {
+        result = await options.invoke<VideoClipSlotAuthoritativeAuthoredResult>("import_and_assign_video_clip_slots_authoritative", args);
+        requireCommandKind(result.command_kind, "import_and_assign");
+        applicationCurrent = options.authoritativeApplicationIsCurrent(result);
+      } catch (initialError) {
+        const terminal = await recoverVideoClipSlotTerminal(preparedToken, requestId, operationGeneration, authority).catch(() => null);
+        if (terminal) requireTerminalEnvelope(terminal, "import_and_assign");
+        if (terminal?.terminal.kind === "authored") {
+          requireCommandKind(terminal.terminal.result.command_kind, "import_and_assign");
+          result = terminal.terminal.result;
+          applicationCurrent = options.authoritativeApplicationIsCurrent(terminal);
+        }
+        else if (terminal?.terminal.kind === "failure") throw new Error(terminal.terminal.result.message);
+        else throw initialError;
+      }
+      if (!applicationCurrent) return null;
+      await options.refreshSnapshot();
+      if (!options.isProjectAuthorityCurrent(result.mutation.authority)) return null;
+      options.setMessage(`Imported and assigned ${result.created_slot_ids.length} video clip slot(s).`);
+      return result;
+    } catch (error) {
+      if (reservationStarted) {
+        void options.invoke<boolean>("cancel_media_asset_operation", {
+          requestId,
+          operationGeneration,
+          ownerId: options.projectTransactionOwnerId,
+        }).catch(() => undefined);
+      }
+      // The backend's prepared-token reaper owns abort cleanup; a failed
+      // prepare/finalize/direct operation cannot apply renderer-side state.
+      if (options.isProjectAuthorityCurrent(authority)) options.setMessage(String(error));
+      return null;
+    } finally {
+      operation?.release();
+    }
   };
   const addVideoLayer = async () => {
     let sideEffectAuthority = options.getCurrentProjectAuthority();
@@ -178,8 +550,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       setMessageIfAuthorityCurrent(sideEffectAuthority, String(error));
     }
   };
-  const importMediaFiles = async () => {
-    const kind = options.videoSourceKind();
+  const importMediaFiles = async (kindOverride?: "File" | "StillImage") => {
+    const kind = kindOverride ?? options.videoSourceKind();
     if (kind !== "File" && kind !== "StillImage") {
       options.setMessage("Batch import supports local video files and still images only.");
       return;
@@ -230,6 +602,42 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
         mediaOperation.release();
       }
     } catch (error) { setMessageIfAuthorityCurrent(sideEffectAuthority, String(error)); }
+  };
+  const importMediaFilesFromPaths = async (paths: readonly string[]) => {
+    const normalizedPaths = paths.map((path) => path.trim()).filter(Boolean);
+    if (normalizedPaths.length === 0) return null;
+    const authority = options.getCurrentProjectAuthority();
+    let sideEffectAuthority = authority;
+    const preparedStart = await preflightAndBeginMediaAssetOperation(
+      authority,
+      options.prepareMediaAssetOperationStart,
+      () => options.beginMediaAssetOperation("Import dropped media", "preparing"),
+    );
+    sideEffectAuthority = preparedStart.authority;
+    try {
+      const staged = await prepareFinalizeAndCommitMediaAssets({
+        invoke: options.invoke,
+        kind: "File",
+        paths: normalizedPaths,
+        expectedEpoch: sideEffectAuthority.project_epoch,
+        expectedAuthority: sideEffectAuthority,
+        ownerId: options.projectTransactionOwnerId,
+        signal: preparedStart.operation.signal,
+        onPhase: preparedStart.operation.setPhase,
+        onReport: options.setMediaAssetImportReport,
+        commitCommand: "commit_prepared_media_assets_authoritative",
+      });
+      if (!staged.applicationCurrent || !options.isProjectAuthorityCurrent(staged.terminalAuthority)) return null;
+      options.setMediaAssetImportReport(staged.committed ?? staged.report);
+      options.setMessage(mediaAssetImportReportMessage(staged.committed ?? staged.report));
+      await options.refreshSnapshot();
+      return staged.report;
+    } catch (error) {
+      setMessageIfAuthorityCurrent(sideEffectAuthority, String(error));
+      return null;
+    } finally {
+      preparedStart.operation.release();
+    }
   };
   const launchVideoClip = async (layerId: number, fadeMs: number) => {
     try {
@@ -920,7 +1328,12 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   };
 
   return {
-    addVideoLayer, importMediaFiles, launchVideoClip, takeVideoClip, stopVideoClip,
+    addVideoLayer, importMediaFiles, importMediaFilesFromPaths, launchVideoClip, takeVideoClip, stopVideoClip,
+    createVideoClipSlot, assignVideoClipSlotAsset, updateVideoClipSlot, removeVideoClipSlot,
+    duplicateVideoClipSlot, setDefaultVideoClipSlot, reorderVideoClipSlots,
+    queueVideoClipSlot, cancelQueuedVideoClipSlot, launchVideoClipSlot, seekVideoClipSlot,
+    importAndAssignVideoClipSlots,
+    refreshVideoClipSlotRuntime, resetVideoClipSlotRuntimeFence,
     playVideoLayerAudioMonitor, stopVideoLayerAudioMonitor, setVideoLayerAudioMonitorVolume,
     refreshVideoAudioMonitorStatus,
     refreshAudioOutputDevices,

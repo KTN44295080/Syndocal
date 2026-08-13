@@ -17800,12 +17800,11 @@ async function exerciseSceneMatrixCrossBankMoveAndUndo(client) {
   };
 }
 
-// T6: the vj-bank fixture carries 14 clips so bank 1 must show all 12 pads
-// without scrolling, monitors must own >=65% of the center column, and the
-// three settings drawers default closed. Video now uses Lighting's lower-right
-// stacked Outputs/Layers pane: its terminal layer control must therefore be
-// reachable through the true local scrollport rather than requiring six rows
-// to be simultaneously visible in an intentionally half-height subpane.
+// B4: the authoritative 32-slot bank is the primary Clip surface and must keep
+// all stable pad identities within its own scrollport. The prior 12-layer
+// transport/capture grid remains available behind its collapsed disclosure;
+// this gate opens that disclosure and proves its terminal pad remains reachable
+// through local scrolling without reviving it as the primary surface.
 async function runVjBankViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -17817,16 +17816,91 @@ async function runVjBankViewport(client, viewport) {
   await waitForApp(client);
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.videoClipPad').length === 12",
-    "VJ bank clip pads",
+    "document.querySelectorAll('[data-video-clip-slot-bank=edit] .videoClipSlotPad').length === 32",
+    "VJ 32-slot bank pads",
   );
   await sleep(120);
   const containment = await measure(client, `vj-bank-${viewport.width}x${viewport.height}`);
+  const b4Bank = await evaluatePageFunction(client, () => {
+    const app = document.querySelector('.app');
+    const bank = document.querySelector('[data-video-clip-slot-bank="edit"]');
+    const grid = bank?.querySelector('.videoClipSlotBankGrid');
+    if (!(app instanceof HTMLElement) || !(bank instanceof HTMLElement) || !(grid instanceof HTMLElement)) {
+      return { present: false };
+    }
+    const pads = [...grid.querySelectorAll('.videoClipSlotPad')];
+    const bankRect = bank.getBoundingClientRect();
+    const columns = getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length;
+    const undersizedTargets = [...bank.querySelectorAll('button, input, select')].filter((target) => {
+      const rect = target.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && rect.height < 43.5;
+    }).length;
+    const before = { windowX: window.scrollX, windowY: window.scrollY, appTop: app.scrollTop, appLeft: app.scrollLeft };
+    bank.scrollTop = Math.max(0, bank.scrollHeight - bank.clientHeight);
+    const terminal = pads.at(-1)?.getBoundingClientRect();
+    const after = { windowX: window.scrollX, windowY: window.scrollY, appTop: app.scrollTop, appLeft: app.scrollLeft };
+    const terminalReachable = Boolean(terminal)
+      && terminal.left >= bankRect.left - 1 && terminal.right <= bankRect.right + 1
+      && terminal.top >= bankRect.top - 1 && terminal.bottom <= bankRect.bottom + 1;
+    bank.scrollTop = 0;
+    return {
+      present: true,
+      count: pads.length,
+      identities: pads.map((pad) => Number(pad.getAttribute('data-video-clip-slot-index'))),
+      columns,
+      overflowY: getComputedStyle(bank).overflowY,
+      terminalReachable,
+      undersizedTargets,
+      outerScrollStable: JSON.stringify(before) === JSON.stringify(after),
+      documentFixed: document.documentElement.scrollWidth === document.documentElement.clientWidth
+        && document.documentElement.scrollHeight === document.documentElement.clientHeight
+        && app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight,
+    };
+  });
+  const legacyTransport = await evaluatePageFunction(client, () => {
+    const app = document.querySelector('.app');
+    const details = document.querySelector('.videoMixerClipPane .videoClipLegacyTransport');
+    if (!(app instanceof HTMLElement) || !(details instanceof HTMLDetailsElement)) return { present: false };
+    const initiallyOpen = details.open;
+    details.open = true;
+    const panel = details.querySelector('.videoClipGridPanel');
+    const grid = details.querySelector('.videoClipGrid');
+    const pads = [...details.querySelectorAll('.videoClipPad')];
+    if (!(panel instanceof HTMLElement) || !(grid instanceof HTMLElement)) {
+      details.open = initiallyOpen;
+      return { present: true, initiallyOpen, reachable: false, count: pads.length };
+    }
+    const before = { windowX: window.scrollX, windowY: window.scrollY, appTop: app.scrollTop, appLeft: app.scrollLeft };
+    details.scrollIntoView({ block: 'nearest' });
+    panel.scrollTop = panel.scrollHeight;
+    grid.scrollTop = grid.scrollHeight;
+    const terminal = pads.at(-1)?.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const reachable = Boolean(terminal)
+      && terminal.left >= panelRect.left - 1 && terminal.right <= panelRect.right + 1
+      && terminal.top >= panelRect.top - 1 && terminal.bottom <= panelRect.bottom + 1;
+    const after = { windowX: window.scrollX, windowY: window.scrollY, appTop: app.scrollTop, appLeft: app.scrollLeft };
+    details.open = initiallyOpen;
+    return {
+      present: true,
+      initiallyOpen,
+      count: pads.length,
+      reachable,
+      outerScrollStable: JSON.stringify(before) === JSON.stringify(after),
+    };
+  });
   const conditions = [
-    ["vjBankTwelvePadsFullyVisibleWithoutScroll", () =>
-      containment.visibleVideoClipPadCount === 12 &&
-      containment.fullyVisibleVideoClipPadCount === 12 &&
-      containment.videoClipGridScrollDelta <= 1],
+    ["vjBankPrimaryThirtyTwoStableSlots", () =>
+      b4Bank.present && b4Bank.count === 32 &&
+      b4Bank.identities.every((identity, index) => identity === index)],
+    ["vjBankPrimaryUsesInternalResponsiveGrid", () =>
+      b4Bank.columns >= 2 && b4Bank.columns <= 8 &&
+      b4Bank.overflowY === "auto" && b4Bank.terminalReachable],
+    ["vjBankPrimaryPreservesTargetsAndOuterFrame", () =>
+      b4Bank.undersizedTargets === 0 && b4Bank.outerScrollStable && b4Bank.documentFixed],
+    ["vjBankLegacyTransportCollapsedAndReachable", () =>
+      legacyTransport.present && !legacyTransport.initiallyOpen &&
+      legacyTransport.count === 12 && legacyTransport.reachable && legacyTransport.outerScrollStable],
     ["vjBankDrawersDefaultClosed", () =>
       containment.mixerDrawerBarCount === 3 && containment.mixerDrawerOpenCount === 0],
     ["vjBankMonitorsDominateCenterColumn", () => containment.videoMixerMonitorHeightRatio >= 0.65],
@@ -17860,7 +17934,9 @@ async function runVjBankViewport(client, viewport) {
     label: `vj-bank-${viewport.width}x${viewport.height}`,
     passed: failedChecks.length === 0,
     failedChecks,
-    pads: [containment.visibleVideoClipPadCount, containment.fullyVisibleVideoClipPadCount, containment.videoClipGridScrollDelta],
+    pads: [b4Bank.count, b4Bank.columns, b4Bank.undersizedTargets],
+    b4Bank,
+    legacyTransport,
     padGeometry: {
       gridHeight: containment.videoClipGridClientHeight,
       firstPad: containment.videoClipFirstPadBounds,

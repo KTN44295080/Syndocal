@@ -1677,6 +1677,122 @@ export interface VideoCuePointSummary {
   color?: string | null;
 }
 
+/** Stable authored identity for an ordered clip-bank entry. */
+export type VideoClipSlotId = number;
+export type VideoClipLoopMode = "Once" | "Loop" | "PingPong";
+export type VideoClipLaunchQuantization = "Immediate" | "NextBeat" | "NextBar";
+
+export interface VideoClipCuePointSummary {
+  position_ms: number;
+  name: string;
+}
+
+export interface VideoClipEffectOverrideSummary {
+  stage_index: number;
+  control_name: string;
+  value: [number, number, number, number];
+}
+
+/** Persisted authoring data. Runtime selection/playhead never belongs here. */
+export interface VideoClipSlotSummary {
+  id: VideoClipSlotId;
+  media_asset_id: MediaAssetId;
+  in_point_ms: number;
+  out_point_ms?: number | null;
+  loop_mode: VideoClipLoopMode;
+  speed: number;
+  cue_points: VideoClipCuePointSummary[];
+  launch_quantization: VideoClipLaunchQuantization;
+  effect_overrides: VideoClipEffectOverrideSummary[];
+}
+
+export interface VideoClipPendingLaunchSummary {
+  slot_id: VideoClipSlotId;
+  quantization: VideoClipLaunchQuantization;
+  target_boundary_ordinal: number;
+  clock_generation: number;
+  held_for_clock_discontinuity: boolean;
+}
+
+/** Ephemeral engine truth. It is intentionally separate from `.sdc` snapshots. */
+export interface VideoClipLayerRuntimeSummary {
+  layer_id: number;
+  active_slot_id?: VideoClipSlotId | null;
+  queued_slot_id?: VideoClipSlotId | null;
+  pending_launch?: VideoClipPendingLaunchSummary | null;
+  playhead_ms: number;
+  playing: boolean;
+  ping_pong_reverse: boolean;
+}
+
+export interface VideoClipRuntimeSnapshot {
+  layers: VideoClipLayerRuntimeSummary[];
+}
+
+export type VideoClipSlotAuthoritativeCommitKind =
+  | "create"
+  | "assign"
+  | "update"
+  | "remove"
+  | "reorder"
+  | "duplicate"
+  | "set_default"
+  | "import_and_assign"
+  | "queue"
+  | "cancel_queue"
+  | "launch"
+  | "seek";
+
+export interface VideoClipSlotAuthoritativeAuthoredResult {
+  command_kind: VideoClipSlotAuthoritativeCommitKind;
+  layer_id: number;
+  affected_slot_ids: VideoClipSlotId[];
+  focus_slot_id?: VideoClipSlotId | null;
+  created_slot_ids: VideoClipSlotId[];
+  imported_asset_ids: MediaAssetId[];
+  insertion_before_slot_id?: VideoClipSlotId | null;
+  mutation: ProjectHistoryMutationResult;
+}
+
+export interface VideoClipSlotAuthoritativeRuntimeResult {
+  command_kind: VideoClipSlotAuthoritativeCommitKind;
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  runtime_generation: number;
+  runtime: VideoClipRuntimeSnapshot;
+}
+
+/** History-free read report; unlike a runtime command reply it has no command identity. */
+export interface VideoClipRuntimeReport {
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  runtime_generation: number;
+  runtime: VideoClipRuntimeSnapshot;
+}
+
+/** Immutable terminal receipt for a runtime command; live runtime is attached to the envelope. */
+export interface VideoClipSlotAuthoritativeRuntimeOutcome {
+  command_kind: VideoClipSlotAuthoritativeCommitKind;
+}
+
+export interface VideoClipSlotAuthoritativeFailureResult {
+  message: string;
+}
+
+export type VideoClipSlotAuthoritativeTerminalResult =
+  | { kind: "authored"; result: VideoClipSlotAuthoritativeAuthoredResult }
+  | { kind: "runtime"; result: VideoClipSlotAuthoritativeRuntimeOutcome }
+  | { kind: "failure"; result: VideoClipSlotAuthoritativeFailureResult };
+
+export interface VideoClipSlotAuthoritativeTerminalEnvelope {
+  command_kind: VideoClipSlotAuthoritativeCommitKind;
+  shape_fingerprint: string;
+  terminal: VideoClipSlotAuthoritativeTerminalResult;
+  runtime?: VideoClipSlotAuthoritativeRuntimeResult;
+}
+
 export interface VideoLayerState {
   enabled: boolean;
   solo: boolean;
@@ -1737,6 +1853,8 @@ export interface VideoLayerSummary {
   blend_mode: VideoBlendMode;
   state: VideoLayerState;
   isf_effect?: VideoIsfEffectSummary | null;
+  clip_slots?: VideoClipSlotSummary[];
+  default_clip_slot_id?: VideoClipSlotId | null;
 }
 
 export interface VideoLayerTarget {

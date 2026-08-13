@@ -18,6 +18,7 @@ import {
 import { VideoSourceCreatePanel } from "./VideoSourceCreatePanel";
 import { VideoTimelineAutomationPanel } from "./VideoTimelineAutomationPanel";
 import { VideoClipGridPanel } from "./VideoClipGridPanel";
+import { VideoClipSlotBankPanel } from "./VideoClipSlotBankPanel";
 import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
 import { LiveAudioInputRail } from "./LiveAudioInputRail";
 import { AutoVjStrip } from "./AutoVjStrip";
@@ -36,6 +37,8 @@ interface VideoControlPanelProps {
   liveMonitors: ComponentProps<typeof LiveVideoMonitorPanel>;
   sourceCreate: ComponentProps<typeof VideoSourceCreatePanel>;
   clipGrid: ComponentProps<typeof VideoClipGridPanel>;
+  clipSlotBank: ComponentProps<typeof VideoClipSlotBankPanel>;
+  clipSlotTake: { enabled: boolean; onTake: () => void | Promise<void> };
   layerList: ComponentProps<typeof VideoLayerListPanel>;
   timelineAutomation: ComponentProps<typeof VideoTimelineAutomationPanel>;
   autoVj: ComponentProps<typeof AutoVjStrip>;
@@ -244,7 +247,13 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                 </div>
               </details>
             </Show>
-            <span>LIVE TAKE</span>
+            <button
+              type="button"
+              class="primary videoClipSlotTake"
+              data-video-clip-slot-take
+              disabled={!props.clipSlotTake.enabled}
+              onClick={() => void props.clipSlotTake.onTake()}
+            >Take</button>
           </div>
         </header>
         <Show when={props.mediaLibrary.activeOperations.length > 0}>
@@ -301,14 +310,19 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                 <For each={props.mediaLibrary.assets}>
                   {(asset) => {
                     const availability = () => props.mediaLibrary.availabilityById[asset.id];
-                    const referenceCount = () => props.clipGrid.layers.filter((layer) => layer.media_asset_id === asset.id).length;
+                    const referenceCount = () => props.clipGrid.layers.reduce(
+                      (count, layer) => count
+                        + (layer.media_asset_id === asset.id ? 1 : 0)
+                        + (layer.clip_slots?.filter((slot) => slot.media_asset_id === asset.id).length ?? 0),
+                      0,
+                    );
                     const thumbnail = () => props.mediaLibrary.thumbnails[asset.id];
                     const relinkable = () => asset.source.kind === "File" || asset.source.kind === "StillImage";
                     return (
                       <article
                         class={`videoMediaLibraryItem availability-${availability()?.kind ?? "unknown"}`}
                         tabindex="0"
-                        aria-label={`${asset.label}. ${mediaAvailabilityLabel(availability())}. ${referenceCount()} layer reference(s).`}
+                        aria-label={`${asset.label}. ${mediaAvailabilityLabel(availability())}. ${referenceCount()} layer and Clip Slot reference(s).`}
                         aria-describedby={`media-library-source-${asset.id}`}
                         onMouseEnter={() => startMediaLibraryPreview(asset, Boolean(thumbnail()))}
                         onMouseLeave={(event) => stopMediaLibraryPreview(asset.id, event.currentTarget)}
@@ -346,7 +360,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                         </div>
                         <div class="videoMediaLibraryCardHeading">
                           <span id={`media-library-source-${asset.id}`} class="srOnly" data-no-localize>{mediaSourceLabel(asset)}</span>
-                          <small>{referenceCount()} layer reference(s) · {asset.source.kind}</small>
+                          <small>{referenceCount()} layer and Clip Slot reference(s) · {asset.source.kind}</small>
                         </div>
                         <div class="videoMediaLibraryCardActions">
                           <span
@@ -402,11 +416,15 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
           <MixerDrawerBar id="reactive" title="Reactive" status={reactiveStatus()} open={reactiveOpen()} onToggle={() => toggleDrawer("reactive")} />
           <AudioReactiveVjStrip {...props.audioReactive} />
         </Show>
-        <VideoClipGridPanel
-          {...props.clipGrid}
-          compact={props.mixer}
-          sourceCreateVisible={sourceCreateVisible()}
-        />
+        <VideoClipSlotBankPanel {...props.clipSlotBank} />
+        <details class="videoClipLegacyTransport" open={!props.mixer}>
+          <summary>Layer transport &amp; capture</summary>
+          <VideoClipGridPanel
+            {...props.clipGrid}
+            compact={props.mixer}
+            sourceCreateVisible={sourceCreateVisible()}
+          />
+        </details>
       </section>
       <section class="videoMixerContextPane" aria-label="Layers and outputs">
         <section class="videoMixerProgramPane" aria-label="Video outputs">

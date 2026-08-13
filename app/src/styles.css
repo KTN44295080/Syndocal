@@ -30122,6 +30122,45 @@ h3 {
   display: none;
 }
 
+.layoutTouch .touchControlDomainTabs {
+  position: relative;
+  z-index: 4;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  justify-self: center;
+  align-self: start;
+  display: inline-flex;
+  gap: 4px;
+  min-height: 44px;
+  padding: 4px;
+  border: 1px solid #343a3f;
+  background: #111416;
+}
+
+.layoutTouch .touchControlDomainTabs button {
+  min-width: 96px;
+  min-height: 44px;
+}
+
+.layoutTouch.touchDomainVideo > .touchSurfacePanel {
+  display: none;
+}
+
+.layoutTouch.touchDomainVideo > .touchVideoPanel {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  padding-top: 56px;
+  overflow: hidden auto;
+}
+
+.layoutTouch.touchDomainVideo > .touchVideoPanel > .videoClipSlotBankPanel {
+  min-height: 0;
+}
+
 .touchSurfaceToolbar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -36052,7 +36091,14 @@ a[href]:focus-visible,
 .videoMixerClipPane {
   grid-column: 1;
   grid-row: 4;
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid var(--ray-border);
+}
+
+.videoMixerClipPane > .videoClipSlotBankPanel {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .videoMixerContextPane {
@@ -36655,4 +36701,239 @@ a[href]:focus-visible,
   .videoMediaLibraryCardActions {
     flex-wrap: wrap;
   }
+}
+
+/* B4 shared Clip Slot bank.  The same eight-column, 16:9 contain grid is
+ * mounted in Edit and Control; the pane scrolls internally rather than asking
+ * the application viewport to grow. */
+.videoClipSlotBankPanel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #343b40;
+  background: #15191b;
+  container-type: inline-size;
+  container-name: video-clip-bank;
+}
+
+.videoClipSlotBankHeader,
+.touchVideoClipBankHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.videoClipSlotBankHeader > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.videoClipSlotBankHeader h3 {
+  margin: 0;
+}
+
+.videoClipSlotBankHeader span,
+.touchVideoClipBankHeader > span {
+  color: #9ca7ad;
+}
+
+.videoClipSlotRuntimeReadout {
+  text-align: right;
+}
+
+.videoClipSlotBankGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(112px, calc(50% - 4px)), 1fr));
+  gap: 8px;
+  width: 100%;
+  max-width: 952px;
+  min-width: 0;
+  margin-inline: auto;
+}
+
+.videoClipSlotPad {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #343b40;
+  background: #1b2023;
+}
+
+.videoClipSlotBankToolbar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(168px, 100%), 1fr));
+  align-items: end;
+  gap: 8px;
+}
+
+.videoClipSlotBankToolbar label,
+.videoClipSlotInspectorFields label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.videoClipSlotBankToolbar button,
+.videoClipSlotBankToolbar input,
+.videoClipSlotBankToolbar select {
+  min-height: 44px;
+  min-width: 0;
+}
+
+.videoClipSlotPad.empty {
+  border-style: dashed;
+  color: #8a949a;
+}
+
+.videoClipSlotPad.selected { border-color: #e1a833; }
+.videoClipSlotPad.active { border-color: #53b46f; }
+.videoClipSlotPad.queued { border-color: #55a3d5; }
+
+.videoClipSlotPrimary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 7px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  overflow: hidden;
+}
+
+.videoClipSlotPrimary img {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  object-fit: contain;
+  background: #0d1113;
+}
+
+.videoClipSlotPadTitle {
+  opacity: 0;
+}
+
+.videoClipSlotPrimary:hover .videoClipSlotPadTitle,
+.videoClipSlotPrimary:focus-visible .videoClipSlotPadTitle,
+.videoClipSlotPad.selected .videoClipSlotPadTitle {
+  opacity: 1;
+}
+
+.videoClipSlotPrimary > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoClipSlotPrimary em {
+  font-style: normal;
+  color: #b8e7c3;
+}
+
+.videoClipSlotPadActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-top: 1px solid #343b40;
+}
+
+.videoClipSlotPad > button:not(.videoClipSlotPrimary) {
+  min-height: 44px;
+  margin: 4px;
+}
+
+.videoClipSlotPadActions button,
+.videoClipSlotInspectorActions button,
+.videoClipSlotInspectorPanel > button,
+.videoClipSlotInspectorPanel header button,
+.videoClipSlotTake {
+  min-height: 44px;
+}
+
+.videoClipSlotTake {
+  min-width: 88px;
+}
+
+.videoClipLegacyTransport {
+  min-width: 0;
+}
+
+.videoClipLegacyTransport > summary {
+  cursor: pointer;
+}
+
+.videoClipSlotInspectorPanel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  position: fixed;
+  top: 64px;
+  right: 12px;
+  z-index: 40;
+  width: min(520px, calc(100vw - 24px));
+  max-height: calc(100dvh - 76px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #4b565d;
+  background: #181d20;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.48);
+}
+
+.videoClipSlotInspectorPanel > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.videoClipSlotInspectorPanel h3 { margin: 0; }
+
+.videoClipSlotInspectorPanel label {
+  display: grid;
+  gap: 4px;
+}
+
+.videoClipSlotInspectorPanel dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.videoClipSlotInspectorPanel dt { color: #9ca7ad; }
+.videoClipSlotInspectorPanel dd { margin: 3px 0 0; }
+
+.videoClipSlotInspectorActions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.videoClipSlotInspectorFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.videoClipSlotInspectorPanel textarea {
+  resize: vertical;
+}
+
+.videoClipSlotInspectorError {
+  margin: 0;
+  color: #ffb4b4;
 }

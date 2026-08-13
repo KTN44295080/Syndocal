@@ -236,6 +236,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
         <div class="topbarLeft" data-tauri-drag-region ref={projectMenuRoot}>
           <button
             class={projectMenuOpen() ? "appMenuButton active" : "appMenuButton"}
+            data-project-drop-surface
             title="Project menu"
             aria-label="Project menu"
             aria-haspopup="menu"
