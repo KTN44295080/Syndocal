@@ -84,19 +84,36 @@ Status: IN PROGRESS — 8 of 15 native workflow rows executed successfully at th
 - Result after completion: 0 assets / 0 layers / 0 outputs; first-run CTA remained available.
 - Baseline artifact remained 4,706 bytes, SHA-256 `EFEF469E930BD1D8FA87A3B67A07C670FC1A8888F71D555B970EA65C554D18FD`.
 
+### 9. Cancel during the first hash — PASS
+
+- Process was restarted with `SYNDOCAL_QA_MEDIA_HASH_PAUSE_MS=30000`; the exact checkout executable was the only Syndocal process and its window was maximized before interaction.
+- Input: `media\v12.mp4`, 20,606,544 bytes (>1 MiB), SHA-256 `1DB23DAAE678294856645DAF6E2E6C01E3C7CE8B7D9D64A3D9BF31564AAE74B7`.
+- The native operation rail visibly reached `ハッシュ / メタデータ検査中`; Cancel was pressed during the 30-second first-hash pause.
+- Native result: `VJセットアップに失敗しました: Media asset operation was cancelled` and the runtime returned to 0 assets / 0 layers / 0 outputs.
+- After waiting beyond the full pause interval, no delayed completion or catalog/layer/output mutation appeared.
+- The source retained the same 20,606,544-byte length, UTC last-write timestamp `2026-08-13T12:46:07.4152871Z`, and SHA-256 before/after cancellation.
+- A same-directory rename-and-restore round trip succeeded immediately after the delayed check, proving that no retained file lock remained.
+
+### 10. Project replacement during prepare/hash — PASS
+
+- A fresh process was restarted with the same 30-second first-hash pause and `media\v12.mp4`; the native rail again visibly reached `ハッシュ / メタデータ検査中`.
+- While hashing was paused, the in-app project menu remained usable and opened `projects\bootstrap-success.sdc` through the native project picker.
+- The UI immediately switched to the replacement project's 1 asset / 1 layer / 1 output state.
+- After waiting beyond the full 30-second pause interval, the replacement state remained 1 / 1 / 1 with no stale completion, error, or count change from the superseded operation.
+- `bootstrap-success.sdc` remained 10,119 bytes with SHA-256 `5863BE40C4A6396ACE026B7AEAC507D1B91ECBC765FAC9696121CD63EA0FD8E8`.
+- `v12.mp4` remained 20,606,544 bytes with SHA-256 `1DB23DAAE678294856645DAF6E2E6C01E3C7CE8B7D9D64A3D9BF31564AAE74B7` and unchanged UTC last-write timestamp.
+
 ## Remaining rows — not accepted
 
-1. Cancel during the first hash with the 30-second QA pause and a greater-than-1-MiB source.
-2. Project replacement during prepare/hash.
-3. Missing availability.
-4. HashMismatch availability.
-5. All-reference Relink, including default mismatch refusal and a successful matching-content relink.
-6. Restart/load with no implicit source-file touch.
-7. Explicit Save/reload semantic equivalence.
+1. Missing availability.
+2. HashMismatch availability.
+3. All-reference Relink, including default mismatch refusal and a successful matching-content relink.
+4. Restart/load with no implicit source-file touch.
+5. Explicit Save/reload semantic equivalence.
 
 ## Evidence boundaries
 
 - Browser/TypeScript/static gates are not substituted for the native observations above.
-- The first eight rows have native UI outcomes plus saved-project/hash evidence. Internal coordinator revision/history-generation counters were not directly exported by the UI; where Undo menu state was visible it was consistent with one operation, but this document does not claim an unobserved counter value.
+- The first ten rows have native UI outcomes plus saved-project/hash evidence. Internal coordinator revision/history-generation counters were not directly exported by the UI; where Undo menu state was visible it was consistent with one operation, but this document does not claim an unobserved counter value.
 - Screenshot evidence remains in the supervising Codex task transcript; saved `.sdc` artifacts and fixture hashes are the durable local evidence.
 - This checkpoint is not Media Asset T1 completion and is not a release-candidate GO.
