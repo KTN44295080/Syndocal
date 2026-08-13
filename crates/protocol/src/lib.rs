@@ -884,6 +884,56 @@ fn default_video_clip_speed() -> f32 {
     1.0
 }
 
+/// A launch the runtime has accepted but must not execute until its captured
+/// clock boundary. `target_boundary_ordinal` is the global beat-boundary
+/// ordinal in `clock_generation`; a `NextBar` target is represented by the
+/// corresponding 4-beat bar boundary's beat ordinal (and is therefore a
+/// multiple of four). Both the ordinal and the zero-based clock generation may
+/// validly be zero. A discontinuity holds this exact identity instead of
+/// retargeting a different musical beat.
+///
+/// This is runtime truth only. It is intentionally separate from the authored
+/// video snapshot and is never a project-persistence field.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoClipPendingLaunchSummary {
+    pub slot_id: VideoClipSlotId,
+    pub quantization: VideoClipLaunchQuantization,
+    pub target_boundary_ordinal: u64,
+    pub clock_generation: u64,
+    #[serde(default)]
+    pub held_for_clock_discontinuity: bool,
+}
+
+/// Decoder and transport truth for one authored video layer. `playhead_ms` is
+/// a source-relative, integer-millisecond position: `u64` deliberately avoids
+/// a non-finite floating-point state at the protocol boundary. This type is
+/// not embedded in `VideoLayerSummary`, `VideoSnapshot`, or `EngineSnapshot`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoClipLayerRuntimeSummary {
+    #[serde(default)]
+    pub layer_id: VideoLayerId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_slot_id: Option<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_slot_id: Option<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_launch: Option<VideoClipPendingLaunchSummary>,
+    #[serde(default)]
+    pub playhead_ms: u64,
+    #[serde(default)]
+    pub playing: bool,
+    #[serde(default)]
+    pub ping_pong_reverse: bool,
+}
+
+/// A standalone runtime publication that an engine or UI transport can mount
+/// without changing any authored or persisted video DTO.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoClipRuntimeSnapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<VideoClipLayerRuntimeSummary>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoLayerSummary {
     pub id: VideoLayerId,
@@ -1481,6 +1531,100 @@ pub fn validate_engine_ready_video_clip_slots(video: &VideoSnapshot) -> Result<(
     validate_video_clip_slots(video, true)
 }
 
+/// Validate runtime-local identities and queue state without requiring an
+/// authored snapshot. Use `validate_video_clip_runtime_against_authored_slots`
+/// when the caller also has the engine-ready authored slot banks.
+pub fn validate_video_clip_runtime_snapshot(
+    runtime: &VideoClipRuntimeSnapshot,
+) -> Result<(), String> {
+    let mut layer_ids = BTreeMap::new();
+    for layer in &runtime.layers {
+        if layer.layer_id == 0 {
+            return Err("Video clip runtime layer IDs must be non-zero".to_string());
+        }
+        if layer_ids.insert(layer.layer_id, ()).is_some() {
+            return Err(format!(
+                "Video clip runtime layer ID {} is duplicated",
+                layer.layer_id
+            ));
+        }
+        validate_video_clip_layer_runtime_summary(layer)?;
+    }
+    Ok(())
+}
+
+/// Validate a runtime publication against the authored T2 slot banks. This
+/// rejects runtime layers or active/queued/pending slot identities that cannot
+/// be resolved in their own authored layer, without storing runtime truth in
+/// the project snapshot.
+pub fn validate_video_clip_runtime_against_authored_slots(
+    runtime: &VideoClipRuntimeSnapshot,
+    video: &VideoSnapshot,
+) -> Result<(), String> {
+    validate_video_clip_runtime_snapshot(runtime)?;
+    validate_engine_ready_video_clip_slots(video)?;
+
+    let authored_layers: BTreeMap<VideoLayerId, &VideoLayerSummary> =
+        video.layers.iter().map(|layer| (layer.id, layer)).collect();
+    for runtime_layer in &runtime.layers {
+        let authored_layer = authored_layers
+            .get(&runtime_layer.layer_id)
+            .ok_or_else(|| {
+                format!(
+                    "Video clip runtime layer {} is not in the authored video snapshot",
+                    runtime_layer.layer_id
+                )
+            })?;
+        let slot_ids: BTreeMap<VideoClipSlotId, &VideoClipSlotSummary> = authored_layer
+            .clip_slots
+            .iter()
+            .map(|slot| (slot.id, slot))
+            .collect();
+
+        let active_slot = validate_runtime_slot_reference(
+            runtime_layer.layer_id,
+            "active",
+            runtime_layer.active_slot_id,
+            &slot_ids,
+        )?;
+        validate_runtime_slot_reference(
+            runtime_layer.layer_id,
+            "queued",
+            runtime_layer.queued_slot_id,
+            &slot_ids,
+        )?;
+        if let Some(pending_launch) = &runtime_layer.pending_launch {
+            validate_runtime_slot_reference(
+                runtime_layer.layer_id,
+                "pending",
+                Some(pending_launch.slot_id),
+                &slot_ids,
+            )?;
+        }
+        if let Some(active_slot) = active_slot {
+            if runtime_layer.ping_pong_reverse
+                && !matches!(active_slot.loop_mode, VideoClipLoopMode::PingPong)
+            {
+                return Err(format!(
+                    "Video clip runtime layer {} reports reverse ping-pong direction for non-ping-pong slot {}",
+                    runtime_layer.layer_id, active_slot.id.0
+                ));
+            }
+            if runtime_layer.playhead_ms < active_slot.in_point_ms
+                || active_slot
+                    .out_point_ms
+                    .is_some_and(|out_point_ms| runtime_layer.playhead_ms >= out_point_ms)
+            {
+                return Err(format!(
+                    "Video clip runtime layer {} playhead is outside active slot {} range",
+                    runtime_layer.layer_id, active_slot.id.0
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Convert an old inline-video project into the catalog representation without
 /// changing a caller's value unless *all* validation and ID allocation steps
 /// succeed. The conversion never hashes files, resolves paths, or otherwise
@@ -1683,6 +1827,93 @@ fn legacy_video_layer_transport_to_clip_slot(
         state.speed,
         cue_points,
     ))
+}
+
+fn validate_video_clip_layer_runtime_summary(
+    layer: &VideoClipLayerRuntimeSummary,
+) -> Result<(), String> {
+    if layer.active_slot_id.is_none()
+        && (layer.playing || layer.playhead_ms != 0 || layer.ping_pong_reverse)
+    {
+        return Err(format!(
+            "Video clip runtime layer {} has transport state without an active slot",
+            layer.layer_id
+        ));
+    }
+
+    for (role, slot_id) in [
+        ("active", layer.active_slot_id),
+        ("queued", layer.queued_slot_id),
+    ] {
+        if slot_id.is_some_and(|slot_id| slot_id.0 == 0) {
+            return Err(format!(
+                "Video clip runtime layer {} has a zero {role} slot ID",
+                layer.layer_id
+            ));
+        }
+    }
+
+    if let Some(pending_launch) = &layer.pending_launch {
+        match layer.queued_slot_id {
+            Some(queued_slot_id) => {
+                if pending_launch.slot_id.0 == 0 {
+                    return Err(format!(
+                        "Video clip runtime layer {} has a zero pending slot ID",
+                        layer.layer_id
+                    ));
+                }
+                if queued_slot_id != pending_launch.slot_id {
+                    return Err(format!(
+                        "Video clip runtime layer {} queued and pending slot IDs disagree",
+                        layer.layer_id
+                    ));
+                }
+                if matches!(
+                    pending_launch.quantization,
+                    VideoClipLaunchQuantization::Immediate
+                ) {
+                    return Err(format!(
+                        "Video clip runtime layer {} cannot pend an immediate launch",
+                        layer.layer_id
+                    ));
+                }
+                if matches!(
+                    pending_launch.quantization,
+                    VideoClipLaunchQuantization::NextBar
+                ) && pending_launch.target_boundary_ordinal % 4 != 0
+                {
+                    return Err(format!(
+                        "Video clip runtime layer {} has a next-bar target that is not a 4-beat boundary",
+                        layer.layer_id
+                    ));
+                }
+            }
+            None => {
+                return Err(format!(
+                    "Video clip runtime layer {} has a pending launch without its queued slot",
+                    layer.layer_id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_runtime_slot_reference<'a>(
+    layer_id: VideoLayerId,
+    role: &str,
+    slot_id: Option<VideoClipSlotId>,
+    slots: &'a BTreeMap<VideoClipSlotId, &'a VideoClipSlotSummary>,
+) -> Result<Option<&'a VideoClipSlotSummary>, String> {
+    match slot_id {
+        Some(slot_id) => slots.get(&slot_id).copied().map(Some).ok_or_else(|| {
+            format!(
+                "Video clip runtime layer {layer_id} {role} slot {} is not in its authored slot bank",
+                slot_id.0
+            )
+        }),
+        None => Ok(None),
+    }
 }
 
 fn validate_video_media_asset_catalog(
@@ -6134,6 +6365,222 @@ mod tests {
             launch_quantization: super::VideoClipLaunchQuantization::Immediate,
             effect_overrides: Vec::new(),
         }
+    }
+
+    fn clip_slot_runtime_test_video() -> super::VideoSnapshot {
+        let mut layer = media_asset_test_layer(1, "Layer", "C:/show/a.mp4");
+        layer.media_asset_id = Some(10);
+        layer.clip_slots = vec![clip_slot_test_slot(20, 10), clip_slot_test_slot(21, 10)];
+        layer.clip_slots[0].loop_mode = super::VideoClipLoopMode::PingPong;
+        layer.default_clip_slot_id = Some(super::VideoClipSlotId(20));
+        super::VideoSnapshot {
+            layers: vec![layer],
+            media_assets: vec![media_asset_test_asset(10, "A", "C:/show/a.mp4")],
+            ..super::VideoSnapshot::default()
+        }
+    }
+
+    fn clip_slot_runtime_test_snapshot() -> super::VideoClipRuntimeSnapshot {
+        super::VideoClipRuntimeSnapshot {
+            layers: vec![super::VideoClipLayerRuntimeSummary {
+                layer_id: 1,
+                active_slot_id: Some(super::VideoClipSlotId(20)),
+                queued_slot_id: Some(super::VideoClipSlotId(21)),
+                pending_launch: Some(super::VideoClipPendingLaunchSummary {
+                    slot_id: super::VideoClipSlotId(21),
+                    quantization: super::VideoClipLaunchQuantization::NextBar,
+                    target_boundary_ordinal: 16,
+                    clock_generation: 3,
+                    held_for_clock_discontinuity: true,
+                }),
+                playhead_ms: 400,
+                playing: true,
+                ping_pong_reverse: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn video_clip_runtime_dto_defaults_roundtrips_and_stays_out_of_authored_snapshots() {
+        let default_runtime: super::VideoClipRuntimeSnapshot =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(default_runtime, super::VideoClipRuntimeSnapshot::default());
+
+        let runtime = clip_slot_runtime_test_snapshot();
+        let encoded = serde_json::to_vec(&runtime).unwrap();
+        let decoded: super::VideoClipRuntimeSnapshot = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, runtime);
+
+        let legacy_layer: super::VideoClipLayerRuntimeSummary =
+            serde_json::from_value(serde_json::json!({ "layer_id": 1 })).unwrap();
+        assert_eq!(legacy_layer.playhead_ms, 0);
+        assert!(!legacy_layer.playing);
+        assert!(!legacy_layer.ping_pong_reverse);
+        assert_eq!(legacy_layer.active_slot_id, None);
+        assert_eq!(legacy_layer.queued_slot_id, None);
+        assert_eq!(legacy_layer.pending_launch, None);
+
+        let zero_boundary: super::VideoClipPendingLaunchSummary =
+            serde_json::from_value(serde_json::json!({
+                "slot_id": 21,
+                "quantization": "NextBeat",
+                "target_boundary_ordinal": 0,
+                "clock_generation": 0
+            }))
+            .unwrap();
+        assert_eq!(zero_boundary.target_boundary_ordinal, 0);
+        assert_eq!(zero_boundary.clock_generation, 0);
+        assert!(!zero_boundary.held_for_clock_discontinuity);
+        super::validate_video_clip_runtime_snapshot(&super::VideoClipRuntimeSnapshot {
+            layers: vec![super::VideoClipLayerRuntimeSummary {
+                layer_id: 1,
+                queued_slot_id: Some(zero_boundary.slot_id),
+                pending_launch: Some(zero_boundary.clone()),
+                ..super::VideoClipLayerRuntimeSummary::default()
+            }],
+        })
+        .unwrap();
+
+        let complete_pending = serde_json::json!({
+            "slot_id": 21,
+            "quantization": "NextBeat",
+            "target_boundary_ordinal": 0,
+            "clock_generation": 0
+        });
+        for required_field in [
+            "slot_id",
+            "quantization",
+            "target_boundary_ordinal",
+            "clock_generation",
+        ] {
+            let mut missing = complete_pending.clone();
+            missing.as_object_mut().unwrap().remove(required_field);
+            assert!(
+                serde_json::from_value::<super::VideoClipPendingLaunchSummary>(missing).is_err()
+            );
+        }
+
+        let authored_json = serde_json::to_string(&clip_slot_runtime_test_video()).unwrap();
+        let engine_json = serde_json::to_string(&super::EngineSnapshot::default()).unwrap();
+        for runtime_field in [
+            "active_slot_id",
+            "queued_slot_id",
+            "pending_launch",
+            "playhead_ms",
+            "ping_pong_reverse",
+        ] {
+            assert!(!authored_json.contains(runtime_field));
+            assert!(!engine_json.contains(runtime_field));
+        }
+    }
+
+    #[test]
+    fn video_clip_runtime_validation_rejects_invalid_or_dangling_runtime_truth() {
+        let video = clip_slot_runtime_test_video();
+        let runtime = clip_slot_runtime_test_snapshot();
+        super::validate_video_clip_runtime_snapshot(&runtime).unwrap();
+        super::validate_video_clip_runtime_against_authored_slots(&runtime, &video).unwrap();
+
+        let invalid_nan: Result<super::VideoClipRuntimeSnapshot, _> =
+            serde_json::from_value(serde_json::json!({
+                "layers": [{ "layer_id": 1, "playhead_ms": "NaN" }]
+            }));
+        assert!(invalid_nan.is_err());
+
+        let mut duplicate_layer = runtime.clone();
+        duplicate_layer.layers.push(runtime.layers[0].clone());
+        assert!(super::validate_video_clip_runtime_snapshot(&duplicate_layer).is_err());
+
+        for inactive_transport in [
+            super::VideoClipLayerRuntimeSummary {
+                layer_id: 1,
+                playing: true,
+                ..super::VideoClipLayerRuntimeSummary::default()
+            },
+            super::VideoClipLayerRuntimeSummary {
+                layer_id: 1,
+                playhead_ms: 1,
+                ..super::VideoClipLayerRuntimeSummary::default()
+            },
+            super::VideoClipLayerRuntimeSummary {
+                layer_id: 1,
+                ping_pong_reverse: true,
+                ..super::VideoClipLayerRuntimeSummary::default()
+            },
+        ] {
+            let invalid = super::VideoClipRuntimeSnapshot {
+                layers: vec![inactive_transport],
+            };
+            assert!(super::validate_video_clip_runtime_snapshot(&invalid).is_err());
+        }
+
+        let inactive_queued_only = super::VideoClipRuntimeSnapshot {
+            layers: vec![super::VideoClipLayerRuntimeSummary {
+                layer_id: 1,
+                queued_slot_id: Some(super::VideoClipSlotId(21)),
+                ..super::VideoClipLayerRuntimeSummary::default()
+            }],
+        };
+        super::validate_video_clip_runtime_snapshot(&inactive_queued_only).unwrap();
+        super::validate_video_clip_runtime_against_authored_slots(&inactive_queued_only, &video)
+            .unwrap();
+
+        let mut pending_without_queue = runtime.clone();
+        pending_without_queue.layers[0].queued_slot_id = None;
+        assert!(super::validate_video_clip_runtime_snapshot(&pending_without_queue).is_err());
+
+        let mut queued_only = runtime.clone();
+        queued_only.layers[0].pending_launch = None;
+        super::validate_video_clip_runtime_snapshot(&queued_only).unwrap();
+        super::validate_video_clip_runtime_against_authored_slots(&queued_only, &video).unwrap();
+
+        let mut immediate_pending = runtime.clone();
+        immediate_pending.layers[0]
+            .pending_launch
+            .as_mut()
+            .unwrap()
+            .quantization = super::VideoClipLaunchQuantization::Immediate;
+        assert!(super::validate_video_clip_runtime_snapshot(&immediate_pending).is_err());
+
+        let mut non_bar_boundary = runtime.clone();
+        non_bar_boundary.layers[0]
+            .pending_launch
+            .as_mut()
+            .unwrap()
+            .target_boundary_ordinal = 17;
+        assert!(super::validate_video_clip_runtime_snapshot(&non_bar_boundary).is_err());
+
+        let mut non_ping_pong_authored = video.clone();
+        non_ping_pong_authored.layers[0].clip_slots[0].loop_mode = super::VideoClipLoopMode::Loop;
+        assert!(super::validate_video_clip_runtime_against_authored_slots(
+            &runtime,
+            &non_ping_pong_authored
+        )
+        .is_err());
+
+        let mut dangling_pending = runtime.clone();
+        dangling_pending.layers[0].queued_slot_id = Some(super::VideoClipSlotId(99));
+        dangling_pending.layers[0]
+            .pending_launch
+            .as_mut()
+            .unwrap()
+            .slot_id = super::VideoClipSlotId(99);
+        super::validate_video_clip_runtime_snapshot(&dangling_pending).unwrap();
+        assert!(super::validate_video_clip_runtime_against_authored_slots(
+            &dangling_pending,
+            &video
+        )
+        .is_err());
+
+        let mut invalid_playhead = runtime;
+        invalid_playhead.layers[0].playhead_ms = u64::MAX;
+        let mut bounded_video = video.clone();
+        bounded_video.layers[0].clip_slots[0].out_point_ms = Some(500);
+        assert!(super::validate_video_clip_runtime_against_authored_slots(
+            &invalid_playhead,
+            &bounded_video
+        )
+        .is_err());
     }
 
     fn clip_slot_test_effect() -> super::VideoIsfEffectSummary {
