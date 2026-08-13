@@ -12,6 +12,14 @@ pub type TimelineEventId = u64;
 pub type TimelineAudioClipId = u64;
 pub type AutomationId = u64;
 pub type VideoLayerId = u64;
+/// Stable project-local identity for an authored Video clip slot. This remains
+/// a newtype (rather than a UI index) so reordering a bank cannot retarget a
+/// persisted reference.
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+#[serde(transparent)]
+pub struct VideoClipSlotId(pub u64);
 /// Stable project-local identity for a reusable media library entry.
 pub type MediaAssetId = u64;
 pub type CompositionId = u64;
@@ -808,6 +816,74 @@ fn default_video_layer_enabled() -> bool {
     true
 }
 
+/// How a clip playhead behaves when it reaches its authored half-open range.
+/// `PingPong` is authored here; decoder/playhead semantics are owned by the
+/// later runtime tranche.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoClipLoopMode {
+    #[default]
+    Once,
+    Loop,
+    PingPong,
+}
+
+/// The musical boundary at which a queued clip may launch. Runtime owns the
+/// 4-beats-per-bar clock calculation and holds the queued action across a
+/// clock discontinuity rather than guessing a boundary.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoClipLaunchQuantization {
+    #[default]
+    Immediate,
+    NextBeat,
+    NextBar,
+}
+
+/// A named cue point in a clip's source-relative millisecond domain.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoClipCuePointSummary {
+    pub position_ms: u64,
+    pub name: String,
+}
+
+/// A clip-local value for a control that already exists in the layer's ISF
+/// chain. `stage_index == 0` selects the legacy root effect; `1..` selects the
+/// corresponding zero-based entry in the root effect's serialized `stack`.
+/// B1 deliberately does not introduce an independent clip FX chain.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoClipEffectOverrideSummary {
+    #[serde(default)]
+    pub stage_index: usize,
+    pub control_name: String,
+    pub value: [f32; 4],
+}
+
+/// One ordered, authored slot in a layer's clip bank. `in_point_ms` is
+/// inclusive and `out_point_ms`, when present, is exclusive. `None` means the
+/// source's natural end; it avoids inventing duration metadata at migration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoClipSlotSummary {
+    pub id: VideoClipSlotId,
+    pub media_asset_id: MediaAssetId,
+    #[serde(default)]
+    pub in_point_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_point_ms: Option<u64>,
+    #[serde(default)]
+    pub loop_mode: VideoClipLoopMode,
+    #[serde(default = "default_video_clip_speed")]
+    pub speed: f32,
+    #[serde(default)]
+    pub cue_points: Vec<VideoClipCuePointSummary>,
+    #[serde(default)]
+    pub launch_quantization: VideoClipLaunchQuantization,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effect_overrides: Vec<VideoClipEffectOverrideSummary>,
+}
+
+fn default_video_clip_speed() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoLayerSummary {
     pub id: VideoLayerId,
@@ -822,6 +898,14 @@ pub struct VideoLayerSummary {
     pub state: VideoLayerState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isf_effect: Option<VideoIsfEffectSummary>,
+    /// Ordered authored slot bank. Empty is the legacy pre-T2 form and is
+    /// omitted so merely reading old projects remains byte-compatible.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clip_slots: Vec<VideoClipSlotSummary>,
+    /// Stable default selection for the authored layer. Runtime active/queued
+    /// selection is intentionally not persisted in this B1 representation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_clip_slot_id: Option<VideoClipSlotId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1359,6 +1443,16 @@ pub struct MediaAssetMigrationReport {
     pub migrated_layer_ids: Vec<VideoLayerId>,
 }
 
+/// What a successful legacy clip-slot normalization changed. IDs follow the
+/// serialized layer order, which keeps the first explicit save deterministic.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoClipSlotMigrationReport {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created_slot_ids: Vec<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrated_layer_ids: Vec<VideoLayerId>,
+}
+
 /// Validate persisted media-library invariants while allowing an old layer to
 /// retain its `None` reference before migration. Use
 /// `validate_engine_ready_video_media_assets` for a runtime-installable image.
@@ -1371,6 +1465,20 @@ pub fn validate_media_asset_catalog(video: &VideoSnapshot) -> Result<(), String>
 /// must exactly mirror that item.
 pub fn validate_engine_ready_video_media_assets(video: &VideoSnapshot) -> Result<(), String> {
     validate_video_media_asset_catalog(video, true)
+}
+
+/// Validate authored clip slots while still permitting a pre-T2 legacy layer
+/// with no bank. This is suitable before the explicit in-memory migration.
+pub fn validate_authored_video_clip_slots(video: &VideoSnapshot) -> Result<(), String> {
+    validate_video_clip_slots(video, false)
+}
+
+/// Validate the T2 form consumed by the runtime. Every media-backed layer has
+/// an ordered bank and a valid default; the compatibility `source` and
+/// `media_asset_id` remain projections of that default slot.
+pub fn validate_engine_ready_video_clip_slots(video: &VideoSnapshot) -> Result<(), String> {
+    validate_engine_ready_video_media_assets(video)?;
+    validate_video_clip_slots(video, true)
 }
 
 /// Convert an old inline-video project into the catalog representation without
@@ -1419,6 +1527,74 @@ pub fn normalize_legacy_video_media_assets(
     }
 
     validate_engine_ready_video_media_assets(&candidate)?;
+    *video = candidate;
+    Ok(report)
+}
+
+/// Add one default authored slot to every media-backed legacy layer without
+/// allocating or modifying any media-library entry. The whole operation is a
+/// clone-then-validate-then-commit transaction: a bad later layer leaves the
+/// caller's snapshot untouched, and a second successful pass is byte-stable.
+///
+/// Call `normalize_legacy_video_media_assets` first for an older inline-media
+/// project. This helper intentionally does not create MediaAssets because T2
+/// must preserve the T1 catalog identity exactly.
+pub fn normalize_legacy_video_clip_slots(
+    video: &mut VideoSnapshot,
+) -> Result<VideoClipSlotMigrationReport, String> {
+    let mut candidate = video.clone();
+    validate_engine_ready_video_media_assets(&candidate)?;
+    validate_authored_video_clip_slots(&candidate)?;
+
+    let mut next_slot_id = candidate
+        .layers
+        .iter()
+        .map(|layer| layer.id)
+        .chain(candidate.media_assets.iter().map(|asset| asset.id))
+        .chain(
+            candidate
+                .layers
+                .iter()
+                .flat_map(|layer| layer.clip_slots.iter().map(|slot| slot.id.0)),
+        )
+        .max()
+        .unwrap_or(0);
+    let mut report = VideoClipSlotMigrationReport::default();
+
+    for layer_index in 0..candidate.layers.len() {
+        if !candidate.layers[layer_index].clip_slots.is_empty() {
+            continue;
+        }
+        let media_asset_id = candidate.layers[layer_index]
+            .media_asset_id
+            .ok_or_else(|| {
+                format!(
+                    "Video layer {} is missing its media asset reference",
+                    candidate.layers[layer_index].id
+                )
+            })?;
+        next_slot_id = next_slot_id.checked_add(1).ok_or_else(|| {
+            "Video clip slot ID allocation overflow while migrating legacy video layers".to_string()
+        })?;
+        let slot_id = VideoClipSlotId(next_slot_id);
+        let layer = &mut candidate.layers[layer_index];
+        layer.clip_slots.push(VideoClipSlotSummary {
+            id: slot_id,
+            media_asset_id,
+            in_point_ms: 0,
+            out_point_ms: None,
+            loop_mode: VideoClipLoopMode::Once,
+            speed: default_video_clip_speed(),
+            cue_points: Vec::new(),
+            launch_quantization: VideoClipLaunchQuantization::Immediate,
+            effect_overrides: Vec::new(),
+        });
+        layer.default_clip_slot_id = Some(slot_id);
+        report.created_slot_ids.push(slot_id);
+        report.migrated_layer_ids.push(layer.id);
+    }
+
+    validate_engine_ready_video_clip_slots(&candidate)?;
     *video = candidate;
     Ok(report)
 }
@@ -1482,6 +1658,166 @@ fn validate_video_media_asset_catalog(
     }
 
     Ok(())
+}
+
+fn validate_video_clip_slots(
+    video: &VideoSnapshot,
+    require_slot_banks: bool,
+) -> Result<(), String> {
+    // Validate the catalog projection first, while preserving the legacy
+    // allowance for a missing layer asset reference in non-engine-ready input.
+    validate_video_media_asset_catalog(video, require_slot_banks)?;
+    let asset_ids: BTreeMap<MediaAssetId, &MediaAssetSummary> = video
+        .media_assets
+        .iter()
+        .map(|asset| (asset.id, asset))
+        .collect();
+    let mut slot_ids = BTreeMap::new();
+
+    for layer in &video.layers {
+        if layer.clip_slots.is_empty() {
+            if layer.default_clip_slot_id.is_some() {
+                return Err(format!(
+                    "Video layer {} has a default clip slot but no clip slots",
+                    layer.id
+                ));
+            }
+            if require_slot_banks && layer.media_asset_id.is_some() {
+                return Err(format!(
+                    "Video layer {} has no authored clip slots",
+                    layer.id
+                ));
+            }
+            continue;
+        }
+
+        let default_slot_id = layer
+            .default_clip_slot_id
+            .ok_or_else(|| format!("Video layer {} is missing its default clip slot", layer.id))?;
+        let mut default_slot = None;
+        let mut cue_names = BTreeMap::new();
+        let mut cue_positions = BTreeMap::new();
+        let mut override_identities = BTreeMap::new();
+
+        for slot in &layer.clip_slots {
+            if slot.id.0 == 0 {
+                return Err("Video clip slot IDs must be non-zero".to_string());
+            }
+            if let Some(previous_layer_id) = slot_ids.insert(slot.id, layer.id) {
+                return Err(format!(
+                    "Video clip slot ID {} is duplicated by layers {} and {}",
+                    slot.id.0, previous_layer_id, layer.id
+                ));
+            }
+            if slot.media_asset_id == 0 || !asset_ids.contains_key(&slot.media_asset_id) {
+                return Err(format!(
+                    "Video clip slot {} on layer {} references missing media asset {}",
+                    slot.id.0, layer.id, slot.media_asset_id
+                ));
+            }
+            if let Some(out_point_ms) = slot.out_point_ms {
+                if out_point_ms <= slot.in_point_ms {
+                    return Err(format!(
+                        "Video clip slot {} on layer {} has an invalid half-open range",
+                        slot.id.0, layer.id
+                    ));
+                }
+            }
+            if !slot.speed.is_finite() || !(-4.0..=4.0).contains(&slot.speed) {
+                return Err(format!(
+                    "Video clip slot {} on layer {} has speed outside finite -4.0..=4.0",
+                    slot.id.0, layer.id
+                ));
+            }
+
+            cue_names.clear();
+            cue_positions.clear();
+            for cue_point in &slot.cue_points {
+                let name = cue_point.name.trim();
+                if name.is_empty() {
+                    return Err(format!(
+                        "Video clip slot {} on layer {} has an unnamed cue point",
+                        slot.id.0, layer.id
+                    ));
+                }
+                if cue_names.insert(name, ()).is_some() {
+                    return Err(format!(
+                        "Video clip slot {} on layer {} has duplicate cue point name {name:?}",
+                        slot.id.0, layer.id
+                    ));
+                }
+                if cue_positions.insert(cue_point.position_ms, ()).is_some()
+                    || cue_point.position_ms < slot.in_point_ms
+                    || slot
+                        .out_point_ms
+                        .is_some_and(|out| cue_point.position_ms >= out)
+                {
+                    return Err(format!(
+                        "Video clip slot {} on layer {} has an invalid cue point",
+                        slot.id.0, layer.id
+                    ));
+                }
+            }
+
+            override_identities.clear();
+            for effect_override in &slot.effect_overrides {
+                let control_name = effect_override.control_name.as_str();
+                if control_name.is_empty()
+                    || control_name.trim() != control_name
+                    || override_identities
+                        .insert((effect_override.stage_index, control_name), ())
+                        .is_some()
+                    || !effect_override.value.iter().all(|value| value.is_finite())
+                {
+                    return Err(format!(
+                        "Video clip slot {} on layer {} has an invalid effect override",
+                        slot.id.0, layer.id
+                    ));
+                }
+                if !layer_has_isf_control(layer, effect_override.stage_index, control_name) {
+                    return Err(format!(
+                        "Video clip slot {} on layer {} overrides missing ISF stage {} control {control_name:?}",
+                        slot.id.0, layer.id, effect_override.stage_index
+                    ));
+                }
+            }
+            if slot.id == default_slot_id {
+                default_slot = Some(slot);
+            }
+        }
+
+        let default_slot = default_slot.ok_or_else(|| {
+            format!(
+                "Video layer {} default clip slot {} is not in its slot bank",
+                layer.id, default_slot_id.0
+            )
+        })?;
+        if layer.media_asset_id != Some(default_slot.media_asset_id) {
+            return Err(format!(
+                "Video layer {} media asset projection does not match its default clip slot",
+                layer.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn layer_has_isf_control(
+    layer: &VideoLayerSummary,
+    stage_index: usize,
+    control_name: &str,
+) -> bool {
+    let Some(effect) = layer.isf_effect.as_ref() else {
+        return false;
+    };
+    let controls = if stage_index == 0 {
+        &effect.controls
+    } else if let Some(stage) = effect.stack.get(stage_index - 1) {
+        &stage.controls
+    } else {
+        return false;
+    };
+    controls.iter().any(|control| control.name == control_name)
 }
 
 fn validate_media_asset_summary(asset: &MediaAssetSummary) -> Result<(), String> {
@@ -5538,6 +5874,8 @@ mod tests {
                 ..super::VideoLayerState::default()
             },
             isf_effect: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
         }
     }
 
@@ -5577,6 +5915,8 @@ mod tests {
         let mut parsed: super::VideoSnapshot = serde_json::from_value(legacy_json).unwrap();
         assert!(parsed.media_assets.is_empty());
         assert_eq!(parsed.layers[0].media_asset_id, None);
+        assert!(parsed.layers[0].clip_slots.is_empty());
+        assert_eq!(parsed.layers[0].default_clip_slot_id, None);
         assert_eq!(parsed.layers[0].source, legacy_source);
 
         let report = super::normalize_legacy_video_media_assets(&mut parsed).unwrap();
@@ -5683,6 +6023,325 @@ mod tests {
             assert!(super::normalize_legacy_video_media_assets(&mut invalid).is_err());
             assert_eq!(invalid, before);
         }
+    }
+
+    fn clip_slot_test_slot(
+        id: u64,
+        media_asset_id: super::MediaAssetId,
+    ) -> super::VideoClipSlotSummary {
+        super::VideoClipSlotSummary {
+            id: super::VideoClipSlotId(id),
+            media_asset_id,
+            in_point_ms: 0,
+            out_point_ms: None,
+            loop_mode: super::VideoClipLoopMode::Once,
+            speed: 1.0,
+            cue_points: Vec::new(),
+            launch_quantization: super::VideoClipLaunchQuantization::Immediate,
+            effect_overrides: Vec::new(),
+        }
+    }
+
+    fn clip_slot_test_effect() -> super::VideoIsfEffectSummary {
+        super::VideoIsfEffectSummary {
+            enabled: true,
+            label: "Color".to_string(),
+            source: std::sync::Arc::from("/* test */"),
+            source_path: None,
+            description: None,
+            categories: vec!["Test".to_string()],
+            controls: vec![super::VideoIsfControlSummary {
+                name: "amount".to_string(),
+                kind: super::VideoIsfControlKind::Float,
+                value: [0.5, 0.0, 0.0, 0.0],
+                default: [0.0, 0.0, 0.0, 0.0],
+                minimum: [0.0, 0.0, 0.0, 0.0],
+                maximum: [1.0, 0.0, 0.0, 0.0],
+                labels: Vec::new(),
+                values: Vec::new(),
+            }],
+            stack: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn video_clip_slot_migration_creates_one_default_without_asset_duplication() {
+        let mut video = super::VideoSnapshot {
+            layers: vec![media_asset_test_layer(
+                4,
+                "Legacy Cut",
+                "C:/show/legacy.mp4",
+            )],
+            compositions: vec![super::CompositionSummary {
+                id: 19,
+                label: "Program".to_string(),
+                layer_ids: vec![4],
+                output_ids: Vec::new(),
+            }],
+            ..super::VideoSnapshot::default()
+        };
+        video.layers[0].isf_effect = Some(clip_slot_test_effect());
+        let legacy = video.layers[0].clone();
+
+        let asset_report = super::normalize_legacy_video_media_assets(&mut video).unwrap();
+        assert_eq!(asset_report.created_asset_ids, vec![5]);
+        let asset_count = video.media_assets.len();
+        let report = super::normalize_legacy_video_clip_slots(&mut video).unwrap();
+
+        assert_eq!(report.created_slot_ids, vec![super::VideoClipSlotId(6)]);
+        assert_eq!(report.migrated_layer_ids, vec![4]);
+        assert_eq!(video.media_assets.len(), asset_count);
+        let layer = &video.layers[0];
+        assert_eq!(layer.source, legacy.source);
+        assert_eq!(layer.blend_mode, legacy.blend_mode);
+        assert_eq!(layer.state, legacy.state);
+        assert_eq!(layer.isf_effect, legacy.isf_effect);
+        assert_eq!(layer.media_asset_id, Some(5));
+        assert_eq!(layer.default_clip_slot_id, Some(super::VideoClipSlotId(6)));
+        assert_eq!(layer.clip_slots.len(), 1);
+        assert_eq!(layer.clip_slots[0].media_asset_id, 5);
+        assert_eq!(layer.clip_slots[0].in_point_ms, 0);
+        assert_eq!(layer.clip_slots[0].out_point_ms, None);
+        assert_eq!(video.compositions[0].layer_ids, vec![4]);
+        super::validate_engine_ready_video_clip_slots(&video).unwrap();
+    }
+
+    #[test]
+    fn video_clip_slot_migration_is_atomic_idempotent_and_mixed_deterministic() {
+        let mut first = media_asset_test_layer(1, "Existing", "C:/show/existing.mp4");
+        first.media_asset_id = Some(10);
+        first.clip_slots = vec![clip_slot_test_slot(100, 10)];
+        first.default_clip_slot_id = Some(super::VideoClipSlotId(100));
+        let mut second = media_asset_test_layer(2, "Legacy", "C:/show/legacy.mp4");
+        second.media_asset_id = Some(11);
+        let mut video = super::VideoSnapshot {
+            layers: vec![first, second],
+            media_assets: vec![
+                media_asset_test_asset(10, "Existing", "C:/show/existing.mp4"),
+                media_asset_test_asset(11, "Legacy", "C:/show/legacy.mp4"),
+            ],
+            ..super::VideoSnapshot::default()
+        };
+
+        let report = super::normalize_legacy_video_clip_slots(&mut video).unwrap();
+        assert_eq!(report.created_slot_ids, vec![super::VideoClipSlotId(101)]);
+        assert_eq!(report.migrated_layer_ids, vec![2]);
+        assert_eq!(
+            video.layers[0].clip_slots[0].id,
+            super::VideoClipSlotId(100)
+        );
+        assert_eq!(
+            video.layers[1].default_clip_slot_id,
+            Some(super::VideoClipSlotId(101))
+        );
+        let once = serde_json::to_vec(&video).unwrap();
+        let second_report = super::normalize_legacy_video_clip_slots(&mut video).unwrap();
+        assert_eq!(
+            second_report,
+            super::VideoClipSlotMigrationReport::default()
+        );
+        assert_eq!(serde_json::to_vec(&video).unwrap(), once);
+
+        let mut invalid = video.clone();
+        invalid.layers[1].clip_slots.clear();
+        invalid.layers[1].default_clip_slot_id = None;
+        invalid.layers[1].media_asset_id = Some(99);
+        let before = invalid.clone();
+        assert!(super::normalize_legacy_video_clip_slots(&mut invalid).is_err());
+        assert_eq!(invalid, before);
+    }
+
+    #[test]
+    fn video_clip_slot_validation_rejects_identity_ranges_and_invalid_local_data() {
+        let mut layer = media_asset_test_layer(1, "Layer", "C:/show/a.mp4");
+        layer.media_asset_id = Some(10);
+        layer.clip_slots = vec![clip_slot_test_slot(20, 10)];
+        layer.default_clip_slot_id = Some(super::VideoClipSlotId(20));
+        let video = super::VideoSnapshot {
+            layers: vec![layer],
+            media_assets: vec![media_asset_test_asset(10, "A", "C:/show/a.mp4")],
+            ..super::VideoSnapshot::default()
+        };
+        super::validate_engine_ready_video_clip_slots(&video).unwrap();
+
+        let mut cases = Vec::new();
+        let mut zero = video.clone();
+        zero.layers[0].clip_slots[0].id = super::VideoClipSlotId(0);
+        cases.push(zero);
+
+        let mut duplicate = video.clone();
+        duplicate.layers[0]
+            .clip_slots
+            .push(clip_slot_test_slot(20, 10));
+        cases.push(duplicate);
+
+        let mut dangling = video.clone();
+        dangling.layers[0].clip_slots[0].media_asset_id = 99;
+        cases.push(dangling);
+
+        let mut default_projection_mismatch = video.clone();
+        default_projection_mismatch
+            .media_assets
+            .push(media_asset_test_asset(11, "B", "C:/show/b.mp4"));
+        default_projection_mismatch.layers[0].clip_slots[0].media_asset_id = 11;
+        cases.push(default_projection_mismatch);
+
+        let mut wrong_default = video.clone();
+        wrong_default.layers[0].default_clip_slot_id = Some(super::VideoClipSlotId(21));
+        cases.push(wrong_default);
+
+        let mut bad_range = video.clone();
+        bad_range.layers[0].clip_slots[0].in_point_ms = 50;
+        bad_range.layers[0].clip_slots[0].out_point_ms = Some(50);
+        cases.push(bad_range);
+
+        let mut bad_speed = video.clone();
+        bad_speed.layers[0].clip_slots[0].speed = f32::NAN;
+        cases.push(bad_speed);
+
+        let mut duplicate_cue_name = video.clone();
+        duplicate_cue_name.layers[0].clip_slots[0].cue_points = vec![
+            super::VideoClipCuePointSummary {
+                position_ms: 1,
+                name: "hit".to_string(),
+            },
+            super::VideoClipCuePointSummary {
+                position_ms: 2,
+                name: "hit".to_string(),
+            },
+        ];
+        cases.push(duplicate_cue_name);
+
+        let mut invalid_cue_range = video.clone();
+        invalid_cue_range.layers[0].clip_slots[0].out_point_ms = Some(10);
+        invalid_cue_range.layers[0].clip_slots[0].cue_points =
+            vec![super::VideoClipCuePointSummary {
+                position_ms: 10,
+                name: "past-end".to_string(),
+            }];
+        cases.push(invalid_cue_range);
+
+        let mut missing_control = video.clone();
+        missing_control.layers[0].clip_slots[0].effect_overrides =
+            vec![super::VideoClipEffectOverrideSummary {
+                stage_index: 0,
+                control_name: "missing".to_string(),
+                value: [0.0; 4],
+            }];
+        cases.push(missing_control);
+
+        for invalid in cases {
+            assert!(super::validate_engine_ready_video_clip_slots(&invalid).is_err());
+        }
+
+        let mut override_ok = video;
+        override_ok.layers[0].isf_effect = Some(clip_slot_test_effect());
+        override_ok.layers[0].clip_slots[0].effect_overrides =
+            vec![super::VideoClipEffectOverrideSummary {
+                stage_index: 0,
+                control_name: "amount".to_string(),
+                value: [0.75, 0.0, 0.0, 0.0],
+            }];
+        super::validate_engine_ready_video_clip_slots(&override_ok).unwrap();
+    }
+
+    #[test]
+    fn video_clip_slot_effect_overrides_are_stage_exact_and_canonical() {
+        let mut layer = media_asset_test_layer(1, "Layer", "C:/show/a.mp4");
+        layer.media_asset_id = Some(10);
+        layer.clip_slots = vec![clip_slot_test_slot(20, 10)];
+        layer.default_clip_slot_id = Some(super::VideoClipSlotId(20));
+        let mut effect = clip_slot_test_effect();
+        effect.stack.push(super::VideoIsfEffectStageSummary {
+            enabled: true,
+            label: "Stack Color".to_string(),
+            source: std::sync::Arc::from("/* stack test */"),
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: effect.controls.clone(),
+        });
+        layer.isf_effect = Some(effect);
+        let video = super::VideoSnapshot {
+            layers: vec![layer],
+            media_assets: vec![media_asset_test_asset(10, "A", "C:/show/a.mp4")],
+            ..super::VideoSnapshot::default()
+        };
+
+        assert!(super::layer_has_isf_control(&video.layers[0], 0, "amount"));
+        assert!(super::layer_has_isf_control(&video.layers[0], 1, "amount"));
+        assert!(!super::layer_has_isf_control(&video.layers[0], 2, "amount"));
+
+        let mut exact = video.clone();
+        exact.layers[0].clip_slots[0].effect_overrides = vec![
+            super::VideoClipEffectOverrideSummary {
+                stage_index: 0,
+                control_name: "amount".to_string(),
+                value: [0.25, 0.0, 0.0, 0.0],
+            },
+            super::VideoClipEffectOverrideSummary {
+                stage_index: 1,
+                control_name: "amount".to_string(),
+                value: [0.75, 0.0, 0.0, 0.0],
+            },
+        ];
+        super::validate_engine_ready_video_clip_slots(&exact).unwrap();
+
+        let mut out_of_range_stage = exact.clone();
+        out_of_range_stage.layers[0].clip_slots[0].effect_overrides[1].stage_index = 2;
+        assert!(super::validate_engine_ready_video_clip_slots(&out_of_range_stage).is_err());
+
+        let mut whitespace_name = exact.clone();
+        whitespace_name.layers[0].clip_slots[0].effect_overrides[0].control_name =
+            " amount ".to_string();
+        assert!(super::validate_engine_ready_video_clip_slots(&whitespace_name).is_err());
+
+        let mut duplicate_identity = exact;
+        duplicate_identity.layers[0].clip_slots[0]
+            .effect_overrides
+            .push(super::VideoClipEffectOverrideSummary {
+                stage_index: 1,
+                control_name: "amount".to_string(),
+                value: [0.5, 0.0, 0.0, 0.0],
+            });
+        assert!(super::validate_engine_ready_video_clip_slots(&duplicate_identity).is_err());
+
+        let legacy: super::VideoClipEffectOverrideSummary =
+            serde_json::from_value(serde_json::json!({
+                "control_name": "amount",
+                "value": [0.5, 0.0, 0.0, 0.0]
+            }))
+            .unwrap();
+        assert_eq!(legacy.stage_index, 0);
+    }
+
+    #[test]
+    fn video_clip_slot_migration_rejects_allocator_overflow_without_mutation() {
+        let mut layer = media_asset_test_layer(1, "Maximum", "C:/show/maximum.mp4");
+        layer.media_asset_id = Some(u64::MAX);
+        let mut video = super::VideoSnapshot {
+            layers: vec![layer],
+            media_assets: vec![media_asset_test_asset(
+                u64::MAX,
+                "Maximum",
+                "C:/show/maximum.mp4",
+            )],
+            ..super::VideoSnapshot::default()
+        };
+        let before = video.clone();
+        assert!(super::normalize_legacy_video_clip_slots(&mut video).is_err());
+        assert_eq!(video, before);
+    }
+
+    #[test]
+    fn video_clip_slot_migration_requires_existing_t1_asset_without_creating_one() {
+        let mut video = super::VideoSnapshot {
+            layers: vec![media_asset_test_layer(1, "Pre-T1", "C:/show/pre-t1.mp4")],
+            ..super::VideoSnapshot::default()
+        };
+        let before = video.clone();
+        assert!(super::normalize_legacy_video_clip_slots(&mut video).is_err());
+        assert_eq!(video, before);
     }
 
     #[test]
