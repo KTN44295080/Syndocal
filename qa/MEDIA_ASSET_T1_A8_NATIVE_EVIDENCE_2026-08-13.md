@@ -1,6 +1,6 @@
 # Media Asset T1 A8 native evidence — 2026-08-13
 
-Status: IN PROGRESS — 12 of 15 native workflow rows executed successfully at this checkpoint. The remaining three rows are deliberately not accepted yet.
+Status: PASS — all 15 native workflow rows executed successfully on release executable SHA-256 `41FE507275C21916F36894A4D4E5DF4D9CEF537E5223A778302B83CCE93FAE07`. A later frontend thumbnail-grid change still requires its own rebuilt-executable native acceptance before that newer candidate can supersede this checkpoint.
 
 ## Release identity and native gate
 
@@ -121,15 +121,31 @@ Status: IN PROGRESS — 12 of 15 native workflow rows executed successfully at t
 - The disposable copied replacement was removed and the parked original was restored. The original source length, timestamp, and SHA-256 matched exactly; no parked file remained.
 - `catalog-one.sdc` retained the same SHA-256 and last-write timestamp, proving that machine-local availability inspection did not mutate saved project state.
 
-## Remaining rows — not accepted
+### 13. All-reference Relink — PASS
 
-1. All-reference Relink, including default mismatch refusal and a successful matching-content relink.
-2. Restart/load with no implicit source-file touch.
-3. Explicit Save/reload semantic equivalence.
+- Baseline `projects\relink-baseline.sdc` contained 3 assets, 3 layers, 1 output, and 1 composition. Asset 20 (`v02`) was referenced by layers 2 and 3.
+- The default content-match policy was first exercised with distinct valid `mismatch-valid.mp4` bytes. Native result: `メディア素材 20 は想定されたコンテンツハッシュと一致しません。`; no candidate was adopted and both references remained on `v02.mp4`.
+- A second attempt used `media\match-copy-v02.mp4`, a different path containing the exact `v02.mp4` identity: 6,214 bytes and SHA-256 `D9C1041B5319D6D3942BE9C17AE92B4E4455AA6AE52F15389D93F7CE41EAA4AE`.
+- Native result: `メディア素材 20 を再リンクしました。`
+- Saved artifact `projects\relink-success.sdc` retained asset ID 20, the same hash and byte size, and the same 3 / 3 / 1 / 1 counts. Both layer 2 and layer 3 source projections changed to `match-copy-v02.mp4`; no unrelated asset, layer, output, or composition was added.
+- `relink-success.sdc` is 15,089 bytes with SHA-256 `DDE1A024DB13956BA9A50AECFF4BF20B6BFAB5E65DF58312DE29A96C2FD429EF`.
+
+### 14. Restart/load without implicit source-file touch — PASS
+
+- The exact responsive Syndocal process was stopped and restarted; exactly one window for this checkout's executable was found and activated at 1920x1032 before UI work.
+- `relink-success.sdc` was opened without pressing `サムネイルを読み込む`; the button remained visible, proving thumbnail reads were still opt-in for this session.
+- All 17 files in the fixture media directory were checked after restart/load against the pre-restart manifest. Changed hash, byte-size, or UTC last-write entries: 0.
+- The loaded project retained 3 assets / 3 layers / 1 output / 1 composition and the two asset-20 references. The saved project retained its exact SHA-256 and last-write timestamp during load.
+
+### 15. Explicit Save/reload semantic equivalence — PASS
+
+- After the restart/load above, an explicit Save As produced `projects\relink-reload.sdc`.
+- `relink-success.sdc` and `relink-reload.sdc` are byte-for-byte identical: 15,089 bytes and SHA-256 `DDE1A024DB13956BA9A50AECFF4BF20B6BFAB5E65DF58312DE29A96C2FD429EF`.
+- Parsed `snapshot` JSON and project version are exactly equal. Both artifacts contain 3 assets / 3 layers / 1 output / 1 composition, with asset ID 20 and both referencing layers preserving the matching-copy path, hash, and byte size.
 
 ## Evidence boundaries
 
 - Browser/TypeScript/static gates are not substituted for the native observations above.
-- The first twelve rows have native UI outcomes plus saved-project/hash evidence. Internal coordinator revision/history-generation counters were not directly exported by the UI; where Undo menu state was visible it was consistent with one operation, but this document does not claim an unobserved counter value.
+- All fifteen rows have native UI outcomes plus saved-project/hash evidence. Internal coordinator revision/history-generation counters were not directly exported by the UI; where Undo menu state was visible it was consistent with one operation, but this document does not claim an unobserved counter value.
 - Screenshot evidence remains in the supervising Codex task transcript; saved `.sdc` artifacts and fixture hashes are the durable local evidence.
-- This checkpoint is not Media Asset T1 completion and is not a release-candidate GO.
+- This checkpoint closes the A8 matrix for the named executable only. Any subsequent native-UI change must be rebuilt and receive targeted native acceptance before a newer executable can inherit this GO.

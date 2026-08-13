@@ -517,7 +517,7 @@ If any test filter selects zero tests, correct the command and rerun; do not cou
 
 ### A8. Media Asset native acceptance
 
-Status: IN PROGRESS. The current source builds through `pnpm --dir app tauri build --no-bundle`; the release executable SHA-256 is `41FE507275C21916F36894A4D4E5DF4D9CEF537E5223A778302B83CCE93FAE07`. Exactly one responsive Syndocal window and a maximized Video workspace are under native acceptance. Twelve of fifteen workflow rows are now recorded as PASS in `qa/MEDIA_ASSET_T1_A8_NATIVE_EVIDENCE_2026-08-13.md`; the remaining three are explicitly not accepted.
+Status: PASS for release executable SHA-256 `41FE507275C21916F36894A4D4E5DF4D9CEF537E5223A778302B83CCE93FAE07`. All fifteen workflow rows are recorded as PASS in `qa/MEDIA_ASSET_T1_A8_NATIVE_EVIDENCE_2026-08-13.md`, including default mismatch refusal, all-reference matching-content Relink, restart/load with zero implicit source-file changes, and byte-identical explicit Save/reload. A subsequent Media Library thumbnail-grid frontend change is being reviewed separately and must pass a fresh native build plus targeted grid/hover/no-touch acceptance before its newer executable supersedes this A8 checkpoint.
 
 After focused/static review is P0/P1 clean:
 
