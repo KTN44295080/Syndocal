@@ -1,7 +1,7 @@
 # Syndocal complete product roadmap and frozen checkpoint
 
-Status: implementation paused at the user-requested checkpoint on 2026-08-13 (JST).
-Roadmap revision: v2, completeness-audit additions integrated on 2026-08-13 (JST).
+Status: implementation resumed on 2026-08-13 (JST). Media Asset A1-A7 are implemented and the ordered A7 focused gate is green; A8 native workflow acceptance is in progress and the whole-product Q5 completion query still fails.
+Roadmap revision: v3, live checkpoint and A7 evidence integrated on 2026-08-13 (JST).
 
 This document is the detailed continuation contract from the current checkout to a release candidate that can truthfully be compared with Daslight 5 and SynapseRack. It records what is committed, what is only present in the dirty worktree, what has been tested, what is still unsafe, the dependency order, file ownership, required evidence, commit boundaries, and the native completion gate.
 
@@ -38,6 +38,23 @@ No new feature tranche should begin before the current dirty state is re-anchore
 | `c90e5a2 feat: harden atomic show runtime and media assets` | Protocol and Engine schema/runtime/allocator/publication/rollback checkpoint | Focused Protocol/Engine checkpoint only |
 | `ed3f473 feat: stage media asset authority workflows` | Frontend staged Prepare/Finalize/Commit workflow and static proof checkpoint | Partial frontend wiring only; not reply-loss complete |
 
+The original frozen table above is retained as historical context. The resumed implementation has since produced these focused checkpoints:
+
+| Commit | Meaning | Completion claim |
+| --- | --- | --- |
+| `aad9172 feat: complete authoritative media backend` | Backend-owned terminal receipt/history/Published transaction | A1 implementation checkpoint |
+| `682b908 fix: fence authoritative preview staging` | Expected-authority CAS for automatic Preview staging | Media authority regression checkpoint |
+| `14eeeb2 feat: wire authoritative media frontend` | Direct authoritative frontend commit/query path | A2 implementation checkpoint |
+| `4173e35 fix: preserve atomic legacy media compatibility` | Old IPC names routed through authoritative hash/publication/history | A3 implementation checkpoint |
+| `bb6aef7 test: prove complete media bootstrap rollback` | Complete Bootstrap output/fade/runtime rollback proof | First A6 proof checkpoint |
+| `8cb0459 fix: bind cross-platform media file coherence` | Windows retained handle plus Unix stable snapshot/version/CAS | A4 implementation checkpoint; non-Windows execution proof still open |
+| `68a983d feat: harden media availability lifecycle` | Reserved inspection, cancellation linearization, reaper/drop lifecycle | A5 implementation checkpoint |
+| `bdb7008 test: prove authoritative media command idempotency` | Six real authoritative command concurrency/retry tests | Second A6 proof checkpoint |
+| `dd91db8 test: add deterministic media hash pause` | Native first-hash cancellation/replacement QA seam | A8 testability checkpoint |
+| `10fdf05 feat: complete media library UI and align Edit navigation` | Media Library, availability/relink UI, operation Cancel/progress | A8 UI-readiness checkpoint |
+| `be9c456 fix: align Video with the shared Edit grid` | Lighting/Video navigation and shared Video grid correction | Focused UI checkpoint, not whole-product completion |
+| `2f77981 fix: localize shared Video grid labels` | Eight missed shared-grid Japanese labels | A7 localization correction |
+
 The last observed branch was `codex/syndocal-v1.0`.
 
 ### 1.2 Uncommitted Media Asset files owned by the current tranche
@@ -72,19 +89,19 @@ There is no longer one ambiguous “overall” percentage. Report these dimensio
 
 | Area | Frozen estimate | Basis |
 | --- | ---: | --- |
-| Software implementation toward the planned product target | 81% | Core runtime and authority foundations exist; Media Asset T1, Clip Slots, media-derived data, recording, distributed ShowClock, and several cross-domain boundaries remain |
-| Product-surface coverage | 74% | Lighting and substantial Video/Audio/I/O surfaces exist; reusable media/slot workflow, recording truth, distributed operation, and some operator paths remain incomplete |
-| Automated proof coverage | 70% | Strong focused Rust/static/browser evidence exists, but terminal reply-loss, migration corpus, cross-platform identity, full concurrency, and several physical-adapter seams remain |
-| Current-source native and hardware proof | 25% | Historical native and selected NDI/Spout/audio evidence exists; the current dirty Media/authority tranche has no release build and most real DMX/control/venue gates remain open |
+| Software implementation toward the planned product target | 85% | Media terminal authority, compatibility, coherence, lifecycle, and command-level proof are implemented; Clip Slots, derived data, recording, distributed ShowClock, and cross-domain boundaries remain |
+| Product-surface coverage | 76% | Media Library and the corrected shared Edit Video grid exist; reusable slots, recording truth, distributed operation, and several operator paths remain incomplete |
+| Automated proof coverage | 78% | The complete ordered Media A7 gate is green; unified migration/security/performance and multiple external/hardware seams remain |
+| Current-source native and hardware proof | 27% | Current-source native release build and basic window/layout smoke exist; the complete Media A8 workflow and most real DMX/control/venue gates remain open |
 | Distribution/legal/clean-machine readiness | 35% | Packaging/CI foundations exist; signing, notarization, license disposition, release artifact publication, and clean-machine acceptance remain |
-| Planning roll-up to public release candidate | 63% | Weighted planning indicator only; unresolved P0-Release gates prevent release regardless of percentage |
-| Media Asset T1 overall | 85% | Schema/runtime/frontend staging are advanced; terminal reply-loss/history closure and compatibility/cross-platform boundaries remain |
+| Planning roll-up to public release candidate | 67.0% | `85*0.5 + 78*0.2 + 27*0.2 + 35*0.1`; unresolved P0-Release/P1 gates override the number |
+| Media Asset T1 overall | 97% implementation / A8 not accepted | A1-A7 are implemented and A7 is green; A8's full native workflow matrix remains |
 | Protocol Media Asset schema/migration/validation | 100% for T1 scope | Focused Protocol tests passed before commit |
-| Engine Media Asset runtime/allocator/Published rollback | 94% | Focused tests passed; Bootstrap output/fade rollback proof remains |
-| Frontend Media Asset orchestration | 98% for current API | Import/Add/Bootstrap/Relink sequencing and cancellation are wired; it must be changed once authoritative commit API is frozen |
-| Backend Media Asset prepare/finalize/registry | 94% | Focused registry, commit, relink tests passed; authoritative terminal transaction is missing |
-| Media Asset adversarial/final review | 78% | Multiple P1s found and fixed; current backend still has known P1s and no final GO |
-| Native release/UI/hardware acceptance for this tranche | 0% | No native release build or maximized-window acceptance was run for the current tranche |
+| Engine Media Asset runtime/allocator/Published rollback | 100% for A6 scope | Complete Bootstrap A restoration and allocator proof pass in A7 |
+| Frontend Media Asset orchestration | 100% for A2 scope | Direct authoritative Import/Add/Bootstrap/Relink with exact recovery/cancellation is implemented and the focused gate passes |
+| Backend Media Asset prepare/finalize/registry | 100% for A1-A5 implementation scope | Authoritative terminal transaction, compatibility bridge, coherence, availability, and reaper are implemented |
+| Media Asset adversarial/final review | In progress | Earlier focused reviews closed reported P0/P1; one final frozen A1-A7 review is running before A8 acceptance |
+| Native release/UI/hardware acceptance for this tranche | In progress | Current release build and one responsive/maximized window were obtained; the required A8 workflows remain |
 | Clip Slot T2 | design complete, implementation 0% | Transition model is accepted; code has not begun |
 | Distributed ShowClock/2PC | architecture requirements drafted, implementation 0% | Local clock and machine-local output fence exist; authenticated distributed authority does not |
 
@@ -262,7 +279,7 @@ Media Asset T1 blocks Clip Slot T2 and the final Video operator comparison. Comp
 
 ### A1. Backend-owned authoritative Media Asset terminal transaction
 
-Priority: highest. Status: not implemented at this stop point.
+Priority: highest. Status: implemented and committed in `aad9172`; the ordered A7 proof passes. Final frozen adversarial review and A8 remain before the tranche is accepted.
 
 Problem:
 
@@ -355,7 +372,7 @@ Checkpoint commit A1 should own only `app/src-tauri/src/main.rs` unless an addit
 
 ### A2. Frontend authoritative commit wiring
 
-Start only after A1 API and return DTOs are frozen and reviewed.
+Status: implemented and committed in `682b908` and `14eeeb2`. The direct authoritative command/query path passes the A7 frontend gate.
 
 Required changes:
 
@@ -385,7 +402,7 @@ Checkpoint commit A2 should own only the six frozen frontend files and any focus
 
 ### A3. Preserve old IPC names while replacing their internals
 
-Open P1 even though current production frontend calls are zero.
+Status: implemented and committed in `4173e35`. Compatibility names/shapes are retained and production tests cover authoritative owner, atomicity, hash identity, and history. Native A8 remains.
 
 Affected compatibility commands:
 
@@ -422,7 +439,7 @@ Required tests:
 
 ### A4. Cross-platform file coherence decision
 
-Windows is the current native target and its retained handle/identity path is statically strong. Non-Windows remains open if supported.
+Status: implementation committed in `8cb0459`. Windows retained handles and Unix stable private snapshots/version/CAS are present. Windows focused tests pass; execution on macOS/Linux and the supported-platform release decision remain open.
 
 Risk on non-Windows:
 
@@ -445,7 +462,7 @@ Tests:
 
 ### A5. Availability cancellation and reaper hardening
 
-P2, but complete before release.
+Status: implemented and committed in `68a983d`; the current A7 operation and availability filters pass. Native cancellation is still an A8 acceptance item.
 
 - Add reserved operation identity to verified availability when the inspection can be long.
 - Allow cancellation before first read and between chunks/probe entries.
@@ -455,6 +472,8 @@ P2, but complete before release.
 - Test app shutdown joins/unparks the one reaper thread promptly.
 
 ### A6. Fill Engine proof gaps
+
+Status: implemented and committed in `bb6aef7` and `bdb7008`; the current A7 Engine and authoritative filters pass.
 
 - Add a forced publication-failure Bootstrap test that asserts restoration of:
   - `video_outputs`;
@@ -470,6 +489,8 @@ P2, but complete before release.
 - Test retained output IDs and layer IDs are identical on exact retry.
 
 ### A7. Media Asset T1 focused gate
+
+Status: PASS on 2026-08-13 for the current resumed checkpoint. Exact commands, nonzero counts, warnings, and non-claims are recorded in `qa/MEDIA_ASSET_T1_A7_EVIDENCE_2026-08-13.md`. The gate found eight missing Japanese labels; they were fixed in `2f77981`, after which localization was 3174/3174.
 
 Run from a frozen tree, in order:
 
@@ -495,6 +516,8 @@ Run from a frozen tree, in order:
 If any test filter selects zero tests, correct the command and rerun; do not count it.
 
 ### A8. Media Asset native acceptance
+
+Status: IN PROGRESS. The current source builds through `pnpm --dir app tauri build --no-bundle`; the release executable SHA-256 is `41FE507275C21916F36894A4D4E5DF4D9CEF537E5223A778302B83CCE93FAE07`. Exactly one responsive Syndocal window and a maximized basic Video-layout smoke were obtained. None of the workflow rows below is accepted until its dedicated evidence is recorded.
 
 After focused/static review is P0/P1 clean:
 
@@ -1452,7 +1475,7 @@ This is the minimum domain-level inventory. Each row must be decomposed into Q1 
 
 | Domain ID | Scope | Primary section/source | Frozen status | Release-blocking remainder |
 | --- | --- | --- | --- | --- |
-| `MEDIA-T1` | MediaAsset schema, import, relink, authority | A | In progress | terminal reply-loss/history, compatibility internals, platform/lifecycle proof, native acceptance |
+| `MEDIA-T1` | MediaAsset schema, import, relink, authority | A | A1-A7 implemented/green; A8 in progress | full native workflow acceptance and macOS/Linux execution proof or narrowed support claim |
 | `MEDIA-DERIVED` | thumbnails, proxies, waveform, analysis, cache | M | Not started as one tranche | authored/cache separation, cancellation, eviction, performance |
 | `VIDEO-SLOT` | clip banks/slots, queue/Take | B | Design complete, code not started | full implementation and native acceptance |
 | `VIDEO-FX` | scoped effects and transition buses | C | Partial foundation | scope model, deterministic Take, mapping/timeline and faults |
@@ -1553,10 +1576,10 @@ Initial high-severity register:
 
 | Risk ID | Severity | Boundary | Status / blocking milestone |
 | --- | --- | --- | --- |
-| `R-MEDIA-TERM-001` | P1 | media publish/history/reply loss | Open; blocks A completion |
+| `R-MEDIA-TERM-001` | P1 | media publish/history/reply loss | Code closed by `aad9172`/`14eeeb2`; final frozen review and A8 evidence pending |
 | `R-TX-BEGIN-001` | P1 | Begin side effect with lost reply | Open; blocks generic dependent mutations |
-| `R-MEDIA-COMPAT-001` | P1 | old raw IPC authority/hash/atomicity | Open; blocks A completion |
-| `R-FILE-ABA-001` | P1 if non-Windows supported | path/file image coherence | Open decision/implementation |
+| `R-MEDIA-COMPAT-001` | P1 | old raw IPC authority/hash/atomicity | Code closed by `4173e35`; native compatibility evidence pending |
+| `R-FILE-ABA-001` | P1 if non-Windows supported | path/file image coherence | Code implementation closed by `8cb0459`; macOS/Linux execution and product support decision pending |
 | `R-PATCH-ATOMIC-001` | P1 | profile ancillary and Engine Patch/Repair | Open; blocks D completion |
 | `R-OUTPUT-SWAP-001` | P1 | project/Takeover replacement and external outputs | Open; blocks distributed/venue completion |
 | `R-SHOW-SPLIT-001` | P1 | two-node partition and dual output | Not implemented; blocks automatic failover claim |
@@ -1579,6 +1602,13 @@ Each release candidate receives a stable evidence directory containing:
 - signing/notarization/license/SBOM results;
 - clean-machine install/update/uninstall results;
 - known failures, waivers, and non-claims.
+
+Current focused evidence records:
+
+| Evidence ID | Scope | Record | Status |
+| --- | --- | --- | --- |
+| `MEDIA-T1-A7-2026-08-13` | Ordered automated Media Asset A7 gate and current native build hash | `qa/MEDIA_ASSET_T1_A7_EVIDENCE_2026-08-13.md` | Accepted for A7 only |
+| `MEDIA-T1-A8-2026-08-13` | Full native Media Asset workflow matrix | Pending | In progress; must not be inferred from the basic Video layout smoke |
 
 ### Q5. Completion query
 
@@ -1722,10 +1752,9 @@ No confirmed P0-Code at the last frozen reviewed checkpoint. Current dirty `main
 
 ### P1
 
-- Media terminal reply-loss/history closure.
 - Generic Begin reply-loss/liveness.
-- Old raw compatibility Media IPC internal atomicity/authority/hash identity.
-- Non-Windows file ABA/current-path identity if non-Windows is supported.
+- Media terminal reply-loss/history and old compatibility atomicity are code-closed, but remain acceptance-open until the final frozen review and A8 are recorded.
+- Non-Windows file coherence is implemented, but macOS/Linux execution proof and the supported-platform decision remain open.
 - Pending broader PATCH/GDTF atomic project/engine commit and raw mutation admission.
 - Remaining generic project/input/output authority boundaries identified in prior reviews must be re-audited before release.
 - Distributed ShowClock/split-brain-safe two-PC operation is not implemented.
@@ -1735,13 +1764,9 @@ No confirmed P0-Code at the last frozen reviewed checkpoint. Current dirty `main
 
 ### P2 / proof gaps
 
-- availability first-hash cancellation;
-- reaper spawn failure visibility;
-- post-engine-ACK/pre-receipt insertion model;
-- Bootstrap output/fade rollback test coverage;
-- production-level all-six concurrent/reply-loss Media command tests;
-- non-Windows tests;
-- native Tauri release build and UI/hardware acceptance;
+- Media availability first-hash cancellation, reaper spawn failure, terminal receipt recovery, complete Bootstrap rollback, and all-six command idempotency now have automated implementation proof; their required native/external rows remain separate.
+- non-Windows execution tests;
+- full native Media A8 workflow acceptance (the release build/basic window smoke alone is insufficient);
 - comparative benchmark evidence.
 - media thumbnail/proxy/cache/analysis lifecycle and performance proof;
 - full migration/corruption/fuzz corpus;
@@ -1768,4 +1793,4 @@ Do not claim:
 - secure internet exposure of Web Remote or ShowClock without the declared TLS/authentication/fencing boundary;
 - whole-product Daslight parity from loopback, fixture count, internal schema, or the currently measured subset of tasks.
 
-The next truthful milestone is: **backend-owned terminal Media Asset commit, reviewed and committed as a focused checkpoint**.
+The next truthful milestone is: **Media Asset A8 full native workflow acceptance on the exact current release executable, followed by the final frozen Media T1 review and evidence-led closeout**.
