@@ -23,7 +23,8 @@ use engine::{
     validate_move_effect_request as validate_engine_move_effect_request,
     validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
     EngineHandle, FixtureFlagClearKind, FixturePatchCandidate, MediaAssetImportCandidate,
-    MediaAssetTransaction, OutputOwnershipActivation, VideoIsfStackMutation,
+    MediaAssetTransaction, OutputOwnershipActivation, VideoClipSlotImportAndAssignCandidate,
+    VideoClipSlotImportAssignment, VideoIsfStackMutation,
 };
 use io::midi::{
     MidiClockEvent, MidiClockInput, MidiControlEvent, MidiControlInput, MidiFeedbackOutput,
@@ -35,35 +36,37 @@ use minisign_verify::PublicKey;
 #[cfg(test)]
 use protocol::DmxControlAction;
 use protocol::{
-    canonical_video_output_mapping_field, normalize_legacy_video_media_assets,
-    validate_engine_ready_video_media_assets, AttributeControl, AttributeResolution,
-    AudioAnalysisSummary, AutoVjConfig, AutomationId, AutomationKeyframeSummary,
-    ChaserEffectRequest, ChaserStep, ChildTimelineSummary, ChildTimelineTransportPathSegment,
-    ClockSnapshot, ColorEffectRequest, ColorMappingEffectRequest, CompositionId,
-    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueNodeGraphTarget,
-    CurveEffectRequest, CustomFixtureProfileFile, CustomFixtureProfileRequest, DmxControlMapping,
-    DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig,
-    DmxOutputProtocol, EffectBeamTarget, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset,
-    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureGroupSummary,
-    FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary,
-    LearnedDmxControl, LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MachineOutputRole,
-    MappingEffectRequest, MediaAssetAvailability, MediaAssetId, MediaAssetRelinkOutcome,
-    MediaAssetRelinkPolicy, MediaAssetSummary, MediaContentHash, MediaHashAlgorithm,
-    MidiControlAction, MidiControlMapping, MidiFeedbackMessage, MidiInputSummary,
-    MidiOutputSummary, MoveEffectBeamTarget, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorFeatureFaderResult,
-    OperatorLockMode, OperatorPolicy, OperatorSelectionContext, OscControlAction,
-    OscControlMapping, OscInputConfig, OutputOwnershipStatus, PatchFixtureRequest,
-    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
-    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
-    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
-    TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
-    TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
-    VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
-    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    canonical_video_output_mapping_field, normalize_legacy_video_clip_slots,
+    normalize_legacy_video_media_assets, validate_engine_ready_video_clip_slots, AttributeControl,
+    AttributeResolution, AudioAnalysisSummary, AutoVjConfig, AutomationId,
+    AutomationKeyframeSummary, ChaserEffectRequest, ChaserStep, ChildTimelineSummary,
+    ChildTimelineTransportPathSegment, ClockSnapshot, ColorEffectRequest,
+    ColorMappingEffectRequest, CompositionId, CompositionSummary, CueEffectTarget,
+    CueFixtureTarget, CueId, CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile,
+    CustomFixtureProfileRequest, DmxControlMapping, DmxInputConfig, DmxInputProtocol,
+    DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectBeamTarget, EffectId,
+    EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, FixtureGroupSummary, FixtureId, FixtureLimits, FixturePreset,
+    FixtureProfileSummary, GeometrySummary, LearnedDmxControl, LearnedMidiControl,
+    LearnedOscControl, LfoEffectRequest, MachineOutputRole, MappingEffectRequest,
+    MediaAssetAvailability, MediaAssetId, MediaAssetRelinkOutcome, MediaAssetRelinkPolicy,
+    MediaAssetSummary, MediaContentHash, MediaHashAlgorithm, MidiControlAction, MidiControlMapping,
+    MidiFeedbackMessage, MidiInputSummary, MidiOutputSummary, MoveEffectBeamTarget,
+    MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
+    NodeGraphTransformOp, OperatorFeatureFaderResult, OperatorLockMode, OperatorPolicy,
+    OperatorSelectionContext, OscControlAction, OscControlMapping, OscInputConfig,
+    OutputOwnershipStatus, PatchFixtureRequest, PatchedFixtureSummary, PositionWaveEffectRequest,
+    ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus, Rotation3,
+    SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
+    StageObjectKind, StageObjectSummary, TimelineAudioClipId, TimelineAudioClipSummary,
+    TimelineEventId, TimelineLayerKind, TimelineSnapRequest, TimelineTrackKind,
+    TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary, ValueEffectRequest, Vec3,
+    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoClipRuntimeSnapshot,
+    VideoClipSlotId, VideoClipSlotSummary, VideoEffectTarget, VideoIsfEffectStageSummary,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
+    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
     COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
 use serde::{Deserialize, Serialize};
@@ -93,6 +96,10 @@ type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
 const APP_NAME: &str = "Syndocal";
 const DESKTOP_ESCAPE_SHORTCUT_EVENT: &str = "desktop-window-forward-escape";
 const PROJECT_FILE_VERSION: u32 = 1;
+/// Largest integer represented exactly by JavaScript's JSON number model.
+/// Runtime generation is a frontend ordering fence, so approximate values are
+/// forbidden even though Rust can count further.
+const VIDEO_CLIP_RUNTIME_GENERATION_MAX: u64 = 9_007_199_254_740_991;
 const PHASE1_SAMPLE_PROJECT_LABEL: &str = "samples/phase1-mini-show.sdc";
 const PHASE1_SAMPLE_PROJECT_JSON: &str = include_str!("../../../samples/phase1-mini-show.sdc");
 const SAMPLE_EFFECT_PRESET_PULSE_LABEL: &str = "samples/front-dimmer-pulse.effect";
@@ -289,6 +296,10 @@ struct AppState {
     /// in command-level tests. It is compiled out of production builds.
     #[cfg(test)]
     media_asset_authoritative_publish_attempts: AtomicU64,
+    /// Command-level B3 proof counts only authored/direct engine publication
+    /// boundaries; runtime slot transport intentionally stays history-free.
+    #[cfg(test)]
+    video_clip_slot_authoritative_publish_attempts: AtomicU64,
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
     program_audio_handoff: Arc<ProgramAudioHandoffCoordinator>,
     _media_audio_sync: MediaAudioSyncRuntime,
@@ -347,12 +358,23 @@ struct AppState {
     /// recovery a liveness decision instead of treating every different
     /// renderer as orphaned (which could steal a live pane's edit).
     project_transaction_owners: Mutex<HashMap<String, String>>,
+    /// Backend-issued, never-reused renderer incarnation for each window
+    /// label. Kept parallel to the wire-compatible owner string registry so
+    /// stale same-string IPC cannot cross a retire/re-register ABA boundary.
+    project_transaction_owner_incarnations: Mutex<HashMap<String, u64>>,
+    next_project_transaction_owner_incarnation: AtomicU64,
+    /// Serializes capture/revalidation of a B3 caller incarnation with owner
+    /// rotation. This is intentionally distinct from external command
+    /// admission because authored/runtime commit helpers acquire that gate.
+    project_transaction_owner_rotation: Mutex<()>,
     /// Backend-enforced Operator Lock state for each registered renderer owner.
     /// The project policy remains authoritative in the coordinator; this cache
     /// records only whether that exact owner has successfully unlocked the
     /// current epoch/policy image. A policy or identity change resets to the
     /// policy's `lock_on_load` default before any authoritative mutation.
     project_operator_sessions: Mutex<HashMap<String, ProjectOperatorSession>>,
+    /// Monotonic order of successful backend clip-runtime publications.
+    video_clip_slot_runtime_generation: AtomicU64,
     /// Linearizes every external callback/remote engine send with project
     /// transaction baselines and identity publication.  Any path that also
     /// needs coordinator state must acquire this mutex first.
@@ -564,6 +586,261 @@ enum MediaAssetAuthoritativeTerminalResult {
     Failure(MediaAssetAuthoritativeFailureResult),
 }
 
+/// Clip-slot operations do not have an expensive Prepare phase, but they still
+/// need the same exact reply-recovery identity as Media T1.  The optional
+/// prepared token is zero for ordinary slot authoring/runtime commands and is
+/// the finalized Media T1 generation only for direct import-and-assign.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct VideoClipSlotAuthoritativeOperationKey {
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    owner_id: String,
+    window_label: String,
+    owner_incarnation: u64,
+    start_epoch: u64,
+    start_revision: u64,
+    start_checkpoint_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VideoClipSlotCallerBinding {
+    window_label: String,
+    owner_id: String,
+    incarnation: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VideoClipSlotAuthoritativeCommitKind {
+    Create,
+    Assign,
+    Update,
+    Remove,
+    Reorder,
+    Duplicate,
+    SetDefault,
+    ImportAndAssign,
+    Queue,
+    CancelQueue,
+    Launch,
+    Seek,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VideoClipSlotAuthoritativeRequestShape {
+    kind: VideoClipSlotAuthoritativeCommitKind,
+    /// The complete, canonical semantic shape. Direct import includes ordered
+    /// finalized identities here so the terminal receipt is audit-complete.
+    fingerprint: String,
+    /// The retry-comparable semantic shape. For ordinary commands this equals
+    /// `fingerprint`; direct imports use the target/anchor/default request
+    /// because the prepared token is deliberately released after B and only
+    /// the terminal receipt remains for a lost-reply retry.
+    retry_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoClipSlotAuthoritativeAuthoredResult {
+    command_kind: VideoClipSlotAuthoritativeCommitKind,
+    layer_id: VideoLayerId,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    affected_slot_ids: Vec<VideoClipSlotId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    focus_slot_id: Option<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    created_slot_ids: Vec<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    imported_asset_ids: Vec<MediaAssetId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    insertion_before_slot_id: Option<VideoClipSlotId>,
+    mutation: ProjectHistoryMutationResult,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoClipSlotAuthoritativeRuntimeResult {
+    command_kind: VideoClipSlotAuthoritativeCommitKind,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    runtime_generation: u64,
+    runtime: VideoClipRuntimeSnapshot,
+}
+
+/// Read-only, authority-bound transport truth for initial mount and resync.
+/// Unlike the runtime commands it has no terminal receipt and never mutates
+/// engine state, persistence, revision, or project history.
+#[derive(Debug, Clone, Serialize)]
+struct VideoClipRuntimeReport {
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    runtime_generation: u64,
+    runtime: VideoClipRuntimeSnapshot,
+}
+
+/// A terminal runtime receipt deliberately stores only the immutable fact that
+/// the command was acknowledged. The transport snapshot is live state, so a
+/// reply-loss retry must attach a fresh snapshot instead of replaying the one
+/// captured before a later queue/cancel/launch/seek command.
+#[derive(Debug, Clone, Serialize)]
+struct VideoClipSlotAuthoritativeRuntimeOutcome {
+    command_kind: VideoClipSlotAuthoritativeCommitKind,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoClipSlotAuthoritativeFailureResult {
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", content = "result", rename_all = "snake_case")]
+enum VideoClipSlotAuthoritativeTerminalResult {
+    Authored(VideoClipSlotAuthoritativeAuthoredResult),
+    Runtime(VideoClipSlotAuthoritativeRuntimeOutcome),
+    Failure(VideoClipSlotAuthoritativeFailureResult),
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoClipSlotAuthoritativeTerminalEnvelope {
+    command_kind: VideoClipSlotAuthoritativeCommitKind,
+    shape_fingerprint: String,
+    terminal: VideoClipSlotAuthoritativeTerminalResult,
+    /// Runtime transport is deliberately attached at query time. The terminal
+    /// receipt itself remains an immutable command-outcome identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime: Option<VideoClipSlotAuthoritativeRuntimeResult>,
+}
+
+#[derive(Debug, Clone)]
+struct VideoClipSlotAuthoritativeReceiptRecord {
+    shape: VideoClipSlotAuthoritativeRequestShape,
+    terminal: VideoClipSlotAuthoritativeTerminalResult,
+    expires_at: Instant,
+}
+
+/// Tauri DTO for a new authored slot. The server, never the renderer,
+/// allocates its globally stable ID after the exact operation lane is won.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotCreateRequest {
+    layer_id: VideoLayerId,
+    media_asset_id: MediaAssetId,
+    #[serde(default)]
+    in_point_ms: u64,
+    #[serde(default)]
+    out_point_ms: Option<u64>,
+    #[serde(default)]
+    loop_mode: protocol::VideoClipLoopMode,
+    #[serde(default = "default_video_clip_slot_speed")]
+    speed: f32,
+    #[serde(default)]
+    cue_points: Vec<protocol::VideoClipCuePointSummary>,
+    #[serde(default)]
+    launch_quantization: protocol::VideoClipLaunchQuantization,
+    #[serde(default)]
+    effect_overrides: Vec<protocol::VideoClipEffectOverrideSummary>,
+    #[serde(default)]
+    before_slot_id: Option<VideoClipSlotId>,
+    #[serde(default)]
+    make_default: bool,
+}
+
+fn default_video_clip_slot_speed() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotAssignRequest {
+    layer_id: VideoLayerId,
+    slot_id: VideoClipSlotId,
+    media_asset_id: MediaAssetId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotUpdateRequest {
+    layer_id: VideoLayerId,
+    slot: VideoClipSlotSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotRemoveRequest {
+    layer_id: VideoLayerId,
+    slot_id: VideoClipSlotId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotReorderRequest {
+    layer_id: VideoLayerId,
+    slot_ids: Vec<VideoClipSlotId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotDuplicateRequest {
+    layer_id: VideoLayerId,
+    source_slot_id: VideoClipSlotId,
+    #[serde(default)]
+    before_slot_id: Option<VideoClipSlotId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotSetDefaultRequest {
+    layer_id: VideoLayerId,
+    slot_id: VideoClipSlotId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotQueueRequest {
+    layer_id: VideoLayerId,
+    slot_id: VideoClipSlotId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotCancelQueueRequest {
+    layer_id: VideoLayerId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotLaunchRequest {
+    layer_id: VideoLayerId,
+    #[serde(default)]
+    slot_id: Option<VideoClipSlotId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotSeekRequest {
+    layer_id: VideoLayerId,
+    position_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoClipSlotImportAndAssignRequest {
+    target_layer_id: VideoLayerId,
+    #[serde(default)]
+    before_slot_id: Option<VideoClipSlotId>,
+    #[serde(default)]
+    make_default: bool,
+}
+
+/// Included in the direct-drop request shape in exact finalized input order.
+/// The prepared registry token identifies the guarded handle; these immutable
+/// fields prove what those bytes and target operation actually were.
+#[derive(Debug, Clone, Serialize)]
+struct VideoClipSlotPreparedImportIdentity {
+    input_index: usize,
+    label: String,
+    source: VideoSourceSummary,
+    content_hash: MediaContentHash,
+    byte_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoClipSlotDirectDropShape {
+    request: VideoClipSlotImportAndAssignRequest,
+    prepared_import_token: u64,
+    operation_generation: u64,
+    prepared_identities: Vec<VideoClipSlotPreparedImportIdentity>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct MediaAssetAuthoritativeTerminalEnvelope {
     command_kind: MediaAssetAuthoritativeCommitKind,
@@ -675,6 +952,20 @@ struct MediaAssetOperationRegistry {
     authoritative_receipts:
         Mutex<HashMap<MediaAssetAuthoritativeOperationKey, MediaAssetAuthoritativeReceiptRecord>>,
     authoritative_lanes: Mutex<HashMap<MediaAssetAuthoritativeOperationKey, Arc<Mutex<()>>>>,
+    /// Clip Slot B3 shares the Media T1 reaper but intentionally owns a
+    /// separate key and result type: slot mutations have no imported-file
+    /// token, while direct import-and-assign does bind the finalized token.
+    video_clip_slot_authoritative_receipts: Mutex<
+        HashMap<VideoClipSlotAuthoritativeOperationKey, VideoClipSlotAuthoritativeReceiptRecord>,
+    >,
+    video_clip_slot_authoritative_lanes:
+        Mutex<HashMap<VideoClipSlotAuthoritativeOperationKey, Arc<Mutex<()>>>>,
+    /// A same-string owner re-registration cannot prove that an old renderer
+    /// request belongs to the new incarnation. Retain only a short tombstone
+    /// of purged keys so those old retries/queries fail closed rather than
+    /// inheriting or replaying a terminal receipt under the new window.
+    video_clip_slot_authoritative_retired_keys:
+        Mutex<HashMap<VideoClipSlotAuthoritativeOperationKey, Instant>>,
     /// Short-lived hover sessions are backend-owned and bind a registered
     /// renderer generation to one immutable private media copy. The existing
     /// media reaper owns their TTL cleanup too.
@@ -1780,6 +2071,146 @@ impl MediaAssetOperationRegistry {
         Ok(terminal)
     }
 
+    fn video_clip_slot_authoritative_receipt(
+        &self,
+        key: &VideoClipSlotAuthoritativeOperationKey,
+    ) -> Option<VideoClipSlotAuthoritativeReceiptRecord> {
+        let mut receipts = self
+            .video_clip_slot_authoritative_receipts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = Instant::now();
+        receipts.retain(|_, record| record.expires_at > now);
+        let record = receipts.get_mut(key)?;
+        record.expires_at = now + MEDIA_ASSET_COMMIT_RECEIPT_TTL;
+        Some(record.clone())
+    }
+
+    fn ensure_video_clip_slot_authoritative_key_not_retired(
+        &self,
+        key: &VideoClipSlotAuthoritativeOperationKey,
+    ) -> Result<(), String> {
+        let now = Instant::now();
+        let mut retired = self
+            .video_clip_slot_authoritative_retired_keys
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        retired.retain(|_, expires_at| *expires_at > now);
+        if retired.contains_key(key) {
+            Err("Video clip slot operation belongs to a retired renderer incarnation; start a new operation".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn video_clip_slot_authoritative_publication_lane(
+        &self,
+        key: &VideoClipSlotAuthoritativeOperationKey,
+    ) -> Arc<Mutex<()>> {
+        let mut lanes = self
+            .video_clip_slot_authoritative_lanes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(
+            lanes
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    }
+
+    /// The B3 counterpart of the Media T1 terminal lane. Exact retries return
+    /// one previously acknowledged result; a different semantic shape for the
+    /// exact operation can query but cannot reach the engine again.
+    fn video_clip_slot_authoritative_terminal_single_flight<F>(
+        &self,
+        key: &VideoClipSlotAuthoritativeOperationKey,
+        shape: &VideoClipSlotAuthoritativeRequestShape,
+        publish: F,
+    ) -> Result<VideoClipSlotAuthoritativeTerminalResult, String>
+    where
+        F: FnOnce() -> Result<VideoClipSlotAuthoritativeTerminalResult, String>,
+    {
+        self.ensure_video_clip_slot_authoritative_key_not_retired(key)?;
+        let lane = self.video_clip_slot_authoritative_publication_lane(key);
+        let _lane_guard = lane.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.ensure_video_clip_slot_authoritative_key_not_retired(key)?;
+        if let Some(record) = self.video_clip_slot_authoritative_receipt(key) {
+            if record.shape.kind == shape.kind
+                && record.shape.retry_fingerprint == shape.retry_fingerprint
+            {
+                return Ok(record.terminal);
+            }
+            return Err(format!(
+                "Video clip slot operation already completed as {:?} with shape {}; query its canonical terminal result instead of republishing",
+                record.shape.kind, record.shape.fingerprint
+            ));
+        }
+
+        let terminal = publish()?;
+        let now = Instant::now();
+        let mut receipts = self
+            .video_clip_slot_authoritative_receipts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        receipts.retain(|_, record| record.expires_at > now);
+        receipts.insert(
+            key.clone(),
+            VideoClipSlotAuthoritativeReceiptRecord {
+                shape: shape.clone(),
+                terminal: terminal.clone(),
+                expires_at: now + MEDIA_ASSET_COMMIT_RECEIPT_TTL,
+            },
+        );
+        Ok(terminal)
+    }
+
+    /// A B3 terminal receipt is owned by a concrete renderer incarnation.
+    /// Owner IDs are transport-visible strings and may later be reused, so a
+    /// window rotation must remove both the old receipts and their lanes
+    /// before the string can be trusted again under a new WebView label.
+    fn purge_video_clip_slot_authoritative_for_owner(&self, owner_id: &str) {
+        let expires_at = Instant::now() + MEDIA_ASSET_COMMIT_RECEIPT_TTL;
+        let mut retired_keys = Vec::new();
+        {
+            let mut receipts = self
+                .video_clip_slot_authoritative_receipts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            receipts.retain(|key, _| {
+                if key.owner_id == owner_id {
+                    retired_keys.push(key.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        {
+            let mut lanes = self
+                .video_clip_slot_authoritative_lanes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            lanes.retain(|key, _| {
+                if key.owner_id == owner_id {
+                    retired_keys.push(key.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        if !retired_keys.is_empty() {
+            let mut retired = self
+                .video_clip_slot_authoritative_retired_keys
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            retired.retain(|_, retired_at| *retired_at > Instant::now());
+            for key in retired_keys {
+                retired.insert(key, expires_at);
+            }
+        }
+    }
+
     /// Eagerly release everything past its TTL: reserved-but-unadopted slots,
     /// prepared imports/relinks (dropping their retained Windows file handles),
     /// and delivered commit receipts. Returns the number of entries reclaimed.
@@ -1834,8 +2265,26 @@ impl MediaAssetOperationRegistry {
             reclaimed += before - receipts.len();
         }
         {
+            let mut retired = self
+                .video_clip_slot_authoritative_retired_keys
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = retired.len();
+            retired.retain(|_, expires_at| *expires_at > now);
+            reclaimed += before - retired.len();
+        }
+        {
             let mut receipts = self
                 .authoritative_receipts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = receipts.len();
+            receipts.retain(|_, record| record.expires_at > now);
+            reclaimed += before - receipts.len();
+        }
+        {
+            let mut receipts = self
+                .video_clip_slot_authoritative_receipts
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let before = receipts.len();
@@ -1859,6 +2308,15 @@ impl MediaAssetOperationRegistry {
         {
             let mut lanes = self
                 .authoritative_lanes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = lanes.len();
+            lanes.retain(|_, lane| Arc::strong_count(lane) > 1);
+            reclaimed += before - lanes.len();
+        }
+        {
+            let mut lanes = self
+                .video_clip_slot_authoritative_lanes
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let before = lanes.len();
@@ -3993,6 +4451,7 @@ fn build_media_asset_layer_import_candidate(
     labels: &[String],
     mut allocate_asset_id: impl FnMut() -> MediaAssetId,
     mut allocate_layer_id: impl FnMut() -> VideoLayerId,
+    mut allocate_clip_slot_id: impl FnMut() -> VideoClipSlotId,
 ) -> Result<(MediaAssetImportCandidate, Vec<VideoLayerId>), String> {
     if prepared.is_empty() {
         return Err("Prepared media asset import contains no successful local files".to_string());
@@ -4025,6 +4484,11 @@ fn build_media_asset_layer_import_candidate(
             asset
         };
         let layer_id = allocate_layer_id();
+        // T2's compatibility boundary is exact: every layer born through a
+        // retained T1 "add local media layer" route receives one globally
+        // allocated default slot, never an empty temporary bank. The source and
+        // media_asset_id remain that slot's compatibility projection.
+        let slot_id = allocate_clip_slot_id();
         candidate.layers.push(protocol::VideoLayerSummary {
             id: layer_id,
             label: normalize_video_layer_label(label.clone())?,
@@ -4033,6 +4497,18 @@ fn build_media_asset_layer_import_candidate(
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
+            clip_slots: vec![VideoClipSlotSummary {
+                id: slot_id,
+                media_asset_id: asset.id,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: Default::default(),
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: Default::default(),
+                effect_overrides: Vec::new(),
+            }],
+            default_clip_slot_id: Some(slot_id),
         });
         layer_ids.push(layer_id);
     }
@@ -4238,6 +4714,299 @@ fn media_asset_authoritative_expected_authority(
     }
 }
 
+fn video_clip_slot_authoritative_kind_name(
+    kind: VideoClipSlotAuthoritativeCommitKind,
+) -> &'static str {
+    match kind {
+        VideoClipSlotAuthoritativeCommitKind::Create => "create",
+        VideoClipSlotAuthoritativeCommitKind::Assign => "assign",
+        VideoClipSlotAuthoritativeCommitKind::Update => "update",
+        VideoClipSlotAuthoritativeCommitKind::Remove => "remove",
+        VideoClipSlotAuthoritativeCommitKind::Reorder => "reorder",
+        VideoClipSlotAuthoritativeCommitKind::Duplicate => "duplicate",
+        VideoClipSlotAuthoritativeCommitKind::SetDefault => "set_default",
+        VideoClipSlotAuthoritativeCommitKind::ImportAndAssign => "import_and_assign",
+        VideoClipSlotAuthoritativeCommitKind::Queue => "queue",
+        VideoClipSlotAuthoritativeCommitKind::CancelQueue => "cancel_queue",
+        VideoClipSlotAuthoritativeCommitKind::Launch => "launch",
+        VideoClipSlotAuthoritativeCommitKind::Seek => "seek",
+    }
+}
+
+fn video_clip_slot_authoritative_shape<T: Serialize>(
+    kind: VideoClipSlotAuthoritativeCommitKind,
+    payload: &T,
+) -> Result<VideoClipSlotAuthoritativeRequestShape, String> {
+    let payload = serde_json::to_vec(payload)
+        .map_err(|error| format!("Unable to encode video clip slot request shape: {error}"))?;
+    let kind_name = video_clip_slot_authoritative_kind_name(kind);
+    let mut hasher = Sha256::new();
+    hasher.update(b"syndocal-video-clip-slot-authoritative-shape-v1");
+    hasher.update((kind_name.len() as u64).to_le_bytes());
+    hasher.update(kind_name.as_bytes());
+    hasher.update((payload.len() as u64).to_le_bytes());
+    hasher.update(payload);
+    let fingerprint = format!("{:x}", hasher.finalize());
+    Ok(VideoClipSlotAuthoritativeRequestShape {
+        kind,
+        retry_fingerprint: fingerprint.clone(),
+        fingerprint,
+    })
+}
+
+fn video_clip_slot_authoritative_shape_with_retry<T: Serialize, R: Serialize>(
+    kind: VideoClipSlotAuthoritativeCommitKind,
+    payload: &T,
+    retry_payload: &R,
+) -> Result<VideoClipSlotAuthoritativeRequestShape, String> {
+    let mut shape = video_clip_slot_authoritative_shape(kind, payload)?;
+    shape.retry_fingerprint = video_clip_slot_authoritative_shape(kind, retry_payload)?.fingerprint;
+    Ok(shape)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn video_clip_slot_authoritative_operation_key(
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    binding: &VideoClipSlotCallerBinding,
+    start_epoch: u64,
+    start_revision: u64,
+    start_checkpoint_hash: String,
+) -> Result<VideoClipSlotAuthoritativeOperationKey, String> {
+    if request_id == 0 {
+        return Err("Video clip slot operation request ID must be non-zero".to_string());
+    }
+    if prepared_token == 0 && operation_generation != 0 {
+        return Err(
+            "Video clip slot operation generation requires a prepared import token".to_string(),
+        );
+    }
+    if prepared_token != 0 && (operation_generation == 0 || prepared_token != operation_generation)
+    {
+        return Err(
+            "Prepared video clip slot import token does not match the operation generation"
+                .to_string(),
+        );
+    }
+    Ok(VideoClipSlotAuthoritativeOperationKey {
+        prepared_token,
+        request_id,
+        operation_generation,
+        owner_id: binding.owner_id.clone(),
+        window_label: binding.window_label.clone(),
+        owner_incarnation: binding.incarnation,
+        start_epoch,
+        start_revision,
+        start_checkpoint_hash,
+    })
+}
+
+fn video_clip_slot_authoritative_expected_authority(
+    key: &VideoClipSlotAuthoritativeOperationKey,
+) -> MediaAssetPrepareAuthority {
+    MediaAssetPrepareAuthority {
+        epoch: key.start_epoch,
+        revision: key.start_revision,
+        checkpoint_hash: key.start_checkpoint_hash.clone(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_video_clip_slot_authoritative_operation<P: Serialize>(
+    state: &AppState,
+    kind: VideoClipSlotAuthoritativeCommitKind,
+    shape_payload: &P,
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+    execute: impl FnOnce(
+        &str,
+        &MediaAssetPrepareAuthority,
+    ) -> Result<VideoClipSlotAuthoritativeTerminalResult, String>,
+) -> Result<VideoClipSlotAuthoritativeTerminalResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = match caller_binding {
+        Some(binding) => binding,
+        None => {
+            let owners = state
+                .project_transaction_owners
+                .lock()
+                .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+            let window_label = owners
+                .iter()
+                .find_map(|(label, candidate)| (candidate == &owner_id).then_some(label.clone()))
+                .ok_or_else(|| {
+                    "Project transaction renderer session is no longer registered".to_string()
+                })?;
+            drop(owners);
+            capture_video_clip_slot_caller_binding_for_window_label(
+                state,
+                &window_label,
+                &owner_id,
+            )?
+        }
+    };
+    if binding.owner_id != owner_id {
+        return Err(
+            "Video clip slot caller binding owner does not match the operation owner".to_string(),
+        );
+    }
+    ensure_video_clip_slot_caller_binding_current(state, &binding)?;
+    let key = video_clip_slot_authoritative_operation_key(
+        prepared_token,
+        request_id,
+        operation_generation,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let expected_authority = video_clip_slot_authoritative_expected_authority(&key);
+    let shape = video_clip_slot_authoritative_shape(kind, shape_payload)?;
+    state
+        .media_asset_operations
+        .video_clip_slot_authoritative_terminal_single_flight(&key, &shape, || {
+            execute(&owner_id, &expected_authority)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_video_clip_slot_authoritative_operation_with_shape(
+    state: &AppState,
+    shape: VideoClipSlotAuthoritativeRequestShape,
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+    execute: impl FnOnce(
+        &str,
+        &MediaAssetPrepareAuthority,
+    ) -> Result<VideoClipSlotAuthoritativeTerminalResult, String>,
+) -> Result<VideoClipSlotAuthoritativeTerminalResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = match caller_binding {
+        Some(binding) => binding,
+        None => {
+            let owners = state
+                .project_transaction_owners
+                .lock()
+                .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+            let window_label = owners
+                .iter()
+                .find_map(|(label, candidate)| (candidate == &owner_id).then_some(label.clone()))
+                .ok_or_else(|| {
+                    "Project transaction renderer session is no longer registered".to_string()
+                })?;
+            drop(owners);
+            capture_video_clip_slot_caller_binding_for_window_label(
+                state,
+                &window_label,
+                &owner_id,
+            )?
+        }
+    };
+    if binding.owner_id != owner_id {
+        return Err(
+            "Video clip slot caller binding owner does not match the operation owner".to_string(),
+        );
+    }
+    ensure_video_clip_slot_caller_binding_current(state, &binding)?;
+    let key = video_clip_slot_authoritative_operation_key(
+        prepared_token,
+        request_id,
+        operation_generation,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let expected_authority = video_clip_slot_authoritative_expected_authority(&key);
+    state
+        .media_asset_operations
+        .video_clip_slot_authoritative_terminal_single_flight(&key, &shape, || {
+            execute(&owner_id, &expected_authority)
+        })
+}
+
+fn expect_video_clip_slot_authored_terminal(
+    terminal: VideoClipSlotAuthoritativeTerminalResult,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    match terminal {
+        VideoClipSlotAuthoritativeTerminalResult::Authored(result) => Ok(result),
+        VideoClipSlotAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Video clip slot authored command received an unexpected terminal result: {other:?}"
+        )),
+    }
+}
+
+fn expect_current_video_clip_slot_runtime_terminal(
+    state: &AppState,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+    terminal: VideoClipSlotAuthoritativeTerminalResult,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    match terminal {
+        VideoClipSlotAuthoritativeTerminalResult::Runtime(outcome) => {
+            let _rotation = state
+                .project_transaction_owner_rotation
+                .lock()
+                .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+            resolve_video_clip_slot_caller_binding(state, owner_id, caller_binding)?;
+            fresh_authoritative_video_clip_slot_runtime_result(
+                state,
+                outcome.command_kind,
+                owner_id,
+                expected_authority,
+            )
+        }
+        VideoClipSlotAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Video clip slot runtime command received an unexpected terminal result: {other:?}"
+        )),
+    }
+}
+
+/// Once the engine has published B and project history has advanced, result
+/// materialization is bookkeeping only and must never manufacture a terminal
+/// failure. A poisoned test/debug result cell still contains a valid vector;
+/// recover it instead of converting a successful ACK into `Failure`.
+fn video_clip_slot_direct_result_ids(
+    created_slot_ids: &Mutex<Vec<VideoClipSlotId>>,
+    imported_asset_ids: &Mutex<Vec<MediaAssetId>>,
+) -> (Vec<VideoClipSlotId>, Vec<MediaAssetId>) {
+    let created_slot_ids = created_slot_ids
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let imported_asset_ids = imported_asset_ids
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    (created_slot_ids, imported_asset_ids)
+}
+
 /// Consume a *finalized* local-media token as the compatibility layer-creation
 /// form. The expensive hash/probe and exclusive finalization already happened
 /// before the caller opened its generic project transaction. This routine only
@@ -4369,6 +5138,7 @@ fn commit_prepared_media_asset_layers_locked(
         &labels,
         || state.engine.allocate_media_asset_id(),
         || state.engine.allocate_video_layer_id(),
+        || state.engine.allocate_video_clip_slot_id(),
     )?;
     let transaction = match bootstrap_output {
         Some(output) => MediaAssetTransaction::BootstrapVjShow { candidate, output },
@@ -17212,7 +17982,7 @@ fn apply_media_asset_transaction_to_candidate_video(
         }
     }
     synchronize_derived_video_compositions(video);
-    validate_engine_ready_video_media_assets(video)?;
+    validate_engine_ready_video_clip_slots(video)?;
     Ok(())
 }
 
@@ -17234,6 +18004,326 @@ fn media_asset_transaction_candidate_snapshot(
     if let Some(authored_video) = snapshot.authored_video.as_mut() {
         apply_media_asset_transaction_to_candidate_video(authored_video, transaction)?;
     }
+    Ok(snapshot)
+}
+
+fn video_clip_slot_layer_mut(
+    video: &mut protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+) -> Result<&mut protocol::VideoLayerSummary, String> {
+    video
+        .layers
+        .iter_mut()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))
+}
+
+fn sync_video_clip_slot_default_projections(
+    video: &mut protocol::VideoSnapshot,
+) -> Result<(), String> {
+    for layer in &mut video.layers {
+        let default_slot_id = layer
+            .default_clip_slot_id
+            .ok_or_else(|| format!("Video layer {} has no default clip slot", layer.id))?;
+        let slot = layer
+            .clip_slots
+            .iter()
+            .find(|slot| slot.id == default_slot_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Video layer {} default clip slot {} was not found",
+                    layer.id, default_slot_id.0
+                )
+            })?;
+        let asset_id = slot.media_asset_id;
+        let source = video
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .map(|asset| asset.source.clone())
+            .ok_or_else(|| {
+                format!(
+                    "Video layer {} default clip slot {} references missing media asset {}",
+                    layer.id, default_slot_id.0, asset_id
+                )
+            })?;
+        layer.media_asset_id = Some(asset_id);
+        layer.source = source;
+        // Mirror the engine's `sync_authored_default_projection` exactly.
+        // The authored default's compatibility state is persistence truth;
+        // leaving its transport/cue projection stale would produce a B hash
+        // that the next A reconciliation correctly rejects and would clear
+        // the just-recorded Undo history.
+        layer.state.speed = slot.speed;
+        layer.state.loop_enabled = !matches!(slot.loop_mode, protocol::VideoClipLoopMode::Once);
+        layer.state.loop_start_ms = slot.in_point_ms;
+        layer.state.loop_end_ms = slot
+            .out_point_ms
+            .or_else(|| {
+                layer
+                    .source
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.duration_ms)
+            })
+            .unwrap_or(0);
+        layer.state.cue_points = slot
+            .cue_points
+            .iter()
+            .map(|cue| protocol::VideoCuePointSummary {
+                position_ms: cue.position_ms,
+                label: cue.name.clone(),
+                color: None,
+            })
+            .collect();
+        layer.state.cue_points_ms = slot.cue_points.iter().map(|cue| cue.position_ms).collect();
+        layer.state = video::sanitize_layer_state(layer.state.clone());
+    }
+    Ok(())
+}
+
+fn validate_video_clip_slot_candidate(video: &mut protocol::VideoSnapshot) -> Result<(), String> {
+    sync_video_clip_slot_default_projections(video)?;
+    synchronize_derived_video_compositions(video);
+    validate_engine_ready_video_clip_slots(video)
+}
+
+fn create_video_clip_slot_in_candidate(
+    video: &mut protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+    slot: VideoClipSlotSummary,
+    before_slot_id: Option<VideoClipSlotId>,
+    make_default: bool,
+) -> Result<(), String> {
+    if slot.id.0 == 0 {
+        return Err("Video clip slot IDs must be non-zero".to_string());
+    }
+    if video
+        .layers
+        .iter()
+        .flat_map(|layer| layer.clip_slots.iter())
+        .any(|known| known.id == slot.id)
+    {
+        return Err(format!("Video clip slot {} already exists", slot.id.0));
+    }
+    let layer = video_clip_slot_layer_mut(video, layer_id)?;
+    if layer.clip_slots.len() >= 32 {
+        return Err(format!(
+            "Video layer {layer_id} exceeds the 32 clip slot bank limit"
+        ));
+    }
+    let insert_at = match before_slot_id {
+        Some(before_slot_id) => layer
+            .clip_slots
+            .iter()
+            .position(|known| known.id == before_slot_id)
+            .ok_or_else(|| {
+                format!(
+                    "Video clip slot {} was not found on layer {}",
+                    before_slot_id.0, layer_id
+                )
+            })?,
+        None => layer.clip_slots.len(),
+    };
+    let slot_id = slot.id;
+    layer.clip_slots.insert(insert_at, slot);
+    if make_default || layer.default_clip_slot_id.is_none() {
+        layer.default_clip_slot_id = Some(slot_id);
+    }
+    Ok(())
+}
+
+fn assign_video_clip_slot_asset_in_candidate(
+    video: &mut protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+    slot_id: VideoClipSlotId,
+    media_asset_id: MediaAssetId,
+) -> Result<(), String> {
+    let layer = video_clip_slot_layer_mut(video, layer_id)?;
+    let slot = layer
+        .clip_slots
+        .iter_mut()
+        .find(|slot| slot.id == slot_id)
+        .ok_or_else(|| {
+            format!(
+                "Video clip slot {} was not found on layer {}",
+                slot_id.0, layer_id
+            )
+        })?;
+    slot.media_asset_id = media_asset_id;
+    Ok(())
+}
+
+fn update_video_clip_slot_in_candidate(
+    video: &mut protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+    slot: VideoClipSlotSummary,
+) -> Result<(), String> {
+    let layer = video_clip_slot_layer_mut(video, layer_id)?;
+    let previous = layer
+        .clip_slots
+        .iter_mut()
+        .find(|known| known.id == slot.id)
+        .ok_or_else(|| {
+            format!(
+                "Video clip slot {} was not found on layer {}",
+                slot.id.0, layer_id
+            )
+        })?;
+    *previous = slot;
+    Ok(())
+}
+
+fn remove_video_clip_slot_in_candidate(
+    video: &mut protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+    slot_id: VideoClipSlotId,
+) -> Result<(), String> {
+    let layer = video_clip_slot_layer_mut(video, layer_id)?;
+    if layer.clip_slots.len() <= 1 {
+        return Err(format!(
+            "Video layer {layer_id} cannot remove its last clip slot"
+        ));
+    }
+    let index = layer
+        .clip_slots
+        .iter()
+        .position(|slot| slot.id == slot_id)
+        .ok_or_else(|| {
+            format!(
+                "Video clip slot {} was not found on layer {}",
+                slot_id.0, layer_id
+            )
+        })?;
+    layer.clip_slots.remove(index);
+    if layer.default_clip_slot_id == Some(slot_id) {
+        layer.default_clip_slot_id = Some(
+            layer
+                .clip_slots
+                .get(index)
+                .or_else(|| layer.clip_slots.get(index.saturating_sub(1)))
+                .expect("removing from a bank larger than one leaves a slot")
+                .id,
+        );
+    }
+    Ok(())
+}
+
+fn reorder_video_clip_slots_in_candidate(
+    video: &mut protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+    slot_ids: &[VideoClipSlotId],
+) -> Result<(), String> {
+    let layer = video_clip_slot_layer_mut(video, layer_id)?;
+    if slot_ids.len() != layer.clip_slots.len()
+        || slot_ids.iter().collect::<HashSet<_>>().len() != slot_ids.len()
+    {
+        return Err(format!(
+            "Video layer {layer_id} clip slot order is not a full unique bank"
+        ));
+    }
+    let previous = std::mem::take(&mut layer.clip_slots);
+    let mut remaining = previous
+        .into_iter()
+        .map(|slot| (slot.id, slot))
+        .collect::<HashMap<_, _>>();
+    let mut ordered = Vec::with_capacity(slot_ids.len());
+    for slot_id in slot_ids {
+        ordered.push(remaining.remove(slot_id).ok_or_else(|| {
+            format!(
+                "Video clip slot {} was not found on layer {}",
+                slot_id.0, layer_id
+            )
+        })?);
+    }
+    layer.clip_slots = ordered;
+    Ok(())
+}
+
+fn duplicate_video_clip_slot_in_candidate(
+    video: &mut protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+    source_slot_id: VideoClipSlotId,
+    new_slot_id: VideoClipSlotId,
+    before_slot_id: Option<VideoClipSlotId>,
+) -> Result<(), String> {
+    let source = video
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .and_then(|layer| {
+            layer
+                .clip_slots
+                .iter()
+                .find(|slot| slot.id == source_slot_id)
+        })
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Video clip slot {} was not found on layer {}",
+                source_slot_id.0, layer_id
+            )
+        })?;
+    let mut duplicate = source;
+    duplicate.id = new_slot_id;
+    create_video_clip_slot_in_candidate(video, layer_id, duplicate, before_slot_id, false)
+}
+
+fn set_default_video_clip_slot_in_candidate(
+    video: &mut protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+    slot_id: VideoClipSlotId,
+) -> Result<(), String> {
+    let layer = video_clip_slot_layer_mut(video, layer_id)?;
+    if !layer.clip_slots.iter().any(|slot| slot.id == slot_id) {
+        return Err(format!(
+            "Video clip slot {} was not found on layer {}",
+            slot_id.0, layer_id
+        ));
+    }
+    layer.default_clip_slot_id = Some(slot_id);
+    Ok(())
+}
+
+fn import_and_assign_video_clip_slots_in_candidate(
+    video: &mut protocol::VideoSnapshot,
+    candidate: &VideoClipSlotImportAndAssignCandidate,
+) -> Result<(), String> {
+    let mut known_asset_ids = video
+        .media_assets
+        .iter()
+        .map(|asset| asset.id)
+        .collect::<HashSet<_>>();
+    for asset in &candidate.assets {
+        if asset.id == 0 || !known_asset_ids.insert(asset.id) {
+            return Err(format!("Media asset {} already exists", asset.id));
+        }
+        video.media_assets.push(asset.clone());
+    }
+    for assignment in &candidate.assignments {
+        create_video_clip_slot_in_candidate(
+            video,
+            assignment.layer_id,
+            assignment.slot.clone(),
+            assignment.before_slot_id,
+            assignment.make_default,
+        )?;
+    }
+    Ok(())
+}
+
+fn video_clip_slot_candidate_snapshot(
+    mut snapshot: EngineSnapshot,
+    mutate: impl Fn(&mut protocol::VideoSnapshot) -> Result<(), String>,
+) -> Result<EngineSnapshot, String> {
+    // History B is always built from the persistence/authored default image.
+    // Never derive a candidate from the rendered active source: an active
+    // queued/pending transport is runtime-only and must survive a direct drop
+    // or authored bank edit unchanged.
+    use_authored_video_snapshot(&mut snapshot);
+    mutate(&mut snapshot.video)?;
+    validate_video_clip_slot_candidate(&mut snapshot.video)?;
     Ok(snapshot)
 }
 
@@ -17387,6 +18477,218 @@ fn run_admitted_internal_media_asset_transaction<T>(
     };
     commit_internal_media_asset_transaction_after_preflight(transaction_active, coordinator, plan);
     Ok(published)
+}
+
+/// B3's authored counterpart to the Media T1 terminal transaction. Its caller
+/// owns the per-exact-operation single-flight lane; this helper owns the
+/// second authority check, A/B persistence image, one Published ACK, and the
+/// assignment-only history commit. Nothing after the ACK can fail.
+fn commit_authoritative_video_clip_slot_authored<T>(
+    state: &AppState,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    history_label: &str,
+    build_candidate: impl FnOnce(EngineSnapshot) -> Result<EngineSnapshot, String>,
+    publish: impl FnOnce() -> Result<T, String>,
+) -> Result<(T, ProjectHistoryMutationResult), String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_media_asset_commit(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err("Project transaction is active; retry the video clip slot command".to_string());
+    }
+    let mut snapshot = state.engine.persistence_snapshot()?;
+    use_authored_video_snapshot(&mut snapshot);
+    let before_project = project_file_for_save_from_parts(snapshot.clone(), &coordinator.ancillary);
+    let before = ProjectCheckpoint {
+        hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+        project: before_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+    };
+    let candidate_snapshot = build_candidate(snapshot)?;
+    let after_project =
+        project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
+    let after = ProjectCheckpoint {
+        project: after_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: String::new(),
+    };
+    let plan = prepare_internal_media_asset_commit(
+        &coordinator,
+        history_label,
+        "",
+        before,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )?;
+    let published = run_admitted_internal_media_asset_transaction(
+        &state.project_transaction_active,
+        &mut coordinator,
+        plan,
+        || {
+            #[cfg(test)]
+            state
+                .video_clip_slot_authoritative_publish_attempts
+                .fetch_add(1, Ordering::AcqRel);
+            publish()
+        },
+    )?;
+    let mutation = ProjectHistoryMutationResult {
+        history_status: project_history_status_for_coordinator(&coordinator),
+        authority: project_authority_bundle_from_coordinator(state, &coordinator),
+    };
+    Ok((published, mutation))
+}
+
+fn validate_authoritative_video_clip_slot_runtime(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+) -> Result<(), String> {
+    reconcile_project_checkpoint_for_coordinator(state, coordinator)?;
+    ensure_project_transaction_owner_registered(state, owner_id)?;
+    ensure_project_epoch_matches(coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(coordinator)?;
+    if media_asset_prepare_authority(coordinator) != *expected_authority {
+        return Err(
+            "Project changed since this video clip slot command was issued; retry".to_string(),
+        );
+    }
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err("Project transaction is active; retry the video clip slot command".to_string());
+    }
+    ensure_project_operator_video_clip_slot_runtime_allowed(state, coordinator, owner_id)
+}
+
+fn commit_authoritative_video_clip_slot_runtime(
+    state: &AppState,
+    command_kind: VideoClipSlotAuthoritativeCommitKind,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    publish: impl FnOnce() -> Result<(), String>,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_video_clip_slot_runtime(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    let runtime_generation = state
+        .video_clip_slot_runtime_generation
+        .load(Ordering::Acquire)
+        .checked_add(1)
+        .ok_or_else(|| {
+            "Video clip slot runtime generation is exhausted; restart Syndocal".to_string()
+        })?;
+    if runtime_generation > VIDEO_CLIP_RUNTIME_GENERATION_MAX {
+        return Err(
+            "Video clip slot runtime generation is exhausted; restart Syndocal".to_string(),
+        );
+    }
+    publish()?;
+    state
+        .video_clip_slot_runtime_generation
+        .store(runtime_generation, Ordering::Release);
+    Ok(VideoClipSlotAuthoritativeRuntimeResult {
+        command_kind,
+        project_epoch: coordinator.epoch,
+        project_revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        runtime_generation,
+        runtime: state.engine.snapshot().video_clip_runtime,
+    })
+}
+
+/// Materialize the live transport portion of a previously acknowledged
+/// runtime receipt. The immutable receipt key remains the authority fence: if
+/// an authored command changed E/R/H, returning its old runtime image would
+/// roll a renderer backwards, so fail closed instead.
+fn fresh_authoritative_video_clip_slot_runtime_result(
+    state: &AppState,
+    command_kind: VideoClipSlotAuthoritativeCommitKind,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let (_external_admission, coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    ensure_project_transaction_owner_registered(state, owner_id)?;
+    if media_asset_prepare_authority(&coordinator) != *expected_authority {
+        return Err(
+            "Project changed since this video clip runtime receipt was issued; retry".to_string(),
+        );
+    }
+    Ok(VideoClipSlotAuthoritativeRuntimeResult {
+        command_kind,
+        project_epoch: coordinator.epoch,
+        project_revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        runtime_generation: state
+            .video_clip_slot_runtime_generation
+            .load(Ordering::Acquire),
+        runtime: state.engine.snapshot().video_clip_runtime,
+    })
+}
+
+/// Read current clip transport without reconciling or mutating anything. A
+/// renderer may use this while Full-locked because it is truthful observation,
+/// not a command; the supplied E/R/H must still exactly fence the result.
+fn get_video_clip_slot_runtime_impl(
+    state: &AppState,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipRuntimeReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    if coordinator.epoch != expected_epoch
+        || coordinator.revision != expected_revision
+        || coordinator.checkpoint_hash != expected_checkpoint_hash
+    {
+        return Err(
+            "Project changed since this video clip runtime read was issued; retry".to_string(),
+        );
+    }
+    Ok(VideoClipRuntimeReport {
+        project_epoch: coordinator.epoch,
+        project_revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        runtime_generation: state
+            .video_clip_slot_runtime_generation
+            .load(Ordering::Acquire),
+        runtime: state.engine.snapshot().video_clip_runtime,
+    })
 }
 
 /// Authoritative admission for a backend-owned media commit. Unlike
@@ -17854,6 +19156,1386 @@ fn get_media_asset_operation_terminal_result(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn create_video_clip_slot_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotCreateRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::Create,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        caller_binding,
+        |owner_id, authority| {
+            let slot_id = state.engine.allocate_video_clip_slot_id();
+            let slot = VideoClipSlotSummary {
+                id: slot_id,
+                media_asset_id: request.media_asset_id,
+                in_point_ms: request.in_point_ms,
+                out_point_ms: request.out_point_ms,
+                loop_mode: request.loop_mode,
+                speed: request.speed,
+                cue_points: request.cue_points.clone(),
+                launch_quantization: request.launch_quantization,
+                effect_overrides: request.effect_overrides.clone(),
+            };
+            let candidate_slot = slot.clone();
+            let (_, mutation) = commit_authoritative_video_clip_slot_authored(
+                state,
+                authority.epoch,
+                owner_id,
+                authority,
+                "Create video clip slot",
+                |snapshot| {
+                    video_clip_slot_candidate_snapshot(snapshot, |video| {
+                        create_video_clip_slot_in_candidate(
+                            video,
+                            request.layer_id,
+                            candidate_slot.clone(),
+                            request.before_slot_id,
+                            request.make_default,
+                        )
+                    })
+                },
+                || {
+                    state.engine.create_video_clip_slot_published(
+                        request.layer_id,
+                        slot,
+                        request.before_slot_id,
+                        request.make_default,
+                    )
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
+                VideoClipSlotAuthoritativeAuthoredResult {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::Create,
+                    layer_id: request.layer_id,
+                    affected_slot_ids: vec![slot_id],
+                    focus_slot_id: Some(slot_id),
+                    created_slot_ids: vec![slot_id],
+                    imported_asset_ids: Vec::new(),
+                    insertion_before_slot_id: request.before_slot_id,
+                    mutation,
+                },
+            ))
+        },
+    )?;
+    expect_video_clip_slot_authored_terminal(terminal)
+}
+
+#[tauri::command]
+fn create_video_clip_slot_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotCreateRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    create_video_clip_slot_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assign_video_clip_slot_asset_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotAssignRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::Assign,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        caller_binding,
+        |owner_id, authority| {
+            let (_, mutation) = commit_authoritative_video_clip_slot_authored(
+                state,
+                authority.epoch,
+                owner_id,
+                authority,
+                "Assign video clip slot asset",
+                |snapshot| {
+                    video_clip_slot_candidate_snapshot(snapshot, |video| {
+                        assign_video_clip_slot_asset_in_candidate(
+                            video,
+                            request.layer_id,
+                            request.slot_id,
+                            request.media_asset_id,
+                        )
+                    })
+                },
+                || {
+                    state.engine.assign_video_clip_slot_asset_published(
+                        request.layer_id,
+                        request.slot_id,
+                        request.media_asset_id,
+                    )
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
+                VideoClipSlotAuthoritativeAuthoredResult {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::Assign,
+                    layer_id: request.layer_id,
+                    affected_slot_ids: vec![request.slot_id],
+                    focus_slot_id: Some(request.slot_id),
+                    created_slot_ids: Vec::new(),
+                    imported_asset_ids: Vec::new(),
+                    insertion_before_slot_id: None,
+                    mutation,
+                },
+            ))
+        },
+    )?;
+    expect_video_clip_slot_authored_terminal(terminal)
+}
+
+#[tauri::command]
+fn assign_video_clip_slot_asset_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotAssignRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    assign_video_clip_slot_asset_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_video_clip_slot_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotUpdateRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::Update,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        caller_binding,
+        |owner_id, authority| {
+            let candidate_slot = request.slot.clone();
+            let (_, mutation) = commit_authoritative_video_clip_slot_authored(
+                state,
+                authority.epoch,
+                owner_id,
+                authority,
+                "Update video clip slot",
+                |snapshot| {
+                    video_clip_slot_candidate_snapshot(snapshot, |video| {
+                        update_video_clip_slot_in_candidate(
+                            video,
+                            request.layer_id,
+                            candidate_slot.clone(),
+                        )
+                    })
+                },
+                || {
+                    state
+                        .engine
+                        .update_video_clip_slot_published(request.layer_id, request.slot.clone())
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
+                VideoClipSlotAuthoritativeAuthoredResult {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::Update,
+                    layer_id: request.layer_id,
+                    affected_slot_ids: vec![request.slot.id],
+                    focus_slot_id: Some(request.slot.id),
+                    created_slot_ids: Vec::new(),
+                    imported_asset_ids: Vec::new(),
+                    insertion_before_slot_id: None,
+                    mutation,
+                },
+            ))
+        },
+    )?;
+    expect_video_clip_slot_authored_terminal(terminal)
+}
+
+#[tauri::command]
+fn update_video_clip_slot_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotUpdateRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    update_video_clip_slot_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn remove_video_clip_slot_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotRemoveRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::Remove,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        caller_binding,
+        |owner_id, authority| {
+            let (_, mutation) = commit_authoritative_video_clip_slot_authored(
+                state,
+                authority.epoch,
+                owner_id,
+                authority,
+                "Remove video clip slot",
+                |snapshot| {
+                    video_clip_slot_candidate_snapshot(snapshot, |video| {
+                        remove_video_clip_slot_in_candidate(
+                            video,
+                            request.layer_id,
+                            request.slot_id,
+                        )
+                    })
+                },
+                || {
+                    state
+                        .engine
+                        .remove_video_clip_slot_published(request.layer_id, request.slot_id)
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
+                VideoClipSlotAuthoritativeAuthoredResult {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::Remove,
+                    layer_id: request.layer_id,
+                    affected_slot_ids: vec![request.slot_id],
+                    focus_slot_id: None,
+                    created_slot_ids: Vec::new(),
+                    imported_asset_ids: Vec::new(),
+                    insertion_before_slot_id: None,
+                    mutation,
+                },
+            ))
+        },
+    )?;
+    expect_video_clip_slot_authored_terminal(terminal)
+}
+
+#[tauri::command]
+fn remove_video_clip_slot_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotRemoveRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    remove_video_clip_slot_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reorder_video_clip_slots_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotReorderRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::Reorder,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        caller_binding,
+        |owner_id, authority| {
+            let candidate_slot_ids = request.slot_ids.clone();
+            let (_, mutation) = commit_authoritative_video_clip_slot_authored(
+                state,
+                authority.epoch,
+                owner_id,
+                authority,
+                "Reorder video clip slots",
+                |snapshot| {
+                    video_clip_slot_candidate_snapshot(snapshot, |video| {
+                        reorder_video_clip_slots_in_candidate(
+                            video,
+                            request.layer_id,
+                            &candidate_slot_ids,
+                        )
+                    })
+                },
+                || {
+                    state.engine.reorder_video_clip_slots_published(
+                        request.layer_id,
+                        request.slot_ids.clone(),
+                    )
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
+                VideoClipSlotAuthoritativeAuthoredResult {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::Reorder,
+                    layer_id: request.layer_id,
+                    affected_slot_ids: request.slot_ids.clone(),
+                    focus_slot_id: request.slot_ids.first().copied(),
+                    created_slot_ids: Vec::new(),
+                    imported_asset_ids: Vec::new(),
+                    insertion_before_slot_id: None,
+                    mutation,
+                },
+            ))
+        },
+    )?;
+    expect_video_clip_slot_authored_terminal(terminal)
+}
+
+#[tauri::command]
+fn reorder_video_clip_slots_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotReorderRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    reorder_video_clip_slots_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn duplicate_video_clip_slot_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotDuplicateRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::Duplicate,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        caller_binding,
+        |owner_id, authority| {
+            let new_slot_id = state.engine.allocate_video_clip_slot_id();
+            let (_, mutation) = commit_authoritative_video_clip_slot_authored(
+                state,
+                authority.epoch,
+                owner_id,
+                authority,
+                "Duplicate video clip slot",
+                |snapshot| {
+                    video_clip_slot_candidate_snapshot(snapshot, |video| {
+                        duplicate_video_clip_slot_in_candidate(
+                            video,
+                            request.layer_id,
+                            request.source_slot_id,
+                            new_slot_id,
+                            request.before_slot_id,
+                        )
+                    })
+                },
+                || {
+                    state.engine.duplicate_video_clip_slot_published(
+                        request.layer_id,
+                        request.source_slot_id,
+                        new_slot_id,
+                        request.before_slot_id,
+                    )
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
+                VideoClipSlotAuthoritativeAuthoredResult {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::Duplicate,
+                    layer_id: request.layer_id,
+                    affected_slot_ids: vec![request.source_slot_id, new_slot_id],
+                    focus_slot_id: Some(new_slot_id),
+                    created_slot_ids: vec![new_slot_id],
+                    imported_asset_ids: Vec::new(),
+                    insertion_before_slot_id: request.before_slot_id,
+                    mutation,
+                },
+            ))
+        },
+    )?;
+    expect_video_clip_slot_authored_terminal(terminal)
+}
+
+#[tauri::command]
+fn duplicate_video_clip_slot_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotDuplicateRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    duplicate_video_clip_slot_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_default_video_clip_slot_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotSetDefaultRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::SetDefault,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        caller_binding,
+        |owner_id, authority| {
+            let (_, mutation) = commit_authoritative_video_clip_slot_authored(
+                state,
+                authority.epoch,
+                owner_id,
+                authority,
+                "Set default video clip slot",
+                |snapshot| {
+                    video_clip_slot_candidate_snapshot(snapshot, |video| {
+                        set_default_video_clip_slot_in_candidate(
+                            video,
+                            request.layer_id,
+                            request.slot_id,
+                        )
+                    })
+                },
+                || {
+                    state
+                        .engine
+                        .set_default_video_clip_slot_published(request.layer_id, request.slot_id)
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
+                VideoClipSlotAuthoritativeAuthoredResult {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::SetDefault,
+                    layer_id: request.layer_id,
+                    affected_slot_ids: vec![request.slot_id],
+                    focus_slot_id: Some(request.slot_id),
+                    created_slot_ids: Vec::new(),
+                    imported_asset_ids: Vec::new(),
+                    insertion_before_slot_id: None,
+                    mutation,
+                },
+            ))
+        },
+    )?;
+    expect_video_clip_slot_authored_terminal(terminal)
+}
+
+#[tauri::command]
+fn set_default_video_clip_slot_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotSetDefaultRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    set_default_video_clip_slot_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[tauri::command]
+fn get_video_clip_slot_runtime(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipRuntimeReport, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    get_video_clip_slot_runtime_impl(
+        &state,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn queue_video_clip_slot_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotQueueRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let response_binding = caller_binding.clone();
+    let expected_authority = MediaAssetPrepareAuthority {
+        epoch: expected_epoch,
+        revision: expected_revision,
+        checkpoint_hash: expected_checkpoint_hash.clone(),
+    };
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::Queue,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id.clone(),
+        caller_binding,
+        |owner_id, authority| {
+            commit_authoritative_video_clip_slot_runtime(
+                state,
+                VideoClipSlotAuthoritativeCommitKind::Queue,
+                authority.epoch,
+                owner_id,
+                authority,
+                || {
+                    state
+                        .engine
+                        .queue_video_clip_slot_published(request.layer_id, request.slot_id)
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Runtime(
+                VideoClipSlotAuthoritativeRuntimeOutcome {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::Queue,
+                },
+            ))
+        },
+    )?;
+    expect_current_video_clip_slot_runtime_terminal(
+        state,
+        &owner_id,
+        &expected_authority,
+        response_binding,
+        terminal,
+    )
+}
+
+#[tauri::command]
+fn queue_video_clip_slot_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotQueueRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    queue_video_clip_slot_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cancel_queued_video_clip_slot_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotCancelQueueRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let response_binding = caller_binding.clone();
+    let expected_authority = MediaAssetPrepareAuthority {
+        epoch: expected_epoch,
+        revision: expected_revision,
+        checkpoint_hash: expected_checkpoint_hash.clone(),
+    };
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::CancelQueue,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id.clone(),
+        caller_binding,
+        |owner_id, authority| {
+            commit_authoritative_video_clip_slot_runtime(
+                state,
+                VideoClipSlotAuthoritativeCommitKind::CancelQueue,
+                authority.epoch,
+                owner_id,
+                authority,
+                || {
+                    state
+                        .engine
+                        .cancel_queued_video_clip_slot_published(request.layer_id)
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Runtime(
+                VideoClipSlotAuthoritativeRuntimeOutcome {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::CancelQueue,
+                },
+            ))
+        },
+    )?;
+    expect_current_video_clip_slot_runtime_terminal(
+        state,
+        &owner_id,
+        &expected_authority,
+        response_binding,
+        terminal,
+    )
+}
+
+#[tauri::command]
+fn cancel_queued_video_clip_slot_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotCancelQueueRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    cancel_queued_video_clip_slot_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_video_clip_slot_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotLaunchRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let response_binding = caller_binding.clone();
+    let expected_authority = MediaAssetPrepareAuthority {
+        epoch: expected_epoch,
+        revision: expected_revision,
+        checkpoint_hash: expected_checkpoint_hash.clone(),
+    };
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::Launch,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id.clone(),
+        caller_binding,
+        |owner_id, authority| {
+            commit_authoritative_video_clip_slot_runtime(
+                state,
+                VideoClipSlotAuthoritativeCommitKind::Launch,
+                authority.epoch,
+                owner_id,
+                authority,
+                || {
+                    state
+                        .engine
+                        .launch_video_clip_slot_published(request.layer_id, request.slot_id)
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Runtime(
+                VideoClipSlotAuthoritativeRuntimeOutcome {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::Launch,
+                },
+            ))
+        },
+    )?;
+    expect_current_video_clip_slot_runtime_terminal(
+        state,
+        &owner_id,
+        &expected_authority,
+        response_binding,
+        terminal,
+    )
+}
+
+#[tauri::command]
+fn launch_video_clip_slot_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotLaunchRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    launch_video_clip_slot_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seek_video_clip_slot_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotSeekRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let response_binding = caller_binding.clone();
+    let expected_authority = MediaAssetPrepareAuthority {
+        epoch: expected_epoch,
+        revision: expected_revision,
+        checkpoint_hash: expected_checkpoint_hash.clone(),
+    };
+    let terminal = run_video_clip_slot_authoritative_operation(
+        state,
+        VideoClipSlotAuthoritativeCommitKind::Seek,
+        &request,
+        0,
+        request_id,
+        0,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id.clone(),
+        caller_binding,
+        |owner_id, authority| {
+            commit_authoritative_video_clip_slot_runtime(
+                state,
+                VideoClipSlotAuthoritativeCommitKind::Seek,
+                authority.epoch,
+                owner_id,
+                authority,
+                || {
+                    state
+                        .engine
+                        .seek_video_clip_slot_published(request.layer_id, request.position_ms)
+                },
+            )?;
+            Ok(VideoClipSlotAuthoritativeTerminalResult::Runtime(
+                VideoClipSlotAuthoritativeRuntimeOutcome {
+                    command_kind: VideoClipSlotAuthoritativeCommitKind::Seek,
+                },
+            ))
+        },
+    )?;
+    expect_current_video_clip_slot_runtime_terminal(
+        state,
+        &owner_id,
+        &expected_authority,
+        response_binding,
+        terminal,
+    )
+}
+
+#[tauri::command]
+fn seek_video_clip_slot_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotSeekRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    seek_video_clip_slot_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn import_and_assign_video_clip_slots_authoritative_command_impl(
+    state: &AppState,
+    request: VideoClipSlotImportAndAssignRequest,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let normalized_owner_id = normalize_project_transaction_owner_id(owner_id.clone())?;
+    ensure_project_transaction_owner_registered(state, &normalized_owner_id)?;
+    let rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding =
+        resolve_video_clip_slot_caller_binding(state, &normalized_owner_id, caller_binding)?;
+    let operation_key = video_clip_slot_authoritative_operation_key(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash.clone(),
+    )?;
+    state
+        .media_asset_operations
+        .ensure_video_clip_slot_authoritative_key_not_retired(&operation_key)?;
+    let retry_shape = video_clip_slot_authoritative_shape(
+        VideoClipSlotAuthoritativeCommitKind::ImportAndAssign,
+        &request,
+    )?;
+    // A reply-loss retry must recover the recorded terminal result after the
+    // finalized prepared handle has been released. It still compares the exact
+    // target/anchor/default shape before returning that result.
+    if let Some(record) = state
+        .media_asset_operations
+        .video_clip_slot_authoritative_receipt(&operation_key)
+    {
+        if record.shape.kind != VideoClipSlotAuthoritativeCommitKind::ImportAndAssign
+            || record.shape.retry_fingerprint != retry_shape.fingerprint
+        {
+            return Err(format!(
+                "Video clip slot operation already completed as {:?} with shape {}; query its canonical terminal result instead of republishing",
+                record.shape.kind, record.shape.fingerprint
+            ));
+        }
+        return expect_video_clip_slot_authored_terminal(record.terminal);
+    }
+    let prepared = state.media_asset_operations.prepared_exact(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &normalized_owner_id,
+    )?;
+    drop(rotation);
+    let mut prepared_assets = prepared.assets.clone();
+    prepared_assets.sort_by_key(|asset| asset.input_index);
+    if prepared_assets
+        .windows(2)
+        .any(|pair| pair[0].input_index == pair[1].input_index)
+    {
+        return Err("Prepared direct-drop media input order is not unique".to_string());
+    }
+    let shape = VideoClipSlotDirectDropShape {
+        request: request.clone(),
+        prepared_import_token,
+        operation_generation,
+        prepared_identities: prepared_assets
+            .iter()
+            .map(|asset| VideoClipSlotPreparedImportIdentity {
+                input_index: asset.input_index,
+                label: asset.label.clone(),
+                source: asset.source.clone(),
+                content_hash: asset.content_hash.clone(),
+                byte_size: asset.byte_size,
+            })
+            .collect(),
+    };
+    let full_shape = video_clip_slot_authoritative_shape_with_retry(
+        VideoClipSlotAuthoritativeCommitKind::ImportAndAssign,
+        &shape,
+        &request,
+    )?;
+    let terminal = run_video_clip_slot_authoritative_operation_with_shape(
+        state,
+        full_shape,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+        |owner_id, authority| {
+            require_legacy_prepared_media_all_or_nothing(
+                &prepared,
+                "Import and assign video clip slots",
+            )?;
+            if prepared_assets.is_empty() {
+                return Err(
+                    "Direct video clip slot drop contains no prepared local media".to_string(),
+                );
+            }
+            verify_authoritative_prepared_import(
+                state,
+                &prepared,
+                authority.epoch,
+                owner_id,
+                authority,
+                None,
+            )?;
+            let finalized_source_refs = prepared
+                .finalized_sources
+                .as_ref()
+                .ok_or_else(|| {
+                    "Prepared direct-drop media must be finalized before committing".to_string()
+                })?
+                .iter()
+                .collect::<Vec<_>>();
+            let engine_candidate = Arc::new(Mutex::new(None));
+            let created_slot_ids = Arc::new(Mutex::new(Vec::with_capacity(prepared_assets.len())));
+            let imported_asset_ids =
+                Arc::new(Mutex::new(Vec::with_capacity(prepared_assets.len())));
+            let candidate_for_preflight = Arc::clone(&engine_candidate);
+            let created_ids_for_preflight = Arc::clone(&created_slot_ids);
+            let imported_ids_for_preflight = Arc::clone(&imported_asset_ids);
+            let candidate_for_publish = Arc::clone(&engine_candidate);
+            let commit = commit_authoritative_video_clip_slot_authored(
+                state,
+                authority.epoch,
+                owner_id,
+                authority,
+                "Import and assign video clip slots",
+                |snapshot| {
+                    let (asset_candidate, import_results) =
+                        build_media_asset_catalog_import_candidate(
+                            media_asset_catalog_for_snapshot(&snapshot),
+                            &prepared_assets,
+                            || state.engine.allocate_media_asset_id(),
+                        );
+                    let mut imported_asset_ids = import_results
+                        .into_iter()
+                        .map(|(input_index, _, asset_id)| (input_index, asset_id))
+                        .collect::<HashMap<_, _>>();
+                    let mut candidate = VideoClipSlotImportAndAssignCandidate {
+                        assets: asset_candidate.assets,
+                        assignments: Vec::with_capacity(prepared_assets.len()),
+                    };
+                    for (index, asset) in prepared_assets.iter().enumerate() {
+                        let media_asset_id = imported_asset_ids
+                            .remove(&asset.input_index)
+                            .ok_or_else(|| {
+                                "Direct video clip slot drop lost a prepared asset identity"
+                                    .to_string()
+                            })?;
+                        imported_ids_for_preflight
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(media_asset_id);
+                        let slot_id = state.engine.allocate_video_clip_slot_id();
+                        created_ids_for_preflight
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(slot_id);
+                        candidate.assignments.push(VideoClipSlotImportAssignment {
+                            layer_id: request.target_layer_id,
+                            slot: VideoClipSlotSummary {
+                                id: slot_id,
+                                media_asset_id,
+                                in_point_ms: 0,
+                                out_point_ms: None,
+                                loop_mode: Default::default(),
+                                speed: 1.0,
+                                cue_points: Vec::new(),
+                                launch_quantization: Default::default(),
+                                effect_overrides: Vec::new(),
+                            },
+                            // Reusing the same anchor preserves the prepared
+                            // input order because each later insert sees the
+                            // earlier one already ahead of that anchor.
+                            before_slot_id: request.before_slot_id,
+                            make_default: request.make_default && index == 0,
+                        });
+                    }
+                    let persistence_candidate = candidate.clone();
+                    *candidate_for_preflight.lock().map_err(|_| {
+                        "Direct video clip slot candidate lock was poisoned".to_string()
+                    })? = Some(candidate);
+                    // Keep the engine payload for the single definitive ACK;
+                    // candidate construction is fully completed before it.
+                    video_clip_slot_candidate_snapshot(snapshot, |video| {
+                        import_and_assign_video_clip_slots_in_candidate(
+                            video,
+                            &persistence_candidate,
+                        )
+                    })
+                },
+                || {
+                    match prepared.admission.try_admit() {
+                        Ok(MediaAssetCommitAdmission::Admitted) => {}
+                        Ok(MediaAssetCommitAdmission::AlreadyAdmitted) => return Err(
+                            "Direct video clip slot import was already committed; query its terminal result"
+                                .to_string(),
+                        ),
+                        Err(()) => {
+                            return Err("Direct video clip slot import was cancelled".to_string())
+                        }
+                    }
+                    ensure_finalized_local_media_sources_current(&finalized_source_refs)?;
+                    state.engine.import_and_assign_video_clip_slots_published(
+                        candidate_for_publish
+                            .lock()
+                            .map_err(|_| {
+                                "Direct video clip slot candidate lock was poisoned".to_string()
+                            })?
+                            .take()
+                            .ok_or_else(|| {
+                                "Direct video clip slot candidate preflight was not completed"
+                                    .to_string()
+                            })?,
+                    )
+                },
+            );
+            match commit {
+                Ok((_, mutation)) => {
+                    // The result cells were fully populated by candidate
+                    // preflight. This recovery-only read cannot turn a
+                    // definitive engine ACK/history B into a false Failure.
+                    let (created_slot_ids, imported_asset_ids) = video_clip_slot_direct_result_ids(
+                        created_slot_ids.as_ref(),
+                        imported_asset_ids.as_ref(),
+                    );
+                    let focus_slot_id = created_slot_ids.first().copied();
+                    Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
+                        VideoClipSlotAuthoritativeAuthoredResult {
+                            command_kind: VideoClipSlotAuthoritativeCommitKind::ImportAndAssign,
+                            layer_id: request.target_layer_id,
+                            affected_slot_ids: created_slot_ids.clone(),
+                            focus_slot_id,
+                            created_slot_ids,
+                            imported_asset_ids,
+                            insertion_before_slot_id: request.before_slot_id,
+                            mutation,
+                        },
+                    ))
+                }
+                Err(error) if prepared.admission.is_admitted() => {
+                    Ok(VideoClipSlotAuthoritativeTerminalResult::Failure(
+                        VideoClipSlotAuthoritativeFailureResult { message: error },
+                    ))
+                }
+                Err(error) => Err(error),
+            }
+        },
+    )?;
+    state.media_asset_operations.consume_prepared_after_commit(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &normalized_owner_id,
+    );
+    expect_video_clip_slot_authored_terminal(terminal)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn import_and_assign_video_clip_slots_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoClipSlotImportAndAssignRequest,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    import_and_assign_video_clip_slots_authoritative_command_impl(
+        &state,
+        request,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn get_video_clip_slot_operation_terminal_result_impl(
+    state: &AppState,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<Option<VideoClipSlotAuthoritativeTerminalEnvelope>, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let key = video_clip_slot_authoritative_operation_key(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    state
+        .media_asset_operations
+        .ensure_video_clip_slot_authoritative_key_not_retired(&key)?;
+    let Some(record) = state
+        .media_asset_operations
+        .video_clip_slot_authoritative_receipt(&key)
+    else {
+        return Ok(None);
+    };
+    // Runtime receipts are outcome identities, not snapshots. Querying one
+    // must return the current transport truth under the exact original E/R/H
+    // fence; a later authored authority yields a stale reject instead.
+    let runtime = match &record.terminal {
+        VideoClipSlotAuthoritativeTerminalResult::Runtime(outcome) => {
+            Some(fresh_authoritative_video_clip_slot_runtime_result(
+                state,
+                outcome.command_kind,
+                &owner_id,
+                &video_clip_slot_authoritative_expected_authority(&key),
+            )?)
+        }
+        _ => None,
+    };
+    Ok(Some(VideoClipSlotAuthoritativeTerminalEnvelope {
+        command_kind: record.shape.kind,
+        shape_fingerprint: record.shape.fingerprint,
+        terminal: record.terminal,
+        runtime,
+    }))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn get_video_clip_slot_operation_terminal_result(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<Option<VideoClipSlotAuthoritativeTerminalEnvelope>, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    get_video_clip_slot_operation_terminal_result_impl(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
 fn commit_prepared_media_asset_relink_authoritative_impl(
     state: &AppState,
     prepared_relink_token: u64,
@@ -18112,6 +20794,7 @@ fn commit_prepared_media_asset_layers_authoritative(
                     &labels,
                     || state.engine.allocate_media_asset_id(),
                     || state.engine.allocate_video_layer_id(),
+                    || state.engine.allocate_video_clip_slot_id(),
                 )?;
                 if bootstrap {
                     let output_id = state.engine.allocate_video_output_id();
@@ -19292,6 +21975,7 @@ fn add_video_input_layer(
     )?;
     let layer_id = state.engine.allocate_video_layer_id();
     let asset_id = state.engine.allocate_media_asset_id();
+    let clip_slot_id = state.engine.allocate_video_clip_slot_id();
     state
         .engine
         .media_asset_transaction_published(MediaAssetTransaction::Import(
@@ -19311,6 +21995,18 @@ fn add_video_input_layer(
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
                     isf_effect: None,
+                    clip_slots: vec![VideoClipSlotSummary {
+                        id: clip_slot_id,
+                        media_asset_id: asset_id,
+                        in_point_ms: 0,
+                        out_point_ms: None,
+                        loop_mode: Default::default(),
+                        speed: 1.0,
+                        cue_points: Vec::new(),
+                        launch_quantization: Default::default(),
+                        effect_overrides: Vec::new(),
+                    }],
+                    default_clip_slot_id: Some(clip_slot_id),
                 }],
             },
         ))?;
@@ -24373,6 +27069,31 @@ fn project_operator_sessions_allow_authoritative_mutation(
     ))
 }
 
+/// Runtime slot transport deliberately remains available during Partial Lock:
+/// it neither changes authored bytes nor history. Full Lock remains an
+/// operator safety fence for both authoring and performance commands.
+fn ensure_project_operator_video_clip_slot_runtime_allowed(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+    owner_id: &str,
+) -> Result<(), String> {
+    let mut sessions = state
+        .project_operator_sessions
+        .lock()
+        .map_err(|_| "Project operator session registry lock was poisoned".to_string())?;
+    let Some(session) = project_operator_session_for_policy(&mut sessions, coordinator, owner_id)
+    else {
+        return Ok(());
+    };
+    if session.unlocked || session.policy.lock_mode == OperatorLockMode::Partial {
+        return Ok(());
+    }
+    Err(
+        "Operator Full Lock blocks video clip slot runtime commands for this renderer session"
+            .to_string(),
+    )
+}
+
 #[tauri::command]
 fn lock_project_operator_session(
     state: State<'_, AppState>,
@@ -25809,6 +28530,116 @@ fn ensure_project_transaction_owner_registered(
     }
 }
 
+/// Bind untrusted B3 IPC to the *calling* WebView, not merely to any window
+/// which happens to have registered the supplied owner string. This check is
+/// deliberately performed before terminal receipt lookup: otherwise pane B
+/// could replay pane A's unlocked result while B itself is Full-locked.
+fn capture_video_clip_slot_caller_binding_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    owner_id: &str,
+) -> Result<VideoClipSlotCallerBinding, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id.to_string())?;
+    let owners = state
+        .project_transaction_owners
+        .lock()
+        .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+    let incarnations = state
+        .project_transaction_owner_incarnations
+        .lock()
+        .map_err(|_| {
+            "Project transaction owner incarnation registry lock was poisoned".to_string()
+        })?;
+    if owners.get(window_label) != Some(&owner_id) {
+        return Err(
+            "Video clip slot IPC owner does not match the invoking renderer window".to_string(),
+        );
+    }
+    let incarnation = incarnations.get(window_label).copied().ok_or_else(|| {
+        "Video clip slot IPC renderer incarnation is no longer registered".to_string()
+    })?;
+    Ok(VideoClipSlotCallerBinding {
+        window_label: window_label.to_string(),
+        owner_id,
+        incarnation,
+    })
+}
+
+fn ensure_video_clip_slot_caller_binding_current(
+    state: &AppState,
+    binding: &VideoClipSlotCallerBinding,
+) -> Result<(), String> {
+    let owners = state
+        .project_transaction_owners
+        .lock()
+        .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+    let incarnations = state
+        .project_transaction_owner_incarnations
+        .lock()
+        .map_err(|_| {
+            "Project transaction owner incarnation registry lock was poisoned".to_string()
+        })?;
+    if owners.get(&binding.window_label) == Some(&binding.owner_id)
+        && incarnations.get(&binding.window_label) == Some(&binding.incarnation)
+    {
+        Ok(())
+    } else {
+        Err(
+            "Video clip slot IPC renderer incarnation changed; retry from the current window"
+                .to_string(),
+        )
+    }
+}
+
+fn resolve_video_clip_slot_caller_binding(
+    state: &AppState,
+    owner_id: &str,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoClipSlotCallerBinding, String> {
+    let binding = match caller_binding {
+        Some(binding) => binding,
+        None => {
+            let owners = state
+                .project_transaction_owners
+                .lock()
+                .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+            let window_label = owners
+                .iter()
+                .find_map(|(label, candidate)| (candidate == owner_id).then_some(label.clone()))
+                .ok_or_else(|| {
+                    "Project transaction renderer session is no longer registered".to_string()
+                })?;
+            drop(owners);
+            capture_video_clip_slot_caller_binding_for_window_label(state, &window_label, owner_id)?
+        }
+    };
+    if binding.owner_id != owner_id {
+        return Err(
+            "Video clip slot caller binding owner does not match the operation owner".to_string(),
+        );
+    }
+    ensure_video_clip_slot_caller_binding_current(state, &binding)?;
+    Ok(binding)
+}
+
+fn allocate_project_transaction_owner_incarnation(state: &AppState) -> Result<u64, String> {
+    let mut incarnation = state
+        .next_project_transaction_owner_incarnation
+        .load(Ordering::Acquire);
+    loop {
+        let next = incarnation.checked_add(1).ok_or_else(|| {
+            "Project transaction owner incarnation space is exhausted; restart Syndocal".to_string()
+        })?;
+        match state
+            .next_project_transaction_owner_incarnation
+            .compare_exchange_weak(incarnation, next, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => return Ok(next),
+            Err(actual) => incarnation = actual,
+        }
+    }
+}
+
 /// Old media IPC has no owner argument. Derive it only from the concrete
 /// invoking WebView's registered generation; accepting a caller-supplied
 /// string here would let raw IPC impersonate another renderer's Operator
@@ -25971,6 +28802,10 @@ fn register_project_transaction_owner(
     owner_id: String,
 ) -> Result<Option<ProjectHistoryMutationResult>, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let _owner_rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
     let _external_admission = lock_project_external_command_admission(&state)?;
     let mut coordinator = lock_project_coordinator(&state)?;
     let mut owners = state
@@ -25979,6 +28814,20 @@ fn register_project_transaction_owner(
         .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
     ensure_project_transaction_owner_unique_to_window(&owners, window.label(), &owner_id)?;
     let retired_preview_owner = owners.get(window.label()).cloned();
+    let same_incarnation = retired_preview_owner.as_deref() == Some(owner_id.as_str());
+    let mut incarnations = state
+        .project_transaction_owner_incarnations
+        .lock()
+        .map_err(|_| {
+            "Project transaction owner incarnation registry lock was poisoned".to_string()
+        })?;
+    let next_incarnation = if same_incarnation {
+        incarnations.get(window.label()).copied().ok_or_else(|| {
+            "Registered project owner is missing its backend incarnation".to_string()
+        })?
+    } else {
+        allocate_project_transaction_owner_incarnation(&state)?
+    };
     // Hold both registries through recovery and the owner/session handoff. The
     // external-admission and coordinator locks already exclude concurrent
     // operator mutations; taking owners before sessions is the only nested
@@ -26006,7 +28855,9 @@ fn register_project_transaction_owner(
             cancel_pending_project_transaction_locked(&state, coordinator, pending).map(Some)
         },
     )?;
+    incarnations.insert(window.label().to_string(), next_incarnation);
     drop(sessions);
+    drop(incarnations);
     drop(owners);
     drop(coordinator);
     if retired_preview_owner.as_deref() != Some(owner_id.as_str()) {
@@ -26014,6 +28865,9 @@ fn register_project_transaction_owner(
             state
                 .media_asset_operations
                 .purge_preview_sessions_for_owner(retired_owner);
+            state
+                .media_asset_operations
+                .purge_video_clip_slot_authoritative_for_owner(retired_owner);
         }
     }
     Ok(recovered)
@@ -26061,6 +28915,10 @@ fn retire_project_transaction_owner_for_window(
     state: &AppState,
     window_label: &str,
 ) -> Result<Option<ProjectHistoryMutationResult>, String> {
+    let _owner_rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
     let mut owners = state
@@ -26068,6 +28926,12 @@ fn retire_project_transaction_owner_for_window(
         .lock()
         .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
     let retired_preview_owner = owners.get(window_label).cloned();
+    let mut incarnations = state
+        .project_transaction_owner_incarnations
+        .lock()
+        .map_err(|_| {
+            "Project transaction owner incarnation registry lock was poisoned".to_string()
+        })?;
     // Match registration's atomic owner/session boundary. In particular, an
     // orphan cancellation failure must leave its previous session available
     // under the still-registered owner instead of orphaning its lock state.
@@ -26093,13 +28957,18 @@ fn retire_project_transaction_owner_for_window(
             cancel_pending_project_transaction_locked(state, coordinator, pending).map(Some)
         },
     )?;
+    incarnations.remove(window_label);
     drop(sessions);
+    drop(incarnations);
     drop(owners);
     drop(coordinator);
     if let Some(retired_owner) = retired_preview_owner.as_deref() {
         state
             .media_asset_operations
             .purge_preview_sessions_for_owner(retired_owner);
+        state
+            .media_asset_operations
+            .purge_video_clip_slot_authoritative_for_owner(retired_owner);
     }
     Ok(recovered)
 }
@@ -29710,6 +32579,8 @@ fn prepare_project_load(
     // successful load installs an engine-ready catalog, while merely opening
     // the original source file never writes migration fields back to disk.
     normalize_legacy_video_media_assets(&mut project.snapshot.video)?;
+    normalize_legacy_video_clip_slots(&mut project.snapshot.video)?;
+    validate_engine_ready_video_clip_slots(&project.snapshot.video)?;
     normalize_project_timeline_layers(&mut project.snapshot);
     clear_runtime_programmer_state(&mut project.snapshot);
     reconcile_project_fixture_groups(&mut project)?;
@@ -37576,6 +40447,8 @@ fn media_asset_thumbnail_snapshot(
             ..VideoLayerState::default()
         },
         isf_effect: None,
+        clip_slots: Vec::new(),
+        default_clip_slot_id: None,
     });
     snapshot
 }
@@ -38428,6 +41301,8 @@ mod vj_preview_transport_tests {
                 ..VideoLayerState::default()
             },
             isf_effect: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
         }
     }
 
@@ -43860,7 +46735,7 @@ fn curl_binary_name() -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 
@@ -43923,10 +46798,10 @@ mod tests {
         env::temp_dir().join(format!("syndocal-{label}-{}-{nonce}", std::process::id()))
     }
 
-    const MEDIA_ASSET_A6_OWNER: &str = "renderer:media-asset-a6";
+    pub(crate) const MEDIA_ASSET_A6_OWNER: &str = "renderer:media-asset-a6";
 
     #[derive(Clone)]
-    struct MediaAssetA6CommandIdentity {
+    pub(crate) struct MediaAssetA6CommandIdentity {
         prepared_token: u64,
         request_id: u64,
         operation_generation: u64,
@@ -43934,16 +46809,16 @@ mod tests {
     }
 
     #[derive(Clone, Copy)]
-    struct MediaAssetA6CommandMutationBaseline {
-        revision: u64,
-        history_generation: u64,
-        undo_len: usize,
-        next_transaction_id: u64,
-        publication_generation: u64,
+    pub(crate) struct MediaAssetA6CommandMutationBaseline {
+        pub(crate) revision: u64,
+        pub(crate) history_generation: u64,
+        pub(crate) undo_len: usize,
+        pub(crate) next_transaction_id: u64,
+        pub(crate) publication_generation: u64,
     }
 
     impl MediaAssetA6CommandIdentity {
-        fn arguments(&self) -> (u64, u64, u64, u64, u64, String, String) {
+        pub(crate) fn arguments(&self) -> (u64, u64, u64, u64, u64, String, String) {
             (
                 self.prepared_token,
                 self.request_id,
@@ -43960,13 +46835,13 @@ mod tests {
     /// EngineHandle and stages real local files through the production prepare
     /// and finalization paths; only the surrounding Tauri State extraction is
     /// bypassed by the private command-body seam.
-    struct MediaAssetA6CommandHarness {
-        state: Arc<AppState>,
+    pub(crate) struct MediaAssetA6CommandHarness {
+        pub(crate) state: Arc<AppState>,
         directory: PathBuf,
     }
 
     impl MediaAssetA6CommandHarness {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let directory = unique_test_directory("media-asset-a6-command");
             fs::create_dir_all(&directory).expect("create Media Asset A6 fixture directory");
 
@@ -44014,6 +46889,7 @@ mod tests {
                 media_asset_operations: Arc::new(MediaAssetOperationRegistry::default()),
                 media_asset_reaper: Mutex::new(None),
                 media_asset_authoritative_publish_attempts: AtomicU64::new(0),
+                video_clip_slot_authoritative_publish_attempts: AtomicU64::new(0),
                 media_audio,
                 program_audio_handoff: Arc::clone(&program_audio_handoff),
                 _media_audio_sync: MediaAudioSyncRuntime::idle_for_tests(program_audio_handoff),
@@ -44066,7 +46942,14 @@ mod tests {
                     "media-asset-a6".to_string(),
                     MEDIA_ASSET_A6_OWNER.to_string(),
                 )])),
+                project_transaction_owner_incarnations: Mutex::new(HashMap::from([(
+                    "media-asset-a6".to_string(),
+                    1,
+                )])),
+                next_project_transaction_owner_incarnation: AtomicU64::new(1),
+                project_transaction_owner_rotation: Mutex::new(()),
                 project_operator_sessions: Mutex::new(HashMap::new()),
+                video_clip_slot_runtime_generation: AtomicU64::new(0),
                 project_external_command_admission: Arc::new(
                     ProjectExternalCommandAdmission::default(),
                 ),
@@ -44081,7 +46964,7 @@ mod tests {
             Self { state, directory }
         }
 
-        fn local_media_path(&self, stem: &str, kind: VideoSourceKind) -> String {
+        pub(crate) fn local_media_path(&self, stem: &str, kind: VideoSourceKind) -> String {
             let path = match kind {
                 VideoSourceKind::File => self.directory.join(format!("{stem}.mp4")),
                 VideoSourceKind::StillImage => self.directory.join(format!("{stem}.png")),
@@ -44131,7 +47014,7 @@ mod tests {
             path.to_string_lossy().into_owned()
         }
 
-        fn authority(&self) -> MediaAssetPrepareAuthority {
+        pub(crate) fn authority(&self) -> MediaAssetPrepareAuthority {
             let expected_epoch = self
                 .state
                 .project_coordinator
@@ -44150,7 +47033,7 @@ mod tests {
             .expect("capture reconciled Media Asset A6 authority")
         }
 
-        fn stage_import(
+        pub(crate) fn stage_import(
             &self,
             request_id: u64,
             kind: VideoSourceKind,
@@ -44300,7 +47183,7 @@ mod tests {
             )
         }
 
-        fn mutation_baseline(&self) -> MediaAssetA6CommandMutationBaseline {
+        pub(crate) fn mutation_baseline(&self) -> MediaAssetA6CommandMutationBaseline {
             let coordinator = self
                 .state
                 .project_coordinator
@@ -44399,7 +47282,7 @@ mod tests {
             .collect()
     }
 
-    fn assert_media_asset_a6_same_terminal<T: Serialize>(first: &T, second: &T) {
+    pub(crate) fn assert_media_asset_a6_same_terminal<T: Serialize>(first: &T, second: &T) {
         assert_eq!(
             serde_json::to_value(first).expect("serialize first terminal result"),
             serde_json::to_value(second).expect("serialize second terminal result"),
@@ -45808,6 +48691,18 @@ mod tests {
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
+            clip_slots: vec![VideoClipSlotSummary {
+                id: VideoClipSlotId(52),
+                media_asset_id: asset.id,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: Default::default(),
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: Default::default(),
+                effect_overrides: Vec::new(),
+            }],
+            default_clip_slot_id: Some(VideoClipSlotId(52)),
         };
 
         let catalog = media_asset_transaction_candidate_snapshot(
@@ -45912,6 +48807,7 @@ mod tests {
 
         let asset_id = engine.allocate_media_asset_id();
         let layer_id = engine.allocate_video_layer_id();
+        let clip_slot_id = engine.allocate_video_clip_slot_id();
         let asset = MediaAssetSummary {
             id: asset_id,
             label: "Real import".to_string(),
@@ -45927,6 +48823,18 @@ mod tests {
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
+            clip_slots: vec![VideoClipSlotSummary {
+                id: clip_slot_id,
+                media_asset_id: asset_id,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: Default::default(),
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: Default::default(),
+                effect_overrides: Vec::new(),
+            }],
+            default_clip_slot_id: Some(clip_slot_id),
         };
         let transaction = MediaAssetTransaction::Import(MediaAssetImportCandidate {
             assets: vec![asset],
@@ -45972,6 +48880,7 @@ mod tests {
 
         let asset_id = engine.allocate_media_asset_id();
         let layer_id = engine.allocate_video_layer_id();
+        let clip_slot_id = engine.allocate_video_clip_slot_id();
         let output_id = engine.allocate_video_output_id();
         let asset = MediaAssetSummary {
             id: asset_id,
@@ -45988,6 +48897,18 @@ mod tests {
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
+            clip_slots: vec![VideoClipSlotSummary {
+                id: clip_slot_id,
+                media_asset_id: asset_id,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: Default::default(),
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: Default::default(),
+                effect_overrides: Vec::new(),
+            }],
+            default_clip_slot_id: Some(clip_slot_id),
         };
         let transaction = MediaAssetTransaction::BootstrapVjShow {
             candidate: MediaAssetImportCandidate {
@@ -46063,6 +48984,8 @@ mod tests {
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
                     isf_effect: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                 }],
             },
             output: safe_first_run_vj_output(engine.allocate_video_output_id()),
@@ -48140,6 +51063,8 @@ mod tests {
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
         });
         let target = legacy_media_asset_refresh_target(&snapshot, 7).unwrap();
         assert_eq!(target.asset_id, 41);
@@ -48171,6 +51096,18 @@ mod tests {
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
                 isf_effect: None,
+                clip_slots: vec![VideoClipSlotSummary {
+                    id: VideoClipSlotId(layer_id),
+                    media_asset_id: original.id,
+                    in_point_ms: 0,
+                    out_point_ms: None,
+                    loop_mode: Default::default(),
+                    speed: 1.0,
+                    cue_points: Vec::new(),
+                    launch_quantization: Default::default(),
+                    effect_overrides: Vec::new(),
+                }],
+                default_clip_slot_id: Some(VideoClipSlotId(layer_id)),
             });
         }
         let mut refreshed = original.clone();
@@ -51799,7 +54736,7 @@ mod tests {
         assert!(prepared.mappings.osc_mappings.is_empty());
     }
 
-    fn sample_operator_policy() -> OperatorPolicy {
+    pub(crate) fn sample_operator_policy() -> OperatorPolicy {
         OperatorPolicy {
             lock_mode: protocol::OperatorLockMode::Partial,
             lock_on_load: true,
@@ -55807,6 +58744,8 @@ f 1 2 3
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
         };
 
         assert_eq!(expected_video_preview_queue_len(&layer, 0), 1);
@@ -55872,6 +58811,8 @@ f 1 2 3
                         ..VideoLayerState::default()
                     },
                     isf_effect: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                 },
                 VideoLayerSummary {
                     id: 3,
@@ -55887,6 +58828,8 @@ f 1 2 3
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
                     isf_effect: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                 },
             ],
             media_assets: Vec::new(),
@@ -58142,6 +61085,8 @@ f 1 2 3
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
         }
     }
 
@@ -67685,11 +70630,1275 @@ mod live_audio_input_tests {
         assert!(recover_live_audio_input_status(&status, &safety));
         assert!(status.lock().unwrap().last_error.is_none());
     }
+
+    #[cfg(test)]
+    use tests::{
+        assert_media_asset_a6_same_terminal, sample_operator_policy, MediaAssetA6CommandHarness,
+        MediaAssetA6CommandMutationBaseline, MEDIA_ASSET_A6_OWNER,
+    };
+
+    /// Seed an engine-ready B1/T2 layer through the same single EngineHandle
+    /// media transaction that production uses. B3 command tests deliberately
+    /// avoid fabricated snapshots so their persistence/hash/history assertions
+    /// cover the actual backend authority bridge.
+    fn seed_video_clip_slot_layer(
+        harness: &MediaAssetA6CommandHarness,
+    ) -> (VideoLayerId, MediaAssetId, MediaAssetId, VideoClipSlotId) {
+        let path = harness.local_media_path("b3-seed", VideoSourceKind::File);
+        let cancel = AtomicBool::new(false);
+        let (prepared, _) =
+            prepare_local_media_asset_batch(VideoSourceKind::File, vec![path], &cancel)
+                .expect("prepare B3 seed media");
+        let prepared = prepared.into_iter().next().expect("B3 seed media exists");
+        let layer_id = harness.state.engine.allocate_video_layer_id();
+        let asset_id = harness.state.engine.allocate_media_asset_id();
+        let alternate_asset_id = harness.state.engine.allocate_media_asset_id();
+        let slot_id = harness.state.engine.allocate_video_clip_slot_id();
+        let source = prepared.source.clone();
+        harness
+            .state
+            .engine
+            .media_asset_transaction_published(MediaAssetTransaction::Import(
+                MediaAssetImportCandidate {
+                    assets: vec![
+                        MediaAssetSummary {
+                            id: asset_id,
+                            label: "B3 seed media".to_string(),
+                            source: source.clone(),
+                            content_hash: Some(prepared.content_hash.clone()),
+                            byte_size: Some(prepared.byte_size),
+                        },
+                        MediaAssetSummary {
+                            id: alternate_asset_id,
+                            label: "B3 alternate media".to_string(),
+                            source: source.clone(),
+                            content_hash: Some(prepared.content_hash),
+                            byte_size: Some(prepared.byte_size),
+                        },
+                    ],
+                    layers: vec![protocol::VideoLayerSummary {
+                        id: layer_id,
+                        label: "B3 seed layer".to_string(),
+                        source,
+                        media_asset_id: Some(asset_id),
+                        blend_mode: VideoBlendMode::Normal,
+                        state: VideoLayerState::default(),
+                        isf_effect: None,
+                        clip_slots: vec![VideoClipSlotSummary {
+                            id: slot_id,
+                            media_asset_id: asset_id,
+                            in_point_ms: 0,
+                            out_point_ms: None,
+                            loop_mode: Default::default(),
+                            // A stopped active source gives the direct-import
+                            // regression a deterministic playhead: the test
+                            // can prove import-and-assign preserves runtime
+                            // truth without racing the normal frame clock.
+                            speed: 0.0,
+                            cue_points: Vec::new(),
+                            launch_quantization: Default::default(),
+                            effect_overrides: Vec::new(),
+                        }],
+                        default_clip_slot_id: Some(slot_id),
+                    }],
+                },
+            ))
+            .expect("seed B3 engine-ready layer");
+        *harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("reset B3 coordinator after seed") =
+            project_coordinator_for_initial_snapshot(harness.state.engine.snapshot());
+        (layer_id, asset_id, alternate_asset_id, slot_id)
+    }
+
+    fn b3_authority_arguments(harness: &MediaAssetA6CommandHarness) -> (u64, u64, String) {
+        let authority = harness.authority();
+        (
+            authority.epoch,
+            authority.revision,
+            authority.checkpoint_hash,
+        )
+    }
+
+    fn b3_assert_authored_mutation_count(
+        harness: &MediaAssetA6CommandHarness,
+        baseline: MediaAssetA6CommandMutationBaseline,
+        expected: u64,
+    ) {
+        assert_eq!(
+            harness
+                .state
+                .video_clip_slot_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            expected,
+            "only first delivery of each authored request publishes"
+        );
+        let coordinator = harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("B3 coordinator after authored commands");
+        assert_eq!(coordinator.revision, baseline.revision + expected);
+        assert_eq!(
+            coordinator.history_generation,
+            baseline.history_generation + expected
+        );
+        assert_eq!(
+            coordinator.history.undo.len(),
+            baseline.undo_len + expected as usize
+        );
+        assert_eq!(
+            coordinator.publication_generation,
+            baseline.publication_generation + expected
+        );
+        assert!(coordinator.history.pending.is_empty());
+    }
+
+    fn b3_persistence_hash(harness: &MediaAssetA6CommandHarness) -> String {
+        let snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("B3 persistence snapshot");
+        let coordinator = harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("B3 persistence coordinator");
+        project_checkpoint_hash(
+            &project_file_for_save_from_parts(snapshot, &coordinator.ancillary),
+            &coordinator.mappings,
+        )
+        .expect("hash B3 persisted project")
+    }
+
+    fn b3_assert_authority_matches_persistence(harness: &MediaAssetA6CommandHarness) {
+        let persistence_hash = b3_persistence_hash(harness);
+        let coordinator = harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("B3 authoritative coordinator");
+        assert_eq!(
+            coordinator.checkpoint_hash, persistence_hash,
+            "the backend candidate B hash must exactly equal engine persistence before the next command"
+        );
+    }
+
+    #[test]
+    fn video_clip_slot_b3_authored_commands_use_one_ack_history_and_exact_retry() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, asset_id, alternate_asset_id, original_slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let baseline = harness.mutation_baseline();
+        let caller_binding = capture_video_clip_slot_caller_binding_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect("capture stable authored B3 incarnation");
+        let create = VideoClipSlotCreateRequest {
+            layer_id,
+            media_asset_id: asset_id,
+            in_point_ms: 12,
+            out_point_ms: Some(120),
+            loop_mode: Default::default(),
+            speed: 1.0,
+            cue_points: Vec::new(),
+            launch_quantization: Default::default(),
+            effect_overrides: Vec::new(),
+            before_slot_id: Some(original_slot_id),
+            make_default: false,
+        };
+        let created = create_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            create.clone(),
+            83_101,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(caller_binding.clone()),
+        )
+        .expect("create clip slot through B3 command core");
+        let created_slot_id = created.created_slot_ids[0];
+        let retried = create_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            create,
+            83_101,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(caller_binding),
+        )
+        .expect("lost-reply create retry returns canonical result");
+        assert_media_asset_a6_same_terminal(&created, &retried);
+        assert_eq!(
+            harness
+                .state
+                .video_clip_slot_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            1,
+            "exact create retry must return its receipt before allocation or publication"
+        );
+        b3_assert_authority_matches_persistence(&harness);
+
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        assign_video_clip_slot_asset_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotAssignRequest {
+                layer_id,
+                slot_id: created_slot_id,
+                media_asset_id: alternate_asset_id,
+            },
+            83_102,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("assign clip slot through B3 command core");
+        b3_assert_authority_matches_persistence(&harness);
+
+        let mut updated_slot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("B3 persistence after create")
+            .authored_video
+            .expect("authored B3 video")
+            .layers
+            .into_iter()
+            .find(|layer| layer.id == layer_id)
+            .expect("B3 layer")
+            .clip_slots
+            .into_iter()
+            .find(|slot| slot.id == created_slot_id)
+            .expect("created B3 slot");
+        updated_slot.speed = 1.25;
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        update_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotUpdateRequest {
+                layer_id,
+                slot: updated_slot,
+            },
+            83_103,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("update clip slot through B3 command core");
+        b3_assert_authority_matches_persistence(&harness);
+
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let duplicated = duplicate_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotDuplicateRequest {
+                layer_id,
+                source_slot_id: original_slot_id,
+                before_slot_id: Some(created_slot_id),
+            },
+            83_104,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("duplicate clip slot through B3 command core");
+        let duplicate_slot_id = duplicated.created_slot_ids[0];
+        b3_assert_authority_matches_persistence(&harness);
+
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        reorder_video_clip_slots_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotReorderRequest {
+                layer_id,
+                slot_ids: vec![created_slot_id, duplicate_slot_id, original_slot_id],
+            },
+            83_105,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("reorder clip slots through B3 command core");
+        b3_assert_authority_matches_persistence(&harness);
+
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        set_default_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotSetDefaultRequest {
+                layer_id,
+                slot_id: created_slot_id,
+            },
+            83_106,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("set default clip slot through B3 command core");
+        b3_assert_authority_matches_persistence(&harness);
+
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        remove_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotRemoveRequest {
+                layer_id,
+                slot_id: duplicate_slot_id,
+            },
+            83_107,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("remove clip slot through B3 command core");
+        b3_assert_authority_matches_persistence(&harness);
+
+        b3_assert_authored_mutation_count(&harness, baseline, 7);
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("B3 final persistence");
+        let layer = persisted
+            .authored_video
+            .expect("B3 final authored video")
+            .layers
+            .into_iter()
+            .find(|layer| layer.id == layer_id)
+            .expect("B3 final layer");
+        assert_eq!(layer.default_clip_slot_id, Some(created_slot_id));
+        assert_eq!(
+            layer
+                .clip_slots
+                .iter()
+                .map(|slot| slot.id)
+                .collect::<Vec<_>>(),
+            vec![created_slot_id, original_slot_id],
+            "duplicate was inserted before its explicit anchor then removed"
+        );
+    }
+
+    #[test]
+    fn video_clip_slot_b3_runtime_commands_are_history_free_and_partial_only() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, asset_id, _alternate_asset_id, slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let mut full_policy = sample_operator_policy();
+        full_policy.lock_mode = OperatorLockMode::Full;
+        let full_epoch = {
+            let mut coordinator = harness
+                .state
+                .project_coordinator
+                .lock()
+                .expect("configure initially-unlocked Full policy");
+            coordinator.ancillary.operator_policy = Some(full_policy.clone());
+            coordinator.epoch
+        };
+        harness
+            .state
+            .project_operator_sessions
+            .lock()
+            .expect("install unlocked B3 operator session")
+            .insert(
+                MEDIA_ASSET_A6_OWNER.to_string(),
+                ProjectOperatorSession {
+                    project_epoch: full_epoch,
+                    policy: full_policy,
+                    unlocked: true,
+                },
+            );
+        let (queue_epoch, queue_revision, queue_hash) = b3_authority_arguments(&harness);
+        let persistence_before = b3_persistence_hash(&harness);
+        let baseline = harness.mutation_baseline();
+        let queued = queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest { layer_id, slot_id },
+            83_201,
+            queue_epoch,
+            queue_revision,
+            queue_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("queue clip slot through B3 runtime command core");
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let cancelled = cancel_queued_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotCancelQueueRequest { layer_id },
+            83_202,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("cancel queued clip slot through B3 runtime command core");
+        let retried_queue = queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest { layer_id, slot_id },
+            83_201,
+            queue_epoch,
+            queue_revision,
+            queue_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("reply-loss queue retry attaches current cancelled runtime");
+        assert_ne!(queued.runtime, cancelled.runtime);
+        assert_eq!(retried_queue.runtime, cancelled.runtime);
+        assert_eq!(cancelled.runtime_generation, queued.runtime_generation + 1);
+        assert_eq!(
+            retried_queue.runtime_generation,
+            cancelled.runtime_generation
+        );
+        let queued_terminal = get_video_clip_slot_operation_terminal_result_impl(
+            &harness.state,
+            0,
+            83_201,
+            0,
+            queue_epoch,
+            queue_revision,
+            queue_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("read queue terminal receipt")
+        .expect("queue terminal receipt");
+        assert_eq!(
+            queued_terminal.command_kind,
+            VideoClipSlotAuthoritativeCommitKind::Queue
+        );
+        assert_eq!(
+            queued_terminal
+                .runtime
+                .as_ref()
+                .expect("fresh runtime query")
+                .runtime,
+            cancelled.runtime
+        );
+        assert_eq!(
+            queued_terminal
+                .runtime
+                .as_ref()
+                .expect("fresh runtime query")
+                .runtime_generation,
+            cancelled.runtime_generation
+        );
+
+        // A terminal receipt is read-only recovery. Lock policy and unrelated
+        // editor activity may block a *new* runtime publication, but they must
+        // not make an already acknowledged result disappear after reply loss.
+        let recovery_baseline = harness.mutation_baseline();
+        harness
+            .state
+            .project_operator_sessions
+            .lock()
+            .expect("engage Full lock after queue ACK")
+            .get_mut(MEDIA_ASSET_A6_OWNER)
+            .expect("installed B3 operator session")
+            .unlocked = false;
+        let recovered_under_full = queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest { layer_id, slot_id },
+            83_201,
+            queue_epoch,
+            queue_revision,
+            queue_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("Full lock cannot block exact runtime receipt recovery");
+        assert_eq!(recovered_under_full.runtime, cancelled.runtime);
+        let full_new_error = queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest { layer_id, slot_id },
+            83_210,
+            queue_epoch,
+            queue_revision,
+            queue_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("Full lock still blocks a new runtime publication");
+        assert!(full_new_error.contains("Full Lock"), "{full_new_error}");
+        let queried_under_full = get_video_clip_slot_operation_terminal_result_impl(
+            &harness.state,
+            0,
+            83_201,
+            0,
+            queue_epoch,
+            queue_revision,
+            queue_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("Full lock permits terminal query")
+        .expect("queue receipt under Full lock");
+        assert_eq!(
+            queried_under_full
+                .runtime
+                .expect("fresh Full-lock runtime")
+                .runtime,
+            cancelled.runtime
+        );
+        harness
+            .state
+            .project_operator_sessions
+            .lock()
+            .expect("unlock Full policy after recovery")
+            .get_mut(MEDIA_ASSET_A6_OWNER)
+            .expect("installed B3 operator session")
+            .unlocked = true;
+
+        let pending_before = {
+            let coordinator = harness
+                .state
+                .project_coordinator
+                .lock()
+                .expect("capture pending receipt-recovery checkpoint");
+            project_checkpoint_for_coordinator(&harness.state, &coordinator)
+                .expect("capture coherent pending checkpoint")
+        };
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("install unrelated pending transaction")
+            .history
+            .pending
+            .insert(
+                83_211,
+                PendingProjectTransaction {
+                    transaction_id: 83_211,
+                    owner_id: "renderer:unrelated".to_string(),
+                    label: "Unrelated edit".to_string(),
+                    coalesce_key: String::new(),
+                    epoch: pending_before.epoch,
+                    before: pending_before,
+                },
+            );
+        harness
+            .state
+            .project_transaction_active
+            .store(true, Ordering::Release);
+        get_video_clip_slot_operation_terminal_result_impl(
+            &harness.state,
+            0,
+            83_201,
+            0,
+            queue_epoch,
+            queue_revision,
+            queue_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("pending/active cannot block terminal query")
+        .expect("queue receipt while pending/active");
+        let pending_new_error = queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest { layer_id, slot_id },
+            83_212,
+            queue_epoch,
+            queue_revision,
+            queue_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("pending transaction still blocks a new runtime publication");
+        assert!(
+            pending_new_error.to_ascii_lowercase().contains("pending")
+                || pending_new_error
+                    .to_ascii_lowercase()
+                    .contains("still being committed"),
+            "{pending_new_error}"
+        );
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("clear unrelated pending transaction")
+            .history
+            .pending
+            .clear();
+        let active_new_error = queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest { layer_id, slot_id },
+            83_213,
+            queue_epoch,
+            queue_revision,
+            queue_hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("active transaction still blocks a new runtime publication");
+        assert!(
+            active_new_error.to_ascii_lowercase().contains("active"),
+            "{active_new_error}"
+        );
+        harness
+            .state
+            .project_transaction_active
+            .store(false, Ordering::Release);
+        let recovery_after = harness.mutation_baseline();
+        assert_eq!(recovery_after.revision, recovery_baseline.revision);
+        assert_eq!(
+            recovery_after.history_generation,
+            recovery_baseline.history_generation
+        );
+        assert_eq!(recovery_after.undo_len, recovery_baseline.undo_len);
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        launch_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotLaunchRequest {
+                layer_id,
+                slot_id: Some(slot_id),
+            },
+            83_203,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("launch clip slot through B3 runtime command core");
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        seek_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotSeekRequest {
+                layer_id,
+                position_ms: 33,
+            },
+            83_204,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("seek clip slot through B3 runtime command core");
+        assert_eq!(
+            b3_persistence_hash(&harness),
+            persistence_before,
+            "runtime slot transport cannot change the persisted project hash"
+        );
+        let coordinator = harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("B3 runtime coordinator");
+        assert_eq!(coordinator.revision, baseline.revision);
+        assert_eq!(coordinator.history_generation, baseline.history_generation);
+        assert_eq!(coordinator.history.undo.len(), baseline.undo_len);
+        drop(coordinator);
+
+        let generation_before_overflow = harness
+            .state
+            .video_clip_slot_runtime_generation
+            .load(Ordering::Acquire);
+        harness
+            .state
+            .video_clip_slot_runtime_generation
+            .store(VIDEO_CLIP_RUNTIME_GENERATION_MAX - 1, Ordering::Release);
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let boundary = queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest { layer_id, slot_id },
+            83_208,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("last JavaScript-exact runtime generation publishes");
+        assert_eq!(
+            boundary.runtime_generation,
+            VIDEO_CLIP_RUNTIME_GENERATION_MAX
+        );
+        let runtime_before_overflow = harness.state.engine.snapshot().video_clip_runtime;
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        assert!(cancel_queued_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotCancelQueueRequest { layer_id },
+            83_209,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("unsafe JSON runtime generation fails before engine publication")
+        .contains("generation is exhausted"));
+        assert_eq!(
+            harness.state.engine.snapshot().video_clip_runtime,
+            runtime_before_overflow
+        );
+        assert_eq!(
+            harness
+                .state
+                .video_clip_slot_runtime_generation
+                .load(Ordering::Acquire),
+            VIDEO_CLIP_RUNTIME_GENERATION_MAX
+        );
+        harness
+            .state
+            .video_clip_slot_runtime_generation
+            .store(generation_before_overflow, Ordering::Release);
+
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("install Partial lock")
+            .ancillary
+            .operator_policy = Some(sample_operator_policy());
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest { layer_id, slot_id },
+            83_205,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("Partial lock permits runtime transport");
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        assert!(create_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotCreateRequest {
+                layer_id,
+                media_asset_id: asset_id,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: Default::default(),
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: Default::default(),
+                effect_overrides: Vec::new(),
+                before_slot_id: None,
+                make_default: false,
+            },
+            83_206,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("Partial lock rejects authored B3 commands")
+        .contains("Partial Lock"));
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("upgrade Full lock")
+            .ancillary
+            .operator_policy
+            .as_mut()
+            .expect("installed policy")
+            .lock_mode = OperatorLockMode::Full;
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        assert!(queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest { layer_id, slot_id },
+            83_207,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("Full lock rejects runtime B3 commands")
+        .contains("Full Lock"));
+    }
+
+    #[test]
+    fn video_clip_slot_b3_window_binding_rotation_and_runtime_read_fail_closed() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, asset_id, _alternate_asset_id, slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .expect("register second B3 pane")
+            .insert("b3-pane-b".to_string(), "renderer:b3-pane-b".to_string());
+
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let baseline = harness.mutation_baseline();
+        let old_incarnation = capture_video_clip_slot_caller_binding_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect("capture old B3 wrapper incarnation before barrier");
+        create_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotCreateRequest {
+                layer_id,
+                media_asset_id: asset_id,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: Default::default(),
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: Default::default(),
+                effect_overrides: Vec::new(),
+                before_slot_id: Some(slot_id),
+                make_default: false,
+            },
+            83_251,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(old_incarnation.clone()),
+        )
+        .expect("create A-owned B3 receipt");
+        b3_assert_authored_mutation_count(&harness, baseline, 1);
+
+        let mut full_policy = sample_operator_policy();
+        full_policy.lock_mode = OperatorLockMode::Full;
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("install B3 Full lock")
+            .ancillary
+            .operator_policy = Some(full_policy);
+        let publish_before = harness
+            .state
+            .video_clip_slot_authoritative_publish_attempts
+            .load(Ordering::Acquire);
+        assert!(capture_video_clip_slot_caller_binding_for_window_label(
+            &harness.state,
+            "b3-pane-b",
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect_err("pane B cannot pass pane A's owner to any B3 public wrapper")
+        .contains("does not match"));
+        assert_eq!(
+            harness
+                .state
+                .video_clip_slot_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            publish_before,
+            "window mismatch is rejected before receipt lookup or engine publication"
+        );
+
+        let runtime_before = harness.state.engine.snapshot().video_clip_runtime;
+        let read = get_video_clip_slot_runtime_impl(
+            &harness.state,
+            epoch,
+            revision.wrapping_add(1),
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("read rejects stale E/R/H without reconciling");
+        assert!(read.contains("changed"));
+        let current = {
+            let coordinator = harness
+                .state
+                .project_coordinator
+                .lock()
+                .expect("capture read-only B3 authority");
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
+        };
+        let read_baseline = harness.mutation_baseline();
+        let read = get_video_clip_slot_runtime_impl(
+            &harness.state,
+            current.0,
+            current.1,
+            current.2,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("Full lock permits truthful B3 runtime read");
+        assert_eq!(read.runtime, runtime_before);
+        let after_read = harness.mutation_baseline();
+        assert_eq!(after_read.revision, read_baseline.revision);
+        assert_eq!(
+            after_read.history_generation,
+            read_baseline.history_generation
+        );
+
+        // Model same-string owner re-registration after the old renderer is
+        // retired. Production retirement purges after it removes the window,
+        // then a new window incarnation can register the same visible string.
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .expect("retire old B3 owner")
+            .remove("media-asset-a6");
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .expect("retire old B3 incarnation")
+            .remove("media-asset-a6");
+        harness
+            .state
+            .media_asset_operations
+            .purge_video_clip_slot_authoritative_for_owner(MEDIA_ASSET_A6_OWNER);
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .expect("re-register same B3 owner string")
+            .insert(
+                "media-asset-a6".to_string(),
+                MEDIA_ASSET_A6_OWNER.to_string(),
+            );
+        let new_incarnation = allocate_project_transaction_owner_incarnation(&harness.state)
+            .expect("allocate re-registered B3 incarnation");
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .expect("register new B3 incarnation")
+            .insert("media-asset-a6".to_string(), new_incarnation);
+        assert!(get_video_clip_slot_operation_terminal_result_impl(
+            &harness.state,
+            0,
+            83_251,
+            0,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(old_incarnation.clone()),
+        )
+        .expect_err("retired same-string owner cannot query old B3 receipt")
+        .contains("renderer incarnation changed"));
+        assert!(create_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotCreateRequest {
+                layer_id,
+                media_asset_id: asset_id,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: Default::default(),
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: Default::default(),
+                effect_overrides: Vec::new(),
+                before_slot_id: Some(slot_id),
+                make_default: false,
+            },
+            83_251,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(old_incarnation.clone()),
+        )
+        .expect_err("retired same-string owner cannot retry old B3 mutation")
+        .contains("renderer incarnation changed"));
+        let current = b3_authority_arguments(&harness);
+        assert!(queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest { layer_id, slot_id },
+            83_252,
+            current.0,
+            current.1,
+            current.2,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(old_incarnation),
+        )
+        .expect_err("unknown old-incarnation key is rejected after wrapper validation barrier")
+        .contains("renderer incarnation changed"));
+        assert_eq!(
+            harness
+                .state
+                .video_clip_slot_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            publish_before,
+            "retired receipt retry cannot republish"
+        );
+    }
+
+    #[test]
+    fn video_clip_slot_b3_public_ipc_surface_binds_every_command_to_its_window() {
+        const B3_PUBLIC_COMMANDS: &[&str] = &[
+            "create_video_clip_slot_authoritative",
+            "assign_video_clip_slot_asset_authoritative",
+            "update_video_clip_slot_authoritative",
+            "remove_video_clip_slot_authoritative",
+            "reorder_video_clip_slots_authoritative",
+            "duplicate_video_clip_slot_authoritative",
+            "set_default_video_clip_slot_authoritative",
+            "queue_video_clip_slot_authoritative",
+            "cancel_queued_video_clip_slot_authoritative",
+            "launch_video_clip_slot_authoritative",
+            "seek_video_clip_slot_authoritative",
+            "import_and_assign_video_clip_slots_authoritative",
+            "get_video_clip_slot_operation_terminal_result",
+            "get_video_clip_slot_runtime",
+        ];
+        let source = include_str!("main.rs");
+        for command in B3_PUBLIC_COMMANDS {
+            let needle = format!("fn {command}(");
+            let start = source
+                .find(&needle)
+                .unwrap_or_else(|| panic!("missing registered B3 command {command}"));
+            let body = &source[start..];
+            let end = body
+                .find("\n}\n")
+                .unwrap_or_else(|| panic!("unterminated B3 command {command}"));
+            let body = &body[..end];
+            assert!(
+                body.contains("window: WebviewWindow"),
+                "{command} must receive the concrete invoking WebView"
+            );
+            assert!(
+                body.contains("capture_video_clip_slot_caller_binding_for_window_label"),
+                "{command} must capture its exact backend window incarnation before receipt/mutation/query"
+            );
+        }
+    }
+
+    #[test]
+    fn video_clip_slot_b3_direct_import_assign_is_ordered_atomic_and_receipted() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, anchor_slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        launch_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotLaunchRequest {
+                layer_id,
+                slot_id: Some(anchor_slot_id),
+            },
+            83_301,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("launch seed slot before direct import");
+        let runtime_before = harness.state.engine.snapshot().video_clip_runtime;
+        let rendered_source_before = harness
+            .state
+            .engine
+            .snapshot()
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .expect("rendered B3 seed layer")
+            .source
+            .clone();
+        let baseline = harness.mutation_baseline();
+        let identity = harness.stage_import(
+            83_302,
+            VideoSourceKind::File,
+            &["b3-direct-a", "b3-direct-b"],
+        );
+        let request = VideoClipSlotImportAndAssignRequest {
+            target_layer_id: layer_id,
+            before_slot_id: Some(anchor_slot_id),
+            make_default: false,
+        };
+        let (token, request_id, generation, epoch, revision, hash, owner_id) = identity.arguments();
+        let imported = import_and_assign_video_clip_slots_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            token,
+            request_id,
+            generation,
+            epoch,
+            revision,
+            hash.clone(),
+            owner_id.clone(),
+            None,
+        )
+        .expect("two-file B3 direct import and assignment");
+        let retried = import_and_assign_video_clip_slots_authoritative_command_impl(
+            &harness.state,
+            request,
+            token,
+            request_id,
+            generation,
+            epoch,
+            revision,
+            hash.clone(),
+            owner_id.clone(),
+            None,
+        )
+        .expect("lost reply direct import returns its terminal receipt");
+        assert_media_asset_a6_same_terminal(&imported, &retried);
+        assert_eq!(imported.insertion_before_slot_id, Some(anchor_slot_id));
+        assert_eq!(imported.created_slot_ids.len(), 2);
+        assert_eq!(imported.imported_asset_ids.len(), 2);
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("B3 direct import persistence");
+        let layer = persisted
+            .authored_video
+            .expect("B3 direct authored video")
+            .layers
+            .into_iter()
+            .find(|layer| layer.id == layer_id)
+            .expect("B3 direct layer");
+        assert_eq!(
+            layer
+                .clip_slots
+                .iter()
+                .map(|slot| slot.id)
+                .collect::<Vec<_>>(),
+            vec![
+                imported.created_slot_ids[0],
+                imported.created_slot_ids[1],
+                anchor_slot_id,
+            ],
+            "the direct drop inserts the prepared Vec in order before its explicit anchor"
+        );
+        assert_eq!(layer.default_clip_slot_id, Some(anchor_slot_id));
+        assert_eq!(
+            harness.state.engine.snapshot().video_clip_runtime,
+            runtime_before
+        );
+        assert_eq!(
+            harness
+                .state
+                .engine
+                .snapshot()
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.id == layer_id)
+                .expect("rendered B3 direct layer")
+                .source,
+            rendered_source_before,
+            "direct import must not replace the active rendered source"
+        );
+        b3_assert_authored_mutation_count(&harness, baseline, 1);
+        let receipt = get_video_clip_slot_operation_terminal_result_impl(
+            &harness.state,
+            token,
+            request_id,
+            generation,
+            epoch,
+            revision,
+            hash,
+            owner_id,
+            None,
+        )
+        .expect("query B3 direct terminal receipt")
+        .expect("B3 direct terminal receipt exists");
+        assert_eq!(
+            serde_json::to_value(receipt.terminal).expect("serialize receipt terminal"),
+            serde_json::to_value(VideoClipSlotAuthoritativeTerminalResult::Authored(imported))
+                .expect("serialize direct terminal"),
+            "terminal query recovers the allocated ordered IDs and result"
+        );
+
+        // An invalid direct insertion anchor must fail during candidate
+        // preflight. It may allocate only ephemeral candidate IDs; neither
+        // catalog/bank/default/rendered/runtime nor B authority/history may
+        // change before the engine's sole publication boundary.
+        let failure_before_hash = b3_persistence_hash(&harness);
+        let failure_before_runtime = harness.state.engine.snapshot().video_clip_runtime;
+        let failure_before = harness.mutation_baseline();
+        let failed_identity =
+            harness.stage_import(83_303, VideoSourceKind::File, &["b3-direct-invalid-anchor"]);
+        let (token, request_id, generation, epoch, revision, hash, owner_id) =
+            failed_identity.arguments();
+        assert!(
+            import_and_assign_video_clip_slots_authoritative_command_impl(
+                &harness.state,
+                VideoClipSlotImportAndAssignRequest {
+                    target_layer_id: layer_id,
+                    before_slot_id: Some(VideoClipSlotId(999_999)),
+                    make_default: true,
+                },
+                token,
+                request_id,
+                generation,
+                epoch,
+                revision,
+                hash,
+                owner_id,
+                None,
+            )
+            .expect_err("invalid anchor rejects direct import before engine publication")
+            .contains("was not found")
+        );
+        assert_eq!(b3_persistence_hash(&harness), failure_before_hash);
+        assert_eq!(
+            harness.state.engine.snapshot().video_clip_runtime,
+            failure_before_runtime
+        );
+        let coordinator = harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("B3 direct anchor failure coordinator");
+        assert_eq!(coordinator.revision, failure_before.revision);
+        assert_eq!(
+            coordinator.history_generation,
+            failure_before.history_generation
+        );
+        assert_eq!(coordinator.history.undo.len(), failure_before.undo_len);
+        assert_eq!(
+            coordinator.publication_generation,
+            failure_before.publication_generation
+        );
+        drop(coordinator);
+        assert_eq!(
+            harness
+                .state
+                .video_clip_slot_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            1,
+            "invalid anchor cannot produce a second direct publication"
+        );
+    }
 }
 
 #[cfg(test)]
 mod video_recording_runtime_tests {
     use super::*;
+
+    #[test]
+    fn video_clip_slot_b3_direct_result_bookkeeping_recovers_poison_after_ack() {
+        let created_slot_ids = Mutex::new(vec![VideoClipSlotId(71), VideoClipSlotId(72)]);
+        let imported_asset_ids = Mutex::new(vec![81, 82]);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = created_slot_ids.lock().expect("poison direct created IDs");
+            panic!("inject post-ACK direct result-cell poison");
+        }));
+        let (created, imported) =
+            video_clip_slot_direct_result_ids(&created_slot_ids, &imported_asset_ids);
+        assert_eq!(created, vec![VideoClipSlotId(71), VideoClipSlotId(72)]);
+        assert_eq!(imported, vec![81, 82]);
+    }
 
     fn generate_long_sync_audio(ffmpeg: &OsStr, path: &Path, duration_seconds: u32) {
         let middle_duration = duration_seconds as f64 - 0.2;
@@ -67877,6 +72086,8 @@ mod video_recording_runtime_tests {
                 ..VideoLayerState::default()
             },
             isf_effect: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
         }];
         snapshot.video.compositions = vec![CompositionSummary {
             id: 3,
@@ -68386,6 +72597,8 @@ fn main() {
             media_asset_reaper: Mutex::new(None),
             #[cfg(test)]
             media_asset_authoritative_publish_attempts: AtomicU64::new(0),
+            #[cfg(test)]
+            video_clip_slot_authoritative_publish_attempts: AtomicU64::new(0),
             media_audio,
             program_audio_handoff,
             _media_audio_sync: media_audio_sync,
@@ -68434,7 +72647,11 @@ fn main() {
             project_mapping_callback_epoch: Arc::new(AtomicU64::new(0)),
             project_transaction_active: Arc::new(AtomicBool::new(false)),
             project_transaction_owners: Mutex::new(HashMap::new()),
+            project_transaction_owner_incarnations: Mutex::new(HashMap::new()),
+            next_project_transaction_owner_incarnation: AtomicU64::new(0),
+            project_transaction_owner_rotation: Mutex::new(()),
             project_operator_sessions: Mutex::new(HashMap::new()),
+            video_clip_slot_runtime_generation: AtomicU64::new(0),
             project_external_command_admission: Arc::new(ProjectExternalCommandAdmission::default()),
             project_save_publication: Mutex::new(()),
             snapshot_sync: Mutex::new(SnapshotSyncState::default()),
@@ -68673,6 +72890,20 @@ fn main() {
             commit_prepared_local_media_layers_authoritative,
             commit_prepared_bootstrap_vj_show_authoritative,
             get_media_asset_operation_terminal_result,
+            create_video_clip_slot_authoritative,
+            assign_video_clip_slot_asset_authoritative,
+            update_video_clip_slot_authoritative,
+            remove_video_clip_slot_authoritative,
+            reorder_video_clip_slots_authoritative,
+            duplicate_video_clip_slot_authoritative,
+            set_default_video_clip_slot_authoritative,
+            get_video_clip_slot_runtime,
+            import_and_assign_video_clip_slots_authoritative,
+            queue_video_clip_slot_authoritative,
+            cancel_queued_video_clip_slot_authoritative,
+            launch_video_clip_slot_authoritative,
+            seek_video_clip_slot_authoritative,
+            get_video_clip_slot_operation_terminal_result,
             commit_prepared_video_file_layer,
             commit_prepared_still_image_layer,
             commit_prepared_local_media_layers,
