@@ -47,6 +47,37 @@ impl VideoRenderInputKey {
 )]
 #[serde(transparent)]
 pub struct VideoClipSlotId(pub u64);
+macro_rules! video_effect_id_newtype {
+    ($name:ident) => {
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            Default,
+            Serialize,
+            Deserialize,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+        )]
+        #[serde(transparent)]
+        pub struct $name(pub u64);
+    };
+}
+
+video_effect_id_newtype!(VideoEffectId);
+video_effect_id_newtype!(VideoEffectChainId);
+video_effect_id_newtype!(VideoEffectStageId);
+video_effect_id_newtype!(VideoEffectPresetId);
+video_effect_id_newtype!(VideoLayerGroupId);
+video_effect_id_newtype!(VideoTransitionBusId);
+
+pub const VIDEO_EFFECT_CHAIN_MAX_STAGES: usize = 32;
+pub const VIDEO_EFFECT_PROJECT_MAX_CHAINS: usize = 256;
+pub const VIDEO_EFFECT_PROJECT_MAX_PRESETS: usize = 128;
+pub const VIDEO_EFFECT_PROJECT_MAX_GROUPS: usize = 64;
 /// Stable project-local identity for a reusable media library entry.
 pub type MediaAssetId = u64;
 pub type CompositionId = u64;
@@ -817,6 +848,104 @@ pub struct VideoIsfEffectSummary {
     pub stack: Vec<VideoIsfEffectStageSummary>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VideoTransitionEffectOwner {
+    ClipTake { layer_id: VideoLayerId },
+    LayerBus { bus_id: VideoTransitionBusId },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum VideoEffectScope {
+    Clip {
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+    },
+    Layer {
+        layer_id: VideoLayerId,
+    },
+    Transition {
+        owner: VideoTransitionEffectOwner,
+    },
+    Composition {
+        composition_id: CompositionId,
+    },
+    Group {
+        group_id: VideoLayerGroupId,
+    },
+    Output {
+        output_id: VideoOutputId,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VideoEffectKind {
+    Isf { effect: VideoIsfEffectSummary },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoEffectSummary {
+    pub id: VideoEffectId,
+    pub kind: VideoEffectKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoEffectStageSummary {
+    pub id: VideoEffectStageId,
+    pub enabled: bool,
+    pub label: String,
+    pub effect: VideoEffectSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoEffectChainSummary {
+    pub id: VideoEffectChainId,
+    pub scope: VideoEffectScope,
+    #[serde(default)]
+    pub bypassed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<VideoEffectStageSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoEffectPresetStagePayload {
+    pub enabled: bool,
+    pub label: String,
+    pub effect: VideoEffectKind,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct VideoEffectPresetPayload {
+    #[serde(default)]
+    pub bypassed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<VideoEffectPresetStagePayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoEffectPresetSummary {
+    pub id: VideoEffectPresetId,
+    pub label: String,
+    pub payload: VideoEffectPresetPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoLayerGroupSummary {
+    pub id: VideoLayerGroupId,
+    pub label: String,
+    pub composition_id: CompositionId,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layer_ids: Vec<VideoLayerId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoEffectControlTarget {
+    pub effect_id: VideoEffectId,
+    pub control_name: String,
+}
+
 impl Default for VideoLayerState {
     fn default() -> Self {
         Self {
@@ -878,6 +1007,8 @@ pub struct VideoClipCuePointSummary {
 /// B1 deliberately does not introduce an independent clip FX chain.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoClipEffectOverrideSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_id: Option<VideoEffectId>,
     #[serde(default)]
     pub stage_index: usize,
     pub control_name: String,
@@ -1483,6 +1614,12 @@ pub struct VideoSnapshot {
     pub layers: Vec<VideoLayerSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub media_assets: Vec<MediaAssetSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effect_chains: Vec<VideoEffectChainSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effect_presets: Vec<VideoEffectPresetSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layer_groups: Vec<VideoLayerGroupSummary>,
     pub compositions: Vec<CompositionSummary>,
     pub outputs: Vec<VideoOutputSummary>,
     #[serde(default)]
@@ -1498,6 +1635,9 @@ impl Default for VideoSnapshot {
         Self {
             layers: Vec::new(),
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -1526,6 +1666,14 @@ pub struct MediaAssetMigrationReport {
 pub struct VideoClipSlotMigrationReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub created_slot_ids: Vec<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrated_layer_ids: Vec<VideoLayerId>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoEffectChainMigrationReport {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created_chain_ids: Vec<VideoEffectChainId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub migrated_layer_ids: Vec<VideoLayerId>,
 }
@@ -1770,6 +1918,527 @@ pub fn normalize_legacy_video_clip_slots(
     validate_engine_ready_video_clip_slots(&candidate)?;
     *video = candidate;
     Ok(report)
+}
+
+/// Normalize legacy layer ISF stacks into stable, centrally scoped chains.
+/// The legacy `layers[].isf_effect` value remains an exact compatibility
+/// projection; only an explicit save serializes the additive central model.
+pub fn normalize_legacy_video_effect_chains(
+    video: &mut VideoSnapshot,
+) -> Result<VideoEffectChainMigrationReport, String> {
+    let mut candidate = video.clone();
+    validate_authored_video_effect_chains(&candidate)?;
+
+    let mut next_chain_id = candidate
+        .effect_chains
+        .iter()
+        .map(|chain| chain.id.0)
+        .max()
+        .unwrap_or(0);
+    let mut next_stage_id = candidate
+        .effect_chains
+        .iter()
+        .flat_map(|chain| chain.stages.iter().map(|stage| stage.id.0))
+        .max()
+        .unwrap_or(0);
+    let mut next_effect_id = candidate
+        .effect_chains
+        .iter()
+        .flat_map(|chain| chain.stages.iter().map(|stage| stage.effect.id.0))
+        .max()
+        .unwrap_or(0);
+    let mut report = VideoEffectChainMigrationReport::default();
+
+    for layer_index in 0..candidate.layers.len() {
+        let layer_id = candidate.layers[layer_index].id;
+        let scope = VideoEffectScope::Layer { layer_id };
+        let existing_index = candidate
+            .effect_chains
+            .iter()
+            .position(|chain| chain.scope == scope);
+        if let Some(index) = existing_index {
+            validate_layer_effect_chain_projection(
+                &candidate.layers[layer_index],
+                &candidate.effect_chains[index],
+            )?;
+            reconcile_clip_override_effect_ids(
+                &mut candidate.layers[layer_index],
+                &candidate.effect_chains[index],
+            )?;
+            continue;
+        }
+        let Some(legacy) = candidate.layers[layer_index].isf_effect.clone() else {
+            continue;
+        };
+        next_chain_id = next_chain_id.checked_add(1).ok_or_else(|| {
+            "Video effect chain ID allocation overflow during legacy migration".to_string()
+        })?;
+        let mut legacy_stages = Vec::with_capacity(1 + legacy.stack.len());
+        let mut root = legacy.clone();
+        root.stack.clear();
+        legacy_stages.push(root);
+        legacy_stages.extend(
+            legacy
+                .stack
+                .iter()
+                .cloned()
+                .map(|stage| VideoIsfEffectSummary {
+                    enabled: stage.enabled,
+                    label: stage.label,
+                    source: stage.source,
+                    source_path: stage.source_path,
+                    description: stage.description,
+                    categories: stage.categories,
+                    controls: stage.controls,
+                    stack: Vec::new(),
+                }),
+        );
+        let mut stages = Vec::with_capacity(legacy_stages.len());
+        for mut effect in legacy_stages {
+            next_stage_id = next_stage_id.checked_add(1).ok_or_else(|| {
+                "Video effect stage ID allocation overflow during legacy migration".to_string()
+            })?;
+            next_effect_id = next_effect_id.checked_add(1).ok_or_else(|| {
+                "Video effect ID allocation overflow during legacy migration".to_string()
+            })?;
+            let stage_enabled = effect.enabled;
+            effect.enabled = true;
+            stages.push(VideoEffectStageSummary {
+                id: VideoEffectStageId(next_stage_id),
+                enabled: stage_enabled,
+                label: effect.label.clone(),
+                effect: VideoEffectSummary {
+                    id: VideoEffectId(next_effect_id),
+                    kind: VideoEffectKind::Isf { effect },
+                },
+            });
+        }
+        let chain = VideoEffectChainSummary {
+            id: VideoEffectChainId(next_chain_id),
+            scope,
+            bypassed: false,
+            stages,
+        };
+        reconcile_clip_override_effect_ids(&mut candidate.layers[layer_index], &chain)?;
+        candidate.effect_chains.push(chain);
+        report
+            .created_chain_ids
+            .push(VideoEffectChainId(next_chain_id));
+        report.migrated_layer_ids.push(layer_id);
+    }
+
+    validate_engine_ready_video_effect_chains(&candidate)?;
+    *video = candidate;
+    Ok(report)
+}
+
+pub fn validate_authored_video_effect_chains(video: &VideoSnapshot) -> Result<(), String> {
+    validate_video_effect_chains(video, false)
+}
+
+pub fn validate_engine_ready_video_effect_chains(video: &VideoSnapshot) -> Result<(), String> {
+    validate_video_effect_chains(video, true)
+}
+
+fn validate_video_effect_chains(
+    video: &VideoSnapshot,
+    require_projection: bool,
+) -> Result<(), String> {
+    validate_authored_video_clip_slots(video)?;
+    if video.effect_chains.len() > VIDEO_EFFECT_PROJECT_MAX_CHAINS {
+        return Err(format!(
+            "Video project exceeds {VIDEO_EFFECT_PROJECT_MAX_CHAINS} effect chains"
+        ));
+    }
+    if video.effect_presets.len() > VIDEO_EFFECT_PROJECT_MAX_PRESETS {
+        return Err(format!(
+            "Video project exceeds {VIDEO_EFFECT_PROJECT_MAX_PRESETS} effect presets"
+        ));
+    }
+    if video.layer_groups.len() > VIDEO_EFFECT_PROJECT_MAX_GROUPS {
+        return Err(format!(
+            "Video project exceeds {VIDEO_EFFECT_PROJECT_MAX_GROUPS} layer groups"
+        ));
+    }
+
+    let layers: BTreeMap<VideoLayerId, &VideoLayerSummary> =
+        video.layers.iter().map(|layer| (layer.id, layer)).collect();
+    let compositions: BTreeMap<CompositionId, &CompositionSummary> = video
+        .compositions
+        .iter()
+        .map(|composition| (composition.id, composition))
+        .collect();
+    let outputs: BTreeMap<VideoOutputId, &VideoOutputSummary> = video
+        .outputs
+        .iter()
+        .map(|output| (output.id, output))
+        .collect();
+    if layers.len() != video.layers.len() || layers.contains_key(&0) {
+        return Err("Video layer IDs must be non-zero and unique".to_string());
+    }
+    if compositions.len() != video.compositions.len() || compositions.contains_key(&0) {
+        return Err("Video composition IDs must be non-zero and unique".to_string());
+    }
+    if outputs.len() != video.outputs.len() || outputs.contains_key(&0) {
+        return Err("Video output IDs must be non-zero and unique".to_string());
+    }
+    let groups: BTreeMap<VideoLayerGroupId, &VideoLayerGroupSummary> = video
+        .layer_groups
+        .iter()
+        .map(|group| (group.id, group))
+        .collect();
+    if groups.len() != video.layer_groups.len() || groups.contains_key(&VideoLayerGroupId(0)) {
+        return Err("Video layer group IDs must be non-zero and unique".to_string());
+    }
+
+    let mut grouped_layers = BTreeMap::new();
+    for group in &video.layer_groups {
+        if group.label.trim().is_empty() || group.label != group.label.trim() {
+            return Err(format!(
+                "Video layer group {} label must be canonical",
+                group.id.0
+            ));
+        }
+        let composition = compositions.get(&group.composition_id).ok_or_else(|| {
+            format!(
+                "Video layer group {} references missing composition {}",
+                group.id.0, group.composition_id
+            )
+        })?;
+        if group.layer_ids.is_empty() {
+            return Err(format!(
+                "Video layer group {} must contain at least one layer",
+                group.id.0
+            ));
+        }
+        let mut indices = Vec::with_capacity(group.layer_ids.len());
+        for layer_id in &group.layer_ids {
+            if !layers.contains_key(layer_id)
+                || grouped_layers.insert(*layer_id, group.id).is_some()
+            {
+                return Err(format!(
+                    "Video layer {} is missing or belongs to multiple groups",
+                    layer_id
+                ));
+            }
+            let index = composition
+                .layer_ids
+                .iter()
+                .position(|candidate| candidate == layer_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Video layer group {} member {} is outside composition {}",
+                        group.id.0, layer_id, composition.id
+                    )
+                })?;
+            indices.push(index);
+        }
+        if indices.windows(2).any(|pair| pair[1] != pair[0] + 1) {
+            return Err(format!(
+                "Video layer group {} members must follow contiguous composition order",
+                group.id.0
+            ));
+        }
+    }
+
+    let mut chain_ids = BTreeMap::new();
+    let mut stage_ids = BTreeMap::new();
+    let mut effect_ids = BTreeMap::new();
+    let mut scopes = BTreeMap::new();
+    for chain in &video.effect_chains {
+        if chain.id.0 == 0 || chain_ids.insert(chain.id, ()).is_some() {
+            return Err("Video effect chain IDs must be non-zero and unique".to_string());
+        }
+        if scopes.insert(chain.scope.clone(), chain.id).is_some() {
+            return Err("Each video effect scope may own at most one chain".to_string());
+        }
+        validate_video_effect_scope(&chain.scope, &layers, &compositions, &outputs, &groups)?;
+        if chain.stages.len() > VIDEO_EFFECT_CHAIN_MAX_STAGES {
+            return Err(format!(
+                "Video effect chain {} exceeds {VIDEO_EFFECT_CHAIN_MAX_STAGES} stages",
+                chain.id.0
+            ));
+        }
+        for stage in &chain.stages {
+            if stage.id.0 == 0 || stage_ids.insert(stage.id, ()).is_some() {
+                return Err("Video effect stage IDs must be non-zero and unique".to_string());
+            }
+            if stage.effect.id.0 == 0 || effect_ids.insert(stage.effect.id, ()).is_some() {
+                return Err("Video effect IDs must be non-zero and unique".to_string());
+            }
+            validate_canonical_label("effect stage", stage.id.0, &stage.label)?;
+            validate_video_effect_kind(&stage.effect.kind)?;
+        }
+    }
+
+    let mut preset_ids = BTreeMap::new();
+    for preset in &video.effect_presets {
+        if preset.id.0 == 0 || preset_ids.insert(preset.id, ()).is_some() {
+            return Err("Video effect preset IDs must be non-zero and unique".to_string());
+        }
+        validate_canonical_label("effect preset", preset.id.0, &preset.label)?;
+        if preset.payload.stages.len() > VIDEO_EFFECT_CHAIN_MAX_STAGES {
+            return Err(format!(
+                "Video effect preset {} exceeds {VIDEO_EFFECT_CHAIN_MAX_STAGES} stages",
+                preset.id.0
+            ));
+        }
+        for stage in &preset.payload.stages {
+            if stage.label.trim().is_empty() || stage.label != stage.label.trim() {
+                return Err(format!(
+                    "Video effect preset {} stage label must be canonical",
+                    preset.id.0
+                ));
+            }
+            validate_video_effect_kind(&stage.effect)?;
+        }
+    }
+
+    for layer in &video.layers {
+        let layer_chain = video
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id: layer.id });
+        if require_projection && layer.isf_effect.is_some() != layer_chain.is_some() {
+            return Err(format!(
+                "Video layer {} legacy ISF and canonical layer chain must both exist",
+                layer.id
+            ));
+        }
+        if let Some(chain) = layer_chain {
+            validate_layer_effect_chain_projection(layer, chain)?;
+            validate_clip_override_effect_ids(layer, chain, require_projection)?;
+        } else if require_projection
+            && layer
+                .clip_slots
+                .iter()
+                .any(|slot| !slot.effect_overrides.is_empty())
+        {
+            return Err(format!(
+                "Video layer {} clip overrides require a canonical layer chain",
+                layer.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_video_effect_scope(
+    scope: &VideoEffectScope,
+    layers: &BTreeMap<VideoLayerId, &VideoLayerSummary>,
+    compositions: &BTreeMap<CompositionId, &CompositionSummary>,
+    outputs: &BTreeMap<VideoOutputId, &VideoOutputSummary>,
+    groups: &BTreeMap<VideoLayerGroupId, &VideoLayerGroupSummary>,
+) -> Result<(), String> {
+    match scope {
+        VideoEffectScope::Clip { layer_id, slot_id } => {
+            let layer = layers
+                .get(layer_id)
+                .ok_or_else(|| format!("Video clip effect references missing layer {layer_id}"))?;
+            if !layer.clip_slots.iter().any(|slot| slot.id == *slot_id) {
+                return Err(format!(
+                    "Video clip effect references missing slot {}",
+                    slot_id.0
+                ));
+            }
+        }
+        VideoEffectScope::Layer { layer_id } => {
+            if !layers.contains_key(layer_id) {
+                return Err(format!(
+                    "Video layer effect references missing layer {layer_id}"
+                ));
+            }
+        }
+        VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::ClipTake { layer_id },
+        } => {
+            if !layers.contains_key(layer_id) {
+                return Err(format!(
+                    "Video Clip Take effect references missing layer {layer_id}"
+                ));
+            }
+        }
+        VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::LayerBus { .. },
+        } => return Err("Layer Bus effect scopes are unavailable until C3".to_string()),
+        VideoEffectScope::Composition { composition_id } => {
+            if !compositions.contains_key(composition_id) {
+                return Err(format!(
+                    "Video composition effect references missing composition {composition_id}"
+                ));
+            }
+        }
+        VideoEffectScope::Group { group_id } => {
+            if !groups.contains_key(group_id) {
+                return Err(format!(
+                    "Video group effect references missing group {}",
+                    group_id.0
+                ));
+            }
+        }
+        VideoEffectScope::Output { output_id } => {
+            if !outputs.contains_key(output_id) {
+                return Err(format!(
+                    "Video output effect references missing output {output_id}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_label(kind: &str, id: u64, label: &str) -> Result<(), String> {
+    if label.trim().is_empty() || label != label.trim() {
+        return Err(format!(
+            "Video {kind} {id} label must be non-empty and trimmed"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_video_effect_kind(kind: &VideoEffectKind) -> Result<(), String> {
+    match kind {
+        VideoEffectKind::Isf { effect } => {
+            if !effect.enabled {
+                return Err(
+                    "Canonical ISF effect entities must be enabled; stage state owns bypass"
+                        .to_string(),
+                );
+            }
+            if effect.label.trim().is_empty()
+                || effect.label != effect.label.trim()
+                || effect.source.trim().is_empty()
+            {
+                return Err(
+                    "Video ISF effect label/source must be canonical and non-empty".to_string(),
+                );
+            }
+            if !effect.stack.is_empty() {
+                return Err(
+                    "Canonical ISF effect entities may not contain a legacy nested stack"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn projected_legacy_isf(
+    chain: &VideoEffectChainSummary,
+) -> Result<Option<VideoIsfEffectSummary>, String> {
+    if chain.stages.is_empty() {
+        return Ok(None);
+    }
+    let mut projected = Vec::with_capacity(chain.stages.len());
+    for stage in &chain.stages {
+        let VideoEffectKind::Isf { effect } = &stage.effect.kind;
+        let mut effect = effect.clone();
+        effect.enabled = !chain.bypassed && stage.enabled;
+        effect.stack.clear();
+        projected.push(effect);
+    }
+    let mut root = projected.remove(0);
+    root.stack = projected
+        .into_iter()
+        .map(|effect| VideoIsfEffectStageSummary {
+            enabled: effect.enabled,
+            label: effect.label,
+            source: effect.source,
+            source_path: effect.source_path,
+            description: effect.description,
+            categories: effect.categories,
+            controls: effect.controls,
+        })
+        .collect();
+    Ok(Some(root))
+}
+
+fn validate_layer_effect_chain_projection(
+    layer: &VideoLayerSummary,
+    chain: &VideoEffectChainSummary,
+) -> Result<(), String> {
+    if chain.scope != (VideoEffectScope::Layer { layer_id: layer.id }) {
+        return Err(format!(
+            "Video layer {} effect chain has wrong scope",
+            layer.id
+        ));
+    }
+    if projected_legacy_isf(chain)? != layer.isf_effect {
+        return Err(format!(
+            "Video layer {} legacy ISF projection diverges from canonical chain",
+            layer.id
+        ));
+    }
+    Ok(())
+}
+
+fn reconcile_clip_override_effect_ids(
+    layer: &mut VideoLayerSummary,
+    chain: &VideoEffectChainSummary,
+) -> Result<(), String> {
+    for slot in &mut layer.clip_slots {
+        for effect_override in &mut slot.effect_overrides {
+            let effect_id = chain
+                .stages
+                .get(effect_override.stage_index)
+                .map(|stage| stage.effect.id)
+                .ok_or_else(|| {
+                    format!(
+                        "Video layer {} clip override stage is outside canonical chain",
+                        layer.id
+                    )
+                })?;
+            if effect_override
+                .effect_id
+                .is_some_and(|existing| existing != effect_id)
+            {
+                return Err(format!(
+                    "Video layer {} clip override effect identity diverges",
+                    layer.id
+                ));
+            }
+            effect_override.effect_id = Some(effect_id);
+        }
+    }
+    Ok(())
+}
+
+fn validate_clip_override_effect_ids(
+    layer: &VideoLayerSummary,
+    chain: &VideoEffectChainSummary,
+    require_ids: bool,
+) -> Result<(), String> {
+    for slot in &layer.clip_slots {
+        for effect_override in &slot.effect_overrides {
+            let expected = chain
+                .stages
+                .get(effect_override.stage_index)
+                .map(|stage| stage.effect.id)
+                .ok_or_else(|| {
+                    format!(
+                        "Video layer {} clip override stage is outside canonical chain",
+                        layer.id
+                    )
+                })?;
+            if require_ids && effect_override.effect_id != Some(expected) {
+                return Err(format!(
+                    "Video layer {} clip override must target the exact stable effect",
+                    layer.id
+                ));
+            }
+            if effect_override
+                .effect_id
+                .is_some_and(|effect_id| effect_id != expected)
+            {
+                return Err(format!(
+                    "Video layer {} clip override stable effect and stage index diverge",
+                    layer.id
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Translate the authored portion of the old layer transport into a default
@@ -6977,6 +7646,7 @@ mod tests {
         let mut missing_control = video.clone();
         missing_control.layers[0].clip_slots[0].effect_overrides =
             vec![super::VideoClipEffectOverrideSummary {
+                effect_id: None,
                 stage_index: 0,
                 control_name: "missing".to_string(),
                 value: [0.0; 4],
@@ -6991,6 +7661,7 @@ mod tests {
         override_ok.layers[0].isf_effect = Some(clip_slot_test_effect());
         override_ok.layers[0].clip_slots[0].effect_overrides =
             vec![super::VideoClipEffectOverrideSummary {
+                effect_id: None,
                 stage_index: 0,
                 control_name: "amount".to_string(),
                 value: [0.75, 0.0, 0.0, 0.0],
@@ -7028,11 +7699,13 @@ mod tests {
         let mut exact = video.clone();
         exact.layers[0].clip_slots[0].effect_overrides = vec![
             super::VideoClipEffectOverrideSummary {
+                effect_id: None,
                 stage_index: 0,
                 control_name: "amount".to_string(),
                 value: [0.25, 0.0, 0.0, 0.0],
             },
             super::VideoClipEffectOverrideSummary {
+                effect_id: None,
                 stage_index: 1,
                 control_name: "amount".to_string(),
                 value: [0.75, 0.0, 0.0, 0.0],
@@ -7053,6 +7726,7 @@ mod tests {
         duplicate_identity.layers[0].clip_slots[0]
             .effect_overrides
             .push(super::VideoClipEffectOverrideSummary {
+                effect_id: None,
                 stage_index: 1,
                 control_name: "amount".to_string(),
                 value: [0.5, 0.0, 0.0, 0.0],
@@ -8887,6 +9561,249 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<super::SubmasterSummary>(&encoded).unwrap(),
             live
+        );
+    }
+
+    #[test]
+    fn video_effect_chain_legacy_migration_is_atomic_idempotent_and_exact() {
+        let mut layer = media_asset_test_layer(7, "Layer FX", "C:/show/fx.mp4");
+        layer.isf_effect = Some(clip_slot_test_effect());
+        layer.media_asset_id = Some(10);
+        layer.clip_slots = vec![clip_slot_test_slot(20, 10)];
+        layer.default_clip_slot_id = Some(super::VideoClipSlotId(20));
+        layer.clip_slots[0].effect_overrides = vec![super::VideoClipEffectOverrideSummary {
+            effect_id: None,
+            stage_index: 0,
+            control_name: "amount".to_string(),
+            value: [0.5, 0.0, 0.0, 0.0],
+        }];
+        let mut video = super::VideoSnapshot {
+            layers: vec![layer],
+            media_assets: vec![media_asset_test_asset(10, "FX", "C:/show/fx.mp4")],
+            ..super::VideoSnapshot::default()
+        };
+
+        let report = super::normalize_legacy_video_effect_chains(&mut video).unwrap();
+        assert_eq!(report.created_chain_ids, vec![super::VideoEffectChainId(1)]);
+        assert_eq!(report.migrated_layer_ids, vec![7]);
+        assert_eq!(video.effect_chains.len(), 1);
+        assert_eq!(
+            video.effect_chains[0].scope,
+            super::VideoEffectScope::Layer { layer_id: 7 }
+        );
+        assert_eq!(
+            video.effect_chains[0].stages[0].id,
+            super::VideoEffectStageId(1)
+        );
+        assert_eq!(
+            video.effect_chains[0].stages[0].effect.id,
+            super::VideoEffectId(1)
+        );
+        assert_eq!(
+            video.layers[0].clip_slots[0].effect_overrides[0].effect_id,
+            Some(super::VideoEffectId(1))
+        );
+        super::validate_engine_ready_video_effect_chains(&video).unwrap();
+        let stable = video.clone();
+        assert_eq!(
+            super::normalize_legacy_video_effect_chains(&mut video).unwrap(),
+            super::VideoEffectChainMigrationReport::default()
+        );
+        assert_eq!(video, stable);
+
+        let json = serde_json::to_string(&video).unwrap();
+        assert_eq!(
+            serde_json::from_str::<super::VideoSnapshot>(&json).unwrap(),
+            video
+        );
+        let mut divergent = video;
+        let super::VideoEffectKind::Isf { effect } =
+            &mut divergent.effect_chains[0].stages[0].effect.kind;
+        effect.label = "Different".to_string();
+        let original = divergent.clone();
+        assert!(super::normalize_legacy_video_effect_chains(&mut divergent).is_err());
+        assert_eq!(divergent, original);
+    }
+
+    #[test]
+    fn video_effect_chain_scope_group_limits_and_forward_bus_fail_closed() {
+        let layers = (1..=3)
+            .map(|id| {
+                media_asset_test_layer(id, &format!("Layer {id}"), &format!("C:/show/{id}.mp4"))
+            })
+            .collect::<Vec<_>>();
+        let mut video = super::VideoSnapshot {
+            layers,
+            compositions: vec![super::CompositionSummary {
+                id: 9,
+                label: "Main".to_string(),
+                layer_ids: vec![1, 2, 3],
+                output_ids: Vec::new(),
+            }],
+            layer_groups: vec![super::VideoLayerGroupSummary {
+                id: super::VideoLayerGroupId(11),
+                label: "Backgrounds".to_string(),
+                composition_id: 9,
+                layer_ids: vec![1, 2],
+            }],
+            effect_chains: vec![super::VideoEffectChainSummary {
+                id: super::VideoEffectChainId(21),
+                scope: super::VideoEffectScope::Group {
+                    group_id: super::VideoLayerGroupId(11),
+                },
+                bypassed: false,
+                stages: Vec::new(),
+            }],
+            ..super::VideoSnapshot::default()
+        };
+        super::validate_authored_video_effect_chains(&video).unwrap();
+
+        let mut duplicate_scope = video.clone();
+        duplicate_scope
+            .effect_chains
+            .push(super::VideoEffectChainSummary {
+                id: super::VideoEffectChainId(22),
+                scope: super::VideoEffectScope::Group {
+                    group_id: super::VideoLayerGroupId(11),
+                },
+                bypassed: true,
+                stages: Vec::new(),
+            });
+        assert!(super::validate_authored_video_effect_chains(&duplicate_scope).is_err());
+
+        video.effect_chains[0].scope = super::VideoEffectScope::Transition {
+            owner: super::VideoTransitionEffectOwner::LayerBus {
+                bus_id: super::VideoTransitionBusId(5),
+            },
+        };
+        assert!(super::validate_authored_video_effect_chains(&video).is_err());
+
+        let mut non_contiguous = video.clone();
+        non_contiguous.effect_chains.clear();
+        non_contiguous.layer_groups[0].layer_ids = vec![1, 3];
+        assert!(super::validate_authored_video_effect_chains(&non_contiguous).is_err());
+
+        let mut reversed = video.clone();
+        reversed.effect_chains.clear();
+        reversed.layer_groups[0].layer_ids = vec![2, 1];
+        assert!(super::validate_authored_video_effect_chains(&reversed).is_err());
+
+        let mut duplicate_composition = video.clone();
+        duplicate_composition.effect_chains.clear();
+        duplicate_composition.layer_groups.clear();
+        duplicate_composition
+            .compositions
+            .push(super::CompositionSummary {
+                id: 9,
+                label: "Ambiguous".to_string(),
+                layer_ids: vec![3],
+                output_ids: Vec::new(),
+            });
+        assert!(super::validate_authored_video_effect_chains(&duplicate_composition).is_err());
+
+        let mut zero_output = video.clone();
+        zero_output.effect_chains.clear();
+        zero_output.layer_groups.clear();
+        zero_output.outputs.push(super::VideoOutputSummary {
+            id: 0,
+            label: "Invalid".to_string(),
+            kind: super::VideoOutputKind::Display,
+            enabled: true,
+            composition_id: 9,
+            fullscreen: false,
+            monitor_id: None,
+            width: 1920,
+            height: 1080,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: super::VideoOutputMapping::default(),
+        });
+        assert!(super::validate_authored_video_effect_chains(&zero_output).is_err());
+
+        let mut too_many_stages = non_contiguous;
+        too_many_stages.layer_groups[0].layer_ids = vec![1, 2];
+        too_many_stages.effect_chains = vec![super::VideoEffectChainSummary {
+            id: super::VideoEffectChainId(40),
+            scope: super::VideoEffectScope::Clip {
+                layer_id: 1,
+                slot_id: super::VideoClipSlotId(1),
+            },
+            bypassed: false,
+            stages: Vec::new(),
+        }];
+        too_many_stages.layers[0].clip_slots = vec![clip_slot_test_slot(1, 1)];
+        too_many_stages.layers[0].media_asset_id = Some(1);
+        too_many_stages.media_assets = vec![media_asset_test_asset(1, "A", "C:/show/1.mp4")];
+        let stage = super::VideoEffectStageSummary {
+            id: super::VideoEffectStageId(1),
+            enabled: true,
+            label: "Stage".to_string(),
+            effect: super::VideoEffectSummary {
+                id: super::VideoEffectId(1),
+                kind: super::VideoEffectKind::Isf {
+                    effect: clip_slot_test_effect(),
+                },
+            },
+        };
+        too_many_stages.effect_chains[0].stages =
+            vec![stage; super::VIDEO_EFFECT_CHAIN_MAX_STAGES + 1];
+        assert!(super::validate_authored_video_effect_chains(&too_many_stages).is_err());
+    }
+
+    #[test]
+    fn video_effect_chain_migration_overflow_leaves_snapshot_unchanged() {
+        let mut first = media_asset_test_layer(1, "No FX", "C:/show/one.mp4");
+        let mut second = media_asset_test_layer(2, "FX", "C:/show/two.mp4");
+        second.isf_effect = Some(clip_slot_test_effect());
+        first.media_asset_id = Some(10);
+        second.media_asset_id = Some(11);
+        let mut video = super::VideoSnapshot {
+            layers: vec![first, second],
+            media_assets: vec![
+                media_asset_test_asset(10, "One", "C:/show/one.mp4"),
+                media_asset_test_asset(11, "Two", "C:/show/two.mp4"),
+            ],
+            effect_chains: vec![super::VideoEffectChainSummary {
+                id: super::VideoEffectChainId(u64::MAX),
+                scope: super::VideoEffectScope::Layer { layer_id: 1 },
+                bypassed: false,
+                stages: Vec::new(),
+            }],
+            ..super::VideoSnapshot::default()
+        };
+        let original = video.clone();
+        assert!(super::normalize_legacy_video_effect_chains(&mut video).is_err());
+        assert_eq!(video, original);
+    }
+
+    #[test]
+    fn video_effect_chain_serde_defaults_do_not_pollute_legacy_snapshot() {
+        let mut legacy = serde_json::to_value(super::VideoSnapshot::default()).unwrap();
+        let object = legacy.as_object_mut().unwrap();
+        object.remove("effect_chains");
+        object.remove("effect_presets");
+        object.remove("layer_groups");
+        let parsed: super::VideoSnapshot = serde_json::from_value(legacy).unwrap();
+        assert!(parsed.effect_chains.is_empty());
+        assert!(parsed.effect_presets.is_empty());
+        assert!(parsed.layer_groups.is_empty());
+        assert!(!serde_json::to_string(&parsed)
+            .unwrap()
+            .contains("effect_chains"));
+
+        let decoded: super::VideoEffectScope = serde_json::from_value(serde_json::json!({
+            "scope": "clip",
+            "layer_id": 1,
+            "slot_id": 2
+        }))
+        .unwrap();
+        assert_eq!(
+            decoded,
+            super::VideoEffectScope::Clip {
+                layer_id: 1,
+                slot_id: super::VideoClipSlotId(2)
+            }
         );
     }
 }
