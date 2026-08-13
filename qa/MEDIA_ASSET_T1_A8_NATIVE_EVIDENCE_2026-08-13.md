@@ -1,6 +1,6 @@
 # Media Asset T1 A8 native evidence — 2026-08-13
 
-Status: IN PROGRESS — 8 of 15 native workflow rows executed successfully at this checkpoint. The remaining seven rows are deliberately not accepted yet.
+Status: IN PROGRESS — 12 of 15 native workflow rows executed successfully at this checkpoint. The remaining three rows are deliberately not accepted yet.
 
 ## Release identity and native gate
 
@@ -103,17 +103,33 @@ Status: IN PROGRESS — 8 of 15 native workflow rows executed successfully at th
 - `bootstrap-success.sdc` remained 10,119 bytes with SHA-256 `5863BE40C4A6396ACE026B7AEAC507D1B91ECBC765FAC9696121CD63EA0FD8E8`.
 - `v12.mp4` remained 20,606,544 bytes with SHA-256 `1DB23DAAE678294856645DAF6E2E6C01E3C7CE8B7D9D64A3D9BF31564AAE74B7` and unchanged UTC last-write timestamp.
 
+### 11. Missing availability — PASS
+
+- Baseline: `projects\catalog-one.sdc`, with orphan catalog asset `v01` at `media\v01.mp4` and zero layer references.
+- Before inspection, the exact source was moved to a same-directory parked path; the source path was absent while the original bytes remained recoverable.
+- The native per-asset Verify action reported `欠損` for `v01`.
+- Native status: `メディア利用可否: 0件を検証済み、1件は要確認。プロジェクト履歴は変更されていません。`
+- The source was restored by rename. Its 6,217-byte length, UTC last-write timestamp `2026-08-13T12:46:06.5879161Z`, and SHA-256 `36791A9A700A831023047700C49E2D4576188D54FB7E02D6AFB91F58C11B36EE` matched the pre-test values exactly.
+- `catalog-one.sdc` retained SHA-256 `B8464015039973511051992886857E2B64123F243CEE158CDF461DF42FEB9934` and UTC last-write timestamp `2026-08-13T13:15:25.6802559Z`.
+
+### 12. HashMismatch availability — PASS
+
+- The original `v01.mp4` was parked, and the distinct valid `mismatch-valid.mp4` bytes were copied to the exact catalog path `media\v01.mp4`.
+- Replacement bytes were 76,750 bytes with SHA-256 `3107CB1EAD787328ADF4737136E3DE1ABA2FA194BADCBA38EC20C4BF280A6C0F`, distinct from the catalog's expected 6,217-byte / `36791A...B36EE` identity.
+- The native per-asset Verify action reported `ハッシュ不一致`, not Missing or Verified.
+- Native status again stated that one asset required attention and that project history was unchanged.
+- The disposable copied replacement was removed and the parked original was restored. The original source length, timestamp, and SHA-256 matched exactly; no parked file remained.
+- `catalog-one.sdc` retained the same SHA-256 and last-write timestamp, proving that machine-local availability inspection did not mutate saved project state.
+
 ## Remaining rows — not accepted
 
-1. Missing availability.
-2. HashMismatch availability.
-3. All-reference Relink, including default mismatch refusal and a successful matching-content relink.
-4. Restart/load with no implicit source-file touch.
-5. Explicit Save/reload semantic equivalence.
+1. All-reference Relink, including default mismatch refusal and a successful matching-content relink.
+2. Restart/load with no implicit source-file touch.
+3. Explicit Save/reload semantic equivalence.
 
 ## Evidence boundaries
 
 - Browser/TypeScript/static gates are not substituted for the native observations above.
-- The first ten rows have native UI outcomes plus saved-project/hash evidence. Internal coordinator revision/history-generation counters were not directly exported by the UI; where Undo menu state was visible it was consistent with one operation, but this document does not claim an unobserved counter value.
+- The first twelve rows have native UI outcomes plus saved-project/hash evidence. Internal coordinator revision/history-generation counters were not directly exported by the UI; where Undo menu state was visible it was consistent with one operation, but this document does not claim an unobserved counter value.
 - Screenshot evidence remains in the supervising Codex task transcript; saved `.sdc` artifacts and fixture hashes are the durable local evidence.
 - This checkpoint is not Media Asset T1 completion and is not a release-candidate GO.
