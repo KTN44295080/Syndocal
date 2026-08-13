@@ -5,7 +5,8 @@ use protocol::{VideoLayerId, VideoSourceKind};
 #[cfg(feature = "libav")]
 use super::VideoPixelFormat;
 use super::{
-    StillImageSignature, VideoDecodeError, VideoFrame, VideoFrameDecoder, VideoFrameRequest,
+    render_input_cache_owner_matches, StillImageSignature, VideoDecodeError, VideoFrame,
+    VideoFrameDecoder, VideoFrameRequest, VideoRenderInput,
 };
 #[cfg(feature = "libav")]
 use ffmpeg_next as ffmpeg;
@@ -17,11 +18,36 @@ const LIBAV_WORKING_SET_CAPACITY: usize = 8;
 
 pub struct LibavFrameDecoder {
     entries: Vec<LibavFrameCacheEntry>,
-    working_set_lru: Vec<VideoLayerId>,
+    working_set_lru: Vec<LibavRenderInputOwner>,
     #[cfg(feature = "libav")]
     sessions: Vec<LibavDecodeSession>,
     #[cfg(feature = "libav")]
     session_counters: LibavSessionCounters,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LibavRenderInputOwner {
+    key: protocol::VideoRenderInputKey,
+    legacy_layer_id: Option<VideoLayerId>,
+}
+
+impl LibavRenderInputOwner {
+    #[cfg_attr(not(any(feature = "libav", test)), allow(dead_code))]
+    fn new(key: protocol::VideoRenderInputKey, layer_id: VideoLayerId) -> Self {
+        Self {
+            key,
+            legacy_layer_id: (key == protocol::VideoRenderInputKey::LEGACY).then_some(layer_id),
+        }
+    }
+
+    fn matches(self, key: protocol::VideoRenderInputKey, layer_id: VideoLayerId) -> bool {
+        render_input_cache_owner_matches(
+            self.key,
+            self.legacy_layer_id.unwrap_or(layer_id),
+            key,
+            layer_id,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -38,6 +64,7 @@ pub(crate) struct LibavSessionDiagnostics {
 #[derive(Clone)]
 #[cfg_attr(not(feature = "libav"), allow(dead_code))]
 struct LibavFrameCacheEntry {
+    key: protocol::VideoRenderInputKey,
     layer_id: VideoLayerId,
     path: PathBuf,
     width: u32,
@@ -49,6 +76,7 @@ struct LibavFrameCacheEntry {
 
 #[cfg(feature = "libav")]
 struct LibavDecodeSession {
+    key: protocol::VideoRenderInputKey,
     layer_id: VideoLayerId,
     path: PathBuf,
     width: u32,
@@ -137,6 +165,7 @@ impl LibavFrameDecoder {
     #[cfg(any(feature = "libav", test))]
     fn cached_frame(
         &self,
+        key: protocol::VideoRenderInputKey,
         request: &VideoFrameRequest,
         path: &std::path::Path,
         signature: &StillImageSignature,
@@ -144,7 +173,8 @@ impl LibavFrameDecoder {
         self.entries
             .iter()
             .find(|entry| {
-                entry.layer_id == request.layer_id
+                entry.key == key
+                    && entry.layer_id == request.layer_id
                     && entry.path == path
                     && entry.width == request.width
                     && entry.height == request.height
@@ -156,32 +186,55 @@ impl LibavFrameDecoder {
 
     #[cfg(any(feature = "libav", test))]
     fn replace_layer_cache_entry(&mut self, entry: LibavFrameCacheEntry) {
-        self.touch_layer(entry.layer_id);
-        self.entries
-            .retain(|cached| cached.layer_id != entry.layer_id);
+        self.touch_input(entry.key, entry.layer_id);
+        self.entries.retain(|cached| {
+            !render_input_cache_owner_matches(
+                entry.key,
+                entry.layer_id,
+                cached.key,
+                cached.layer_id,
+            )
+        });
         self.entries.push(entry);
     }
 
-    fn evict_layer_state(&mut self, layer_id: VideoLayerId) {
-        self.entries.retain(|entry| entry.layer_id != layer_id);
+    fn evict_input_state(&mut self, key: protocol::VideoRenderInputKey, layer_id: VideoLayerId) {
+        self.entries.retain(|entry| {
+            !render_input_cache_owner_matches(key, layer_id, entry.key, entry.layer_id)
+        });
         #[cfg(feature = "libav")]
-        self.sessions.retain(|session| session.layer_id != layer_id);
+        self.sessions.retain(|session| {
+            !render_input_cache_owner_matches(key, layer_id, session.key, session.layer_id)
+        });
     }
 
     pub(crate) fn release_layer(&mut self, layer_id: VideoLayerId) {
-        self.evict_layer_state(layer_id);
+        self.entries.retain(|entry| entry.layer_id != layer_id);
+        #[cfg(feature = "libav")]
+        self.sessions.retain(|session| session.layer_id != layer_id);
+        let active_owners = self
+            .entries
+            .iter()
+            .map(|entry| LibavRenderInputOwner::new(entry.key, entry.layer_id))
+            .collect::<Vec<_>>();
         self.working_set_lru
-            .retain(|cached_layer_id| *cached_layer_id != layer_id);
+            .retain(|owner| active_owners.contains(owner));
+    }
+
+    fn release_input_key(&mut self, key: protocol::VideoRenderInputKey, layer_id: VideoLayerId) {
+        self.evict_input_state(key, layer_id);
+        self.working_set_lru
+            .retain(|cached| !cached.matches(key, layer_id));
     }
 
     #[cfg(any(feature = "libav", test))]
-    fn touch_layer(&mut self, layer_id: VideoLayerId) {
-        self.working_set_lru
-            .retain(|cached_layer_id| *cached_layer_id != layer_id);
-        self.working_set_lru.push(layer_id);
+    fn touch_input(&mut self, key: protocol::VideoRenderInputKey, layer_id: VideoLayerId) {
+        let owner = LibavRenderInputOwner::new(key, layer_id);
+        self.working_set_lru.retain(|cached| *cached != owner);
+        self.working_set_lru.push(owner);
         while self.working_set_lru.len() > LIBAV_WORKING_SET_CAPACITY {
-            let evicted_layer_id = self.working_set_lru.remove(0);
-            self.evict_layer_state(evicted_layer_id);
+            let evicted = self.working_set_lru.remove(0);
+            self.evict_input_state(evicted.key, evicted.legacy_layer_id.unwrap_or(0));
             #[cfg(feature = "libav")]
             {
                 self.session_counters.evictions = self.session_counters.evictions.saturating_add(1);
@@ -190,24 +243,30 @@ impl LibavFrameDecoder {
     }
 
     #[cfg(feature = "libav")]
-    fn session_index(&self, layer_id: VideoLayerId) -> Option<usize> {
-        self.sessions
-            .iter()
-            .position(|session| session.layer_id == layer_id)
+    fn session_index(
+        &self,
+        key: protocol::VideoRenderInputKey,
+        layer_id: VideoLayerId,
+    ) -> Option<usize> {
+        self.sessions.iter().position(|session| {
+            render_input_cache_owner_matches(key, layer_id, session.key, session.layer_id)
+        })
     }
 
     #[cfg(feature = "libav")]
     fn decode_enabled(
         &mut self,
-        request: &VideoFrameRequest,
+        input: &VideoRenderInput,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        let key = input.key;
+        let request = &input.request;
         let Some(path) = request
             .source
             .path
             .as_deref()
             .filter(|path| !path.trim().is_empty())
         else {
-            self.release_layer(request.layer_id);
+            self.release_input_key(key, request.layer_id);
             self.session_counters.errors = self.session_counters.errors.saturating_add(1);
             return Err(VideoDecodeError::MissingSourcePath {
                 layer_id: request.layer_id,
@@ -216,8 +275,8 @@ impl LibavFrameDecoder {
         };
         let path = PathBuf::from(path);
         let signature = StillImageSignature::from_path(&path);
-        if let Some(frame) = self.cached_frame(request, &path, &signature) {
-            self.touch_layer(request.layer_id);
+        if let Some(frame) = self.cached_frame(key, request, &path, &signature) {
+            self.touch_input(key, request.layer_id);
             self.session_counters.frame_reuses =
                 self.session_counters.frame_reuses.saturating_add(1);
             return Ok(Some(frame));
@@ -226,9 +285,11 @@ impl LibavFrameDecoder {
         let cached_entry = self
             .entries
             .iter()
-            .find(|entry| entry.layer_id == request.layer_id)
+            .find(|entry| {
+                render_input_cache_owner_matches(key, request.layer_id, entry.key, entry.layer_id)
+            })
             .cloned();
-        let session_index = self.session_index(request.layer_id);
+        let session_index = self.session_index(key, request.layer_id);
         let session_matches = session_index
             .is_some_and(|index| self.sessions[index].matches(request, &path, &signature));
         let decision = if session_matches {
@@ -263,13 +324,13 @@ impl LibavFrameDecoder {
             if session_index.is_some() {
                 self.session_counters.resets = self.session_counters.resets.saturating_add(1);
             }
-            self.release_layer(request.layer_id);
-            self.touch_layer(request.layer_id);
-            let session = match open_libav_session(request, path.clone(), signature.clone()) {
+            self.release_input_key(key, request.layer_id);
+            self.touch_input(key, request.layer_id);
+            let session = match open_libav_session(key, request, path.clone(), signature.clone()) {
                 Ok(session) => session,
                 Err(error) => {
                     self.session_counters.errors = self.session_counters.errors.saturating_add(1);
-                    self.release_layer(request.layer_id);
+                    self.release_input_key(key, request.layer_id);
                     return Err(error);
                 }
             };
@@ -292,12 +353,12 @@ impl LibavFrameDecoder {
             Ok(frame) => frame,
             Err(_) if seek_before_decode && request.position_ms > 0 => {
                 let mut fallback_session =
-                    match open_libav_session(request, path.clone(), signature.clone()) {
+                    match open_libav_session(key, request, path.clone(), signature.clone()) {
                         Ok(session) => session,
                         Err(error) => {
                             self.session_counters.errors =
                                 self.session_counters.errors.saturating_add(1);
-                            self.release_layer(request.layer_id);
+                            self.release_input_key(key, request.layer_id);
                             return Err(error);
                         }
                     };
@@ -310,18 +371,19 @@ impl LibavFrameDecoder {
                     Err(error) => {
                         self.session_counters.errors =
                             self.session_counters.errors.saturating_add(1);
-                        self.release_layer(request.layer_id);
+                        self.release_input_key(key, request.layer_id);
                         return Err(error);
                     }
                 }
             }
             Err(error) => {
                 self.session_counters.errors = self.session_counters.errors.saturating_add(1);
-                self.release_layer(request.layer_id);
+                self.release_input_key(key, request.layer_id);
                 return Err(error);
             }
         };
         self.replace_layer_cache_entry(LibavFrameCacheEntry {
+            key,
             layer_id: request.layer_id,
             path,
             width: request.width,
@@ -338,28 +400,73 @@ impl VideoFrameDecoder for LibavFrameDecoder {
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
         self.entries
             .retain(|entry| layer_ids.contains(&entry.layer_id));
+        let active_owners = self
+            .entries
+            .iter()
+            .map(|entry| LibavRenderInputOwner::new(entry.key, entry.layer_id))
+            .collect::<Vec<_>>();
         self.working_set_lru
-            .retain(|layer_id| layer_ids.contains(layer_id));
+            .retain(|owner| active_owners.contains(owner));
         #[cfg(feature = "libav")]
         self.sessions
             .retain(|session| layer_ids.contains(&session.layer_id));
+    }
+
+    fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        self.entries.retain(|entry| {
+            inputs.iter().any(|input| {
+                render_input_cache_owner_matches(
+                    input.key,
+                    input.layer_id(),
+                    entry.key,
+                    entry.layer_id,
+                )
+            })
+        });
+        self.working_set_lru.retain(|owner| {
+            inputs
+                .iter()
+                .any(|input| owner.matches(input.key, input.layer_id()))
+        });
+        #[cfg(feature = "libav")]
+        self.sessions.retain(|session| {
+            inputs.iter().any(|input| {
+                render_input_cache_owner_matches(
+                    input.key,
+                    input.layer_id(),
+                    session.key,
+                    session.layer_id,
+                )
+            })
+        });
     }
 
     fn release_layer(&mut self, layer_id: VideoLayerId) {
         LibavFrameDecoder::release_layer(self, layer_id);
     }
 
+    fn release_input(&mut self, input: &VideoRenderInput) {
+        self.release_input_key(input.key, input.layer_id());
+    }
+
     fn decode_frame(
         &mut self,
         request: &VideoFrameRequest,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
-        if request.source.kind != VideoSourceKind::File {
-            self.release_layer(request.layer_id);
+        self.decode_input_frame(&VideoRenderInput::legacy(request.clone()))
+    }
+
+    fn decode_input_frame(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        if input.request.source.kind != VideoSourceKind::File {
+            self.release_input_key(input.key, input.layer_id());
             return Ok(None);
         }
         #[cfg(feature = "libav")]
         {
-            self.decode_enabled(request)
+            self.decode_enabled(input)
         }
         #[cfg(not(feature = "libav"))]
         {
@@ -415,6 +522,7 @@ fn session_decision(
 
 #[cfg(feature = "libav")]
 fn open_libav_session(
+    key: protocol::VideoRenderInputKey,
     request: &VideoFrameRequest,
     path: PathBuf,
     signature: StillImageSignature,
@@ -440,6 +548,7 @@ fn open_libav_session(
         .map_err(|error| decode_error(request, error))?;
     decoder.flush();
     Ok(LibavDecodeSession {
+        key,
         layer_id: request.layer_id,
         path,
         width: request.width,
@@ -740,6 +849,7 @@ mod tests {
         token: u8,
     ) -> LibavFrameCacheEntry {
         LibavFrameCacheEntry {
+            key: protocol::VideoRenderInputKey::LEGACY,
             layer_id: request.layer_id,
             path: path.into(),
             width: request.width,
@@ -830,7 +940,12 @@ mod tests {
         assert_eq!(decoder.cache_len(), 1);
         assert_eq!(
             decoder
-                .cached_frame(&request, &path, &file_signature)
+                .cached_frame(
+                    protocol::VideoRenderInputKey::LEGACY,
+                    &request,
+                    &path,
+                    &file_signature
+                )
                 .unwrap()
                 .data,
             vec![1]
@@ -838,28 +953,48 @@ mod tests {
 
         request.position_ms = 33;
         assert!(decoder
-            .cached_frame(&request, &path, &file_signature)
+            .cached_frame(
+                protocol::VideoRenderInputKey::LEGACY,
+                &request,
+                &path,
+                &file_signature
+            )
             .is_none());
         decoder.replace_layer_cache_entry(cache_entry(&request, &path, file_signature.clone(), 2));
         assert_eq!(decoder.cache_len(), 1);
 
         request.width = 32;
         assert!(decoder
-            .cached_frame(&request, &path, &file_signature)
+            .cached_frame(
+                protocol::VideoRenderInputKey::LEGACY,
+                &request,
+                &path,
+                &file_signature
+            )
             .is_none());
         decoder.replace_layer_cache_entry(cache_entry(&request, &path, file_signature.clone(), 3));
         assert_eq!(decoder.cache_len(), 1);
 
         path = PathBuf::from("second.mp4");
         assert!(decoder
-            .cached_frame(&request, &path, &file_signature)
+            .cached_frame(
+                protocol::VideoRenderInputKey::LEGACY,
+                &request,
+                &path,
+                &file_signature
+            )
             .is_none());
         decoder.replace_layer_cache_entry(cache_entry(&request, &path, file_signature.clone(), 4));
         assert_eq!(decoder.cache_len(), 1);
 
         file_signature = signature(2);
         assert!(decoder
-            .cached_frame(&request, &path, &file_signature)
+            .cached_frame(
+                protocol::VideoRenderInputKey::LEGACY,
+                &request,
+                &path,
+                &file_signature
+            )
             .is_none());
         decoder.replace_layer_cache_entry(cache_entry(&request, &path, file_signature.clone(), 5));
         assert_eq!(decoder.cache_len(), 1);
@@ -870,7 +1005,12 @@ mod tests {
         assert_eq!(decoder.entries[0].frame.data, vec![5]);
         assert_eq!(
             decoder
-                .cached_frame(&request, &path, &file_signature)
+                .cached_frame(
+                    protocol::VideoRenderInputKey::LEGACY,
+                    &request,
+                    &path,
+                    &file_signature
+                )
                 .unwrap()
                 .data,
             vec![5]
@@ -1368,7 +1508,15 @@ mod tests {
                 }
                 assert_eq!(bounded.entries.len(), LIBAV_WORKING_SET_CAPACITY);
                 assert_eq!(bounded.sessions.len(), LIBAV_WORKING_SET_CAPACITY);
-                assert_eq!(bounded.working_set_lru, (2..=9).collect::<Vec<_>>());
+                assert_eq!(
+                    bounded.working_set_lru,
+                    (2..=9)
+                        .map(|layer_id| LibavRenderInputOwner::new(
+                            protocol::VideoRenderInputKey::LEGACY,
+                            layer_id,
+                        ))
+                        .collect::<Vec<_>>()
+                );
                 assert_eq!(bounded.session_counters.opens, 9);
                 assert_eq!(bounded.session_counters.evictions, 1);
                 assert!(bounded.entries.iter().all(|entry| entry.layer_id != 1));
@@ -1378,11 +1526,30 @@ mod tests {
                 assert_eq!(bounded.decode_frame(&request).unwrap(), None);
                 assert_eq!(bounded.entries.len(), LIBAV_WORKING_SET_CAPACITY - 1);
                 assert_eq!(bounded.sessions.len(), LIBAV_WORKING_SET_CAPACITY - 1);
-                assert!(!bounded.working_set_lru.contains(&request.layer_id));
+                assert!(!bounded
+                    .working_set_lru
+                    .contains(&LibavRenderInputOwner::new(
+                        protocol::VideoRenderInputKey::LEGACY,
+                        request.layer_id,
+                    ),));
                 request.source.kind = VideoSourceKind::File;
             }
 
             let _ = std::fs::remove_file(path);
         }
     }
+}
+#[test]
+fn legacy_render_input_owners_remain_layer_scoped() {
+    let first = LibavRenderInputOwner::new(protocol::VideoRenderInputKey::LEGACY, 1);
+    let second = LibavRenderInputOwner::new(protocol::VideoRenderInputKey::LEGACY, 2);
+    assert_ne!(first, second);
+    assert!(first.matches(protocol::VideoRenderInputKey::LEGACY, 1));
+    assert!(!first.matches(protocol::VideoRenderInputKey::LEGACY, 2));
+
+    let explicit = protocol::VideoRenderInputKey {
+        project_render_epoch: 4,
+        input_id: protocol::VideoRenderInputId(8),
+    };
+    assert!(LibavRenderInputOwner::new(explicit, 1).matches(explicit, 999));
 }

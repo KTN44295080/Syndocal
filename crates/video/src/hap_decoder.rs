@@ -10,8 +10,9 @@ use protocol::{VideoLayerId, VideoSourceKind};
 use serde::Serialize;
 
 use super::{
-    FfmpegCliFrameDecoder, LibavFrameDecoder, StillImageSignature, VideoDecodeError, VideoFrame,
-    VideoFrameDecoder, VideoFrameRequest, VideoPixelFormat,
+    render_input_cache_owner_matches, FfmpegCliFrameDecoder, LibavFrameDecoder,
+    StillImageSignature, VideoDecodeError, VideoFrame, VideoFrameDecoder, VideoFrameRequest,
+    VideoPixelFormat, VideoRenderInput,
 };
 
 #[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
@@ -53,6 +54,7 @@ pub struct HapMovFrameDecoder {
 }
 
 struct HapMovie {
+    key: protocol::VideoRenderInputKey,
     path: PathBuf,
     signature: StillImageSignature,
     reader: Mp4Reader<BufReader<File>>,
@@ -66,6 +68,7 @@ struct HapMovie {
 
 #[derive(Clone)]
 struct HapFrameCacheEntry {
+    key: protocol::VideoRenderInputKey,
     layer_id: VideoLayerId,
     path: PathBuf,
     position_ms: u64,
@@ -113,6 +116,12 @@ impl PreferredVideoFrameDecoder {
         VideoFrameDecoder::release_layer(&mut self.fallback, layer_id);
     }
 
+    pub fn release_input(&mut self, input: &VideoRenderInput) {
+        self.hap.release_input_key(input.key, input.layer_id());
+        self.libav.release_input(input);
+        VideoFrameDecoder::release_input(&mut self.fallback, input);
+    }
+
     pub fn diagnostics(&self) -> VideoDecoderDiagnostics {
         let libav_sessions = self.libav.session_diagnostics();
         VideoDecoderDiagnostics {
@@ -130,14 +139,14 @@ impl PreferredVideoFrameDecoder {
         }
     }
 
-    fn decode_cli_fallback(
+    fn decode_cli_fallback_input(
         &mut self,
-        request: &VideoFrameRequest,
+        input: &VideoRenderInput,
         primary_error: Option<VideoDecodeError>,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
         self.diagnostics.cli_fallback_requests =
             self.diagnostics.cli_fallback_requests.saturating_add(1);
-        match self.fallback.decode_frame(request) {
+        match self.fallback.decode_input_frame(input) {
             Ok(Some(frame)) => {
                 self.diagnostics.cli_fallback_successes =
                     self.diagnostics.cli_fallback_successes.saturating_add(1);
@@ -158,11 +167,12 @@ impl PreferredVideoFrameDecoder {
         }
     }
 
-    fn decode_general_file(
+    fn decode_general_input(
         &mut self,
-        request: &VideoFrameRequest,
+        input: &VideoRenderInput,
         primary_error: Option<VideoDecodeError>,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        let request = &input.request;
         if request.source.kind != VideoSourceKind::File {
             self.diagnostics.deferred_requests =
                 self.diagnostics.deferred_requests.saturating_add(1);
@@ -172,16 +182,16 @@ impl PreferredVideoFrameDecoder {
             };
         }
         self.diagnostics.libav_requests = self.diagnostics.libav_requests.saturating_add(1);
-        match self.libav.decode_frame(request) {
+        match self.libav.decode_input_frame(input) {
             Ok(Some(frame)) => {
                 self.diagnostics.libav_successes =
                     self.diagnostics.libav_successes.saturating_add(1);
                 Ok(Some(frame))
             }
-            Ok(None) => self.decode_cli_fallback(request, primary_error),
+            Ok(None) => self.decode_cli_fallback_input(input, primary_error),
             Err(libav_error) => {
                 self.diagnostics.libav_failures = self.diagnostics.libav_failures.saturating_add(1);
-                self.decode_cli_fallback(request, primary_error.or(Some(libav_error)))
+                self.decode_cli_fallback_input(input, primary_error.or(Some(libav_error)))
             }
         }
     }
@@ -194,14 +204,32 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         self.fallback.retain_layers(layer_ids);
     }
 
+    fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        self.hap.retain_inputs(inputs);
+        self.libav.retain_inputs(inputs);
+        self.fallback.retain_inputs(inputs);
+    }
+
     fn release_layer(&mut self, layer_id: VideoLayerId) {
         PreferredVideoFrameDecoder::release_layer(self, layer_id);
+    }
+
+    fn release_input(&mut self, input: &VideoRenderInput) {
+        PreferredVideoFrameDecoder::release_input(self, input);
     }
 
     fn decode_frame(
         &mut self,
         request: &VideoFrameRequest,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.decode_input_frame(&VideoRenderInput::legacy(request.clone()))
+    }
+
+    fn decode_input_frame(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        let request = &input.request;
         self.diagnostics.total_requests = self.diagnostics.total_requests.saturating_add(1);
         let has_file_path = request.source.kind == VideoSourceKind::File
             && request
@@ -210,13 +238,13 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
                 .as_deref()
                 .is_some_and(|path| !path.trim().is_empty());
         if !has_file_path {
-            self.release_layer(request.layer_id);
+            self.release_input(input);
         }
         if HapMovFrameDecoder::supports_request(request) {
-            self.libav.release_layer(request.layer_id);
-            VideoFrameDecoder::release_layer(&mut self.fallback, request.layer_id);
+            self.libav.release_input(input);
+            VideoFrameDecoder::release_input(&mut self.fallback, input);
             self.diagnostics.hap_requests = self.diagnostics.hap_requests.saturating_add(1);
-            return match self.hap.decode_frame(request) {
+            return match self.hap.decode_input_frame(input) {
                 Ok(Some(frame)) => {
                     self.diagnostics.hap_successes =
                         self.diagnostics.hap_successes.saturating_add(1);
@@ -229,11 +257,11 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
                 }
                 Err(error) => {
                     self.diagnostics.hap_failures = self.diagnostics.hap_failures.saturating_add(1);
-                    self.decode_general_file(request, Some(error))
+                    self.decode_general_input(input, Some(error))
                 }
             };
         }
-        self.decode_general_file(request, None)
+        self.decode_general_input(input, None)
     }
 }
 
@@ -247,6 +275,24 @@ impl HapMovFrameDecoder {
 
     fn release_layer(&mut self, layer_id: VideoLayerId) {
         self.frames.retain(|frame| frame.layer_id != layer_id);
+        self.retain_movies_referenced_by_frames();
+    }
+
+    fn release_input_key(&mut self, key: protocol::VideoRenderInputKey, layer_id: VideoLayerId) {
+        self.frames.retain(|frame| {
+            !render_input_cache_owner_matches(key, layer_id, frame.key, frame.layer_id)
+        });
+        self.retain_movies_referenced_by_frames();
+    }
+
+    fn retain_movies_referenced_by_frames(&mut self) {
+        self.movies.retain(|movie| {
+            self.frames.iter().any(|frame| {
+                frame.key == movie.key
+                    && frame.path == movie.path
+                    && frame.signature == movie.signature
+            })
+        });
     }
 
     pub fn supports_request(request: &VideoFrameRequest) -> bool {
@@ -284,19 +330,19 @@ impl HapMovFrameDecoder {
 
     fn movie_index(
         &mut self,
+        key: protocol::VideoRenderInputKey,
         path: &Path,
         signature: &StillImageSignature,
         request: &VideoFrameRequest,
     ) -> Result<usize, VideoDecodeError> {
-        if let Some(index) = self
-            .movies
-            .iter()
-            .position(|movie| movie.path == path && movie.signature == *signature)
-        {
+        if let Some(index) = self.movies.iter().position(|movie| {
+            movie.key == key && movie.path == path && movie.signature == *signature
+        }) {
             return Ok(index);
         }
 
-        self.movies.retain(|movie| movie.path != path);
+        self.movies
+            .retain(|movie| movie.key != key || movie.path != path);
         let file = File::open(path).map_err(|error| decode_error(request, error.to_string()))?;
         let size = file
             .metadata()
@@ -322,6 +368,7 @@ impl HapMovFrameDecoder {
             ));
         }
         self.movies.push(HapMovie {
+            key,
             path: path.to_path_buf(),
             signature: signature.clone(),
             reader,
@@ -337,11 +384,12 @@ impl HapMovFrameDecoder {
 
     fn decode_uncached(
         &mut self,
+        key: protocol::VideoRenderInputKey,
         request: &VideoFrameRequest,
         path: &Path,
         signature: &StillImageSignature,
     ) -> Result<VideoFrame, VideoDecodeError> {
-        let movie_index = self.movie_index(path, signature, request)?;
+        let movie_index = self.movie_index(key, path, signature, request)?;
         let movie = &mut self.movies[movie_index];
         let bounded_position_ms = if movie.duration_ms == 0 {
             0
@@ -534,10 +582,42 @@ impl VideoFrameDecoder for HapMovFrameDecoder {
             .retain(|movie| self.frames.iter().any(|entry| entry.path == movie.path));
     }
 
+    fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        self.frames.retain(|entry| {
+            inputs.iter().any(|input| {
+                render_input_cache_owner_matches(
+                    input.key,
+                    input.layer_id(),
+                    entry.key,
+                    entry.layer_id,
+                )
+            })
+        });
+        self.movies.retain(|movie| {
+            self.frames.iter().any(|frame| {
+                frame.key == movie.key
+                    && frame.path == movie.path
+                    && frame.signature == movie.signature
+            })
+        });
+    }
+
+    fn release_input(&mut self, input: &VideoRenderInput) {
+        self.release_input_key(input.key, input.layer_id());
+    }
+
     fn decode_frame(
         &mut self,
         request: &VideoFrameRequest,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.decode_input_frame(&VideoRenderInput::legacy(request.clone()))
+    }
+
+    fn decode_input_frame(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        let request = &input.request;
         if !Self::supports_request(request) {
             return Ok(None);
         }
@@ -553,17 +633,25 @@ impl VideoFrameDecoder for HapMovFrameDecoder {
         let path = PathBuf::from(path);
         let signature = StillImageSignature::from_path(&path);
         if let Some(entry) = self.frames.iter().find(|entry| {
-            entry.layer_id == request.layer_id
+            entry.key == input.key
+                && entry.layer_id == request.layer_id
                 && entry.path == path
                 && entry.position_ms == request.position_ms
                 && entry.signature == signature
         }) {
             return Ok(Some(entry.frame.clone()));
         }
-        let frame = self.decode_uncached(request, &path, &signature)?;
-        self.frames
-            .retain(|entry| entry.layer_id != request.layer_id);
+        let frame = self.decode_uncached(input.key, request, &path, &signature)?;
+        self.frames.retain(|entry| {
+            !render_input_cache_owner_matches(
+                input.key,
+                request.layer_id,
+                entry.key,
+                entry.layer_id,
+            )
+        });
         self.frames.push(HapFrameCacheEntry {
+            key: input.key,
             layer_id: request.layer_id,
             path,
             position_ms: request.position_ms,
@@ -739,6 +827,29 @@ mod tests {
         assert_eq!(cached, frame);
         assert_eq!(decoder.movie_cache_len(), 1);
 
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn legacy_hap_cache_retains_and_releases_by_layer_owner() {
+        let path = write_hap_movie(&[hap_section(0xAB, &[1, 2, 3, 4, 5, 6, 7, 8])], 4, 4);
+        let mut decoder = HapMovFrameDecoder::new();
+        let first_request = request(&path, 0);
+        let mut second_request = first_request.clone();
+        second_request.layer_id = 8;
+
+        decoder.decode_frame(&first_request).unwrap().unwrap();
+        decoder.decode_frame(&second_request).unwrap().unwrap();
+        assert_eq!(decoder.movie_cache_len(), 1);
+        assert_eq!(decoder.frame_cache_len(), 2);
+
+        decoder.retain_inputs(&[VideoRenderInput::legacy(second_request.clone())]);
+        assert_eq!(decoder.movie_cache_len(), 1);
+        assert_eq!(decoder.frame_cache_len(), 1);
+
+        decoder.release_layer(8);
+        assert_eq!(decoder.movie_cache_len(), 0);
+        assert_eq!(decoder.frame_cache_len(), 0);
         fs::remove_file(path).unwrap();
     }
 

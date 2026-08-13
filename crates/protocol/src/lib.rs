@@ -12,6 +12,33 @@ pub type TimelineEventId = u64;
 pub type TimelineAudioClipId = u64;
 pub type AutomationId = u64;
 pub type VideoLayerId = u64;
+/// Runtime-only identity for one renderer input. Unlike `VideoLayerId`, this
+/// identifies a concrete source instance in a render graph and is never part
+/// of the authored project model.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct VideoRenderInputId(pub u64);
+
+/// Runtime ownership key for decoded frames and decoder state.
+///
+/// `layer_id` remains useful diagnostics, but is deliberately excluded here:
+/// one authored layer can feed more than one live render input at once. The
+/// project render epoch fences queues/caches/sessions created for a retired
+/// project image from a replacement image.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VideoRenderInputKey {
+    pub project_render_epoch: u64,
+    pub input_id: VideoRenderInputId,
+}
+
+impl VideoRenderInputKey {
+    /// Compatibility key used by APIs that predate explicit renderer inputs.
+    pub const LEGACY: Self = Self {
+        project_render_epoch: 0,
+        input_id: VideoRenderInputId(0),
+    };
+}
+
 /// Stable project-local identity for an authored Video clip slot. This remains
 /// a newtype (rather than a UI index) so reordering a bank cannot retarget a
 /// persisted reference.

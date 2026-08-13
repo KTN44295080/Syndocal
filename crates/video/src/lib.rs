@@ -10,10 +10,10 @@ use std::{
 use protocol::{
     ClockSnapshot, CompositionId, CompositionSummary, Transform2D, VideoBackendState,
     VideoBackendStatus, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoFxAdjust,
-    VideoLayerId, VideoLayerState, VideoLayerSummary, VideoMediaMetadata, VideoOutputAspectMode,
-    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputSummary, VideoRuntimeStatus,
-    VideoSnapshot, VideoSourceKind, VideoSourceSummary, VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION,
-    VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoMediaMetadata,
+    VideoOutputAspectMode, VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputSummary,
+    VideoRuntimeStatus, VideoSnapshot, VideoSourceKind, VideoSourceSummary,
+    VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION, VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY,
 };
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +57,61 @@ pub struct VideoFrame {
     pub data: Vec<u8>,
 }
 
+/// One runtime decode/render request. The key, rather than its diagnostic
+/// `layer_id`, owns queues, decoder sessions, and caches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoRenderInput {
+    pub key: protocol::VideoRenderInputKey,
+    pub request: VideoFrameRequest,
+    pub isf_effect: Option<VideoIsfEffectSummary>,
+}
+
+impl VideoRenderInput {
+    pub fn new(key: protocol::VideoRenderInputKey, request: VideoFrameRequest) -> Self {
+        Self {
+            key,
+            request,
+            isf_effect: None,
+        }
+    }
+
+    /// Bridges the layer-only renderer APIs to the pre-C0 input identity.
+    pub fn legacy(request: VideoFrameRequest) -> Self {
+        Self::new(protocol::VideoRenderInputKey::LEGACY, request)
+    }
+
+    pub fn layer_id(&self) -> VideoLayerId {
+        self.request.layer_id
+    }
+
+    pub fn with_isf_effect(mut self, effect: Option<VideoIsfEffectSummary>) -> Self {
+        self.isf_effect = effect;
+        self
+    }
+}
+
+/// Runtime inputs are owned solely by their key. The one compatibility
+/// exception is the pre-C0 `LEGACY` key: its layer-only API historically kept
+/// a bounded cache per layer, so retain that behavior without applying it to
+/// any explicit multi-input key.
+pub(crate) fn render_input_cache_owner_matches(
+    key: protocol::VideoRenderInputKey,
+    layer_id: VideoLayerId,
+    candidate_key: protocol::VideoRenderInputKey,
+    candidate_layer_id: VideoLayerId,
+) -> bool {
+    key == candidate_key
+        && (key != protocol::VideoRenderInputKey::LEGACY || layer_id == candidate_layer_id)
+}
+
+/// A decoded frame associated with its runtime owner. `VideoFrame::layer_id`
+/// stays as diagnostics only; input identity selects the frame during a mix.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoRenderInputFrame {
+    pub key: protocol::VideoRenderInputKey,
+    pub frame: VideoFrame,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VideoIsfStageError {
     pub layer_id: VideoLayerId,
@@ -65,7 +120,14 @@ pub struct VideoIsfStageError {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoRenderInputIsfStageError {
+    pub key: protocol::VideoRenderInputKey,
+    pub error: VideoIsfStageError,
+}
+
 pub struct FrameQueue {
+    key: protocol::VideoRenderInputKey,
     layer_id: VideoLayerId,
     slots: Vec<Option<VideoFrame>>,
     start: usize,
@@ -99,6 +161,35 @@ pub struct CompositionLayerPlan {
     pub transform: Transform2D,
     pub color: VideoColorAdjust,
     pub fx: VideoFxAdjust,
+}
+
+/// Explicit input binding for an additive multi-input composition seam.
+/// Multiple entries may intentionally have the same `layer_id`; their runtime
+/// keys keep their decode and presentation histories distinct.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompositionRenderInput {
+    pub key: protocol::VideoRenderInputKey,
+    pub layer: CompositionLayerPlan,
+}
+
+/// Runtime-only composition input list. It deliberately does not alter the
+/// persisted `CompositionPlan`/`VideoSnapshot` contract.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompositionInputMix {
+    pub inputs: Vec<CompositionRenderInput>,
+}
+
+fn validate_unique_render_input_keys<'a>(
+    keys: impl IntoIterator<Item = &'a protocol::VideoRenderInputKey>,
+) -> Result<(), CpuCompositeError> {
+    let mut seen = Vec::new();
+    for key in keys {
+        if seen.contains(key) {
+            return Err(CpuCompositeError::DuplicateRenderInputKey { key: *key });
+        }
+        seen.push(*key);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -274,6 +365,9 @@ pub struct NoopExternalVideoTransportDriver;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CpuCompositeError {
     InvalidOutputSize,
+    DuplicateRenderInputKey {
+        key: protocol::VideoRenderInputKey,
+    },
     UnsupportedFrameFormat {
         layer_id: VideoLayerId,
         format: VideoPixelFormat,
@@ -282,6 +376,19 @@ pub enum CpuCompositeError {
         layer_id: VideoLayerId,
     },
     MissingFrame {
+        layer_id: VideoLayerId,
+    },
+    UnsupportedRenderInputFrameFormat {
+        key: protocol::VideoRenderInputKey,
+        layer_id: VideoLayerId,
+        format: VideoPixelFormat,
+    },
+    RenderInputFrameSizeMismatch {
+        key: protocol::VideoRenderInputKey,
+        layer_id: VideoLayerId,
+    },
+    MissingRenderInputFrame {
+        key: protocol::VideoRenderInputKey,
         layer_id: VideoLayerId,
     },
 }
@@ -336,6 +443,10 @@ pub enum VideoPreviewError {
         layer_id: VideoLayerId,
         label: String,
         error: VideoDecodeError,
+    },
+    RenderInput {
+        key: protocol::VideoRenderInputKey,
+        error: VideoFrameProviderError,
     },
     Runtime(VideoRuntimeError),
 }
@@ -421,6 +532,7 @@ pub enum VideoDecodePriority {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduledVideoDecode {
+    pub input_key: protocol::VideoRenderInputKey,
     pub request: VideoFrameRequest,
     pub priority: VideoDecodePriority,
 }
@@ -481,6 +593,7 @@ pub enum VideoDecodeWorkerStep {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoDecodeWorkerError {
+    pub input_key: protocol::VideoRenderInputKey,
     pub layer_id: VideoLayerId,
     pub label: String,
     pub position_ms: u64,
@@ -490,6 +603,7 @@ pub struct VideoDecodeWorkerError {
 
 #[derive(Debug, Clone)]
 struct ScheduledVideoDecodeJob {
+    input_key: protocol::VideoRenderInputKey,
     request: VideoFrameRequest,
     priority: VideoDecodePriority,
     sequence: u64,
@@ -581,14 +695,21 @@ impl VideoDecodeScheduler {
         request: VideoFrameRequest,
         priority: VideoDecodePriority,
     ) -> VideoDecodeSchedulePush {
-        if let Some(index) = self
-            .jobs
-            .iter()
-            .position(|job| video_decode_request_key_matches(&job.request, &request))
-        {
+        self.push_input(VideoRenderInput::legacy(request), priority)
+    }
+
+    pub fn push_input(
+        &mut self,
+        input: VideoRenderInput,
+        priority: VideoDecodePriority,
+    ) -> VideoDecodeSchedulePush {
+        if let Some(index) = self.jobs.iter().position(|job| {
+            job.input_key == input.key
+                && video_decode_request_key_matches(&job.request, &input.request)
+        }) {
             if priority.rank() < self.jobs[index].priority.rank() {
                 let sequence = self.next_sequence();
-                self.jobs[index].request = request;
+                self.jobs[index].request = input.request;
                 self.jobs[index].priority = priority;
                 self.jobs[index].sequence = sequence;
                 return VideoDecodeSchedulePush::Reprioritized;
@@ -597,7 +718,7 @@ impl VideoDecodeScheduler {
         }
 
         if self.jobs.len() < self.capacity {
-            self.insert(request, priority);
+            self.insert(input, priority);
             return VideoDecodeSchedulePush::Inserted;
         }
 
@@ -606,7 +727,7 @@ impl VideoDecodeScheduler {
         };
         if priority.rank() < self.jobs[worst_index].priority.rank() {
             self.jobs.remove(worst_index);
-            self.insert(request, priority);
+            self.insert(input, priority);
             return VideoDecodeSchedulePush::DroppedLowerPriority;
         }
         VideoDecodeSchedulePush::RejectedFull
@@ -701,6 +822,7 @@ impl VideoDecodeScheduler {
         let index = self.best_job_index()?;
         let job = self.jobs.remove(index);
         Some(ScheduledVideoDecode {
+            input_key: job.input_key,
             request: job.request,
             priority: job.priority,
         })
@@ -711,16 +833,18 @@ impl VideoDecodeScheduler {
         jobs.sort_by_key(|job| (job.priority.rank(), job.sequence));
         jobs.into_iter()
             .map(|job| ScheduledVideoDecode {
+                input_key: job.input_key,
                 request: job.request,
                 priority: job.priority,
             })
             .collect()
     }
 
-    fn insert(&mut self, request: VideoFrameRequest, priority: VideoDecodePriority) {
+    fn insert(&mut self, input: VideoRenderInput, priority: VideoDecodePriority) {
         let sequence = self.next_sequence();
         self.jobs.push(ScheduledVideoDecodeJob {
-            request,
+            input_key: input.key,
+            request: input.request,
             priority,
             sequence,
         });
@@ -844,6 +968,13 @@ impl<D: VideoFrameDecoder> VideoDecodeWorker<D> {
         self.decoder.retain_layers(layer_ids);
     }
 
+    pub fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        self.scheduler
+            .jobs
+            .retain(|job| inputs.iter().any(|input| input.key == job.input_key));
+        self.decoder.retain_inputs(inputs);
+    }
+
     pub fn enqueue_layer_preview(
         &mut self,
         layer: &VideoLayerSummary,
@@ -861,6 +992,14 @@ impl<D: VideoFrameDecoder> VideoDecodeWorker<D> {
             prefetch_interval_ms,
             bpm,
         )
+    }
+
+    pub fn enqueue_input(
+        &mut self,
+        input: VideoRenderInput,
+        priority: VideoDecodePriority,
+    ) -> VideoDecodeSchedulePush {
+        self.scheduler.push_input(input, priority)
     }
 
     pub fn enqueue_composition_preview(
@@ -910,18 +1049,21 @@ impl<D: VideoFrameDecoder> VideoDecodeWorker<D> {
         runtime: &mut VideoRuntime,
     ) -> Option<Result<VideoDecodeWorkerStep, VideoDecodeWorkerError>> {
         let scheduled = self.scheduler.pop_next()?;
-        let request = scheduled.request;
+        let input = VideoRenderInput::new(scheduled.input_key, scheduled.request);
         let priority = scheduled.priority;
-        Some(match self.decoder.decode_frame(&request) {
+        Some(match self.decoder.decode_input_frame(&input) {
             Ok(Some(mut frame)) => {
-                frame.layer_id = request.layer_id;
-                Ok(VideoDecodeWorkerStep::Decoded(runtime.push_frame(frame)))
+                frame.layer_id = input.layer_id();
+                Ok(VideoDecodeWorkerStep::Decoded(
+                    runtime.push_input_frame(&input, frame),
+                ))
             }
             Ok(None) => Ok(VideoDecodeWorkerStep::Skipped),
             Err(error) => Err(VideoDecodeWorkerError {
-                layer_id: request.layer_id,
-                label: request.label,
-                position_ms: request.position_ms,
+                input_key: input.key,
+                layer_id: input.request.layer_id,
+                label: input.request.label,
+                position_ms: input.request.position_ms,
                 priority,
                 error,
             }),
@@ -966,12 +1108,42 @@ pub struct VideoRuntime {
 
 pub trait VideoFrameProvider {
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]);
+    fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        let layer_ids = inputs
+            .iter()
+            .map(VideoRenderInput::layer_id)
+            .collect::<Vec<_>>();
+        self.retain_layers(&layer_ids);
+    }
     fn frame_for_layer(
         &mut self,
         layer: &VideoLayerSummary,
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoFrameProviderError>;
+    fn frame_for_input(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<VideoFrame, VideoFrameProviderError> {
+        self.frame_for_layer(
+            &VideoLayerSummary {
+                id: input.request.layer_id,
+                label: input.request.label.clone(),
+                source: input.request.source.clone(),
+                media_asset_id: None,
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState {
+                    position_ms: input.request.position_ms,
+                    ..VideoLayerState::default()
+                },
+                isf_effect: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
+            },
+            input.request.width,
+            input.request.height,
+        )
+    }
     fn frames_for_layer(
         &mut self,
         layer: &VideoLayerSummary,
@@ -985,11 +1157,27 @@ pub trait VideoFrameProvider {
 
 pub trait VideoFrameDecoder {
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]);
+    fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        let layer_ids = inputs
+            .iter()
+            .map(VideoRenderInput::layer_id)
+            .collect::<Vec<_>>();
+        self.retain_layers(&layer_ids);
+    }
     fn release_layer(&mut self, _layer_id: VideoLayerId) {}
+    fn release_input(&mut self, input: &VideoRenderInput) {
+        self.release_layer(input.layer_id());
+    }
     fn decode_frame(
         &mut self,
         request: &VideoFrameRequest,
     ) -> Result<Option<VideoFrame>, VideoDecodeError>;
+    fn decode_input_frame(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.decode_frame(&input.request)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1021,6 +1209,7 @@ pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
     isf_runtime: Option<Result<IsfGpuRuntime, IsfRuntimeError>>,
     last_isf_error: Option<String>,
     last_isf_stage_errors: Vec<VideoIsfStageError>,
+    last_render_input_isf_stage_errors: Vec<VideoRenderInputIsfStageError>,
 }
 
 const ISF_SHADER_CACHE_CAPACITY: usize = 64;
@@ -1049,6 +1238,7 @@ pub struct StillImageFrameCache {
 }
 
 struct StillImageFrameCacheEntry {
+    key: protocol::VideoRenderInputKey,
     layer_id: VideoLayerId,
     path: PathBuf,
     width: u32,
@@ -1059,6 +1249,7 @@ struct StillImageFrameCacheEntry {
 
 #[derive(Debug, Clone)]
 struct FfmpegCliFrameCacheEntry {
+    key: protocol::VideoRenderInputKey,
     layer_id: VideoLayerId,
     path: PathBuf,
     width: u32,
@@ -1076,11 +1267,20 @@ struct StillImageSignature {
 
 impl FrameQueue {
     pub fn new(layer_id: VideoLayerId, capacity: usize) -> Self {
+        Self::new_for_input(protocol::VideoRenderInputKey::LEGACY, layer_id, capacity)
+    }
+
+    pub fn new_for_input(
+        key: protocol::VideoRenderInputKey,
+        layer_id: VideoLayerId,
+        capacity: usize,
+    ) -> Self {
         assert!(
             capacity > 0,
             "frame queue capacity must be greater than zero"
         );
         Self {
+            key,
             layer_id,
             slots: vec![None; capacity],
             start: 0,
@@ -1090,6 +1290,10 @@ impl FrameQueue {
 
     pub fn layer_id(&self) -> VideoLayerId {
         self.layer_id
+    }
+
+    pub fn key(&self) -> protocol::VideoRenderInputKey {
+        self.key
     }
 
     pub fn capacity(&self) -> usize {
@@ -1226,6 +1430,23 @@ impl VideoRuntime {
         }
     }
 
+    /// Synchronizes queue ownership by the runtime input key. This is separate
+    /// from `sync_layers`: a layer is only a diagnostic label and may appear in
+    /// several simultaneous render inputs.
+    pub fn sync_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        self.queues
+            .retain(|queue| inputs.iter().any(|input| input.key == queue.key()));
+        for input in inputs {
+            if !self.queues.iter().any(|queue| queue.key() == input.key) {
+                self.queues.push(FrameQueue::new_for_input(
+                    input.key,
+                    input.layer_id(),
+                    self.config.frame_queue_capacity,
+                ));
+            }
+        }
+    }
+
     pub fn push_frame(&mut self, frame: VideoFrame) -> FrameQueuePush {
         let layer_id = frame.layer_id;
         if !self.queues.iter().any(|queue| queue.layer_id() == layer_id) {
@@ -1235,6 +1456,26 @@ impl VideoRuntime {
         self.queues
             .iter_mut()
             .find(|queue| queue.layer_id() == layer_id)
+            .expect("queue exists after insertion")
+            .push(frame)
+    }
+
+    pub fn push_input_frame(
+        &mut self,
+        input: &VideoRenderInput,
+        mut frame: VideoFrame,
+    ) -> FrameQueuePush {
+        frame.layer_id = input.layer_id();
+        if !self.queues.iter().any(|queue| queue.key() == input.key) {
+            self.queues.push(FrameQueue::new_for_input(
+                input.key,
+                input.layer_id(),
+                self.config.frame_queue_capacity,
+            ));
+        }
+        self.queues
+            .iter_mut()
+            .find(|queue| queue.key() == input.key)
             .expect("queue exists after insertion")
             .push(frame)
     }
@@ -1249,6 +1490,14 @@ impl VideoRuntime {
 
     pub fn queue_count(&self) -> usize {
         self.queues.len()
+    }
+
+    pub fn input_queue_len(&self, key: protocol::VideoRenderInputKey) -> usize {
+        self.queues
+            .iter()
+            .find(|queue| queue.key() == key)
+            .map(FrameQueue::len)
+            .unwrap_or(0)
     }
 
     pub fn compose_first_plan(
@@ -1272,6 +1521,16 @@ impl VideoRuntime {
         composite_rgba8(plan, &frames, width, height).map_err(VideoRuntimeError::from)
     }
 
+    pub fn compose_input_mix(
+        &self,
+        mix: &CompositionInputMix,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoRuntimeError> {
+        let frames = self.select_frames_for_input_mix(mix);
+        composite_input_mix_rgba8(mix, &frames, width, height).map_err(VideoRuntimeError::from)
+    }
+
     fn select_frames_for_plan(&self, plan: &CompositionPlan) -> Vec<VideoFrame> {
         plan.layers
             .iter()
@@ -1285,6 +1544,27 @@ impl VideoRuntime {
                             .or_else(|| queue.nearest(layer.position_ms))
                     })
                     .cloned()
+            })
+            .collect()
+    }
+
+    fn select_frames_for_input_mix(&self, mix: &CompositionInputMix) -> Vec<VideoRenderInputFrame> {
+        mix.inputs
+            .iter()
+            .filter_map(|input| {
+                self.queues
+                    .iter()
+                    .find(|queue| queue.key() == input.key)
+                    .and_then(|queue| {
+                        queue
+                            .frame_at_or_before(input.layer.position_ms)
+                            .or_else(|| queue.nearest(input.layer.position_ms))
+                    })
+                    .cloned()
+                    .map(|frame| VideoRenderInputFrame {
+                        key: input.key,
+                        frame,
+                    })
             })
             .collect()
     }
@@ -1311,6 +1591,10 @@ impl PreviewFrameProvider {
 impl VideoFrameProvider for PreviewFrameProvider {
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
         self.still_images.retain_layers(layer_ids);
+    }
+
+    fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        self.still_images.retain_inputs(inputs);
     }
 
     fn frame_for_layer(
@@ -1347,6 +1631,46 @@ impl VideoFrameProvider for PreviewFrameProvider {
             )),
         }
     }
+
+    fn frame_for_input(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<VideoFrame, VideoFrameProviderError> {
+        let request = &input.request;
+        match request.source.kind {
+            VideoSourceKind::StillImage => {
+                let path = request
+                    .source
+                    .path
+                    .as_deref()
+                    .filter(|path| !path.is_empty())
+                    .ok_or_else(|| VideoFrameProviderError::MissingStillImagePath {
+                        layer_id: request.layer_id,
+                        label: request.label.clone(),
+                    })?;
+                self.still_images
+                    .frame_for_input(
+                        input.key,
+                        request.layer_id,
+                        path,
+                        request.position_ms,
+                        request.width,
+                        request.height,
+                    )
+                    .map_err(|error| VideoFrameProviderError::StillImage {
+                        layer_id: request.layer_id,
+                        label: request.label.clone(),
+                        error,
+                    })
+            }
+            _ => Ok(debug_solid_frame_for_layer(
+                request.layer_id,
+                request.position_ms,
+                request.width,
+                request.height,
+            )),
+        }
+    }
 }
 
 impl Default for FfmpegCliFrameDecoder {
@@ -1375,18 +1699,22 @@ impl FfmpegCliFrameDecoder {
         self.entries.len()
     }
 
-    fn evict_layer(&mut self, layer_id: VideoLayerId) {
-        self.entries.retain(|entry| entry.layer_id != layer_id);
+    fn evict_input(&mut self, key: protocol::VideoRenderInputKey, layer_id: VideoLayerId) {
+        self.entries.retain(|entry| {
+            !render_input_cache_owner_matches(key, layer_id, entry.key, entry.layer_id)
+        });
     }
 
     fn cached_frame(
         &mut self,
+        key: protocol::VideoRenderInputKey,
         request: &VideoFrameRequest,
         path: &Path,
         signature: &StillImageSignature,
     ) -> Option<VideoFrame> {
         let index = self.entries.iter().position(|entry| {
-            entry.layer_id == request.layer_id
+            entry.key == key
+                && entry.layer_id == request.layer_id
                 && entry.path == path
                 && entry.width == request.width
                 && entry.height == request.height
@@ -1400,11 +1728,54 @@ impl FfmpegCliFrameDecoder {
     }
 
     fn cache_frame(&mut self, entry: FfmpegCliFrameCacheEntry) {
-        self.evict_layer(entry.layer_id);
+        self.evict_input(entry.key, entry.layer_id);
         self.entries.push(entry);
         if self.entries.len() > FFMPEG_CLI_FRAME_CACHE_CAPACITY {
             self.entries.remove(0);
         }
+    }
+
+    fn decode_input(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        let request = &input.request;
+        if request.source.kind != VideoSourceKind::File {
+            self.evict_input(input.key, request.layer_id);
+            return Ok(None);
+        }
+
+        let Some(path) = request
+            .source
+            .path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+        else {
+            self.evict_input(input.key, request.layer_id);
+            return Err(VideoDecodeError::MissingSourcePath {
+                layer_id: request.layer_id,
+                label: request.label.clone(),
+            });
+        };
+        let path = PathBuf::from(path);
+        let signature = StillImageSignature::from_path(&path);
+        if let Some(frame) = self.cached_frame(input.key, request, &path, &signature) {
+            return Ok(Some(frame));
+        }
+
+        self.evict_input(input.key, request.layer_id);
+        let frame = decode_ffmpeg_cli_frame(request, &self.binary, &path)?;
+        self.cache_frame(FfmpegCliFrameCacheEntry {
+            key: input.key,
+            layer_id: request.layer_id,
+            path,
+            width: request.width,
+            height: request.height,
+            position_ms: request.position_ms,
+            signature,
+            frame: frame.clone(),
+        });
+        Ok(Some(frame))
     }
 }
 
@@ -1850,48 +2221,30 @@ impl VideoFrameDecoder for FfmpegCliFrameDecoder {
     }
 
     fn release_layer(&mut self, layer_id: VideoLayerId) {
-        self.evict_layer(layer_id);
+        self.entries.retain(|entry| entry.layer_id != layer_id);
+    }
+
+    fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        self.entries
+            .retain(|entry| inputs.iter().any(|input| input.key == entry.key));
+    }
+
+    fn release_input(&mut self, input: &VideoRenderInput) {
+        self.evict_input(input.key, input.layer_id());
     }
 
     fn decode_frame(
         &mut self,
         request: &VideoFrameRequest,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
-        if request.source.kind != VideoSourceKind::File {
-            self.evict_layer(request.layer_id);
-            return Ok(None);
-        }
+        self.decode_input(&VideoRenderInput::legacy(request.clone()))
+    }
 
-        let Some(path) = request
-            .source
-            .path
-            .as_deref()
-            .filter(|path| !path.trim().is_empty())
-        else {
-            self.evict_layer(request.layer_id);
-            return Err(VideoDecodeError::MissingSourcePath {
-                layer_id: request.layer_id,
-                label: request.label.clone(),
-            });
-        };
-        let path = PathBuf::from(path);
-        let signature = StillImageSignature::from_path(&path);
-        if let Some(frame) = self.cached_frame(request, &path, &signature) {
-            return Ok(Some(frame));
-        }
-
-        self.evict_layer(request.layer_id);
-        let frame = decode_ffmpeg_cli_frame(request, &self.binary, &path)?;
-        self.cache_frame(FfmpegCliFrameCacheEntry {
-            layer_id: request.layer_id,
-            path,
-            width: request.width,
-            height: request.height,
-            position_ms: request.position_ms,
-            signature,
-            frame: frame.clone(),
-        });
-        Ok(Some(frame))
+    fn decode_input_frame(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.decode_input(input)
     }
 }
 
@@ -1969,6 +2322,11 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
         self.decoder.retain_layers(layer_ids);
     }
 
+    fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        self.still_images.retain_inputs(inputs);
+        self.decoder.retain_inputs(inputs);
+    }
+
     fn frame_for_layer(
         &mut self,
         layer: &VideoLayerSummary,
@@ -1976,6 +2334,13 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
         height: u32,
     ) -> Result<VideoFrame, VideoFrameProviderError> {
         self.decode_or_placeholder_for_layer(layer, width, height, None)
+    }
+
+    fn frame_for_input(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<VideoFrame, VideoFrameProviderError> {
+        self.decode_or_placeholder_for_input(input)
     }
 
     fn frames_for_layer(
@@ -2013,55 +2378,70 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
     ) -> Result<VideoFrame, VideoFrameProviderError> {
         let state = sanitize_layer_state(layer.state.clone());
         let position_ms = position_override_ms.unwrap_or(state.position_ms);
-        if matches!(layer.source.kind, VideoSourceKind::StillImage) {
-            self.decoder.release_layer(layer.id);
-            let path = layer
-                .source
-                .path
-                .as_deref()
-                .filter(|path| !path.is_empty())
-                .ok_or_else(|| VideoFrameProviderError::MissingStillImagePath {
-                    layer_id: layer.id,
-                    label: layer.label.clone(),
-                })?;
-            return self
-                .still_images
-                .frame_for_layer(layer.id, path, position_ms, width, height)
-                .map_err(|error| VideoFrameProviderError::StillImage {
-                    layer_id: layer.id,
-                    label: layer.label.clone(),
-                    error,
-                });
-        }
-
-        let request = VideoFrameRequest {
+        let input = VideoRenderInput::legacy(VideoFrameRequest {
             layer_id: layer.id,
             label: layer.label.clone(),
             source: layer.source.clone(),
             position_ms,
             width,
             height,
-        };
-        match self.decoder.decode_frame(&request) {
+        });
+        self.decode_or_placeholder_for_input(&input)
+    }
+
+    fn decode_or_placeholder_for_input(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<VideoFrame, VideoFrameProviderError> {
+        let request = &input.request;
+        if matches!(request.source.kind, VideoSourceKind::StillImage) {
+            self.decoder.release_input(input);
+            let path = request
+                .source
+                .path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+                .ok_or_else(|| VideoFrameProviderError::MissingStillImagePath {
+                    layer_id: request.layer_id,
+                    label: request.label.clone(),
+                })?;
+            return self
+                .still_images
+                .frame_for_input(
+                    input.key,
+                    request.layer_id,
+                    path,
+                    request.position_ms,
+                    request.width,
+                    request.height,
+                )
+                .map_err(|error| VideoFrameProviderError::StillImage {
+                    layer_id: request.layer_id,
+                    label: request.label.clone(),
+                    error,
+                });
+        }
+
+        match self.decoder.decode_input_frame(input) {
             Ok(Some(frame)) => Ok(frame),
             Ok(None) if self.placeholder_when_missing => Ok(debug_solid_frame_for_layer(
-                layer.id,
-                position_ms,
-                width,
-                height,
+                request.layer_id,
+                request.position_ms,
+                request.width,
+                request.height,
             )),
             Ok(None) => Err(VideoFrameProviderError::Decode {
-                layer_id: layer.id,
-                label: layer.label.clone(),
+                layer_id: request.layer_id,
+                label: request.label.clone(),
                 error: VideoDecodeError::UnsupportedSource {
-                    layer_id: layer.id,
-                    label: layer.label.clone(),
-                    kind: layer.source.kind.clone(),
+                    layer_id: request.layer_id,
+                    label: request.label.clone(),
+                    kind: request.source.kind.clone(),
                 },
             }),
             Err(error) => Err(VideoFrameProviderError::Decode {
-                layer_id: layer.id,
-                label: layer.label.clone(),
+                layer_id: request.layer_id,
+                label: request.label.clone(),
                 error,
             }),
         }
@@ -2197,6 +2577,7 @@ impl<D: VideoFrameDecoder> VideoPreviewRenderer<DecoderBackedFrameProvider<D>> {
                 Err(error) => {
                     report.skipped += 1;
                     report.errors.push(VideoDecodeWorkerError {
+                        input_key: scheduled.input_key,
                         layer_id: request.layer_id,
                         label: request.label,
                         position_ms: request.position_ms,
@@ -2220,6 +2601,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             isf_runtime: None,
             last_isf_error: None,
             last_isf_stage_errors: Vec::new(),
+            last_render_input_isf_stage_errors: Vec::new(),
         }
     }
 
@@ -2244,6 +2626,80 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         self.prepare_frames(snapshot, &layer_ids, width, height)?;
         self.runtime
             .compose_plan(&plan, width, height)
+            .map_err(VideoPreviewError::Runtime)
+    }
+
+    /// Renders an explicit runtime input mix without changing the authored
+    /// composition schema. Callers allocate `input_id`s per live source and
+    /// advance `project_render_epoch` whenever the mounted project changes.
+    pub fn render_input_mix(
+        &mut self,
+        inputs: &[VideoRenderInput],
+        mix: &CompositionInputMix,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        validate_unique_render_input_keys(inputs.iter().map(|input| &input.key))
+            .map_err(VideoRuntimeError::from)
+            .map_err(VideoPreviewError::Runtime)?;
+        self.frame_provider.retain_inputs(inputs);
+        self.runtime.sync_inputs(inputs);
+        self.reset_isf_stack_metrics();
+        let mut keyed_isf_errors = Vec::new();
+        for input in inputs {
+            let frame = self
+                .frame_provider
+                .frame_for_input(input)
+                .map_err(|error| VideoPreviewError::RenderInput {
+                    key: input.key,
+                    error,
+                })?;
+            let layer = VideoLayerSummary {
+                id: input.request.layer_id,
+                label: input.request.label.clone(),
+                source: input.request.source.clone(),
+                media_asset_id: None,
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState {
+                    position_ms: input.request.position_ms,
+                    ..VideoLayerState::default()
+                },
+                isf_effect: input.isf_effect.clone(),
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
+            };
+            let (frame, errors) = self.apply_isf_effect_to_frame(&layer, frame);
+            keyed_isf_errors.extend(errors.into_iter().map(|error| {
+                VideoRenderInputIsfStageError {
+                    key: input.key,
+                    error,
+                }
+            }));
+            self.runtime.push_input_frame(input, frame);
+        }
+        self.last_isf_stage_errors = keyed_isf_errors
+            .iter()
+            .map(|error| error.error.clone())
+            .collect();
+        self.last_isf_error = (!keyed_isf_errors.is_empty()).then(|| {
+            keyed_isf_errors
+                .iter()
+                .map(|error| {
+                    format!(
+                        "render input {:?}: {}",
+                        error.key,
+                        format_video_isf_stage_error(&error.error, None)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        });
+        self.last_render_input_isf_stage_errors = keyed_isf_errors;
+        self.runtime
+            .compose_input_mix(mix, width, height)
             .map_err(VideoPreviewError::Runtime)
     }
 
@@ -2429,6 +2885,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 .join("; ")
         });
         self.last_isf_stage_errors = isf_stage_errors;
+        self.last_render_input_isf_stage_errors.clear();
         Ok(())
     }
 
@@ -2590,6 +3047,10 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         &self.last_isf_stage_errors
     }
 
+    pub fn last_render_input_isf_stage_errors(&self) -> &[VideoRenderInputIsfStageError] {
+        &self.last_render_input_isf_stage_errors
+    }
+
     pub fn queue_count(&self) -> usize {
         self.runtime.queue_count()
     }
@@ -2629,8 +3090,32 @@ impl StillImageFrameCache {
             .retain(|entry| layer_ids.iter().any(|layer_id| *layer_id == entry.layer_id));
     }
 
+    pub fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        self.entries
+            .retain(|entry| inputs.iter().any(|input| input.key == entry.key));
+    }
+
     pub fn frame_for_layer(
         &mut self,
+        layer_id: VideoLayerId,
+        path: impl AsRef<Path>,
+        pts_ms: u64,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, StillImageError> {
+        self.frame_for_input(
+            protocol::VideoRenderInputKey::LEGACY,
+            layer_id,
+            path,
+            pts_ms,
+            width,
+            height,
+        )
+    }
+
+    pub fn frame_for_input(
+        &mut self,
+        key: protocol::VideoRenderInputKey,
         layer_id: VideoLayerId,
         path: impl AsRef<Path>,
         pts_ms: u64,
@@ -2640,7 +3125,8 @@ impl StillImageFrameCache {
         let path = path.as_ref().to_path_buf();
         let signature = StillImageSignature::from_path(&path);
         if let Some(entry) = self.entries.iter().find(|entry| {
-            entry.layer_id == layer_id
+            entry.key == key
+                && entry.layer_id == layer_id
                 && entry.path == path
                 && entry.width == width
                 && entry.height == height
@@ -2654,12 +3140,14 @@ impl StillImageFrameCache {
         let loaded = load_still_image_frame(layer_id, &path, pts_ms)?;
         let frame = resize_rgba8_nearest(&loaded, width, height)?;
         self.entries.retain(|entry| {
-            !(entry.layer_id == layer_id
+            !(entry.key == key
+                && entry.layer_id == layer_id
                 && entry.path == path
                 && entry.width == width
                 && entry.height == height)
         });
         self.entries.push(StillImageFrameCacheEntry {
+            key,
             layer_id,
             path,
             width,
@@ -2752,6 +3240,109 @@ pub fn composite_rgba8(
         duration_ms: 0,
         format: VideoPixelFormat::Rgba8,
         data: output,
+    })
+}
+
+/// Mixes explicitly keyed runtime inputs. A repeated `layer_id` is valid: the
+/// input key is the selector, so two source instances at the same PTS neither
+/// deduplicate nor replace one another.
+pub fn composite_input_mix_rgba8(
+    mix: &CompositionInputMix,
+    frames: &[VideoRenderInputFrame],
+    width: u32,
+    height: u32,
+) -> Result<VideoFrame, CpuCompositeError> {
+    if width == 0 || height == 0 {
+        return Err(CpuCompositeError::InvalidOutputSize);
+    }
+    validate_unique_render_input_keys(mix.inputs.iter().map(|input| &input.key))?;
+    let mut output = vec![0u8; width as usize * height as usize * 4];
+
+    for input in &mix.inputs {
+        let frame = frames
+            .iter()
+            .filter(|frame| frame.key == input.key)
+            .max_by_key(|frame| frame.frame.pts_ms)
+            .map(|frame| &frame.frame)
+            .ok_or(CpuCompositeError::MissingRenderInputFrame {
+                key: input.key,
+                layer_id: input.layer.layer_id,
+            })?;
+        let normalized_frame;
+        let frame = if frame.format == VideoPixelFormat::Rgba8 {
+            validate_render_input_rgba_frame_size(input.key, frame)?;
+            frame
+        } else {
+            normalized_frame = convert_render_input_frame_to_rgba8(input.key, frame)?;
+            &normalized_frame
+        };
+        blend_transformed_rgba8(
+            &mut output,
+            frame,
+            width,
+            height,
+            input.layer.opacity.clamp(0.0, 1.0),
+            &input.layer.blend_mode,
+            &input.layer.transform,
+            &input.layer.color,
+            &input.layer.fx,
+        );
+    }
+
+    Ok(VideoFrame {
+        layer_id: 0,
+        width,
+        height,
+        pts_ms: frames
+            .iter()
+            .filter(|frame| mix.inputs.iter().any(|input| input.key == frame.key))
+            .map(|frame| frame.frame.pts_ms)
+            .max()
+            .unwrap_or(0),
+        duration_ms: 0,
+        format: VideoPixelFormat::Rgba8,
+        data: output,
+    })
+}
+
+fn validate_render_input_rgba_frame_size(
+    key: protocol::VideoRenderInputKey,
+    frame: &VideoFrame,
+) -> Result<(), CpuCompositeError> {
+    let Some(expected_len) = rgba_frame_len(frame.width, frame.height) else {
+        return Err(CpuCompositeError::RenderInputFrameSizeMismatch {
+            key,
+            layer_id: frame.layer_id,
+        });
+    };
+    if frame.width == 0 || frame.height == 0 || frame.data.len() != expected_len {
+        return Err(CpuCompositeError::RenderInputFrameSizeMismatch {
+            key,
+            layer_id: frame.layer_id,
+        });
+    }
+    Ok(())
+}
+
+fn convert_render_input_frame_to_rgba8(
+    key: protocol::VideoRenderInputKey,
+    frame: &VideoFrame,
+) -> Result<VideoFrame, CpuCompositeError> {
+    convert_frame_to_rgba8(frame).map_err(|error| match error {
+        CpuCompositeError::FrameSizeMismatch { .. } => {
+            CpuCompositeError::RenderInputFrameSizeMismatch {
+                key,
+                layer_id: frame.layer_id,
+            }
+        }
+        CpuCompositeError::UnsupportedFrameFormat { format, .. } => {
+            CpuCompositeError::UnsupportedRenderInputFrameFormat {
+                key,
+                layer_id: frame.layer_id,
+                format,
+            }
+        }
+        other => other,
     })
 }
 
@@ -5407,10 +5998,14 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -5446,6 +6041,9 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState {
                     position_ms: 160,
@@ -5453,6 +6051,7 @@ mod tests {
                 },
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -5494,10 +6093,14 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -5559,10 +6162,14 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -5639,10 +6246,14 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
                 isf_effect: Some(effect),
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -5743,6 +6354,9 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
                 isf_effect: Some(protocol::VideoIsfEffectSummary {
@@ -5756,6 +6370,7 @@ mod tests {
                     stack: Vec::new(),
                 }),
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -5814,6 +6429,9 @@ mod tests {
                     codec: Some("H264".to_string()),
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState {
                     position_ms: 250,
@@ -5821,6 +6439,7 @@ mod tests {
                 },
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -5887,6 +6506,9 @@ mod tests {
                     codec: Some("H264".to_string()),
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState {
                     position_ms: 100,
@@ -5894,6 +6516,7 @@ mod tests {
                 },
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -5973,6 +6596,9 @@ mod tests {
                         has_audio: false,
                     }),
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState {
                     position_ms: 110,
@@ -5984,6 +6610,7 @@ mod tests {
                 },
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6061,6 +6688,9 @@ mod tests {
                         has_audio: false,
                     }),
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState {
                     position_ms: 0,
@@ -6077,6 +6707,7 @@ mod tests {
                 },
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6130,6 +6761,9 @@ mod tests {
                     has_audio: false,
                 }),
             },
+            media_asset_id: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState {
                 position_ms: 110,
@@ -6248,6 +6882,9 @@ mod tests {
                 codec: Some("H264".to_string()),
                 metadata: None,
             },
+            media_asset_id: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState {
                 position_ms: 200,
@@ -6302,6 +6939,9 @@ mod tests {
                     has_audio: false,
                 }),
             },
+            media_asset_id: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState {
                 position_ms,
@@ -6323,6 +6963,9 @@ mod tests {
                 codec: None,
                 metadata: None,
             },
+            media_asset_id: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
@@ -6342,6 +6985,7 @@ mod tests {
                     ..scheduled_file_layer(33, 200)
                 },
             ],
+            media_assets: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 7,
                 label: "Program".to_string(),
@@ -6601,9 +7245,14 @@ mod tests {
         worker
             .scheduler_mut()
             .push(decode_request(1, 777), VideoDecodePriority::Lookahead);
-        worker
-            .scheduler_mut()
-            .push(decode_request(1, 999), VideoDecodePriority::Lookahead);
+        let error_key = protocol::VideoRenderInputKey {
+            project_render_epoch: 4,
+            input_id: protocol::VideoRenderInputId(12),
+        };
+        worker.scheduler_mut().push_input(
+            VideoRenderInput::new(error_key, decode_request(1, 999)),
+            VideoDecodePriority::Lookahead,
+        );
 
         let report = worker.decode_budget_into_runtime(&mut runtime, 8);
 
@@ -6612,6 +7261,7 @@ mod tests {
         assert_eq!(report.skipped, 2);
         assert_eq!(report.pending, 0);
         assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].input_key, error_key);
         assert_eq!(report.errors[0].position_ms, 999);
         assert_eq!(runtime.queue_len(1), 1);
     }
@@ -6671,10 +7321,14 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -7173,6 +7827,9 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
                     isf_effect: None,
@@ -7187,6 +7844,9 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState {
                         enabled: true,
@@ -7204,11 +7864,15 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
                     isf_effect: None,
                 },
             ],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: vec![
                 VideoOutputSummary {
@@ -7320,6 +7984,9 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState {
                     enabled: true,
@@ -7327,6 +7994,7 @@ mod tests {
                 },
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: vec![VideoOutputSummary {
                 id: 11,
@@ -7435,6 +8103,9 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState {
                     enabled: true,
@@ -7442,6 +8113,7 @@ mod tests {
                 },
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: vec![VideoOutputSummary {
                 id: 11,
@@ -7569,6 +8241,7 @@ mod tests {
 
         let mut snapshot = VideoSnapshot {
             layers: Vec::new(),
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: vec![VideoOutputSummary {
                 id: 11,
@@ -7654,6 +8327,9 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState {
                         opacity: 0.5,
@@ -7672,6 +8348,9 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     blend_mode: VideoBlendMode::Screen,
                     state: VideoLayerState {
                         opacity: 1.0,
@@ -7681,6 +8360,7 @@ mod tests {
                     isf_effect: None,
                 },
             ],
+            media_assets: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 5,
                 label: "Output A".to_string(),
@@ -7719,10 +8399,14 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -7752,6 +8436,9 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState {
                         enabled: false,
@@ -7770,6 +8457,9 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState {
                         enabled: true,
@@ -7779,6 +8469,7 @@ mod tests {
                     isf_effect: None,
                 },
             ],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -7809,6 +8500,9 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState {
                         opacity: 1.0,
@@ -7826,6 +8520,9 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     blend_mode: VideoBlendMode::Add,
                     state: VideoLayerState {
                         solo: true,
@@ -7844,6 +8541,9 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     blend_mode: VideoBlendMode::Screen,
                     state: VideoLayerState {
                         enabled: false,
@@ -7854,6 +8554,7 @@ mod tests {
                     isf_effect: None,
                 },
             ],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -7889,6 +8590,9 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState {
                     opacity: 0.8,
@@ -7896,6 +8600,7 @@ mod tests {
                 },
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 1,
                 label: "Main".to_string(),
@@ -7950,12 +8655,16 @@ mod tests {
                 codec: None,
                 metadata: None,
             },
+            media_asset_id: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
         };
         let snapshot = VideoSnapshot {
             layers: vec![layer(1, "Back"), layer(2, "Middle"), layer(3, "Front")],
+            media_assets: Vec::new(),
             compositions: vec![
                 CompositionSummary {
                     id: 1,
@@ -8046,10 +8755,14 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 1,
                 label: "Main".to_string(),
@@ -8132,10 +8845,14 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Add,
                 state,
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -8203,12 +8920,16 @@ mod tests {
                 codec: None,
                 metadata: None,
             },
+            media_asset_id: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
         };
         let mut snapshot = VideoSnapshot {
             layers: vec![layer(1), layer(2)],
+            media_assets: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 8,
                 label: "Screen".to_string(),
@@ -8322,10 +9043,14 @@ mod tests {
                     codec: None,
                     metadata: None,
                 },
+                media_asset_id: None,
+                clip_slots: Vec::new(),
+                default_clip_slot_id: None,
                 blend_mode: VideoBlendMode::Normal,
                 state: VideoLayerState::default(),
                 isf_effect: None,
             }],
+            media_assets: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 1,
                 label: "Main".to_string(),
@@ -8525,6 +9250,7 @@ mod tests {
     fn output_test_pattern_is_routed_through_projector_mapping() {
         let mut snapshot = VideoSnapshot {
             layers: Vec::new(),
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: vec![VideoOutputSummary {
                 id: 9,
@@ -8983,5 +9709,315 @@ mod tests {
             bad_dxt,
             Err(CpuCompositeError::FrameSizeMismatch { layer_id: 1 })
         );
+    }
+
+    #[test]
+    fn render_input_key_keeps_same_layer_same_pts_sources_distinct_through_queue_and_mix() {
+        let first = VideoRenderInput::new(
+            protocol::VideoRenderInputKey {
+                project_render_epoch: 42,
+                input_id: protocol::VideoRenderInputId(1),
+            },
+            decode_request(7, 100),
+        );
+        let second = VideoRenderInput::new(
+            protocol::VideoRenderInputKey {
+                project_render_epoch: 42,
+                input_id: protocol::VideoRenderInputId(2),
+            },
+            decode_request(7, 100),
+        );
+        let mut runtime = VideoRuntime::new(VideoRuntimeConfig {
+            frame_queue_capacity: 2,
+            preview_width: 1,
+            preview_height: 1,
+        });
+        runtime.sync_inputs(&[first.clone(), second.clone()]);
+
+        let mut red = rgba_frame(7, [100, 0, 0, 255]);
+        red.pts_ms = 100;
+        let mut green = rgba_frame(7, [0, 100, 0, 255]);
+        green.pts_ms = 100;
+        assert_eq!(
+            runtime.push_input_frame(&first, red),
+            FrameQueuePush::Inserted
+        );
+        assert_eq!(
+            runtime.push_input_frame(&second, green),
+            FrameQueuePush::Inserted
+        );
+        assert_eq!(runtime.queue_count(), 2);
+        assert_eq!(runtime.input_queue_len(first.key), 1);
+        assert_eq!(runtime.input_queue_len(second.key), 1);
+
+        let mut first_layer = layer_plan(7, VideoBlendMode::Normal, 1.0);
+        first_layer.position_ms = 100;
+        let mut second_layer = layer_plan(7, VideoBlendMode::Add, 1.0);
+        second_layer.position_ms = 100;
+        let mix = CompositionInputMix {
+            inputs: vec![
+                CompositionRenderInput {
+                    key: first.key,
+                    layer: first_layer,
+                },
+                CompositionRenderInput {
+                    key: second.key,
+                    layer: second_layer,
+                },
+            ],
+        };
+        let output = runtime.compose_input_mix(&mix, 1, 1).unwrap();
+
+        assert_eq!(output.data, vec![100, 100, 0, 255]);
+        assert_eq!(output.pts_ms, 100);
+        assert_eq!(first.layer_id(), second.layer_id());
+    }
+
+    #[test]
+    fn render_input_mix_rejects_duplicate_runtime_owners() {
+        let key = protocol::VideoRenderInputKey {
+            project_render_epoch: 42,
+            input_id: protocol::VideoRenderInputId(9),
+        };
+        let mix = CompositionInputMix {
+            inputs: vec![
+                CompositionRenderInput {
+                    key,
+                    layer: layer_plan(7, VideoBlendMode::Normal, 1.0),
+                },
+                CompositionRenderInput {
+                    key,
+                    layer: layer_plan(7, VideoBlendMode::Add, 1.0),
+                },
+            ],
+        };
+        let frames = vec![VideoRenderInputFrame {
+            key,
+            frame: rgba_frame(7, [100, 0, 0, 255]),
+        }];
+
+        assert_eq!(
+            composite_input_mix_rgba8(&mix, &frames, 1, 1),
+            Err(CpuCompositeError::DuplicateRenderInputKey { key })
+        );
+        assert_eq!(
+            validate_unique_render_input_keys([&key, &key]),
+            Err(CpuCompositeError::DuplicateRenderInputKey { key })
+        );
+    }
+
+    #[test]
+    fn render_input_mix_errors_preserve_exact_runtime_owner() {
+        let key = protocol::VideoRenderInputKey {
+            project_render_epoch: 42,
+            input_id: protocol::VideoRenderInputId(17),
+        };
+        let mix = CompositionInputMix {
+            inputs: vec![CompositionRenderInput {
+                key,
+                layer: layer_plan(7, VideoBlendMode::Normal, 1.0),
+            }],
+        };
+
+        assert_eq!(
+            composite_input_mix_rgba8(&mix, &[], 1, 1),
+            Err(CpuCompositeError::MissingRenderInputFrame { key, layer_id: 7 })
+        );
+        assert_eq!(
+            composite_input_mix_rgba8(
+                &mix,
+                &[VideoRenderInputFrame {
+                    key,
+                    frame: VideoFrame {
+                        data: vec![0, 0, 0],
+                        ..rgba_frame(7, [0, 0, 0, 255])
+                    },
+                }],
+                1,
+                1,
+            ),
+            Err(CpuCompositeError::RenderInputFrameSizeMismatch { key, layer_id: 7 })
+        );
+
+        let hap_frame = dxt1_frame(7, 4, 4, vec![0; 8]);
+        let converted = convert_render_input_frame_to_rgba8(key, &hap_frame).unwrap();
+        assert_eq!(converted.format, VideoPixelFormat::Rgba8);
+        assert_eq!(converted.data.len(), 4 * 4 * 4);
+    }
+
+    #[test]
+    fn preview_render_input_failure_and_isf_diagnostics_preserve_owner() {
+        struct InputFrameProvider;
+        impl VideoFrameProvider for InputFrameProvider {
+            fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+            fn frame_for_layer(
+                &mut self,
+                layer: &VideoLayerSummary,
+                _width: u32,
+                _height: u32,
+            ) -> Result<VideoFrame, VideoFrameProviderError> {
+                Ok(rgba_frame(layer.id, [24, 96, 180, 255]))
+            }
+
+            fn frame_for_input(
+                &mut self,
+                input: &VideoRenderInput,
+            ) -> Result<VideoFrame, VideoFrameProviderError> {
+                if input.request.position_ms == 999 {
+                    return Err(VideoFrameProviderError::Decode {
+                        layer_id: input.layer_id(),
+                        label: input.request.label.clone(),
+                        error: VideoDecodeError::Decode {
+                            layer_id: input.layer_id(),
+                            label: input.request.label.clone(),
+                            message: "decode failed".to_string(),
+                        },
+                    });
+                }
+                Ok(rgba_frame(input.layer_id(), [24, 96, 180, 255]))
+            }
+        }
+
+        let key = protocol::VideoRenderInputKey {
+            project_render_epoch: 8,
+            input_id: protocol::VideoRenderInputId(3),
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig {
+                frame_queue_capacity: 2,
+                preview_width: 1,
+                preview_height: 1,
+            },
+            InputFrameProvider,
+        );
+        let bad_decode = VideoRenderInput::new(key, decode_request(7, 999));
+        let mix = CompositionInputMix {
+            inputs: vec![CompositionRenderInput {
+                key,
+                layer: layer_plan(7, VideoBlendMode::Normal, 1.0),
+            }],
+        };
+        assert!(matches!(
+            renderer.render_input_mix(&[bad_decode], &mix, 1, 1),
+            Err(VideoPreviewError::RenderInput {
+                key: error_key,
+                ..
+            }) if error_key == key
+        ));
+
+        let bad_isf = VideoRenderInput::new(key, decode_request(7, 10)).with_isf_effect(Some(
+            protocol::VideoIsfEffectSummary {
+                enabled: true,
+                label: "Invalid".to_string(),
+                source: "not an ISF shader".into(),
+                source_path: None,
+                description: None,
+                categories: Vec::new(),
+                controls: Vec::new(),
+                stack: Vec::new(),
+            },
+        ));
+        let output = renderer.render_input_mix(&[bad_isf], &mix, 1, 1).unwrap();
+        assert_eq!(output.data, vec![24, 96, 180, 255]);
+        assert_eq!(renderer.last_render_input_isf_stage_errors().len(), 1);
+        assert_eq!(renderer.last_render_input_isf_stage_errors()[0].key, key);
+    }
+
+    #[test]
+    fn decode_scheduler_deduplicates_only_within_one_render_input_key() {
+        let request = decode_request(7, 100);
+        let first = VideoRenderInput::new(
+            protocol::VideoRenderInputKey {
+                project_render_epoch: 9,
+                input_id: protocol::VideoRenderInputId(3),
+            },
+            request.clone(),
+        );
+        let second = VideoRenderInput::new(
+            protocol::VideoRenderInputKey {
+                project_render_epoch: 9,
+                input_id: protocol::VideoRenderInputId(4),
+            },
+            request,
+        );
+        let mut scheduler = VideoDecodeScheduler::new(3);
+
+        assert_eq!(
+            scheduler.push_input(first.clone(), VideoDecodePriority::Current),
+            VideoDecodeSchedulePush::Inserted
+        );
+        assert_eq!(
+            scheduler.push_input(second.clone(), VideoDecodePriority::Current),
+            VideoDecodeSchedulePush::Inserted
+        );
+        assert_eq!(
+            scheduler.push_input(first.clone(), VideoDecodePriority::Current),
+            VideoDecodeSchedulePush::Duplicate
+        );
+        assert_eq!(scheduler.len(), 2);
+        assert_eq!(
+            scheduler
+                .pending()
+                .into_iter()
+                .map(|scheduled| scheduled.input_key)
+                .collect::<Vec<_>>(),
+            vec![first.key, second.key]
+        );
+        assert_eq!(
+            VideoRenderInput::legacy(first.request).key,
+            protocol::VideoRenderInputKey::LEGACY
+        );
+    }
+
+    #[test]
+    fn ffmpeg_cache_is_owned_by_render_input_key_not_layer_id() {
+        let binary = fake_ffmpeg_binary();
+        let request = VideoFrameRequest {
+            layer_id: 21,
+            label: "Shared authored layer".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("same-layer.mp4".to_string()),
+                name: None,
+                codec: Some("h264".to_string()),
+                metadata: None,
+            },
+            position_ms: 250,
+            width: 1,
+            height: 1,
+        };
+        let first = VideoRenderInput::new(
+            protocol::VideoRenderInputKey {
+                project_render_epoch: 4,
+                input_id: protocol::VideoRenderInputId(1),
+            },
+            request.clone(),
+        );
+        let second = VideoRenderInput::new(
+            protocol::VideoRenderInputKey {
+                project_render_epoch: 4,
+                input_id: protocol::VideoRenderInputId(2),
+            },
+            request,
+        );
+        let mut decoder = FfmpegCliFrameDecoder::new(&binary);
+
+        assert_eq!(
+            decoder.decode_input_frame(&first).unwrap().unwrap().data,
+            b"ABCD"
+        );
+        assert_eq!(
+            decoder.decode_input_frame(&second).unwrap().unwrap().data,
+            b"ABCD"
+        );
+        assert_eq!(decoder.cache_len(), 2);
+        let _ = std::fs::remove_file(&binary);
+        assert_eq!(
+            decoder.decode_input_frame(&first).unwrap().unwrap().data,
+            b"ABCD"
+        );
+        decoder.retain_inputs(&[second]);
+        assert_eq!(decoder.cache_len(), 1);
     }
 }
