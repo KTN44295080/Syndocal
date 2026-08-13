@@ -127,6 +127,20 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
         <VideoBackendStatusPanel {...props.backendStatus} />
         <ExternalVideoIoStatusPanel {...props.externalIoStatus} />
       </div>
+      <section class="videoMixerTopPane" aria-label="Preview and Program">
+        <header class="videoMixerPaneHeader">
+          <div>
+            <strong>Preview / Program</strong>
+            <span>Staged clip and routed output</span>
+          </div>
+          <span>LIVE MONITORS</span>
+        </header>
+        <div class="videoMixerTopContent">
+          <LiveVideoMonitorPanel {...props.liveMonitors} />
+          <VideoMasterControlsPanel {...props.masterControls} />
+        </div>
+      </section>
+      <div class="videoMixerGridDivider" aria-hidden="true" />
       <section class="videoMixerClipPane" aria-label="Clip and transition desk">
         <header class="videoMixerPaneHeader">
           <div>
@@ -155,6 +169,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                   </span>
                   <button
                     class="danger"
+                    data-media-operation-cancel={operation.id}
                     aria-label={`Cancel ${operation.label}`}
                     disabled={operation.phase === "cancelling"}
                     onClick={() => props.mediaLibrary.onCancelOperation(operation.id)}
@@ -246,7 +261,6 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             </Show>
           </div>
         </details>
-        <VideoMasterControlsPanel {...props.masterControls} />
         <Show when={props.mixer}>
           <MixerDrawerBar id="audio-in" title="Audio In" status={audioInStatus()} open={audioInOpen()} onToggle={() => toggleDrawer("audio-in")} />
           <LiveAudioInputRail {...props.clipGrid} compact />
@@ -261,32 +275,33 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
           sourceCreateVisible={sourceCreateVisible()}
         />
       </section>
-      <section class="videoMixerProgramPane" aria-label="Program monitor and outputs">
-        <header class="videoMixerPaneHeader">
-          <div>
-            <strong>Live Monitors</strong>
-            <span>Staged clip and routed output</span>
-          </div>
-          <span>PREVIEW / PROGRAM</span>
-        </header>
-        <LiveVideoMonitorPanel {...props.liveMonitors} />
-        <VideoOutputControlListPanel {...props.outputControls} compact={props.mixer} />
+      <section class="videoMixerContextPane" aria-label="Layers and outputs">
+        <section class="videoMixerProgramPane" aria-label="Video outputs">
+          <header class="videoMixerPaneHeader">
+            <div>
+              <strong>Outputs</strong>
+              <span>Program routing and windows</span>
+            </div>
+            <span>OUTPUTS</span>
+          </header>
+          <VideoOutputControlListPanel {...props.outputControls} compact={props.mixer} />
+        </section>
+        <section class="videoMixerLayerPane" aria-label="Live video layers">
+          <header class="videoMixerPaneHeader">
+            <div>
+              <strong>Layers</strong>
+              <span>{props.layerCount} in composition</span>
+            </div>
+            <span>COMPOSITE</span>
+          </header>
+          <VideoLayerListPanel {...props.layerList} compact={props.mixer} />
+        </section>
       </section>
       <Show when={!props.mixer && sourceCreateVisible()}>
         <div class="videoMixerSetupTools" data-vj-media-source-surface="normal">
           <VideoSourceCreatePanel {...props.sourceCreate} />
         </div>
       </Show>
-      <section class="videoMixerLayerPane" aria-label="Live video layers">
-        <header class="videoMixerPaneHeader">
-          <div>
-            <strong>Layers</strong>
-            <span>{props.layerCount} in composition</span>
-          </div>
-          <span>COMPOSITE</span>
-        </header>
-        <VideoLayerListPanel {...props.layerList} compact={props.mixer} />
-      </section>
       <div class="videoMixerAutomationTools">
         <VideoTimelineAutomationPanel {...props.timelineAutomation} />
       </div>

@@ -2670,6 +2670,9 @@ export default function App() {
   const visibleProjectDirty = createMemo(() => projectDirty() || timelineEditorDirty());
   const snapshotRequestGuard = createSnapshotRequestGuard();
   const viewportFixture = browserViewportFixture(isTauriRuntime());
+  const viewportMediaOperationFixture =
+    viewportFixture === "vj-bank" &&
+    new URLSearchParams(window.location.search).get("syndocalViewportMediaOperation") === "1";
   // T12: pane windows collapse the shell to one pane; popped panes are the
   // main window's record of which panes live in separate windows. Window
   // placement is machine-specific, so persistence is localStorage, not .sdc.
@@ -3467,6 +3470,12 @@ export default function App() {
         outputs,
       },
     }));
+    if (viewportMediaOperationFixture) {
+      // Browser-only viewport proof: use the real cancellable operation
+      // controller so the operation rail and its Cancel control are mounted
+      // by the same signal and handler as desktop media work.
+      beginMediaAssetOperation("Verify VJ media catalog", "hashing");
+    }
   } else if (viewportFixture === "auto-vj") {
     const labels = ["Video", "Output", "Signal Echo"];
     const layers = labels.map((layerLabel, index) => {
@@ -21853,6 +21862,30 @@ export default function App() {
           controlHeaderTitle={workspaceTab() === "touch" ? "Faders" : faderDeskTitle()}
           controlHeaderTools={
             <>
+              <Show when={workspaceTab() === "control" && (controlMode() === "edit" || controlMode() === "live")}>
+                <nav class="lightingContextTabs" aria-label="Lighting context" data-lighting-context-tabs>
+                  <button
+                    type="button"
+                    class={controlMode() === "edit" ? "active" : ""}
+                    data-lighting-context-tab="lighting"
+                    aria-keyshortcuts="E"
+                    aria-pressed={controlMode() === "edit"}
+                    onClick={() => selectControlMode("edit")}
+                  >
+                    Lighting
+                  </button>
+                  <button
+                    type="button"
+                    class={controlMode() === "live" ? "active" : ""}
+                    data-lighting-context-tab="timeline"
+                    aria-keyshortcuts="L"
+                    aria-pressed={controlMode() === "live"}
+                    onClick={() => selectControlMode("live")}
+                  >
+                    Timeline
+                  </button>
+                </nav>
+              </Show>
               <Show when={workspaceTab() === "control" && controlMode() === "live"}>
                 <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
                   <button

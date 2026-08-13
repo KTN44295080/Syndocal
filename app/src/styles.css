@@ -35960,6 +35960,439 @@ a[href]:focus-visible,
   width: 100%;
 }
 
+/* Edit-domain correction: Video follows the same two-row desk geometry as
+   Lighting. The program area spans the upper row; Clips and the composed
+   Layers/Outputs context occupy the real lower-left/lower-right grid cells.
+   The divider is structural (not a painted imitation), and deep lists retain
+   their pane-local scrollports instead of reducing controls or media pads. */
+.layoutControl.controlModeMixer {
+  grid-template-columns: minmax(390px, 1fr) minmax(520px, 1.2fr);
+  grid-template-rows: minmax(230px, 0.51fr) minmax(250px, 0.49fr);
+}
+
+.layoutControl.controlModeMixer .videoControlPanel {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.layoutControl.controlModeMixer .videoControlPanelMixer {
+  display: grid;
+  grid-template-columns: minmax(390px, 1fr) minmax(520px, 1.2fr);
+  grid-template-rows: 36px minmax(0, 0.46fr) 5px minmax(0, 0.54fr);
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutControl.controlModeMixer .videoControlPanelMixer > .panelHeader {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.videoMixerTopPane,
+.videoMixerClipPane,
+.videoMixerContextPane {
+  min-width: 0;
+  min-height: 0;
+  background: #15181b;
+  overflow: hidden;
+}
+
+.videoMixerTopPane {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: grid;
+  grid-template-rows: 40px minmax(0, 1fr);
+  border-bottom: 1px solid var(--ray-border);
+}
+
+.videoMixerTopContent {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.48fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.videoMixerTopContent > .liveVideoMonitorPanel,
+.videoMixerTopContent > .videoMasterControls {
+  grid-column: auto;
+  grid-row: auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.videoMixerTopContent > .videoMasterControls {
+  align-content: start;
+  overflow: hidden auto;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
+  min-height: 68px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.videoControlPanelMixer .videoMixerClipPane [data-mixer-drawer-toggle="audio-in"][aria-expanded="true"] ~ .videoClipGridPanel .videoClipGrid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.videoMixerGridDivider {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  min-width: 0;
+  min-height: 0;
+  border-top: 1px solid #090b0d;
+  border-bottom: 1px solid #30363b;
+  background: #111416;
+}
+
+.videoMixerClipPane {
+  grid-column: 1;
+  grid-row: 4;
+  border-right: 1px solid var(--ray-border);
+}
+
+.videoMixerContextPane {
+  grid-column: 2;
+  grid-row: 4;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.videoMixerContextPane > .videoMixerProgramPane,
+.videoMixerContextPane > .videoMixerLayerPane {
+  display: grid;
+  grid-column: auto;
+  grid-row: auto;
+  grid-template-rows: 40px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.videoMixerContextPane > .videoMixerProgramPane {
+  border-bottom: 1px solid var(--ray-border);
+}
+
+.videoMixerContextPane > .videoMixerProgramPane .videoOutputControlList,
+.videoMixerContextPane > .videoMixerLayerPane .videoLayerList {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+}
+
+.videoMixerContextPane > .videoMixerLayerPane .videoLayerList {
+  contain: layout paint;
+}
+
+.videoControlPanelMixer > .videoMixerDiagnostics,
+.videoControlPanelMixer > .videoMixerSetupTools,
+.videoControlPanelMixer > .videoMixerAutomationTools {
+  display: none;
+}
+
+/* At the 720/768 px operating floor, the shared desk keeps the two-column
+   grammar while favoring the lower 6-column/two-row clip bank. This is a
+   reflow: labels, buttons and pad aspect ratio stay unchanged, and the
+   monitors remain a contained, usable top pane rather than pushing the app
+   taller. */
+@media (max-height: 800px) {
+  .layoutControl.controlModeMixer .videoControlPanelMixer {
+    grid-template-columns: minmax(390px, 1.1fr) minmax(520px, 1fr);
+    grid-template-rows: 36px minmax(0, 0.36fr) 5px minmax(0, 0.64fr);
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  /* Keep the 44px transport controls alongside, rather than underneath, the
+     two monitor buses. The bounded bus row can therefore retain real frames
+     at the 720px operating floor without any button or type reduction. */
+  .videoControlPanelMixer .liveVideoMonitorPanel {
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 0.48fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 5px;
+    padding: 6px;
+  }
+
+  .videoControlPanelMixer .liveVideoMonitorBuses {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .videoControlPanelMixer .liveVideoMonitorPanel > .vjPreviewTransport {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  /* Audio In, Auto VJ, and Reactive remain their normal individual 22px
+     controls, but share one horizontal row at the short-height floor. This
+     reclaims vertical space by reflow rather than making a pad, control, or
+     label smaller. Their detailed surfaces still mount immediately below
+     when opened and keep their own local scroll behavior. */
+  .videoControlPanelMixer .videoMixerClipPane {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: 40px 30px 22px minmax(0, 1fr);
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane > .videoMixerPaneHeader,
+  .videoControlPanelMixer .videoMixerClipPane > .videoMediaLibraryRail,
+  .videoControlPanelMixer .videoMixerClipPane > .videoClipGridPanel {
+    grid-column: 1 / -1;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane > .videoMixerPaneHeader {
+    grid-row: 1;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane > .videoMediaLibraryRail {
+    grid-row: 2;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane > [data-mixer-drawer-toggle="audio-in"] {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane > [data-mixer-drawer-toggle="auto-vj"] {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane > [data-mixer-drawer-toggle="reactive"] {
+    grid-column: 3;
+    grid-row: 3;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane > .videoClipGridPanel {
+    grid-row: 4;
+  }
+
+  /* Active media work is an optional direct child before the library rail.
+     Give it its own bounded auto row whenever mounted, so its live status and
+     real Cancel control cannot take an implicit row or overlap the pads. */
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail) {
+    grid-template-rows: 40px auto 30px 22px minmax(0, 1fr);
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane > .videoMediaOperationRail {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail) > .videoMediaLibraryRail {
+    grid-row: 3;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail) > [data-mixer-drawer-toggle="audio-in"],
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail) > [data-mixer-drawer-toggle="auto-vj"],
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail) > [data-mixer-drawer-toggle="reactive"] {
+    grid-row: 4;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail) > .videoClipGridPanel {
+    grid-row: 5;
+  }
+
+  /* An opened drawer receives its own bounded row between the shared control
+     row and the clip bank. The bank stays below it; this is the same local
+     scroll/reflow contract as the normal desk, not an overlap or a target
+     reduction. */
+  .videoControlPanelMixer .videoMixerClipPane:has([data-mixer-drawer-toggle][aria-expanded="true"]) {
+    grid-template-rows: 40px 30px 22px minmax(56px, 64px) minmax(0, 1fr);
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane > [data-mixer-drawer-toggle][aria-expanded="true"] + .liveAudioInputBar,
+  .videoControlPanelMixer .videoMixerClipPane > [data-mixer-drawer-toggle][aria-expanded="true"] + .autoVjStrip,
+  .videoControlPanelMixer .videoMixerClipPane > [data-mixer-drawer-toggle][aria-expanded="true"] + .audioReactiveVjStrip {
+    grid-column: 1 / -1;
+    grid-row: 4;
+    min-height: 0;
+    max-height: 64px;
+    overflow: hidden auto;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane:has([data-mixer-drawer-toggle][aria-expanded="true"]) > .videoClipGridPanel {
+    grid-row: 5;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail):has([data-mixer-drawer-toggle][aria-expanded="true"]) {
+    grid-template-rows: 40px auto 30px 22px minmax(56px, 64px) minmax(0, 1fr);
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail):has([data-mixer-drawer-toggle][aria-expanded="true"]) > [data-mixer-drawer-toggle][aria-expanded="true"] + .liveAudioInputBar,
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail):has([data-mixer-drawer-toggle][aria-expanded="true"]) > [data-mixer-drawer-toggle][aria-expanded="true"] + .autoVjStrip,
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail):has([data-mixer-drawer-toggle][aria-expanded="true"]) > [data-mixer-drawer-toggle][aria-expanded="true"] + .audioReactiveVjStrip {
+    grid-row: 5;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail):has([data-mixer-drawer-toggle][aria-expanded="true"]) > .videoClipGridPanel {
+    grid-row: 6;
+  }
+}
+
+.lightingContextTabs {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-surface-control);
+}
+
+.lightingContextTabs > button {
+  min-width: 74px;
+  min-height: 28px;
+  border: 0;
+  border-right: 1px solid var(--ui-border);
+  border-radius: 0;
+}
+
+.lightingContextTabs > button:last-child {
+  border-right: 0;
+}
+
+.lightingContextTabs > button.active {
+  background: var(--ui-surface-selected);
+  color: #fff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+@media (max-width: 1400px) {
+  .videoMixerTopContent {
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 0.52fr);
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+/* A native mixer pop-out starts at 860 x 520. It keeps the shared two-column
+   desk instead of inheriting the main-window 910px column floor; below that
+   floor the right context may scroll locally, while the app itself cannot.
+   The 46/54 top/lower split retains real Preview and Program viewports while
+   giving active media work and an opened drawer a bounded lower reflow -- no
+   existing control, label, spacing, or pad target is reduced. */
+.app.paneWindow-mixer .layoutControl.controlModeMixer {
+  grid-template-columns: minmax(300px, 1fr) minmax(0, 1.2fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.app.paneWindow-mixer .layoutControl.controlModeMixer > :not(.videoControlPanel) {
+  display: none;
+}
+
+.app.paneWindow-mixer .layoutControl.controlModeMixer .videoControlPanel {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.app.paneWindow-mixer .layoutControl.controlModeMixer .videoControlPanelMixer {
+  grid-template-columns: minmax(300px, 1fr) minmax(0, 1.2fr);
+  grid-template-rows: 36px minmax(0, 0.46fr) 5px minmax(0, 0.54fr);
+}
+
+/* The monitor frame may use all of its bounded grid cell.  Its media remains
+   letterboxed by the existing object-fit: contain rule, so this removes only
+   the intrinsic 16:9 minimum that could otherwise paint outside a short top
+   pane; it never distorts the source. */
+.videoControlPanelMixer .liveVideoMonitorViewport {
+  min-height: 0;
+  aspect-ratio: auto;
+}
+
+/* Keep the existing Clip Grid controls, but let their three independent
+   controls share the wide row. This reflow releases height for the two-row
+   12-pad bank; it does not reduce a label, button, or hit target. */
+.videoControlPanelMixer .videoMixerClipPane .videoClipGridHeader {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipGridHeader > div {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.videoControlPanelMixer .videoMixerClipPane .videoClipGridHeader h3 {
+  white-space: nowrap;
+}
+
+/* This must follow the width compacting rule above: at the short-height
+   operator floor, a sixth column turns the fixed 12-pad bank into two 16:9
+   rows without borrowing the monitor's usable height. */
+@media (max-height: 800px) {
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGridHeader {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGridHeader > div {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane .videoClipGridHeader h3 {
+    white-space: nowrap;
+  }
+}
+
+/* Fullscreen keeps its intentionally hidden desk header, but must retain the
+   same shared Video grammar: one spanning monitor row, one structural divide,
+   and the Clip / Outputs+Layers lower pair. These rules deliberately outrank
+   the older fullscreen three-column desk declarations above. */
+@media (min-width: 1600px) and (min-height: 900px) {
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoControlPanelMixer {
+    grid-template-columns: minmax(390px, 1fr) minmax(520px, 1.2fr);
+    grid-template-rows: minmax(0, 0.47fr) 5px minmax(0, 0.53fr);
+  }
+
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerTopPane {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerGridDivider {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerClipPane {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerContextPane {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerContextPane > .videoMixerProgramPane,
+  html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerContextPane > .videoMixerLayerPane {
+    grid-column: auto;
+    grid-row: auto;
+    grid-template-rows: 40px minmax(0, 1fr);
+  }
+}
+
 /* Media Asset T1: a closed library rail consumes one normal control row. Its
    opened catalog overlays the clip desk and scrolls internally, preserving the
    fixed one-screen shell and the existing clip hit targets. */

@@ -17,6 +17,8 @@ const vjEmptyMode = process.argv.includes("--vj-empty");
 const liveAudioOnlyMode = process.argv.includes("--live-audio-only");
 const fullscreenVjOnlyMode = process.argv.includes("--fullscreen-vj");
 const operatorVjOnlyMode = process.argv.includes("--operator-vj-only");
+const vjBankOnlyMode = process.argv.includes("--vj-bank-only");
+const paneMixerOnlyMode = process.argv.includes("--pane-mixer-only");
 const autoVjOnlyMode = process.argv.includes("--auto-vj-only");
 const audioReactiveOnlyMode = process.argv.includes("--audio-reactive-only");
 const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
@@ -106,6 +108,8 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
         ? "fx-visual"
       : operatorVjOnlyMode
         ? "operator-vj"
+        : paneMixerOnlyMode || vjBankOnlyMode
+          ? "vj-bank"
         : autoVjOnlyMode
           ? "auto-vj"
           : audioReactiveOnlyMode
@@ -137,6 +141,7 @@ const screenshotDir = process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR
 const primaryOperationalViewport = { width: 1920, height: 1080 };
 const measuredClientSizeViewport = { width: 1920, height: 1032 };
 const extendedCeilingViewport = { width: 2048, height: 1152 };
+const defaultMixerPaneViewport = { width: 860, height: 520 };
 const compactFallbackViewports = [
   { width: 1366, height: 768 },
   { width: 1280, height: 720 },
@@ -151,7 +156,9 @@ const requestedViewportMatch = process.env.SYNDOCAL_VIEWPORT_ONLY?.match(/^(\d+)
 const requestedViewport = requestedViewportMatch
   ? { width: Number(requestedViewportMatch[1]), height: Number(requestedViewportMatch[2]) }
   : null;
-const viewports = requestedViewport
+const viewports = paneMixerOnlyMode
+  ? [defaultMixerPaneViewport]
+  : requestedViewport
   ? [requestedViewport]
   : topbarPulseOnlyMode
     ? [compactFallbackViewports[1]]
@@ -199,6 +206,14 @@ const controlTabs = [
   { id: "live", label: "Timeline" },
   { id: "mixer", label: "Video" },
 ];
+
+const selectControlSurface = async (client, modeId) => {
+  if (modeId === "live") {
+    await clickLightingContextTab(client, "timeline");
+    return;
+  }
+  await clickControlModeOption(client, modeId);
+};
 const viewportRecentProjects = [
   "C:/shows/front-room.sdc",
   "C:/shows/main-stage.sdc",
@@ -1510,9 +1525,34 @@ function measureOperatorVjLayoutInPage(layerId) {
   const contained = (child, parent) => Boolean(child && parent &&
     child.left >= parent.left - 1 && child.right <= parent.right + 1 &&
     child.top >= parent.top - 1 && child.bottom <= parent.bottom + 1);
+  const containedOrInternallyReachable = (childElement, parentElement) => {
+    if (!(childElement instanceof HTMLElement) || !(parentElement instanceof HTMLElement)) return false;
+    const initialChildRect = rect(childElement);
+    const initialParentRect = rect(parentElement);
+    if (contained(initialChildRect, initialParentRect) && contained(initialChildRect, viewport)) return true;
+    const style = getComputedStyle(parentElement);
+    if (!/(auto|scroll)/.test(style.overflowY) || parentElement.scrollHeight <= parentElement.clientHeight) return false;
+    const scrollAncestors = [];
+    for (let ancestor = childElement.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const ancestorStyle = getComputedStyle(ancestor);
+      if (/(auto|scroll)/.test(ancestorStyle.overflowY) || /(auto|scroll)/.test(ancestorStyle.overflowX)) {
+        scrollAncestors.push({ element: ancestor, top: ancestor.scrollTop, left: ancestor.scrollLeft });
+      }
+    }
+    childElement.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const reachedRect = rect(childElement);
+    const reached = contained(reachedRect, rect(parentElement)) && contained(reachedRect, viewport);
+    for (const ancestor of scrollAncestors) {
+      ancestor.element.scrollTop = ancestor.top;
+      ancestor.element.scrollLeft = ancestor.left;
+    }
+    return reached;
+  };
   const viewport = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
   const containerSelectors = {
+    topPane: ".videoMixerTopPane",
     clipPane: ".videoMixerClipPane",
+    contextPane: ".videoMixerContextPane",
     programPane: ".videoMixerProgramPane",
     layerPane: ".videoMixerLayerPane",
     layerList: ".videoLayerList.compact",
@@ -1536,55 +1576,67 @@ function measureOperatorVjLayoutInPage(layerId) {
       rect: rect(element),
     };
   });
-  const layerPane = rect(document.querySelector(".videoMixerLayerPane"));
-  const programPane = rect(document.querySelector(".videoMixerProgramPane"));
-  const layerRoot = rect(document.querySelector(`[data-video-isf-layer-id="${layerId}"]`));
+  const layerPaneElement = document.querySelector(".videoMixerLayerPane");
+  const programPaneElement = document.querySelector(".videoMixerProgramPane");
+  const topPaneElement = document.querySelector(".videoMixerTopPane");
+  const layerListElement = document.querySelector(".videoMixerLayerPane .videoLayerList");
+  const outputListElement = document.querySelector(".videoMixerProgramPane .videoOutputControlList");
+  const layerPane = rect(layerPaneElement);
+  const programPane = rect(programPaneElement);
+  const topPane = rect(topPaneElement);
+  const layerRootElement = document.querySelector(`[data-video-isf-layer-id="${layerId}"]`);
   const advancedElement = document.querySelector(`[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced`);
-  const advanced = rect(advancedElement);
-  const advancedHorizontalBounds = advanced
-    ? { ...advanced, top: Number.NEGATIVE_INFINITY, bottom: Number.POSITIVE_INFINITY }
-    : null;
   const layerActions = [...document.querySelectorAll(
     `[data-video-isf-layer-id="${layerId}"] [data-video-isf-action]`,
   )]
-    .filter((action) => !action.closest(".videoIsfAdvanced"))
-    .map(rect);
+    .filter((action) => !action.closest(".videoIsfAdvanced"));
   const advancedControls = [...document.querySelectorAll(
     `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced input, ` +
     `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced select, ` +
     `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced button`,
-  )].map(rect);
-  const outputRail = rect(document.querySelector(".videoOutputSelectorRail"));
-  const outputDetail = rect([...document.querySelectorAll("[data-video-output-detail-id]")]
-    .find((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0));
-  const programMonitor = rect(document.querySelector('[data-live-video-monitor="program"]'));
-  const programLabel = rect(document.querySelector('[data-live-video-monitor="program"] header span'));
+  )];
+  const outputRailElement = document.querySelector(".videoOutputSelectorRail");
+  const outputRail = rect(outputRailElement);
+  const outputDetailElement = [...document.querySelectorAll("[data-video-output-detail-id]")]
+    .find((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0);
+  const outputDetail = rect(outputDetailElement);
+  const programMonitorElement = document.querySelector('[data-live-video-monitor="program"]');
+  const programMonitor = rect(programMonitorElement);
+  const programLabelElement = document.querySelector('[data-live-video-monitor="program"] header span');
+  const programLabel = rect(programLabelElement);
   const clipGridElement = document.querySelector(".videoMixerClipPane .videoClipGrid");
   const audioSyncElement = document.querySelector(".videoMixerClipPane .videoAudioSyncStatus");
   const recordingTelemetryElement = document.querySelector(".videoMixerClipPane .videoRecordingBar span");
   const recordingTelemetryRect = rect(recordingTelemetryElement);
-  const railButtons = [...document.querySelectorAll(".videoOutputRailButton[data-video-output-id]")].map(rect);
+  const railButtons = [...document.querySelectorAll(".videoOutputRailButton[data-video-output-id]")];
   const targets = [
-    ["clipPane", containers.find((entry) => entry.name === "clipPane")?.rect, viewport],
-    ["programPane", programPane, viewport],
-    ["layerPane", layerPane, viewport],
-    ["layerRoot", layerRoot, layerPane],
-    ["advanced", advanced, layerPane],
-    ["outputRail", outputRail, programPane],
-    ["outputDetail", outputDetail, programPane],
-    ["programMonitor", programMonitor, programPane],
-    ["programLabel", programLabel, programMonitor],
-    ...layerActions.map((action, index) => [`layerAction${index + 1}`, action, layerRoot]),
-    ...advancedControls.map((control, index) => [`advancedControl${index + 1}`, control, advancedHorizontalBounds]),
-    ...railButtons.map((button, index) => [`outputRailButton${index + 1}`, button, outputRail]),
+    ["clipPane", document.querySelector(".videoMixerClipPane"), null, viewport],
+    ["programPane", programPaneElement, null, viewport],
+    ["layerPane", layerPaneElement, null, viewport],
+    ["outputRail", outputRailElement, outputListElement],
+    ["programMonitor", programMonitorElement, topPaneElement],
+    ["programLabel", programLabelElement, programMonitorElement],
+    ...layerActions.map((element, index) => [`layerAction${index + 1}`, element, layerListElement]),
+    ...advancedControls.map((element, index) => [`advancedControl${index + 1}`, element, advancedElement]),
+    ...railButtons.map((element, index) => [`outputRailButton${index + 1}`, element, outputRailElement]),
   ].filter(([, child]) => child);
-  const rectContainment = targets.map(([name, child, parent]) => ({ name, contained: contained(child, parent), rect: child }));
+  const rectContainment = targets.map(([name, childElement, parentElement, fixedParent]) => {
+    const child = rect(childElement);
+    const parent = fixedParent ?? rect(parentElement);
+    return {
+      name,
+      contained: fixedParent
+        ? contained(child, parent)
+        : containedOrInternallyReachable(childElement, parentElement),
+      rect: child,
+    };
+  });
   return {
     innerWidth,
     innerHeight,
     containers,
-    advancedViewport: advanced ? {
-      height: advanced.height,
+    advancedViewport: advancedElement ? {
+      height: advancedElement.getBoundingClientRect().height,
       clientHeight: advancedElement?.clientHeight ?? 0,
       scrollHeight: advancedElement?.scrollHeight ?? 0,
     } : null,
@@ -2004,6 +2056,8 @@ async function clickVisibleSelector(client, selector) {
 const workspaceOptionSelector = (workspace) => `[data-workspace-option="${workspace}"]`;
 const controlModeOptionSelector = (mode) =>
   `[data-edit-domain-navigation] [data-control-mode-option="${mode}"]`;
+const lightingContextTabSelector = (tab) =>
+  `[data-workspace-pane="lower-right"] [data-lighting-context-tab="${tab}"]`;
 
 async function clickWorkspaceOption(client, workspace) {
   await clickVisibleSelector(client, workspaceOptionSelector(workspace));
@@ -2011,6 +2065,10 @@ async function clickWorkspaceOption(client, workspace) {
 
 async function clickControlModeOption(client, mode) {
   await clickVisibleSelector(client, controlModeOptionSelector(mode));
+}
+
+async function clickLightingContextTab(client, tab) {
+  await clickVisibleSelector(client, lightingContextTabSelector(tab));
 }
 
 async function selectVisibleOption(client, selector, value) {
@@ -2106,7 +2164,7 @@ async function readTimelineRulerBounds(client) {
 
 async function checkWorkspaceLayoutPersistence(client) {
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await clickLightingContextTab(client, "timeline");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Playback");
   await sleep(100);
   await client.send("Page.navigate", { url: appUrl });
@@ -2114,13 +2172,14 @@ async function checkWorkspaceLayoutPersistence(client) {
   const restored = await client.evaluate(`(() => ({
     workspace: document.querySelector('[data-workspace-option][aria-pressed="true"]')?.getAttribute('data-workspace-option') || '',
     workspaceLabel: (document.querySelector('[data-workspace-option][aria-pressed="true"]')?.textContent || '').trim(),
-    controlMode: document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '',
-    controlModeLabel: (document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.textContent || '').trim(),
+    editDomainMode: document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '',
+    editDomainLabel: (document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.textContent || '').trim(),
+    timelineContext: document.querySelector('[data-lighting-context-tab][aria-pressed="true"]')?.getAttribute('data-lighting-context-tab') || '',
     desk: document.querySelector('.timelineDeskTabs button.active')?.getAttribute('data-timeline-desk-surface') || '',
   }))()`);
   if (
     restored.workspace !== "control" || restored.workspaceLabel !== "Edit" ||
-    restored.controlMode !== "live" || restored.controlModeLabel !== "Timeline" ||
+    restored.editDomainMode !== "edit" || restored.editDomainLabel !== "Lighting" || restored.timelineContext !== "timeline" ||
     restored.desk !== "playback"
   ) {
     throw new Error(`Workspace layout did not restore: ${JSON.stringify(restored)}`);
@@ -2220,17 +2279,17 @@ async function checkKeyboardNavigation(client) {
   await pressKey(client, "KeyL", "l");
   await sleep(60);
   const modeAfterL = await client.evaluate(
-    "document.querySelector('[data-control-mode-option][aria-pressed=\"true\"]')?.getAttribute('data-control-mode-option') || ''",
+    "document.querySelector('.layout.layoutControl.controlModeLive') ? 'live' : ''",
   );
   await pressKey(client, "KeyM", "m");
   await sleep(60);
   const modeAfterM = await client.evaluate(
-    "document.querySelector('[data-control-mode-option][aria-pressed=\"true\"]')?.getAttribute('data-control-mode-option') || ''",
+    "document.querySelector('.layout.layoutControl.controlModeMixer') ? 'mixer' : ''",
   );
   await pressKey(client, "KeyE", "e");
   await sleep(60);
   const modeAfterE = await client.evaluate(
-    "document.querySelector('[data-control-mode-option][aria-pressed=\"true\"]')?.getAttribute('data-control-mode-option') || ''",
+    "document.querySelector('.layout.layoutControl.controlModeEdit') ? 'edit' : ''",
   );
   await pressKey(client, "F3");
   await sleep(60);
@@ -2673,7 +2732,7 @@ async function measureTimelinePaneExpansionState(client) {
 
 async function runTimelinePaneExpansionCheck(client, viewport) {
   await clickWorkspaceOption(client, 'control');
-  await clickControlModeOption(client, 'live');
+  await selectControlSurface(client, 'live');
   await sleep(120);
   const before = await measureTimelinePaneExpansionState(client);
   const mixerDisclosureOpened = await client.evaluate(`(() => {
@@ -2793,10 +2852,10 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     normalDensity.visibleChromeEditDomainNavigationCount === 1 &&
     normalDensity.editDomainNavigationDirectlyAfterTopbar &&
     normalDensity.oldLowerControlModeNavigationCount === 0 &&
-    JSON.stringify(normalDensity.editDomainModeIds) === JSON.stringify(['edit', 'live', 'mixer']) &&
-    JSON.stringify(normalDensity.editDomainModeLabels) === JSON.stringify(['Lighting', 'Timeline', 'Video']) &&
-    normalDensity.editDomainButtonCount === 3 &&
-    normalDensity.editDomainButtonWidths.length === 3 &&
+    JSON.stringify(normalDensity.editDomainModeIds) === JSON.stringify(['edit', 'mixer']) &&
+    JSON.stringify(normalDensity.editDomainModeLabels) === JSON.stringify(['Lighting', 'Video']) &&
+    normalDensity.editDomainButtonCount === 2 &&
+    normalDensity.editDomainButtonWidths.length === 2 &&
     normalDensity.editDomainButtonWidths.every((width) => width > 0)
   );
   const splitterAriaMatchesRendered = (state) => Boolean(
@@ -3253,7 +3312,7 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   await client.send("Page.navigate", { url: fixtureUrl("timeline") });
   await waitForApp(client);
   await clickWorkspaceOption(client, 'control');
-  await clickControlModeOption(client, 'live');
+  await selectControlSurface(client, 'live');
   await sleep(120);
   const matrix = await measureLiveDeskHeaderState(client);
   await client.evaluate(`(() => {
@@ -6276,7 +6335,7 @@ async function runControlStageFixtureEditViewport(client, viewport) {
       ?.filter((call) => call.command === "set_fixture_transform").length ?? -1,
   }))()`);
 
-  await clickControlModeOption(client, "live");
+  await clickLightingContextTab(client, "timeline");
   await clickByText(client, "Show");
   await waitForClientCondition(
     client,
@@ -6597,7 +6656,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
   await waitForApp(client);
   await clickWorkspaceOption(client, 'control');
-  await clickControlModeOption(client, 'live');
+  await selectControlSurface(client, 'live');
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await sleep(120);
   const before = await measureLayeredTimelineDeskState(client);
@@ -6732,7 +6791,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
   await waitForApp(client);
   await clickWorkspaceOption(client, 'control');
-  await clickControlModeOption(client, 'live');
+  await selectControlSurface(client, 'live');
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await sleep(120);
   await client.evaluate(`document.querySelector('[data-timeline-stretch-mode="WINDOW"]')?.click()`);
@@ -9069,7 +9128,136 @@ async function measure(client, label) {
       effectTargetMapSelectionOptionCount: [...document.querySelectorAll('.effectEditor option')]
         .filter((option) => (option.textContent || '').trim().toLowerCase().startsWith('map selection')).length,
       visibleRawMonitorCount: visibleCount('.rawMonitor'),
+      lightingContextTabs: (() => {
+        const root = document.querySelector('[data-lighting-context-tabs]');
+        const lowerRight = root?.closest('[data-workspace-pane="lower-right"]');
+        const visible = Boolean(root && root.getBoundingClientRect().width > 0 && root.getBoundingClientRect().height > 0);
+        const rect = root?.getBoundingClientRect();
+        const lowerRightRect = lowerRight?.getBoundingClientRect();
+        return {
+          count: visible ? root?.querySelectorAll('[data-lighting-context-tab]').length ?? 0 : 0,
+          labels: visible ? [...(root?.querySelectorAll('[data-lighting-context-tab]') ?? [])]
+            .map((button) => (button.textContent || '').trim()) : [],
+          shortcuts: visible ? [...(root?.querySelectorAll('[data-lighting-context-tab]') ?? [])]
+            .map((button) => button.getAttribute('aria-keyshortcuts') ?? '') : [],
+          active: visible ? root?.querySelector('[data-lighting-context-tab][aria-pressed="true"]')
+            ?.getAttribute('data-lighting-context-tab') ?? '' : '',
+          insideLowerRight: Boolean(
+            visible && rect && lowerRightRect &&
+            rect.left >= lowerRightRect.left - 1 && rect.right <= lowerRightRect.right + 1 &&
+            rect.top >= lowerRightRect.top - 1 && rect.bottom <= lowerRightRect.bottom + 1,
+          ),
+          rect: visible && rect ? {
+            x: Math.round(rect.x * 100) / 100,
+            y: Math.round(rect.y * 100) / 100,
+            width: Math.round(rect.width * 100) / 100,
+            height: Math.round(rect.height * 100) / 100,
+          } : null,
+        };
+      })(),
       visibleVideoControlPanelCount: visibleCount('.videoControlPanel'),
+      visibleVideoMixerTopPaneCount: visibleCount('.videoMixerTopPane'),
+      visibleVideoMixerContextPaneCount: visibleCount('.videoMixerContextPane'),
+      visibleVideoMixerGridDividerCount: visibleCount('.videoMixerGridDivider'),
+      videoMixerSharedGrid: (() => {
+        const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect() ?? null;
+        const top = rect('.videoMixerTopPane');
+        const divider = rect('.videoMixerGridDivider');
+        const clips = rect('.videoMixerClipPane');
+        const context = rect('.videoMixerContextPane');
+        const program = rect('.videoMixerProgramPane');
+        const layers = rect('.videoMixerLayerPane');
+        return {
+          top: top ? { x: top.x, y: top.y, width: top.width, height: top.height, right: top.right, bottom: top.bottom } : null,
+          divider: divider ? { x: divider.x, y: divider.y, width: divider.width, height: divider.height, right: divider.right, bottom: divider.bottom } : null,
+          clips: clips ? { x: clips.x, y: clips.y, width: clips.width, height: clips.height, right: clips.right, bottom: clips.bottom } : null,
+          context: context ? { x: context.x, y: context.y, width: context.width, height: context.height, right: context.right, bottom: context.bottom } : null,
+          program: program ? { x: program.x, y: program.y, width: program.width, height: program.height, right: program.right, bottom: program.bottom } : null,
+          layers: layers ? { x: layers.x, y: layers.y, width: layers.width, height: layers.height, right: layers.right, bottom: layers.bottom } : null,
+          topSpansLower: Boolean(top && clips && context && top.left <= clips.left + 1 && top.right >= context.right - 1),
+          dividerSpansLower: Boolean(divider && clips && context && divider.left <= clips.left + 1 && divider.right >= context.right - 1),
+          lowerPanesSideBySide: Boolean(clips && context && clips.right <= context.left + 1 && Math.abs(clips.top - context.top) <= 1),
+          lowerPanesShareBottom: Boolean(clips && context && Math.abs(clips.bottom - context.bottom) <= 1),
+          contextStacksOutputsAboveLayers: Boolean(program && layers && Math.abs(program.left - layers.left) <= 1 && Math.abs(program.right - layers.right) <= 1 && program.bottom <= layers.top + 1),
+        };
+      })(),
+      videoMixerTopPaneUsability: (() => {
+        const top = document.querySelector('.videoMixerTopPane');
+        const monitor = document.querySelector('.videoMixerTopPane .liveVideoMonitorPanel');
+        const previewBus = document.querySelector('[data-live-video-monitor="preview"]');
+        const programBus = document.querySelector('[data-live-video-monitor="program"]');
+        const previewViewport = document.querySelector('[data-live-video-monitor="preview"] .liveVideoMonitorViewport');
+        const programViewport = document.querySelector('[data-live-video-monitor="program"] .liveVideoMonitorViewport');
+        const transport = document.querySelector('.videoMixerTopPane .vjPreviewTransport');
+        const master = document.querySelector('.videoMixerTopPane .videoMasterControls');
+        if (!(top instanceof HTMLElement) || !(monitor instanceof HTMLElement) ||
+          !(previewBus instanceof HTMLElement) || !(programBus instanceof HTMLElement) ||
+          !(previewViewport instanceof HTMLElement) || !(programViewport instanceof HTMLElement) ||
+          !(transport instanceof HTMLElement) ||
+          !(master instanceof HTMLElement)) {
+          return { present: false };
+        }
+        const topRect = top.getBoundingClientRect();
+        const monitorRect = monitor.getBoundingClientRect();
+        const previewBusRect = previewBus.getBoundingClientRect();
+        const programBusRect = programBus.getBoundingClientRect();
+        const previewViewportRect = previewViewport.getBoundingClientRect();
+        const programViewportRect = programViewport.getBoundingClientRect();
+        const transportRect = transport.getBoundingClientRect();
+        const masterRect = master.getBoundingClientRect();
+        const contained = (rect) =>
+          rect.left >= topRect.left - 1 && rect.right <= topRect.right + 1 &&
+          rect.top >= topRect.top - 1 && rect.bottom <= topRect.bottom + 1 &&
+          rect.width > 0 && rect.height > 0;
+        const visibleMasterControl = [...master.querySelectorAll('button, input, select')]
+          .some((control) => {
+            const rect = control.getBoundingClientRect();
+            return rect.left >= topRect.left - 1 && rect.right <= topRect.right + 1 &&
+              rect.top >= topRect.top - 1 && rect.bottom <= topRect.bottom + 1 &&
+              rect.width > 0 && rect.height > 0;
+          });
+        const masterControls = [...master.querySelectorAll('button, input, select')];
+        const terminalMasterControl = masterControls.at(-1);
+        const initialMasterScroll = [master.scrollTop, master.scrollLeft];
+        master.scrollTop = Math.max(0, master.scrollHeight - master.clientHeight);
+        master.scrollLeft = Math.max(0, master.scrollWidth - master.clientWidth);
+        const terminalRect = terminalMasterControl instanceof HTMLElement
+          ? terminalMasterControl.getBoundingClientRect()
+          : null;
+        const terminalMasterControlReachable = Boolean(
+          terminalRect &&
+          terminalRect.left >= masterRect.left - 1 && terminalRect.right <= masterRect.right + 1 &&
+          terminalRect.top >= masterRect.top - 1 && terminalRect.bottom <= masterRect.bottom + 1 &&
+          terminalRect.left >= -1 && terminalRect.right <= innerWidth + 1 &&
+          terminalRect.top >= -1 && terminalRect.bottom <= innerHeight + 1,
+        );
+        master.scrollTop = initialMasterScroll[0];
+        master.scrollLeft = initialMasterScroll[1];
+        const containedByMonitor = (rect) =>
+          rect.left >= monitorRect.left - 1 && rect.right <= monitorRect.right + 1 &&
+          rect.top >= monitorRect.top - 1 && rect.bottom <= monitorRect.bottom + 1 &&
+          rect.width > 0 && rect.height > 0;
+        const overlaps = (first, second) =>
+          first.left < second.right - 1 && first.right > second.left + 1 &&
+          first.top < second.bottom - 1 && first.bottom > second.top + 1;
+        return {
+          present: true,
+          top: [topRect.width, topRect.height],
+          monitor: [monitorRect.width, monitorRect.height],
+          previewViewport: [previewViewportRect.width, previewViewportRect.height],
+          programViewport: [programViewportRect.width, programViewportRect.height],
+          master: [masterRect.width, masterRect.height],
+          monitorContained: contained(monitorRect),
+          previewViewportContained: contained(previewViewportRect),
+          programViewportContained: contained(programViewportRect),
+          transport: [transportRect.width, transportRect.height],
+          transportContained: containedByMonitor(transportRect),
+          transportSeparateFromBuses: !overlaps(transportRect, previewBusRect) && !overlaps(transportRect, programBusRect),
+          masterContained: contained(masterRect),
+          visibleMasterControl,
+          terminalMasterControlReachable,
+        };
+      })(),
       visibleVideoMixerClipPaneCount: visibleCount('.videoMixerClipPane'),
       visibleVideoMixerProgramPaneCount: visibleCount('.videoMixerProgramPane'),
       visibleVideoMixerLayerPaneCount: visibleCount('.videoMixerLayerPane'),
@@ -9082,7 +9270,10 @@ async function measure(client, label) {
       ),
       videoMixerBodyTopGap: (() => {
         const panel = document.querySelector('.videoControlPanelMixer')?.getBoundingClientRect();
-        const pane = document.querySelector('.videoMixerClipPane')?.getBoundingClientRect();
+        // The shared desk starts at the monitor/master top pane; Clips now live
+        // in the lower-left pane, so using it here would turn a valid splitter
+        // height into a false "header gap" in fullscreen.
+        const pane = document.querySelector('.videoMixerTopPane')?.getBoundingClientRect();
         return panel && pane ? Math.round(pane.top - panel.top) : -1;
       })(),
       videoMixerClipPaneWidth: Math.round(
@@ -9131,6 +9322,7 @@ async function measure(client, label) {
       visibleVideoProgramRefreshCount: [...document.querySelectorAll('.videoMixerProgramPane button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'refresh').length,
       visibleVideoMasterControlCount: visibleCount('.videoMasterControls'),
+      paneWindowMode: document.querySelector('.app')?.getAttribute('data-pane-window-mode') ?? '',
       visibleVideoMasterFaderCount: visibleCount('.videoMasterFader input[type="range"]'),
       visibleVideoClipGridCount: visibleCount('.videoClipGridPanel'),
       visibleVideoClipPadCount: visibleCount('.videoClipPad'),
@@ -9151,7 +9343,7 @@ async function measure(client, label) {
       })(),
       liveAudioRailBelowMaster: (() => {
         const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getBoundingClientRect();
-        const master = document.querySelector('.videoMixerClipPane > .videoMasterControls')?.getBoundingClientRect();
+        const master = document.querySelector('.videoMixerTopContent > .videoMasterControls')?.getBoundingClientRect();
         return Boolean(rail && master && rail.top >= master.bottom - 1);
       })(),
       liveAudioRailAboveClipGrid: (() => {
@@ -9230,6 +9422,76 @@ async function measure(client, label) {
           return rect.width > 0 && rect.height > 0 && rect.left >= grid.left - 1 && rect.right <= grid.right + 1 && rect.top >= grid.top - 1 && rect.bottom <= grid.bottom + 1;
         }).length;
       })(),
+      videoClipFirstPadBounds: (() => {
+        const rect = document.querySelector('.videoMixerClipPane .videoClipPad')?.getBoundingClientRect();
+        return rect ? [rect.top, rect.bottom, rect.height] : null;
+      })(),
+      videoClipGridBounds: (() => {
+        const rect = document.querySelector('.videoMixerClipPane > .videoClipGridPanel .videoClipGrid')?.getBoundingClientRect();
+        return rect ? [rect.top, rect.bottom, rect.height] : null;
+      })(),
+      videoMixerRightContextControlsReachable: (() => {
+        const reachableAtEnd = (selector) => {
+          const scroller = document.querySelector(selector);
+          if (!(scroller instanceof HTMLElement)) return false;
+          // Freeze the terminal rendered control in DOM order before moving any
+          // scrollport. Keep controls clipped by overflow as candidates; only
+          // exclude nodes the UI does not render at all (for example the hidden
+          // non-compact action rows retained for compatibility).
+          const controls = [...scroller.querySelectorAll('button, input, select')]
+            .filter((control) => {
+              const style = getComputedStyle(control);
+              return style.display !== 'none' && style.visibility !== 'hidden' && control.offsetParent !== null;
+            });
+          const lastControl = controls.at(-1);
+          if (!(lastControl instanceof HTMLElement)) return false;
+          const scrollAncestors = [];
+          let current = lastControl.parentElement;
+          while (current instanceof HTMLElement) {
+            const style = getComputedStyle(current);
+            if (/(auto|scroll)/.test(style.overflowY) || /(auto|scroll)/.test(style.overflowX)) {
+              scrollAncestors.push({ element: current, top: current.scrollTop, left: current.scrollLeft });
+            }
+            if (current === scroller) break;
+            current = current.parentElement;
+          }
+          if (scrollAncestors.at(-1)?.element !== scroller) return false;
+          const initialWindowScroll = [window.scrollX, window.scrollY];
+          // Use only pane-local scrollports. The inner editor has to move first
+          // before the Layers list can expose the terminal real DOM control.
+          for (const ancestor of scrollAncestors) {
+            ancestor.element.scrollTop = Math.max(0, ancestor.element.scrollHeight - ancestor.element.clientHeight);
+            ancestor.element.scrollLeft = Math.max(0, ancestor.element.scrollWidth - ancestor.element.clientWidth);
+          }
+          const scrollerRect = scroller.getBoundingClientRect();
+          const controlRect = lastControl.getBoundingClientRect();
+          const reachable = Boolean(
+            controlRect.left >= scrollerRect.left - 1 && controlRect.right <= scrollerRect.right + 1 &&
+            controlRect.top >= scrollerRect.top - 1 && controlRect.bottom <= scrollerRect.bottom + 1 &&
+            controlRect.left >= -1 && controlRect.right <= innerWidth + 1 &&
+            controlRect.top >= -1 && controlRect.bottom <= innerHeight + 1 &&
+            window.scrollX === initialWindowScroll[0] && window.scrollY === initialWindowScroll[1],
+          );
+          for (const ancestor of scrollAncestors) {
+            ancestor.element.scrollTop = ancestor.top;
+            ancestor.element.scrollLeft = ancestor.left;
+          }
+          return {
+            reachable,
+            lastControl: {
+              tag: lastControl.tagName,
+              text: (lastControl.textContent ?? '').trim(),
+              rect: [controlRect.left, controlRect.top, controlRect.right, controlRect.bottom],
+            },
+            scroller: [scrollerRect.left, scrollerRect.top, scrollerRect.right, scrollerRect.bottom],
+            ancestorCount: scrollAncestors.length,
+          };
+        };
+        return {
+          outputs: reachableAtEnd('.videoMixerContextPane .videoOutputControlList'),
+          layers: reachableAtEnd('.videoMixerContextPane .videoLayerList'),
+        };
+      })(),
       visibleVideoOutputControlListCount: visibleCount('.videoOutputControlList'),
       visibleVideoOutputItemCount: visibleCount('.videoOutputControlItem'),
       visibleVideoOutputSelectedItemCount: visibleCount('.videoOutputControlItem.selected'),
@@ -9247,12 +9509,38 @@ async function measure(client, label) {
       mixerDrawerBarCount: visibleCount('[data-mixer-drawer-toggle]'),
       mixerDrawerOpenCount: [...document.querySelectorAll('[data-mixer-drawer-toggle]')]
         .filter((bar) => bar.getAttribute('aria-expanded') === 'true').length,
+      mixerDrawerShortHeightLayout: (() => {
+        const pane = document.querySelector('.videoMixerClipPane');
+        if (!(pane instanceof HTMLElement)) return { present: false };
+        const paneRect = pane.getBoundingClientRect();
+        const drawers = [...pane.querySelectorAll('[data-mixer-drawer-toggle]')]
+          .filter((drawer) => drawer instanceof HTMLButtonElement)
+          .map((drawer) => {
+            const rect = drawer.getBoundingClientRect();
+            const title = drawer.querySelector('strong');
+            const status = drawer.querySelector('.mixerDrawerStatus');
+            return {
+              id: drawer.getAttribute('data-mixer-drawer-toggle') ?? '',
+              expanded: drawer.getAttribute('aria-expanded') === 'true',
+              rect: [rect.left, rect.top, rect.right, rect.bottom],
+              contained: rect.left >= paneRect.left - 1 && rect.right <= paneRect.right + 1 &&
+                rect.top >= paneRect.top - 1 && rect.bottom <= paneRect.bottom + 1 &&
+                rect.width > 0 && rect.height >= 22,
+              titleUnclipped: title instanceof HTMLElement && title.scrollWidth <= title.clientWidth + 1,
+              statusUnclipped: status instanceof HTMLElement && status.scrollWidth <= status.clientWidth + 1,
+            };
+          });
+        const shortHeight = innerHeight <= 800;
+        const sameRow = drawers.length === 3 && drawers.every((drawer) => Math.abs(drawer.rect[1] - drawers[0].rect[1]) <= 1);
+        const ordered = drawers.length === 3 && drawers[0].rect[2] <= drawers[1].rect[0] + 1 && drawers[1].rect[2] <= drawers[2].rect[0] + 1;
+        return { present: true, shortHeight, sameRow, ordered, drawers };
+      })(),
       videoClipGridScrollDelta: (() => {
         const grid = document.querySelector('.videoMixerClipPane .videoClipGrid');
         return grid ? grid.scrollHeight - grid.clientHeight : -1;
       })(),
       videoMixerMonitorHeightRatio: (() => {
-        const pane = document.querySelector('.videoMixerProgramPane');
+        const pane = document.querySelector('.videoMixerTopPane');
         const monitors = document.querySelector('.liveVideoMonitorPanel');
         if (!pane || !monitors) return -1;
         const paneHeight = pane.getBoundingClientRect().height - 40;
@@ -9691,15 +9979,15 @@ function hasExpectedControlModeSurface(result) {
   if (!result.label.startsWith("control-")) {
     return true;
   }
-  if (result.controlModeTabCount < 3) {
+  if (result.controlModeTabCount < 2) {
     return false;
   }
   if (
-    result.controlModeSemanticTabCount !== 3 ||
-    result.controlModeSemanticTabWidths.length !== 3 ||
+    result.controlModeSemanticTabCount !== 2 ||
+    result.controlModeSemanticTabWidths.length !== 2 ||
     result.controlModeSemanticTabWidths.some((width) => width <= 0) ||
-    JSON.stringify(result.controlModeSemanticTabIds) !== JSON.stringify(['edit', 'live', 'mixer']) ||
-    JSON.stringify(result.controlModeSemanticTabLabels) !== JSON.stringify(['Lighting', 'Timeline', 'Video']) ||
+    JSON.stringify(result.controlModeSemanticTabIds) !== JSON.stringify(['edit', 'mixer']) ||
+    JSON.stringify(result.controlModeSemanticTabLabels) !== JSON.stringify(['Lighting', 'Video']) ||
     result.editDomainNavigationCount !== 1 ||
     result.oldLowerControlModeNavigationCount !== 0 ||
     !result.editDomainNavigationDirectlyAfterTopbar ||
@@ -9709,6 +9997,17 @@ function hasExpectedControlModeSurface(result) {
     result.controlSharedHeaderHeight > 36
   ) {
     return false;
+  }
+  if (!result.label.startsWith("control-mixer-")) {
+    const expectedLightingContext = result.label.startsWith("control-live-") ? "timeline" : "lighting";
+    if (
+      result.lightingContextTabs.count !== 2 ||
+      JSON.stringify(result.lightingContextTabs.labels) !== JSON.stringify(['Lighting', 'Timeline']) ||
+      JSON.stringify(result.lightingContextTabs.shortcuts) !== JSON.stringify(['E', 'L']) ||
+      result.lightingContextTabs.active !== expectedLightingContext ||
+      !result.lightingContextTabs.insideLowerRight ||
+      !result.lightingContextTabs.rect
+    ) return false;
   }
   if (
     !result.label.startsWith("control-mixer-") &&
@@ -10061,7 +10360,16 @@ function hasExpectedControlModeSurface(result) {
         result.visibleControlStagePanelCount === 0 &&
         result.visibleControlStageCount === 0 &&
         result.visibleVideoControlPanelCount > 0,
-      threePaneMixer:
+      sharedTwoRowGrid:
+        result.visibleVideoMixerTopPaneCount === 1 &&
+        result.visibleVideoMixerContextPaneCount === 1 &&
+        result.visibleVideoMixerGridDividerCount === 1 &&
+        result.videoMixerSharedGrid.topSpansLower &&
+        result.videoMixerSharedGrid.dividerSpansLower &&
+        result.videoMixerSharedGrid.lowerPanesSideBySide &&
+        result.videoMixerSharedGrid.lowerPanesShareBottom &&
+        result.videoMixerSharedGrid.contextStacksOutputsAboveLayers,
+      lowerPaneContents:
         result.visibleVideoMixerClipPaneCount === 1 &&
         result.visibleVideoMixerProgramPaneCount === 1 &&
         result.visibleVideoMixerLayerPaneCount === 1,
@@ -10139,6 +10447,9 @@ function hasExpectedControlModeSurface(result) {
         result.visibleVideoMixerLayerFaderCount >= result.visibleVideoLayerItemCount &&
         result.visibleVideoMixerLayerButtonCount >= 5 &&
         result.visibleVideoDeckPagerCount >= 2,
+      rightContextScroll:
+        result.videoMixerRightContextControlsReachable.outputs?.reachable &&
+        result.videoMixerRightContextControlsReachable.layers?.reachable,
       noLegacyPanels:
         result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
         result.visibleVideoMixerDiagnosticsCount === 0 &&
@@ -11694,6 +12005,15 @@ async function runFullscreenVjAcceptanceViewport(client, viewport) {
   const monitorRatio = live.videoMonitorPreviewWidth > 0
     ? live.videoMonitorProgramWidth / live.videoMonitorPreviewWidth
     : 0;
+  const hasSharedFullscreenGrid = (result) =>
+    result.visibleVideoMixerTopPaneCount === 1 &&
+    result.visibleVideoMixerContextPaneCount === 1 &&
+    result.visibleVideoMixerGridDividerCount === 1 &&
+    result.videoMixerSharedGrid.topSpansLower &&
+    result.videoMixerSharedGrid.dividerSpansLower &&
+    result.videoMixerSharedGrid.lowerPanesSideBySide &&
+    result.videoMixerSharedGrid.lowerPanesShareBottom &&
+    result.videoMixerSharedGrid.contextStacksOutputsAboveLayers;
   const requiredTelemetryTokens = ["OVR ", "XRUN ", "C→W ", "I/O ", "BUF ", "CB ", "Q "];
   const checks = focusViewport
     ? {
@@ -11705,10 +12025,12 @@ async function runFullscreenVjAcceptanceViewport(client, viewport) {
           stopped.visibleVideoMixerOuterHeaderCount === 0 &&
           stopped.videoMixerOuterHeaderHeight === 0 &&
           stopped.videoMixerBodyTopGap <= 1,
-        focusColumnWidths:
-          live.videoMixerClipPaneWidth >= 680 &&
-          live.videoMixerProgramPaneWidth >= 760 &&
-          live.videoMixerLayerPaneWidth >= 300,
+        sharedTwoRowGrid: hasSharedFullscreenGrid(stopped) && hasSharedFullscreenGrid(live),
+        focusPaneWidths:
+          (live.videoMixerSharedGrid.clips?.width ?? 0) >= 680 &&
+          (live.videoMixerSharedGrid.context?.width ?? 0) >= 760 &&
+          (live.videoMixerSharedGrid.program?.width ?? 0) >= 760 &&
+          (live.videoMixerSharedGrid.layers?.width ?? 0) >= 760,
         programMonitorPriority: monitorRatio >= 1.45 && monitorRatio <= 1.58,
         audioDockHeight: live.liveAudioRailHeight >= 84 && live.liveAudioRailHeight <= 96,
         primaryControlTargets: stopped.liveAudioRailPrimaryControlMinHeight >= 32,
@@ -12759,7 +13081,7 @@ async function runViewport(client, viewport) {
   traceViewport(`persistent band compared ${viewport.width}x${viewport.height}`);
   await clickWorkspaceOption(client, "control");
   for (const controlTab of controlTabs) {
-    await clickControlModeOption(client, controlTab.id);
+    await selectControlSurface(client, controlTab.id);
     await sleep(320);
     if (shouldCaptureViewport(viewport)) {
       mkdirSync(screenshotDir, { recursive: true });
@@ -12897,7 +13219,7 @@ async function runViewport(client, viewport) {
       await waitForApp(client);
       await pressKey(client, "F2");
       await sleep(100);
-  await clickControlModeOption(client, "live");
+  await clickLightingContextTab(client, "timeline");
       await sleep(100);
       await clickVisibleByText(client, ".liveDeskViewToggle button", "Matrix");
       await clickVisibleSelector(client, "[data-scene-matrix-edit-strip]");
@@ -15923,7 +16245,7 @@ async function runWorkspaceSplitViewport(client, viewport) {
   await sleep(120);
   const setupInitial = await readWorkspaceSplitState(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await sleep(160);
 
   const initial = await readWorkspaceSplitState(client);
@@ -16138,7 +16460,7 @@ async function runWorkspaceSplitViewport(client, viewport) {
   await sleep(120);
   const setupBefore = await readWorkspaceSplitState(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await sleep(120);
   const control = await readWorkspaceSplitState(client);
   await clickWorkspaceOption(client, "setup");
@@ -16285,7 +16607,7 @@ async function openCueFixture(client, viewport, fixture) {
   await client.send("Page.navigate", { url: fixtureUrl(fixture) });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await clickVisibleByText(client, ".liveDeskViewToggle button", "Matrix");
   const hasExistingCue = await client.evaluate(`(() => {
     const strip = document.querySelector('[data-scene-matrix-edit-strip]');
@@ -16875,7 +17197,7 @@ async function runGroupStrobeViewport(client, viewport) {
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await waitForClientCondition(
     client,
     "document.querySelector('.groupLiveMixerStrip input[aria-label=\"Group strobe rate\"]')",
@@ -17479,8 +17801,11 @@ async function exerciseSceneMatrixCrossBankMoveAndUndo(client) {
 }
 
 // T6: the vj-bank fixture carries 14 clips so bank 1 must show all 12 pads
-// without scrolling, monitors must own >=65% of the center column, at least
-// six layer decks stay visible, and the three settings drawers default closed.
+// without scrolling, monitors must own >=65% of the center column, and the
+// three settings drawers default closed. Video now uses Lighting's lower-right
+// stacked Outputs/Layers pane: its terminal layer control must therefore be
+// reachable through the true local scrollport rather than requiring six rows
+// to be simultaneously visible in an intentionally half-height subpane.
 async function runVjBankViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -17505,7 +17830,26 @@ async function runVjBankViewport(client, viewport) {
     ["vjBankDrawersDefaultClosed", () =>
       containment.mixerDrawerBarCount === 3 && containment.mixerDrawerOpenCount === 0],
     ["vjBankMonitorsDominateCenterColumn", () => containment.videoMixerMonitorHeightRatio >= 0.65],
-    ["vjBankSixLayerRowsVisible", () => containment.fullyVisibleVideoLayerItemCount >= 6],
+    ["vjBankTopMonitorAndMasterRemainUsable", () =>
+      containment.videoMixerTopPaneUsability.present &&
+      containment.videoMixerTopPaneUsability.previewViewport[1] >= 100 &&
+      containment.videoMixerTopPaneUsability.programViewport[1] >= 100 &&
+      containment.videoMixerTopPaneUsability.monitorContained &&
+      containment.videoMixerTopPaneUsability.previewViewportContained &&
+      containment.videoMixerTopPaneUsability.programViewportContained &&
+      containment.videoMixerTopPaneUsability.transportContained &&
+      containment.videoMixerTopPaneUsability.transportSeparateFromBuses &&
+      containment.videoMixerTopPaneUsability.masterContained &&
+      containment.videoMixerTopPaneUsability.terminalMasterControlReachable],
+    ["vjBankShortHeightDrawerControlsRemainReachable", () => {
+      const layout = containment.mixerDrawerShortHeightLayout;
+      return !layout.shortHeight || (
+        layout.present && layout.sameRow && layout.ordered &&
+        layout.drawers.length === 3 &&
+        layout.drawers.every((drawer) => drawer.contained && drawer.titleUnclipped && drawer.statusUnclipped)
+      );
+    }],
+    ["vjBankLayerTerminalControlReachable", () => containment.videoMixerRightContextControlsReachable.layers?.reachable],
     ["vjBankKillVocabularyPresent", () => containment.visibleMixerKillButtonCount >= 1],
     ["vjBankPagerPresentForSecondBank", () => containment.visibleVideoDeckPagerCount >= 1],
     ["vjBankContained", () => isContained(containment)],
@@ -17517,10 +17861,237 @@ async function runVjBankViewport(client, viewport) {
     passed: failedChecks.length === 0,
     failedChecks,
     pads: [containment.visibleVideoClipPadCount, containment.fullyVisibleVideoClipPadCount, containment.videoClipGridScrollDelta],
+    padGeometry: {
+      gridHeight: containment.videoClipGridClientHeight,
+      firstPad: containment.videoClipFirstPadBounds,
+      grid: containment.videoClipGridBounds,
+    },
     drawers: [containment.mixerDrawerBarCount, containment.mixerDrawerOpenCount],
     monitorRatio: containment.videoMixerMonitorHeightRatio,
+    topPane: containment.videoMixerTopPaneUsability,
+    rightContextReachability: containment.videoMixerRightContextControlsReachable,
     layerRows: containment.fullyVisibleVideoLayerItemCount,
+    containment: {
+      document: [containment.documentScrollWidth, containment.documentClientWidth, containment.documentScrollHeight, containment.documentClientHeight],
+      app: [containment.appScrollWidth, containment.appClientWidth, containment.appScrollHeight, containment.appClientHeight],
+      layout: [containment.layoutScrollWidth, containment.layoutClientWidth, containment.layoutScrollHeight, containment.layoutClientHeight],
+    },
     killButtons: containment.visibleMixerKillButtonCount,
+  };
+}
+
+// The persisted native pop-out default is 860 x 520.  This is deliberately a
+// separate contract from the maximized VJ-bank ladder: a child window may use
+// pane-local scrolling for its inspector controls, but it must retain both
+// real monitor viewports, the structural two-column desk, all twelve pads,
+// and a fixed app/document frame.
+async function runPaneMixerViewport(client, viewport, scenario = { id: "closed", activeOperation: false, openedDrawer: null }) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const paneUrl = new URL(fixtureUrl("vj-bank"));
+  paneUrl.searchParams.set("syndocalPaneWindow", "mixer");
+  if (scenario.activeOperation) paneUrl.searchParams.set("syndocalViewportMediaOperation", "1");
+  const drawerStorageScript = await client.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(() => {
+      for (const drawer of ["audio-in", "auto-vj", "reactive"]) {
+        window.localStorage.setItem("syndocal.mixerDrawer." + drawer + ".v1", drawer === ${JSON.stringify(scenario.openedDrawer)} ? "1" : "0");
+      }
+    })();`,
+  });
+  await client.send("Page.navigate", { url: paneUrl.toString() });
+  await client.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: drawerStorageScript.identifier });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    "document.querySelectorAll('.videoClipPad').length === 12",
+    "mixer pane clip pads",
+  );
+  if (scenario.activeOperation) {
+    await waitForClientCondition(
+      client,
+      "document.querySelector('[data-media-operation-cancel]') instanceof HTMLButtonElement",
+      "active mixer pane media operation",
+    );
+  }
+  await sleep(120);
+  const containment = await measure(client, `pane-mixer-${viewport.width}x${viewport.height}`);
+  const terminalClipPad = await evaluatePageFunction(client, () => {
+    const panel = document.querySelector('.videoMixerClipPane .videoClipGridPanel');
+    const grid = panel?.querySelector('.videoClipGrid');
+    const app = document.querySelector('.app');
+    if (!(panel instanceof HTMLElement) || !(grid instanceof HTMLElement)) return { reachable: false, reason: 'missing-grid' };
+    const pads = [...grid.querySelectorAll('.videoClipPad')].filter((pad) => {
+      const style = getComputedStyle(pad);
+      return style.display !== 'none' && style.visibility !== 'hidden' && pad instanceof HTMLElement && pad.offsetParent !== null;
+    });
+    const terminal = pads.at(-1);
+    if (!(terminal instanceof HTMLElement)) return { reachable: false, reason: 'missing-terminal', count: pads.length };
+    const before = {
+      windowX: window.scrollX,
+      windowY: window.scrollY,
+      appTop: app instanceof HTMLElement ? app.scrollTop : 0,
+      appLeft: app instanceof HTMLElement ? app.scrollLeft : 0,
+    };
+    // Both scrollports are within the fixed Clip Grid pane.  Advance the
+    // outer panel first so its grid viewport is exposed, then the actual pad
+    // grid; neither operation may scroll the document or app shell.
+    panel.scrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+    panel.scrollLeft = Math.max(0, panel.scrollWidth - panel.clientWidth);
+    grid.scrollTop = Math.max(0, grid.scrollHeight - grid.clientHeight);
+    grid.scrollLeft = Math.max(0, grid.scrollWidth - grid.clientWidth);
+    let panelRect = panel.getBoundingClientRect();
+    let gridRect = grid.getBoundingClientRect();
+    let terminalRect = terminal.getBoundingClientRect();
+    const visibleTop = Math.max(panelRect.top, gridRect.top);
+    const visibleBottom = Math.min(panelRect.bottom, gridRect.bottom);
+    const targetDelta = terminalRect.top < visibleTop
+      ? terminalRect.top - visibleTop
+      : terminalRect.bottom > visibleBottom
+        ? terminalRect.bottom - visibleBottom
+        : 0;
+    if (targetDelta !== 0) {
+      grid.scrollTop = Math.max(0, Math.min(grid.scrollHeight - grid.clientHeight, grid.scrollTop + targetDelta));
+      panelRect = panel.getBoundingClientRect();
+      gridRect = grid.getBoundingClientRect();
+      terminalRect = terminal.getBoundingClientRect();
+    }
+    const after = {
+      windowX: window.scrollX,
+      windowY: window.scrollY,
+      appTop: app instanceof HTMLElement ? app.scrollTop : 0,
+      appLeft: app instanceof HTMLElement ? app.scrollLeft : 0,
+    };
+    const reachable =
+      terminalRect.left >= panelRect.left - 1 && terminalRect.right <= panelRect.right + 1 &&
+      terminalRect.top >= panelRect.top - 1 && terminalRect.bottom <= panelRect.bottom + 1 &&
+      terminalRect.left >= gridRect.left - 1 && terminalRect.right <= gridRect.right + 1 &&
+      terminalRect.top >= gridRect.top - 1 && terminalRect.bottom <= gridRect.bottom + 1 &&
+      terminalRect.left >= -1 && terminalRect.right <= innerWidth + 1 &&
+      terminalRect.top >= -1 && terminalRect.bottom <= innerHeight + 1 &&
+      before.windowX === after.windowX && before.windowY === after.windowY &&
+      before.appTop === after.appTop && before.appLeft === after.appLeft;
+    grid.scrollTop = 0;
+    grid.scrollLeft = 0;
+    panel.scrollTop = 0;
+    panel.scrollLeft = 0;
+    return {
+      reachable,
+      count: pads.length,
+      terminal: [terminalRect.left, terminalRect.top, terminalRect.right, terminalRect.bottom],
+      scrollports: {
+        panel: [panelRect.left, panelRect.top, panelRect.right, panelRect.bottom, panel.scrollHeight, panel.clientHeight],
+        grid: [gridRect.left, gridRect.top, gridRect.right, gridRect.bottom, grid.scrollHeight, grid.clientHeight],
+      },
+      before,
+      after,
+    };
+  });
+  const activeMediaOperation = await evaluatePageFunction(client, () => {
+    const rail = document.querySelector('.videoMixerClipPane > .videoMediaOperationRail');
+    const clipPane = document.querySelector('.videoMixerClipPane');
+    const status = rail?.querySelector('[role="status"]');
+    const cancel = rail?.querySelector('[data-media-operation-cancel]');
+    if (!(rail instanceof HTMLElement) || !(clipPane instanceof HTMLElement) ||
+      !(status instanceof HTMLElement) || !(cancel instanceof HTMLButtonElement)) {
+      return { mounted: false };
+    }
+    const railRect = rail.getBoundingClientRect();
+    const paneRect = clipPane.getBoundingClientRect();
+    const statusRect = status.getBoundingClientRect();
+    const cancelRect = cancel.getBoundingClientRect();
+    const containsFourEdges = (rect, bounds) =>
+      rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 &&
+      rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1 &&
+      rect.left >= -1 && rect.right <= innerWidth + 1 &&
+      rect.top >= -1 && rect.bottom <= innerHeight + 1 &&
+      rect.width > 0 && rect.height > 0;
+    return {
+      mounted: true,
+      phase: rail.querySelector('[data-media-operation-phase]')?.getAttribute('data-media-operation-phase') ?? '',
+      rail: [railRect.left, railRect.top, railRect.right, railRect.bottom, railRect.height],
+      row: getComputedStyle(rail).gridRowStart,
+      status: [statusRect.left, statusRect.top, statusRect.right, statusRect.bottom],
+      cancel: [cancelRect.left, cancelRect.top, cancelRect.right, cancelRect.bottom],
+      bounded: railRect.height <= 104 + 1 && containsFourEdges(railRect, paneRect),
+      statusReachable: containsFourEdges(statusRect, railRect),
+      cancelReachable: !cancel.disabled && containsFourEdges(cancelRect, railRect),
+    };
+  });
+  const mediaOperationCancel = scenario.activeOperation
+    ? await evaluatePageFunction(client, () => {
+      const cancel = document.querySelector('[data-media-operation-cancel]');
+      if (!(cancel instanceof HTMLButtonElement) || cancel.disabled) return { clicked: false, phase: '' };
+      cancel.click();
+      return {
+        clicked: true,
+        // A controller-less fixture would leave the active signal at hashing:
+        // cancelling proves the real handler found and aborted its controller.
+        phase: document.querySelector('[data-media-operation-phase]')?.getAttribute('data-media-operation-phase') ?? '',
+      };
+    })
+    : { clicked: false, phase: '' };
+  const top = containment.videoMixerTopPaneUsability;
+  const shared = containment.videoMixerSharedGrid;
+  const conditions = [
+    ["paneMixerRoot", () => containment.paneWindowMode === "mixer"],
+    ["paneMixerNoDocumentOrAppScroll", () => isContained(containment)],
+    ["paneMixerTwelvePadsPresent", () => containment.visibleVideoClipPadCount === 12],
+    ["paneMixerTerminalClipPadLocallyReachable", () =>
+      terminalClipPad.count === 12 && terminalClipPad.reachable],
+    ["paneMixerDrawerState", () =>
+      scenario.openedDrawer === null
+        ? containment.mixerDrawerBarCount === 3 && containment.mixerDrawerOpenCount === 0
+        : containment.mixerDrawerBarCount === 3 && containment.mixerDrawerOpenCount === 1 &&
+          containment.mixerDrawerShortHeightLayout.drawers.some((drawer) =>
+            drawer.id === scenario.openedDrawer && drawer.expanded)],
+    ["paneMixerDrawerControlsRemainReachable", () => {
+      const layout = containment.mixerDrawerShortHeightLayout;
+      return layout.present && layout.sameRow && layout.ordered &&
+        layout.drawers.length === 3 &&
+        layout.drawers.every((drawer) => drawer.contained && drawer.titleUnclipped && drawer.statusUnclipped);
+    }],
+    ["paneMixerSharedTwoColumnGeometry", () =>
+      shared.topSpansLower && shared.dividerSpansLower &&
+      shared.lowerPanesSideBySide && shared.lowerPanesShareBottom &&
+      shared.contextStacksOutputsAboveLayers],
+    ["paneMixerRealPreviewAndProgramViewports", () =>
+      top.present && top.previewViewport[1] >= 100 && top.programViewport[1] >= 100 &&
+      top.previewViewportContained && top.programViewportContained &&
+      top.transportContained && top.transportSeparateFromBuses],
+    ["paneMixerTopMasterControlsReachable", () =>
+      top.masterContained && top.visibleMasterControl && top.terminalMasterControlReachable],
+    ["paneMixerRightContextTerminalControlsReachable", () =>
+      containment.videoMixerRightContextControlsReachable.outputs?.reachable &&
+      containment.videoMixerRightContextControlsReachable.layers?.reachable],
+    ["paneMixerActiveMediaOperationRail", () => !scenario.activeOperation ||
+      activeMediaOperation.mounted && activeMediaOperation.phase === "hashing" &&
+      activeMediaOperation.row === "2" && activeMediaOperation.bounded &&
+      activeMediaOperation.statusReachable && activeMediaOperation.cancelReachable],
+    ["paneMixerActiveMediaCancelUsesRealController", () => !scenario.activeOperation ||
+      mediaOperationCancel.clicked && mediaOperationCancel.phase === "cancelling"],
+  ];
+  const failedChecks = conditions.filter(([, check]) => !check()).map(([name]) => name);
+  return {
+    viewport,
+    label: `pane-mixer-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    failedChecks,
+    pads: [containment.visibleVideoClipPadCount, containment.fullyVisibleVideoClipPadCount, containment.videoClipGridScrollDelta],
+    terminalClipPad,
+    activeMediaOperation,
+    mediaOperationCancel,
+    topPane: top,
+    sharedGrid: shared,
+    rightContextReachability: containment.videoMixerRightContextControlsReachable,
+    containment: {
+      document: [containment.documentScrollWidth, containment.documentClientWidth, containment.documentScrollHeight, containment.documentClientHeight],
+      app: [containment.appScrollWidth, containment.appClientWidth, containment.appScrollHeight, containment.appClientHeight],
+      layout: [containment.layoutScrollWidth, containment.layoutClientWidth, containment.layoutScrollHeight, containment.layoutClientHeight],
+    },
   };
 }
 
@@ -17698,18 +18269,17 @@ async function runPaneWindowViewport(client, viewport) {
   })()`);
   const timelineWinAfterInteractions = await readState();
   const poppedMain = await measureState("syndocalPoppedPanes=stage", async () => {
-  await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+    await clickWorkspaceOption(client, "control");
+    await selectControlSurface(client, "live");
   });
   const poppedTimelineMain = await measureState("syndocalPoppedPanes=timeline", async () => {
-  await clickWorkspaceOption(client, "control");
-    // The Timeline context pane is intentionally hidden in this state, while
-    // the chrome Edit-domain navigation remains available.
-    const selectedTimelineMode = await client.evaluate(`(() => {
-      const button = document.querySelector('[data-edit-domain-navigation] [data-control-mode-option="live"]');
-      button?.click();
-      return Boolean(button);
-    })()`);
+    await clickWorkspaceOption(client, "control");
+    // With its host popped out, Timeline has no lower-right local tab in this
+    // shell. The retained L shortcut is the compatible internal selector.
+    await pressKey(client, "KeyL", "l");
+    const selectedTimelineMode = await client.evaluate(`Boolean(
+      document.querySelector('.layout.layoutControl.controlModeLive')
+    )`);
     if (!selectedTimelineMode) throw new Error('Could not select hidden Timeline control mode');
   });
   const timelineRejoinClicked = await clickWorkspaceSelector(client, '[data-pane-rejoin-toggle="timeline"]');
@@ -17832,7 +18402,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const before = await measureSceneMatrixPane(client);
@@ -18380,7 +18950,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const initialPane = await measureSceneMatrixPane(client);
@@ -18388,7 +18958,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const crossBank = await exerciseSceneMatrixCrossBankMoveAndUndo(client);
@@ -19040,7 +19610,7 @@ async function runSceneSettingsViewport(client, viewport) {
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
 
@@ -19394,7 +19964,7 @@ async function runSceneSettingsViewport(client, viewport) {
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(80);
   const oneClickStripGesture = await clickSceneSettingsStrip(
@@ -20906,7 +21476,7 @@ async function runTimelineSlimViewport(client, viewport) {
   await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
   await waitForApp(client);
   await clickWorkspaceOption(client, 'control');
-  await clickControlModeOption(client, 'live');
+  await selectControlSurface(client, 'live');
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await setTimelineToolsDisclosureOpen(client, true);
   await sleep(120);
@@ -20922,7 +21492,7 @@ async function runTimelineSlimViewport(client, viewport) {
   await client.send('Page.navigate', { url: fixtureUrl('timeline') });
   await waitForApp(client);
   await clickWorkspaceOption(client, 'control');
-  await clickControlModeOption(client, 'live');
+  await selectControlSurface(client, 'live');
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await setTimelineToolsDisclosureOpen(client, true);
   await sleep(120);
@@ -21315,7 +21885,7 @@ async function openTimelineShowFixture(client, viewport, fixture) {
   await client.send("Page.navigate", { url: fixtureUrl(fixture) });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(180);
 }
@@ -22367,7 +22937,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
   await client.send("Page.navigate", { url: fixtureUrl("scene-block-large") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(180);
   await openSceneBlockBrowser(client);
@@ -24407,7 +24977,7 @@ async function runFxVisualViewport(client, viewport) {
   await client.send("Page.navigate", { url: fixtureUrl("fx-visual") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
-  await clickControlModeOption(client, "live");
+  await selectControlSurface(client, "live");
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   const stripGesture = await clickSceneSettingsStrip(
     client,
@@ -28359,6 +28929,15 @@ async function main() {
               matrixRow: result.liveSceneMatrixGridRow,
               fadeRow: result.liveFadeMeterGridRow,
               masterRow: result.liveMasterGridRow,
+              mixer: result.controlModeFailedChecks ?? [],
+              sharedGrid: result.videoMixerSharedGrid ?? null,
+              mixerMetrics: [
+                result.videoClipGridClientHeight,
+                result.fullyVisibleVideoClipPadCount,
+                result.videoMixerMonitorHeightRatio,
+                result.videoClipGridBounds,
+                result.videoClipFirstPadBounds,
+              ],
               sceneReadout: [
                 result.liveDeskSceneReadoutCount,
                 result.liveDeskSceneReadoutInsideStatus,
@@ -29218,6 +29797,49 @@ async function main() {
       }
       return;
     }
+    if (paneMixerOnlyMode) {
+      const paneMixerScenarios = [
+        { id: "closed", activeOperation: false, openedDrawer: null, viewport: viewports[0] },
+        { id: "active-closed", activeOperation: true, openedDrawer: null, viewport: viewports[0] },
+        { id: "active-audio-in-open", activeOperation: true, openedDrawer: "audio-in", viewport: viewports[0] },
+      ];
+      const results = [];
+      for (const scenario of paneMixerScenarios) {
+        const result = await runPaneMixerViewport(client, scenario.viewport, scenario);
+        results.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label}-${scenario.id} ` +
+          `pads=${result.pads.join("/")} ` +
+          `preview=${result.topPane.previewViewport?.join("x") ?? "?"} ` +
+          `program=${result.topPane.programViewport?.join("x") ?? "?"} ` +
+          `operation=${result.activeMediaOperation.phase ?? "none"}/${result.mediaOperationCancel.phase || "not-clicked"} ` +
+          `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = results.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Mixer pane viewport acceptance failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (vjBankOnlyMode) {
+      const vjBankResults = [];
+      for (const viewport of viewports) {
+        const result = await runVjBankViewport(client, viewport);
+        vjBankResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+          `pads=${result.pads.join("/")} drawers=${result.drawers.join("/")} ` +
+          `monitorRatio=${result.monitorRatio} layerRows=${result.layerRows} ` +
+          `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = vjBankResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`VJ bank viewport acceptance failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (audioReactiveOnlyMode) {
       const audioReactiveResults = [];
       for (const viewport of viewports) {
@@ -29274,6 +29896,7 @@ async function main() {
                 result.live.videoMixerProgramPaneWidth,
                 result.live.videoMixerLayerPaneWidth,
               ],
+              sharedGrid: result.live.videoMixerSharedGrid,
               monitorWidths: [result.live.videoMonitorPreviewWidth, result.live.videoMonitorProgramWidth],
               monitorRatio: result.monitorRatio,
               outerHeader: [

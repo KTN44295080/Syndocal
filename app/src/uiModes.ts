@@ -30,6 +30,11 @@ export const controlModes: { id: ControlMode; label: string; description: string
   { id: "mixer", label: "Video", description: "Video clip launch, preview/program mixing, layers, and outputs" },
 ];
 
+// Timeline is a Lighting context, not a peer workspace.  Keep its internal
+// mode for keyboard commands, saved layouts, and pane-window compatibility,
+// but only expose the two real Edit domains in the persistent chrome.
+export const editDomainModes = controlModes.filter((mode) => mode.id !== "live");
+
 export const controlCategories: { id: ControlCategory; label: string }[] = [
   { id: "dimmer", label: "Dimmer" },
   { id: "color", label: "Color" },

@@ -74,6 +74,27 @@ function exactCssBlock(source, selector, label) {
   assert.fail(`${label} exact CSS block is missing its closing brace`);
 }
 
+function lastExactCssBlock(source, selector, label) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const selectorPattern = new RegExp(`(^|\\n)[\\t ]*${escapedSelector}\\s*\\{`, "g");
+  let start = -1;
+  let match;
+  while ((match = selectorPattern.exec(source))) {
+    start = match.index + match[0].lastIndexOf(selector);
+  }
+  assert.ok(start >= 0, `${label} exact selector is missing`);
+  const openBrace = source.indexOf("{", start + selector.length);
+  let depth = 0;
+  for (let index = openBrace; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  assert.fail(`${label} CSS block is missing its closing brace`);
+}
+
 function finalCssBlock(source, selector, label) {
   const marker = `${selector} {`;
   const start = source.lastIndexOf(marker);
@@ -211,13 +232,42 @@ const mixerClipGridStyles = finalCssBlockWithDeclaration(styles, mixerClipGridSe
 const mixerClipPadStyles = finalCssBlock(styles, mixerClipPadSelector, "mixer clip-pad viewport");
 const mixerThumbnailStyles = finalCssBlock(styles, mixerThumbnailSelector, "mixer thumbnail viewport");
 const baseClipPadStyles = exactCssBlock(styles, ".videoClipPad", "base clip-pad sizing");
-const baseClipGridStyles = exactCssBlock(styles, ".videoClipGrid", "base clip-grid sizing");
-const mixerLayoutStyles = cssBlock(styles, ".layoutControl.controlModeMixer .videoControlPanelMixer", "mixer layout columns");
+const shortHeightMixerMarker = "/* At the 720/768 px operating floor";
+const shortHeightMixerIndex = requiredIndex(styles, shortHeightMixerMarker, "short-height mixer reflow");
+const mixerLayoutStyles = lastExactCssBlock(
+  styles.slice(0, shortHeightMixerIndex),
+  ".layoutControl.controlModeMixer .videoControlPanelMixer",
+  "mixer shared grid layout",
+);
+const shortHeightMixerLayoutStyles = lastExactCssBlock(
+  styles.slice(shortHeightMixerIndex),
+  ".layoutControl.controlModeMixer .videoControlPanelMixer",
+  "short-height mixer shared grid layout",
+);
+const fullscreenMixerLayoutStyles = lastExactCssBlock(
+  styles,
+  'html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoControlPanelMixer',
+  "fullscreen mixer shared grid layout",
+);
+const paneMixerLayoutStyles = exactCssBlock(
+  styles,
+  ".app.paneWindow-mixer .layoutControl.controlModeMixer .videoControlPanelMixer",
+  "default mixer pane shared grid layout",
+);
+const shortHeightMixerStyles = styles.slice(
+  shortHeightMixerIndex,
+  requiredIndex(styles, "\n}\n\n.lightingContextTabs", "short-height mixer reflow end", shortHeightMixerIndex),
+);
 const previewButtonStyles = cssBlock(styles, ".videoClipPreview", "clip preview hit target");
 const clipPaneGridPanelStyles = cssBlock(
   styles,
   ".videoControlPanelMixer .videoMixerClipPane .videoClipGridPanel",
   "mixer clip-grid internal scroll",
+);
+const mixerClipGridResponsiveStyles = lastExactCssBlock(
+  styles,
+  mixerClipGridSelector,
+  "mixer clip-grid responsive columns",
 );
 assert.match(mixerClipGridStyles, /grid-auto-rows:\s*minmax\(56px, max-content\);/, "mixer rows must keep their content height instead of consuming free pane height");
 assert.match(mixerClipGridStyles, /align-content:\s*start;/, "a sparse mixer bank must remain top-aligned");
@@ -237,20 +287,60 @@ assert.match(clipGrid, /data-vj-thumbnail-request[\s\S]*?onClick=\{props\.onRequ
 assert.equal(pixelDeclaration(baseClipPadStyles, "min-height", "base clip-pad minimum"), 90, "the effective-size proof must include the conflicting 90px base minimum");
 const mixerPadMinHeight = Number(mixerClipPadStyles.match(/min-height:\s*(\d+(?:\.\d+)?);/)?.[1]);
 assert.ok(Number.isFinite(mixerPadMinHeight), "mixer clip-pad minimum must be numeric for effective-size verification");
-const mixerColumnMin = Number(mixerLayoutStyles.match(/grid-template-columns:\s*minmax\((\d+(?:\.\d+)?)px/)?.[1]);
-assert.equal(mixerColumnMin, 390, "effective-size proof must use the accepted 390px mixer clip-column minimum");
-const clipGridColumnCount = Number(baseClipGridStyles.match(/grid-template-columns:\s*repeat\((\d+)/)?.[1]);
-assert.equal(clipGridColumnCount, 3, "effective-size proof must cover the real three-column clip grid");
-const clipGridGap = pixelDeclaration(baseClipGridStyles, "gap", "clip-grid gap");
-const clipGridPanelPadding = pixelDeclaration(clipPaneGridPanelStyles, "padding", "clip-grid panel padding");
-const padWidthAtMinimumColumn = (mixerColumnMin - 2 * clipGridPanelPadding - (clipGridColumnCount - 1) * clipGridGap) / clipGridColumnCount;
-const aspectHeightAtMinimumColumn = padWidthAtMinimumColumn * 9 / 16;
-const effectivePadHeightAtMinimumColumn = Math.max(mixerPadMinHeight, aspectHeightAtMinimumColumn);
-assert.ok(mixerPadMinHeight <= aspectHeightAtMinimumColumn, "effective mixer pad minimum must not override 16:9 at the accepted minimum column");
-assert.ok(
-  Math.abs((padWidthAtMinimumColumn / effectivePadHeightAtMinimumColumn) / (16 / 9) - 1) <= 0.01,
-  `effective mixer pad is 16:9 within 1% at the accepted minimum column (${padWidthAtMinimumColumn.toFixed(2)}x${effectivePadHeightAtMinimumColumn.toFixed(2)})`,
+assert.match(
+  mixerLayoutStyles,
+  /grid-template-columns:\s*minmax\(390px,\s*1fr\)\s+minmax\(520px,\s*1\.2fr\);/,
+  "Video must use Lighting's real two-column lower grid rather than a three-column VJ desk",
 );
+assert.match(
+  mixerLayoutStyles,
+  /grid-template-rows:\s*36px\s+minmax\(0,\s*0\.46fr\)\s+5px\s+minmax\(0,\s*0\.54fr\);/,
+  "Video must use a header, spanning top pane, structural splitter, and lower grid",
+);
+assert.match(
+  shortHeightMixerLayoutStyles,
+  /grid-template-columns:\s*minmax\(390px,\s*1\.1fr\)\s+minmax\(520px,\s*1fr\);/,
+  "short-height Video keeps the shared two-column grid while favoring the clip-bank column",
+);
+assert.match(
+  shortHeightMixerLayoutStyles,
+  /grid-template-rows:\s*36px\s+minmax\(0,\s*0\.36fr\)\s+5px\s+minmax\(0,\s*0\.64fr\);/,
+  "short-height Video reflows height to the lower clip/context pair instead of shrinking controls",
+);
+const mixerClipColumnCount = Number(mixerClipGridResponsiveStyles.match(/grid-template-columns:\s*repeat\((\d+)/)?.[1]);
+assert.equal(mixerClipColumnCount, 6, "mixer bank uses six responsive columns so all twelve 16:9 pads fit as two rows without a vertical scroll");
+assert.equal(mixerPadMinHeight, 0, "mixer pad itself has no fixed height that could override its declared 16:9 ratio");
+assert.match(
+  fullscreenMixerLayoutStyles,
+  /grid-template-columns:\s*minmax\(390px,\s*1fr\)\s+minmax\(520px,\s*1\.2fr\);/,
+  "fullscreen must override the legacy three-column VJ desk with the shared two-column lower grid",
+);
+assert.match(
+  fullscreenMixerLayoutStyles,
+  /grid-template-rows:\s*minmax\(0,\s*0\.47fr\)\s+5px\s+minmax\(0,\s*0\.53fr\);/,
+  "fullscreen hidden-header layout keeps top / divider / lower shared rows",
+);
+assert.match(
+  paneMixerLayoutStyles,
+  /grid-template-columns:\s*minmax\(300px,\s*1fr\)\s+minmax\(0,\s*1\.2fr\);/,
+  "the 860px mixer pane must reflow below the main desk's 910px column minimum",
+);
+assert.match(
+  paneMixerLayoutStyles,
+  /grid-template-rows:\s*36px\s+minmax\(0,\s*0\.46fr\)\s+5px\s+minmax\(0,\s*0\.54fr\);/,
+  "the 860px mixer pane balances >=100px real monitor viewports with active lower local-scroll rows",
+);
+assert.match(shortHeightMixerStyles, /\.videoControlPanelMixer \.liveVideoMonitorPanel\s*\{[\s\S]*?gap:\s*5px;[\s\S]*?padding:\s*6px;/, "short-height monitor reflow must retain the base 5px gap and 6px padding");
+assert.match(shortHeightMixerStyles, /\.videoControlPanelMixer \.videoMixerClipPane > \.videoMediaOperationRail\s*\{[\s\S]*?grid-row:\s*2;/, "short-height active media work must own an explicit second grid row");
+assert.match(shortHeightMixerStyles, /:has\(> \.videoMediaOperationRail\)\s*\{[\s\S]*?grid-template-rows:\s*40px\s+auto\s+30px\s+22px\s+minmax\(0,\s*1fr\);/, "active operation layout must shift the library, drawer row, and clips explicitly");
+assert.match(shortHeightMixerStyles, /:has\(> \.videoMediaOperationRail\):has\(\[data-mixer-drawer-toggle\]\[aria-expanded="true"\]\)\s*\{[\s\S]*?grid-template-rows:\s*40px\s+auto\s+30px\s+22px\s+minmax\(56px,\s*64px\)\s+minmax\(0,\s*1fr\);/, "an open drawer with active media gets its own bounded local row before the clip grid");
+assert.match(controlPanel, /data-media-operation-cancel=\{operation\.id\}/, "the mounted operation rail exposes a stable Cancel target bound to the real operation id");
+const widthCompactMixerIndex = requiredIndex(styles, "@media (max-width: 1400px)", "width-compact mixer reflow");
+const widthCompactMixerEnd = requiredIndex(styles, "\n}\n\n/* Keep the existing Clip Grid controls", "width-compact mixer reflow end", widthCompactMixerIndex);
+const widthCompactMixerStyles = styles.slice(widthCompactMixerIndex, widthCompactMixerEnd);
+assert.doesNotMatch(widthCompactMixerStyles, /videoClipGridPanel/, "width compaction must retain the existing 6px base or 4px short-height clip-grid padding instead of collapsing it to zero");
+assert.match(app, /data-lighting-context-tab="lighting"[\s\S]*?aria-keyshortcuts="E"/, "local Lighting tab exposes its E shortcut to assistive technology");
+assert.match(app, /data-lighting-context-tab="timeline"[\s\S]*?aria-keyshortcuts="L"/, "local Timeline tab exposes its L shortcut to assistive technology");
 for (const [width, height] of [[320, 180], [640, 360]]) {
   assert.ok(Math.abs((width / height) / (16 / 9) - 1) <= 0.01, `${width}x${height} thumbnail viewport remains within 1% of 16:9`);
 }
@@ -305,6 +395,25 @@ assert.equal(
   "the parent must pass its exact source-create visibility decision into the grid",
 );
 assert.equal(count(mixerDisclosure, "onImportMedia"), 0, "opening the mixer disclosure does not add a second grid callback");
+
+const topPaneIndex = requiredIndex(controlPanel, '<section class="videoMixerTopPane"', "Video top pane");
+const dividerIndex = requiredIndex(controlPanel, '<div class="videoMixerGridDivider"', "Video grid divider", topPaneIndex);
+const clipPaneIndex = requiredIndex(controlPanel, '<section class="videoMixerClipPane"', "Video lower-left clip pane", dividerIndex);
+const contextPaneIndex = requiredIndex(controlPanel, '<section class="videoMixerContextPane"', "Video lower-right context pane", clipPaneIndex);
+const contextPane = balancedElement(
+  controlPanel,
+  '<section class="videoMixerContextPane"',
+  "section",
+  "Video lower-right context pane",
+  contextPaneIndex,
+);
+assert.ok(topPaneIndex < dividerIndex && dividerIndex < clipPaneIndex && clipPaneIndex < contextPaneIndex, "Video DOM follows top / splitter / lower-left / lower-right order");
+assert.equal(count(contextPane, '<section class="videoMixerProgramPane"'), 1, "lower-right context retains one output pane");
+assert.equal(count(contextPane, '<section class="videoMixerLayerPane"'), 1, "lower-right context retains one layer pane");
+assert.equal(count(contextPane, '<LiveVideoMonitorPanel {...props.liveMonitors} />'), 0, "monitors live in the spanning top pane, not a third lower column");
+const topPane = balancedElement(controlPanel, '<section class="videoMixerTopPane"', "section", "Video top pane", topPaneIndex);
+assert.equal(count(topPane, '<LiveVideoMonitorPanel {...props.liveMonitors} />'), 1, "top pane preserves the Preview / Program monitor");
+assert.equal(count(topPane, '<VideoMasterControlsPanel {...props.masterControls} />'), 1, "top pane preserves master controls without duplicating them");
 
 const disclosureSummary = '<summary aria-label="Import Media">Import Media</summary>';
 assert.equal(count(mixerDisclosure, disclosureSummary), 1, "mixer disclosure reuses the localized Import Media accessible name");

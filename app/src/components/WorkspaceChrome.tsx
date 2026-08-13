@@ -14,7 +14,7 @@ import type {
   ProjectHistoryStatus,
   OperatorLockMode,
 } from "../types";
-import { controlModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
+import { editDomainModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
 import type { ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
 import type { UiLocale } from "../uiLocalization";
 import { TopbarPulseMeter } from "./TopbarPulseMeter";
@@ -758,18 +758,21 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           aria-label="Edit domain"
           data-edit-domain-navigation
         >
-          <For each={controlModes}>
+          <For each={editDomainModes}>
             {(mode) => {
-              const shortcut = mode.id === "edit" ? "E" : mode.id === "live" ? "L" : "M";
+              const active = () => mode.id === "edit"
+                ? props.controlMode === "edit" || props.controlMode === "live"
+                : props.controlMode === mode.id;
+              const shortcut = mode.id === "edit" ? "E" : "M";
               return (
                 <button
-                  class={props.controlMode === mode.id ? "active" : ""}
+                  class={active() ? "active" : ""}
                   data-control-mode-option={mode.id}
                   data-no-localize
                   title={`${mode.label}: ${mode.description}`}
                   aria-label={mode.label}
                   aria-keyshortcuts={shortcut}
-                  aria-pressed={props.controlMode === mode.id}
+                  aria-pressed={active()}
                   disabled={props.operatorLockMode === "Partial" && mode.id === "edit"}
                   onClick={() => props.onControlMode(mode.id)}
                 >
