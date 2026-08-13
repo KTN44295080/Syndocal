@@ -276,6 +276,10 @@ struct AppState {
     /// during setup. Holding it here keeps the thread owned by `AppState` and
     /// joined on teardown instead of leaked.
     media_asset_reaper: Mutex<Option<MediaAssetOperationReaper>>,
+    /// Counts the exact backend-owned Media Asset engine publication boundary
+    /// in command-level tests. It is compiled out of production builds.
+    #[cfg(test)]
+    media_asset_authoritative_publish_attempts: AtomicU64,
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
     program_audio_handoff: Arc<ProgramAudioHandoffCoordinator>,
     _media_audio_sync: MediaAudioSyncRuntime,
@@ -5171,6 +5175,15 @@ struct MediaAudioSyncRuntime {
 }
 
 impl MediaAudioSyncRuntime {
+    #[cfg(test)]
+    fn idle_for_tests(program_handoff: Arc<ProgramAudioHandoffCoordinator>) -> Self {
+        Self {
+            stop: Arc::new(AtomicBool::new(true)),
+            program_handoff,
+            worker: None,
+        }
+    }
+
     fn start(
         engine: EngineHandle,
         audio: Arc<Mutex<MediaAudioPlayback>>,
@@ -17360,6 +17373,10 @@ fn commit_authoritative_media_asset_transaction<R>(
             // bounded final version CAS only, leaving no candidate/history work
             // between it and Published.
             ensure_finalized_local_media_sources_current(finalized_sources)?;
+            #[cfg(test)]
+            state
+                .media_asset_authoritative_publish_attempts
+                .fetch_add(1, Ordering::AcqRel);
             state.engine.media_asset_transaction_published(transaction)
         },
     )?;
@@ -17377,9 +17394,8 @@ fn commit_authoritative_media_asset_transaction<R>(
 /// an exact retry — which cannot reuse the old ticket — still lands on the same
 /// receipt key and returns the recorded `report` + `mutation` without
 /// republishing the catalog or advancing history twice.
-#[tauri::command]
-fn commit_prepared_media_assets_authoritative(
-    state: State<'_, AppState>,
+fn commit_prepared_media_assets_authoritative_command_impl(
+    state: &AppState,
     prepared_import_token: u64,
     request_id: u64,
     operation_generation: u64,
@@ -17389,7 +17405,7 @@ fn commit_prepared_media_assets_authoritative(
     owner_id: String,
 ) -> Result<MediaAssetAuthoritativeImportResult, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
     let operation_key = media_asset_authoritative_operation_key(
         prepared_import_token,
@@ -17413,7 +17429,7 @@ fn commit_prepared_media_assets_authoritative(
             &owner_id,
         )?;
         verify_authoritative_prepared_import(
-            &state,
+            state,
             &prepared,
             expected_epoch,
             &owner_id,
@@ -17430,7 +17446,7 @@ fn commit_prepared_media_assets_authoritative(
             .iter()
             .collect::<Vec<_>>();
         let committed = commit_authoritative_media_asset_transaction(
-            &state,
+            state,
             prepared.admission.as_ref(),
             expected_epoch,
             &owner_id,
@@ -17488,8 +17504,30 @@ fn commit_prepared_media_assets_authoritative(
 }
 
 #[tauri::command]
-fn get_media_asset_operation_terminal_result(
+fn commit_prepared_media_assets_authoritative(
     state: State<'_, AppState>,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeImportResult, String> {
+    commit_prepared_media_assets_authoritative_command_impl(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
+}
+
+fn get_media_asset_operation_terminal_result_impl(
+    state: &AppState,
     prepared_token: u64,
     request_id: u64,
     operation_generation: u64,
@@ -17499,7 +17537,7 @@ fn get_media_asset_operation_terminal_result(
     owner_id: String,
 ) -> Result<Option<MediaAssetAuthoritativeTerminalEnvelope>, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
     let operation_key = media_asset_authoritative_operation_key(
         prepared_token,
         request_id,
@@ -17517,6 +17555,29 @@ fn get_media_asset_operation_terminal_result(
             shape_fingerprint: record.shape.fingerprint,
             terminal: record.terminal,
         }))
+}
+
+#[tauri::command]
+fn get_media_asset_operation_terminal_result(
+    state: State<'_, AppState>,
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<Option<MediaAssetAuthoritativeTerminalEnvelope>, String> {
+    get_media_asset_operation_terminal_result_impl(
+        &state,
+        prepared_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
 }
 
 fn commit_prepared_media_asset_relink_authoritative_impl(
@@ -17637,6 +17698,30 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
     }
 }
 
+fn commit_prepared_media_asset_relink_authoritative_command_impl(
+    state: &AppState,
+    prepared_relink_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeRelinkResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    commit_prepared_media_asset_relink_authoritative_impl(
+        state,
+        prepared_relink_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        &owner_id,
+        None,
+    )
+}
+
 #[tauri::command]
 fn commit_prepared_media_asset_relink_authoritative(
     state: State<'_, AppState>,
@@ -17648,8 +17733,7 @@ fn commit_prepared_media_asset_relink_authoritative(
     expected_checkpoint_hash: String,
     owner_id: String,
 ) -> Result<MediaAssetAuthoritativeRelinkResult, String> {
-    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    commit_prepared_media_asset_relink_authoritative_impl(
+    commit_prepared_media_asset_relink_authoritative_command_impl(
         &state,
         prepared_relink_token,
         request_id,
@@ -17657,8 +17741,7 @@ fn commit_prepared_media_asset_relink_authoritative(
         expected_epoch,
         expected_revision,
         expected_checkpoint_hash,
-        &owner_id,
-        None,
+        owner_id,
     )
 }
 
@@ -17810,9 +17893,8 @@ fn commit_prepared_media_asset_layers_authoritative(
     Ok(terminal)
 }
 
-#[tauri::command]
-fn commit_prepared_video_file_layer_authoritative(
-    state: State<'_, AppState>,
+fn commit_prepared_video_file_layer_authoritative_command_impl(
+    state: &AppState,
     label: String,
     prepared_import_token: u64,
     request_id: u64,
@@ -17829,7 +17911,7 @@ fn commit_prepared_video_file_layer_authoritative(
         &[&label],
     );
     let terminal = commit_prepared_media_asset_layers_authoritative(
-        &state,
+        state,
         prepared_import_token,
         request_id,
         operation_generation,
@@ -17859,8 +17941,32 @@ fn commit_prepared_video_file_layer_authoritative(
 }
 
 #[tauri::command]
-fn commit_prepared_still_image_layer_authoritative(
+fn commit_prepared_video_file_layer_authoritative(
     state: State<'_, AppState>,
+    label: String,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    commit_prepared_video_file_layer_authoritative_command_impl(
+        &state,
+        label,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
+}
+
+fn commit_prepared_still_image_layer_authoritative_command_impl(
+    state: &AppState,
     label: String,
     prepared_import_token: u64,
     request_id: u64,
@@ -17877,7 +17983,7 @@ fn commit_prepared_still_image_layer_authoritative(
         &[&label],
     );
     let terminal = commit_prepared_media_asset_layers_authoritative(
-        &state,
+        state,
         prepared_import_token,
         request_id,
         operation_generation,
@@ -17907,8 +18013,32 @@ fn commit_prepared_still_image_layer_authoritative(
 }
 
 #[tauri::command]
-fn commit_prepared_local_media_layers_authoritative(
+fn commit_prepared_still_image_layer_authoritative(
     state: State<'_, AppState>,
+    label: String,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    commit_prepared_still_image_layer_authoritative_command_impl(
+        &state,
+        label,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
+}
+
+fn commit_prepared_local_media_layers_authoritative_command_impl(
+    state: &AppState,
     kind: VideoSourceKind,
     prepared_import_token: u64,
     request_id: u64,
@@ -17925,7 +18055,7 @@ fn commit_prepared_local_media_layers_authoritative(
         &[kind_name],
     );
     let terminal = commit_prepared_media_asset_layers_authoritative(
-        &state,
+        state,
         prepared_import_token,
         request_id,
         operation_generation,
@@ -17950,8 +18080,32 @@ fn commit_prepared_local_media_layers_authoritative(
 }
 
 #[tauri::command]
-fn commit_prepared_bootstrap_vj_show_authoritative(
+fn commit_prepared_local_media_layers_authoritative(
     state: State<'_, AppState>,
+    kind: VideoSourceKind,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    commit_prepared_local_media_layers_authoritative_command_impl(
+        &state,
+        kind,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
+}
+
+fn commit_prepared_bootstrap_vj_show_authoritative_command_impl(
+    state: &AppState,
     kind: VideoSourceKind,
     prepared_import_token: u64,
     request_id: u64,
@@ -17970,7 +18124,7 @@ fn commit_prepared_bootstrap_vj_show_authoritative(
         &[media_asset_video_source_kind_name(&kind), "safe_output_v1"],
     );
     let terminal = commit_prepared_media_asset_layers_authoritative(
-        &state,
+        state,
         prepared_import_token,
         request_id,
         operation_generation,
@@ -17992,6 +18146,31 @@ fn commit_prepared_bootstrap_vj_show_authoritative(
             "Authoritative first-run VJ setup received an unexpected terminal result: {other:?}"
         )),
     }
+}
+
+#[tauri::command]
+fn commit_prepared_bootstrap_vj_show_authoritative(
+    state: State<'_, AppState>,
+    kind: VideoSourceKind,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeBootstrapResult, String> {
+    commit_prepared_bootstrap_vj_show_authoritative_command_impl(
+        &state,
+        kind,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
 }
 
 /// Staged compatibility commit for a single File layer. New UI callers must
@@ -43054,6 +43233,1050 @@ mod tests {
         env::temp_dir().join(format!("syndocal-{label}-{}-{nonce}", std::process::id()))
     }
 
+    const MEDIA_ASSET_A6_OWNER: &str = "renderer:media-asset-a6";
+
+    #[derive(Clone)]
+    struct MediaAssetA6CommandIdentity {
+        prepared_token: u64,
+        request_id: u64,
+        operation_generation: u64,
+        authority: MediaAssetPrepareAuthority,
+    }
+
+    #[derive(Clone, Copy)]
+    struct MediaAssetA6CommandMutationBaseline {
+        revision: u64,
+        history_generation: u64,
+        undo_len: usize,
+        next_transaction_id: u64,
+        publication_generation: u64,
+    }
+
+    impl MediaAssetA6CommandIdentity {
+        fn arguments(&self) -> (u64, u64, u64, u64, u64, String, String) {
+            (
+                self.prepared_token,
+                self.request_id,
+                self.operation_generation,
+                self.authority.epoch,
+                self.authority.revision,
+                self.authority.checkpoint_hash.clone(),
+                MEDIA_ASSET_A6_OWNER.to_string(),
+            )
+        }
+    }
+
+    /// Command-level Media Asset fixture. It intentionally creates an actual
+    /// EngineHandle and stages real local files through the production prepare
+    /// and finalization paths; only the surrounding Tauri State extraction is
+    /// bypassed by the private command-body seam.
+    struct MediaAssetA6CommandHarness {
+        state: Arc<AppState>,
+        directory: PathBuf,
+    }
+
+    impl MediaAssetA6CommandHarness {
+        fn new() -> Self {
+            let directory = unique_test_directory("media-asset-a6-command");
+            fs::create_dir_all(&directory).expect("create Media Asset A6 fixture directory");
+
+            let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+                enabled: false,
+                ..DmxOutputConfig::default()
+            });
+            let initial_project_coordinator =
+                project_coordinator_for_initial_snapshot(engine.snapshot());
+            let capture_inputs = Arc::new(Mutex::new(HashMap::new()));
+            let capture_transport = Arc::new(Mutex::new(
+                capture_transport::CaptureTransportState::new(Arc::clone(&capture_inputs)),
+            ));
+            #[cfg(feature = "ndi")]
+            let ndi_inputs = Arc::new(Mutex::new(HashMap::new()));
+            #[cfg(feature = "ndi")]
+            let ndi_transport = Arc::new(Mutex::new(ndi_transport::NdiTransportState::new(
+                Arc::clone(&ndi_inputs),
+                Arc::clone(&capture_inputs),
+            )));
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            let spout_inputs = Arc::new(Mutex::new(HashMap::new()));
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            let spout_transport = Arc::new(Mutex::new(spout_transport::SpoutTransportState::new(
+                Arc::clone(&spout_inputs),
+                #[cfg(feature = "ndi")]
+                Arc::clone(&ndi_inputs),
+                Arc::clone(&capture_inputs),
+            )));
+            let app_video_decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env()
+                .with_capture_inputs(Arc::clone(&capture_inputs));
+            #[cfg(feature = "ndi")]
+            let app_video_decoder = app_video_decoder.with_ndi_inputs(Arc::clone(&ndi_inputs));
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            let app_video_decoder = app_video_decoder.with_spout_inputs(Arc::clone(&spout_inputs));
+            let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+            let program_audio_handoff = Arc::new(ProgramAudioHandoffCoordinator::default());
+            let state = Arc::new(AppState {
+                engine,
+                app_handle: Mutex::new(None),
+                vj_first_run: Arc::new(Mutex::new(())),
+                vj_preview_transport: Mutex::new(VjPreviewTransportRuntime::default()),
+                vj_preview_renderer: Mutex::new(new_vj_preview_renderer()),
+                vj_preview_renderer_reset_pending: AtomicBool::new(false),
+                media_asset_operations: Arc::new(MediaAssetOperationRegistry::default()),
+                media_asset_reaper: Mutex::new(None),
+                media_asset_authoritative_publish_attempts: AtomicU64::new(0),
+                media_audio,
+                program_audio_handoff: Arc::clone(&program_audio_handoff),
+                _media_audio_sync: MediaAudioSyncRuntime::idle_for_tests(program_audio_handoff),
+                live_audio_input_lifecycle: Mutex::new(()),
+                live_audio_input_devices: Mutex::new(LiveAudioInputDeviceCatalog::default()),
+                live_audio_input: Mutex::new(None),
+                video_preview: Arc::new(Mutex::new(
+                    video::VideoPreviewRenderer::with_frame_provider(
+                        video::VideoRuntimeConfig::default(),
+                        video::DecoderBackedFrameProvider::new(app_video_decoder)
+                            .with_prefetch(2, 33),
+                    ),
+                )),
+                video_recording: Mutex::new(VideoRecordingRuntime::default()),
+                external_video_transport: Arc::new(Mutex::new(
+                    video::ExternalVideoTransportRuntime::new(),
+                )),
+                external_video_transport_events: Arc::new(Mutex::new(Vec::new())),
+                capture_transport,
+                capture_inputs: Arc::clone(&capture_inputs),
+                #[cfg(feature = "ndi")]
+                ndi_transport,
+                #[cfg(feature = "ndi")]
+                ndi_inputs: Arc::clone(&ndi_inputs),
+                #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+                spout_transport,
+                #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+                spout_inputs: Arc::clone(&spout_inputs),
+                custom_profiles: Mutex::new(HashMap::new()),
+                fixture_groups: Mutex::new(Vec::new()),
+                fixture_group_delete_undo: Mutex::new(None),
+                visualizer_model_assets: Mutex::new(HashMap::new()),
+                midi_clock: Mutex::new(None),
+                midi_control: Mutex::new(None),
+                midi_feedback: Arc::new(Mutex::new(None)),
+                midi_feedback_runtime: Mutex::new(None),
+                midi_feedback_last_error: Arc::new(Mutex::new(None)),
+                osc_input: Mutex::new(None),
+                remote_control: Mutex::new(None),
+                dmx_input: Mutex::new(None),
+                pending_project_open_paths: Mutex::new(Vec::new()),
+                current_project_path: Mutex::new(None),
+                operator_policy: Mutex::new(None),
+                operator_selection: Arc::new(Mutex::new(OperatorSelectionContext::default())),
+                project_coordinator: Mutex::new(initial_project_coordinator),
+                project_callback_epoch: Arc::new(AtomicU64::new(0)),
+                project_mapping_callback_epoch: Arc::new(AtomicU64::new(0)),
+                project_transaction_active: Arc::new(AtomicBool::new(false)),
+                project_transaction_owners: Mutex::new(HashMap::from([(
+                    "media-asset-a6".to_string(),
+                    MEDIA_ASSET_A6_OWNER.to_string(),
+                )])),
+                project_operator_sessions: Mutex::new(HashMap::new()),
+                project_external_command_admission: Arc::new(
+                    ProjectExternalCommandAdmission::default(),
+                ),
+                project_save_publication: Mutex::new(()),
+                snapshot_sync: Mutex::new(SnapshotSyncState::default()),
+                standby_sync: Mutex::new(StandbySyncRuntime::default()),
+                standby_sync_lifecycle: Arc::new(Mutex::new(())),
+                output_ownership_transition: Arc::new(Mutex::new(())),
+                native_video_output_metrics: Mutex::new(HashMap::new()),
+                native_video_output_workers: Mutex::new(HashMap::new()),
+            });
+            Self { state, directory }
+        }
+
+        fn local_media_path(&self, stem: &str, kind: VideoSourceKind) -> String {
+            let path = match kind {
+                VideoSourceKind::File => self.directory.join(format!("{stem}.mp4")),
+                VideoSourceKind::StillImage => self.directory.join(format!("{stem}.png")),
+                _ => panic!("A6 command fixture only stages local media"),
+            };
+            match kind {
+                VideoSourceKind::File => {
+                    let ffmpeg = env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+                    let output = Command::new(ffmpeg)
+                        .args([
+                            "-hide_banner",
+                            "-loglevel",
+                            "error",
+                            "-y",
+                            "-f",
+                            "lavfi",
+                            "-i",
+                            "color=c=black:s=16x16:r=1:d=0.25",
+                            "-an",
+                            "-c:v",
+                            "mpeg4",
+                            "-q:v",
+                            "2",
+                        ])
+                        .arg(&path)
+                        .output()
+                        .expect("start ffmpeg for Media Asset A6 local video");
+                    assert!(
+                        output.status.success(),
+                        "ffmpeg must create the A6 local video fixture: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                VideoSourceKind::StillImage => {
+                    const PNG: &[u8] = &[
+                        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+                        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+                        0x08, 0x04, 0x00, 0x00, 0x00, 0xb5, 0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00,
+                        0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xfc, 0xff, 0x1f, 0x00,
+                        0x02, 0xeb, 0x01, 0xf5, 0x69, 0x76, 0x65, 0x00, 0x00, 0x00, 0x00, 0x49,
+                        0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+                    ];
+                    fs::write(&path, PNG).expect("write Media Asset A6 local still fixture");
+                }
+                _ => unreachable!(),
+            }
+            path.to_string_lossy().into_owned()
+        }
+
+        fn authority(&self) -> MediaAssetPrepareAuthority {
+            let expected_epoch = self
+                .state
+                .project_coordinator
+                .lock()
+                .expect("Media Asset A6 coordinator lock")
+                .epoch;
+            // Match the production Start command: the A authority is captured
+            // only after reconciliation of the live EngineHandle persistence
+            // image, never from an unreconciled test-only coordinator seed.
+            capture_media_asset_prepare_authority(
+                &self.state,
+                MEDIA_ASSET_A6_OWNER,
+                expected_epoch,
+                None,
+            )
+            .expect("capture reconciled Media Asset A6 authority")
+        }
+
+        fn stage_import(
+            &self,
+            request_id: u64,
+            kind: VideoSourceKind,
+            stems: &[&str],
+        ) -> MediaAssetA6CommandIdentity {
+            let paths = stems
+                .iter()
+                .map(|stem| self.local_media_path(stem, kind.clone()))
+                .collect::<Vec<_>>();
+            let authority = self.authority();
+            let operation = self
+                .state
+                .media_asset_operations
+                .begin(request_id, MEDIA_ASSET_A6_OWNER.to_string())
+                .expect("begin Media Asset A6 operation");
+            let handle = operation.handle();
+            let cancel = operation.cancellation_flag();
+            let (assets, entries) = prepare_local_media_asset_batch(kind, paths, cancel.as_ref())
+                .expect("prepare Media Asset A6 local media");
+            assert!(
+                !assets.is_empty(),
+                "Media Asset A6 fixture preparation must retain local media"
+            );
+            let finalized_sources = finalize_prepared_local_media_assets(&assets, cancel.as_ref())
+                .expect("finalize Media Asset A6 local media");
+            let prepared = PreparedMediaAssetImport {
+                request_id,
+                operation_generation: handle.generation,
+                owner_id: MEDIA_ASSET_A6_OWNER.to_string(),
+                authority: authority.clone(),
+                assets,
+                entries,
+                cancel,
+                admission: operation.admission(),
+                finalized_sources: Some(finalized_sources),
+                expires_at: Instant::now() + MEDIA_ASSET_PREPARED_IMPORT_TTL,
+            };
+            let token = self
+                .state
+                .media_asset_operations
+                .store_prepared_from_active(&handle, MEDIA_ASSET_A6_OWNER, prepared)
+                .expect("store finalized Media Asset A6 import");
+            drop(operation);
+            MediaAssetA6CommandIdentity {
+                prepared_token: token,
+                request_id,
+                operation_generation: handle.generation,
+                authority,
+            }
+        }
+
+        fn stage_relink(&self, request_id: u64) -> (MediaAssetA6CommandIdentity, MediaAssetId) {
+            let initial_path = self.local_media_path("relink-original", VideoSourceKind::File);
+            let initial_cancel = AtomicBool::new(false);
+            let (initial_assets, _) = prepare_local_media_asset_batch(
+                VideoSourceKind::File,
+                vec![initial_path],
+                &initial_cancel,
+            )
+            .expect("prepare Media Asset A6 original relink source");
+            let original_prepared = initial_assets
+                .into_iter()
+                .next()
+                .expect("original relink source exists");
+            let asset_id = self.state.engine.allocate_media_asset_id();
+            let original_asset = MediaAssetSummary {
+                id: asset_id,
+                label: "A6 relink original".to_string(),
+                source: original_prepared.source,
+                content_hash: Some(original_prepared.content_hash),
+                byte_size: Some(original_prepared.byte_size),
+            };
+            self.state
+                .engine
+                .media_asset_transaction_published(MediaAssetTransaction::Import(
+                    MediaAssetImportCandidate {
+                        assets: vec![original_asset.clone()],
+                        layers: Vec::new(),
+                    },
+                ))
+                .expect("seed real EngineHandle catalog for Media Asset A6 relink");
+            *self
+                .state
+                .project_coordinator
+                .lock()
+                .expect("reset Media Asset A6 coordinator after seed") =
+                project_coordinator_for_initial_snapshot(self.state.engine.snapshot());
+
+            let authority = self.authority();
+            let operation = self
+                .state
+                .media_asset_operations
+                .begin(request_id, MEDIA_ASSET_A6_OWNER.to_string())
+                .expect("begin Media Asset A6 relink operation");
+            let handle = operation.handle();
+            let cancel = operation.cancellation_flag();
+            let replacement_path =
+                self.local_media_path("relink-replacement", VideoSourceKind::File);
+            let (replacement_assets, _) = prepare_local_media_asset_batch(
+                VideoSourceKind::File,
+                vec![replacement_path],
+                cancel.as_ref(),
+            )
+            .expect("prepare Media Asset A6 relink replacement");
+            let replacement = replacement_assets
+                .into_iter()
+                .next()
+                .expect("replacement relink source exists");
+            let finalized_replacement_source = finalize_prepared_local_media_assets(
+                std::slice::from_ref(&replacement),
+                cancel.as_ref(),
+            )
+            .expect("finalize Media Asset A6 relink replacement")
+            .into_iter()
+            .next()
+            .expect("finalized relink replacement exists");
+            let prepared = PreparedMediaAssetRelink {
+                request_id,
+                operation_generation: handle.generation,
+                owner_id: MEDIA_ASSET_A6_OWNER.to_string(),
+                asset_id,
+                authority: authority.clone(),
+                original_asset,
+                replacement,
+                adopted_replacement: true,
+                legacy_source_identity: None,
+                cancel,
+                admission: operation.admission(),
+                finalized_replacement_source: Some(finalized_replacement_source),
+                finalized_legacy_source: None,
+                expires_at: Instant::now() + MEDIA_ASSET_PREPARED_IMPORT_TTL,
+            };
+            let token = self
+                .state
+                .media_asset_operations
+                .store_prepared_relink_from_active(&handle, MEDIA_ASSET_A6_OWNER, prepared)
+                .expect("store finalized Media Asset A6 relink");
+            drop(operation);
+            (
+                MediaAssetA6CommandIdentity {
+                    prepared_token: token,
+                    request_id,
+                    operation_generation: handle.generation,
+                    authority,
+                },
+                asset_id,
+            )
+        }
+
+        fn mutation_baseline(&self) -> MediaAssetA6CommandMutationBaseline {
+            let coordinator = self
+                .state
+                .project_coordinator
+                .lock()
+                .expect("Media Asset A6 coordinator baseline lock");
+            MediaAssetA6CommandMutationBaseline {
+                revision: coordinator.revision,
+                history_generation: coordinator.history_generation,
+                undo_len: coordinator.history.undo.len(),
+                next_transaction_id: coordinator.next_transaction_id,
+                publication_generation: coordinator.publication_generation,
+            }
+        }
+
+        fn assert_one_mutation(&self, baseline: MediaAssetA6CommandMutationBaseline) {
+            assert_eq!(
+                self.state
+                    .media_asset_authoritative_publish_attempts
+                    .load(Ordering::Acquire),
+                1,
+                "exactly one real EngineHandle publication reaches the command core"
+            );
+            let coordinator = self
+                .state
+                .project_coordinator
+                .lock()
+                .expect("Media Asset A6 coordinator after commit");
+            assert_eq!(
+                coordinator.revision,
+                baseline.revision.saturating_add(1),
+                "revision advances exactly once after the prepared A authority"
+            );
+            assert_eq!(
+                coordinator.history.undo.len(),
+                baseline.undo_len.saturating_add(1),
+                "one history entry is recorded"
+            );
+            assert_eq!(
+                coordinator.history_generation,
+                baseline.history_generation.saturating_add(1),
+                "history generation advances exactly once"
+            );
+            assert_eq!(
+                coordinator.next_transaction_id,
+                baseline.next_transaction_id.saturating_add(1),
+                "one internal transaction ID is committed"
+            );
+            assert_eq!(
+                coordinator.publication_generation,
+                baseline.publication_generation.saturating_add(1),
+                "one authority publication is committed"
+            );
+            assert!(
+                coordinator.history.pending.is_empty(),
+                "no command-level history reservation is retained"
+            );
+            assert!(
+                !self
+                    .state
+                    .project_transaction_active
+                    .load(Ordering::Acquire),
+                "command transaction flag is disarmed"
+            );
+        }
+    }
+
+    impl Drop for MediaAssetA6CommandHarness {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    fn media_asset_a6_concurrent_exact<R>(
+        state: &Arc<AppState>,
+        command: impl Fn(&AppState) -> Result<R, String> + Send + Sync + 'static,
+    ) -> Vec<R>
+    where
+        R: Send + 'static,
+    {
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let command = Arc::new(command);
+        let handles = (0..2)
+            .map(|_| {
+                let state = Arc::clone(state);
+                let barrier = Arc::clone(&barrier);
+                let command = Arc::clone(&command);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    command(&state).expect("real A6 command invocation succeeds")
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("A6 command thread joins"))
+            .collect()
+    }
+
+    fn assert_media_asset_a6_same_terminal<T: Serialize>(first: &T, second: &T) {
+        assert_eq!(
+            serde_json::to_value(first).expect("serialize first terminal result"),
+            serde_json::to_value(second).expect("serialize second terminal result"),
+            "same-key concurrent and exact-retry command calls return the canonical terminal result"
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_command_import_concurrent_retry_is_single_publish() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let identity = harness.stage_import(71_001, VideoSourceKind::File, &["import"]);
+        let baseline = harness.mutation_baseline();
+        let concurrent_identity = identity.clone();
+        let results = media_asset_a6_concurrent_exact(&harness.state, move |state| {
+            let (
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            ) = concurrent_identity.arguments();
+            commit_prepared_media_assets_authoritative_command_impl(
+                state,
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            )
+        });
+        assert_eq!(results.len(), 2);
+        assert_media_asset_a6_same_terminal(&results[0], &results[1]);
+
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let third = commit_prepared_media_assets_authoritative_command_impl(
+            &harness.state,
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        )
+        .expect("third exact Import retry returns its canonical terminal result");
+        assert_media_asset_a6_same_terminal(&results[0], &third);
+        harness.assert_one_mutation(baseline);
+
+        let asset_id = results[0].report.entries[0]
+            .asset_id
+            .expect("Import report retains its authoritative asset ID");
+        assert_eq!(results[0].report.imported, 1);
+        assert_eq!(
+            media_asset_catalog_for_snapshot(&harness.state.engine.snapshot()).len(),
+            1,
+            "the catalog was published once"
+        );
+        assert_eq!(
+            harness.state.engine.allocate_media_asset_id(),
+            asset_id.saturating_add(1),
+            "the exact retry does not reuse or skip the next asset allocator ID"
+        );
+        assert!(
+            harness
+                .state
+                .media_asset_operations
+                .prepared_exact(
+                    identity.prepared_token,
+                    identity.request_id,
+                    identity.operation_generation,
+                    MEDIA_ASSET_A6_OWNER,
+                )
+                .is_err(),
+            "the staged Import token is consumed only after the canonical terminal receipt exists"
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_command_relink_concurrent_retry_is_single_publish() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (identity, asset_id) = harness.stage_relink(71_002);
+        let baseline = harness.mutation_baseline();
+        let concurrent_identity = identity.clone();
+        let results = media_asset_a6_concurrent_exact(&harness.state, move |state| {
+            let (
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            ) = concurrent_identity.arguments();
+            commit_prepared_media_asset_relink_authoritative_command_impl(
+                state,
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            )
+        });
+        assert_eq!(results.len(), 2);
+        assert_media_asset_a6_same_terminal(&results[0], &results[1]);
+
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let third = commit_prepared_media_asset_relink_authoritative_command_impl(
+            &harness.state,
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        )
+        .expect("third exact Relink retry returns its canonical terminal result");
+        assert_media_asset_a6_same_terminal(&results[0], &third);
+        assert_eq!(
+            results[0].report.outcome,
+            MediaAssetRelinkOutcome::Relinked {
+                asset_id,
+                adopted_replacement: true,
+            }
+        );
+        harness.assert_one_mutation(baseline);
+        assert_eq!(
+            media_asset_catalog_for_snapshot(&harness.state.engine.snapshot())[0].id,
+            asset_id,
+            "the real EngineHandle catalog retains the original relink asset ID"
+        );
+        assert_eq!(
+            harness.state.engine.allocate_media_asset_id(),
+            asset_id.saturating_add(1),
+            "Relink and its exact retries do not consume a replacement asset ID"
+        );
+        assert!(
+            harness
+                .state
+                .media_asset_operations
+                .prepared_relink_exact(
+                    identity.prepared_token,
+                    identity.request_id,
+                    identity.operation_generation,
+                    MEDIA_ASSET_A6_OWNER,
+                )
+                .is_err(),
+            "the staged Relink token is consumed after its canonical terminal receipt"
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_command_video_file_layer_concurrent_retry_is_single_publish() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let identity = harness.stage_import(71_003, VideoSourceKind::File, &["video-layer"]);
+        let baseline = harness.mutation_baseline();
+        let concurrent_identity = identity.clone();
+        let results = media_asset_a6_concurrent_exact(&harness.state, move |state| {
+            let (
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            ) = concurrent_identity.arguments();
+            commit_prepared_video_file_layer_authoritative_command_impl(
+                state,
+                "A6 video layer".to_string(),
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            )
+        });
+        assert_media_asset_a6_same_terminal(&results[0], &results[1]);
+
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let third = commit_prepared_video_file_layer_authoritative_command_impl(
+            &harness.state,
+            "A6 video layer".to_string(),
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        )
+        .expect("third exact video layer retry returns its canonical result");
+        assert_media_asset_a6_same_terminal(&results[0], &third);
+        harness.assert_one_mutation(baseline);
+        assert_eq!(results[0].layer_ids.len(), 1);
+        let layer_id = results[0].layer_ids[0];
+        let snapshot = harness.state.engine.snapshot();
+        assert_eq!(snapshot.video.layers.len(), 1);
+        assert_eq!(snapshot.video.layers[0].id, layer_id);
+        assert_eq!(snapshot.video.layers[0].label, "A6 video layer");
+        assert_eq!(
+            harness.state.engine.allocate_video_layer_id(),
+            layer_id.saturating_add(1),
+            "exact retries retain the original video layer ID and do not advance its allocator"
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_command_still_image_layer_concurrent_retry_is_single_publish() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let identity = harness.stage_import(71_004, VideoSourceKind::StillImage, &["still-layer"]);
+        let baseline = harness.mutation_baseline();
+        let concurrent_identity = identity.clone();
+        let results = media_asset_a6_concurrent_exact(&harness.state, move |state| {
+            let (
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            ) = concurrent_identity.arguments();
+            commit_prepared_still_image_layer_authoritative_command_impl(
+                state,
+                "A6 still layer".to_string(),
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            )
+        });
+        assert_media_asset_a6_same_terminal(&results[0], &results[1]);
+
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let third = commit_prepared_still_image_layer_authoritative_command_impl(
+            &harness.state,
+            "A6 still layer".to_string(),
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        )
+        .expect("third exact still layer retry returns its canonical result");
+        assert_media_asset_a6_same_terminal(&results[0], &third);
+        harness.assert_one_mutation(baseline);
+        assert_eq!(results[0].layer_ids.len(), 1);
+        let layer_id = results[0].layer_ids[0];
+        let snapshot = harness.state.engine.snapshot();
+        assert_eq!(snapshot.video.layers.len(), 1);
+        assert_eq!(snapshot.video.layers[0].id, layer_id);
+        assert_eq!(
+            snapshot.video.layers[0].source.kind,
+            VideoSourceKind::StillImage
+        );
+        assert_eq!(
+            harness.state.engine.allocate_video_layer_id(),
+            layer_id.saturating_add(1),
+            "exact retries retain the original still-image layer ID and do not advance its allocator"
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_command_local_media_layers_concurrent_retry_is_single_publish() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let identity = harness.stage_import(
+            71_005,
+            VideoSourceKind::File,
+            &["local-layers-one", "local-layers-two"],
+        );
+        let baseline = harness.mutation_baseline();
+        let concurrent_identity = identity.clone();
+        let results = media_asset_a6_concurrent_exact(&harness.state, move |state| {
+            let (
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            ) = concurrent_identity.arguments();
+            commit_prepared_local_media_layers_authoritative_command_impl(
+                state,
+                VideoSourceKind::File,
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            )
+        });
+        assert_media_asset_a6_same_terminal(&results[0], &results[1]);
+
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let third = commit_prepared_local_media_layers_authoritative_command_impl(
+            &harness.state,
+            VideoSourceKind::File,
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        )
+        .expect("third exact local layers retry returns its canonical result");
+        assert_media_asset_a6_same_terminal(&results[0], &third);
+        harness.assert_one_mutation(baseline);
+        assert_eq!(results[0].layer_ids.len(), 2);
+        assert_ne!(results[0].layer_ids[0], results[0].layer_ids[1]);
+        let snapshot = harness.state.engine.snapshot();
+        assert_eq!(snapshot.video.layers.len(), 2);
+        assert_eq!(
+            snapshot
+                .video
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            results[0].layer_ids,
+            "the real command returns the actual published local-layer IDs in order"
+        );
+        assert_eq!(
+            harness.state.engine.allocate_video_layer_id(),
+            results[0].layer_ids[1].saturating_add(1),
+            "local-layer retries do not allocate a second set of layer IDs"
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_command_bootstrap_vj_show_concurrent_retry_is_single_publish() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let identity = harness.stage_import(71_006, VideoSourceKind::File, &["bootstrap"]);
+        let baseline = harness.mutation_baseline();
+        let concurrent_identity = identity.clone();
+        let results = media_asset_a6_concurrent_exact(&harness.state, move |state| {
+            let (
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            ) = concurrent_identity.arguments();
+            commit_prepared_bootstrap_vj_show_authoritative_command_impl(
+                state,
+                VideoSourceKind::File,
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id,
+            )
+        });
+        assert_media_asset_a6_same_terminal(&results[0], &results[1]);
+
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let third = commit_prepared_bootstrap_vj_show_authoritative_command_impl(
+            &harness.state,
+            VideoSourceKind::File,
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        )
+        .expect("third exact Bootstrap retry returns its canonical result");
+        assert_media_asset_a6_same_terminal(&results[0], &third);
+        harness.assert_one_mutation(baseline);
+        assert_eq!(results[0].setup.layer_ids.len(), 1);
+        let layer_id = results[0].setup.layer_ids[0];
+        let output_id = results[0].setup.output_id;
+        let snapshot = harness.state.engine.snapshot();
+        assert_eq!(snapshot.video.layers.len(), 1);
+        assert_eq!(snapshot.video.layers[0].id, layer_id);
+        assert_eq!(snapshot.video.outputs.len(), 1);
+        assert_eq!(snapshot.video.outputs[0].id, output_id);
+        assert_eq!(snapshot.video.outputs[0].composition_id, 1);
+        assert!(!snapshot.video.outputs[0].enabled);
+        assert!(snapshot.video.outputs[0].blackout);
+        assert_eq!(
+            harness.state.engine.allocate_video_layer_id(),
+            layer_id.saturating_add(1),
+            "Bootstrap retries retain the original layer ID"
+        );
+        assert_eq!(
+            harness.state.engine.allocate_video_output_id(),
+            output_id.saturating_add(1),
+            "Bootstrap retries retain the original output ID"
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_command_different_shape_returns_canonical_query_without_republish()
+    {
+        let harness = MediaAssetA6CommandHarness::new();
+        let identity = harness.stage_import(71_007, VideoSourceKind::File, &["shape-conflict"]);
+        let baseline = harness.mutation_baseline();
+        let canonical_label = "A6 canonical video layer".to_string();
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let canonical = commit_prepared_video_file_layer_authoritative_command_impl(
+            &harness.state,
+            canonical_label.clone(),
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        )
+        .expect("canonical command publishes exactly once");
+        let layer_id = canonical.layer_ids[0];
+        harness.assert_one_mutation(baseline);
+
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let conflict = commit_prepared_video_file_layer_authoritative_command_impl(
+            &harness.state,
+            "A6 changed video layer".to_string(),
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        )
+        .expect_err("a different shape cannot republish the completed operation");
+        assert!(
+            conflict.contains("canonical terminal result"),
+            "different-shape conflict remains recoverable through the canonical query: {conflict}"
+        );
+        harness.assert_one_mutation(baseline);
+
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let queried = get_media_asset_operation_terminal_result_impl(
+            &harness.state,
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        )
+        .expect("canonical terminal query succeeds")
+        .expect("canonical terminal receipt is retained after a shape conflict");
+        assert_eq!(
+            queried.command_kind,
+            MediaAssetAuthoritativeCommitKind::VideoFileLayer
+        );
+        assert_eq!(
+            queried.shape_fingerprint,
+            media_asset_authoritative_shape(
+                MediaAssetAuthoritativeCommitKind::VideoFileLayer,
+                &[canonical_label.as_str()],
+            )
+            .fingerprint
+        );
+        match queried.terminal {
+            MediaAssetAuthoritativeTerminalResult::Layers(result) => {
+                assert_eq!(result.layer_ids, vec![layer_id]);
+                assert_media_asset_a6_same_terminal(&canonical, &result);
+            }
+            other => panic!("canonical query returned an unexpected terminal: {other:?}"),
+        }
+        assert_eq!(
+            harness.state.engine.allocate_video_layer_id(),
+            layer_id.saturating_add(1),
+            "the conflicting shape neither republishes nor consumes another layer ID"
+        );
+    }
+
     #[test]
     fn media_asset_operation_delayed_cancel_cannot_cancel_reused_or_newer_operation() {
         let registry = Arc::new(MediaAssetOperationRegistry::default());
@@ -66126,6 +67349,8 @@ fn main() {
             vj_preview_renderer_reset_pending: AtomicBool::new(false),
             media_asset_operations: Arc::new(MediaAssetOperationRegistry::default()),
             media_asset_reaper: Mutex::new(None),
+            #[cfg(test)]
+            media_asset_authoritative_publish_attempts: AtomicU64::new(0),
             media_audio,
             program_audio_handoff,
             _media_audio_sync: media_audio_sync,
