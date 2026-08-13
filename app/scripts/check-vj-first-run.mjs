@@ -13,21 +13,43 @@ const workflowEnd = app.indexOf("const videoThumbnailSourceSignature", workflowS
 assert.ok(workflowStart >= 0 && workflowEnd > workflowStart, "first-run VJ workflow is missing");
 const workflow = app.slice(workflowStart, workflowEnd);
 assert.ok(
+  workflow.indexOf("preflightAndBeginMediaAssetOperation") < workflow.indexOf('"select_video_source_files"'),
+  "first-run must flush mappings and only then register its AbortController before the picker",
+);
+assert.ok(
   workflow.indexOf('"select_video_source_files"') < workflow.indexOf("prepareFinalizeAndCommitMediaAssets"),
   "first-run selection must happen before handing the batch to staged preparation",
 );
+const startMediaAssetOperation = mediaAuthority.indexOf('"start_media_asset_operation"');
+const prepareReservedMediaAssets = mediaAuthority.indexOf('"prepare_reserved_media_assets"');
+const finalizePreparedMediaAssets = mediaAuthority.indexOf('"finalize_prepared_media_assets"');
+const authoritativeMediaCommit = mediaAuthority.indexOf("const response = await invokeAuthoritativeCommit(");
 assert.ok(
-  mediaAuthority.indexOf('"prepare_local_media_assets"')
-    < mediaAuthority.indexOf('"finalize_prepared_media_assets"')
-    && mediaAuthority.indexOf('"finalize_prepared_media_assets"')
-      < mediaAuthority.indexOf("const committed = await options.invoke<T>(options.commitCommand"),
-  "first-run selection, Prepare, and Finalize must complete before its one staged project mutation",
+  startMediaAssetOperation >= 0
+    && prepareReservedMediaAssets > startMediaAssetOperation
+    && finalizePreparedMediaAssets > prepareReservedMediaAssets
+    && authoritativeMediaCommit > finalizePreparedMediaAssets,
+  "first-run reserves, prepares, and finalizes before its one authoritative project mutation",
 );
 assert.ok(workflow.includes("if (vjFirstRunBusy()) return;"), "double activation must be ignored");
 assert.ok(workflow.includes("if (paths.length === 0)"), "cancel must return before setup mutation");
 assert.ok(workflow.includes("if (!refreshed)"), "post-commit snapshot refresh failure must be reconciled separately");
+assert.ok(
+  (workflow.match(/if \(!terminalIsCurrent\(\)\)/g) ?? []).length >= 3,
+  "project C must stop the Bootstrap continuation after snapshot/Preview awaits and before B side effects",
+);
 assert.ok(workflow.includes("requireAllPrepared: true"), "first-run mixed Prepare result must reject before the project mutation");
-assert.ok(app.includes('"commit_prepared_bootstrap_vj_show",'), "staged bootstrap must be one project transaction");
+assert.ok(
+  workflow.includes('commitCommand: "commit_prepared_bootstrap_vj_show_authoritative"'),
+  "first-run must use one backend-owned authoritative Bootstrap transaction",
+);
+const authoritativeCommandsStart = app.indexOf("const serverAuthoritativeProjectMutationCommands = new Set([");
+const authoritativeCommandsEnd = app.indexOf("]);", authoritativeCommandsStart);
+assert.ok(authoritativeCommandsStart >= 0 && authoritativeCommandsEnd > authoritativeCommandsStart);
+assert.ok(
+  app.slice(authoritativeCommandsStart, authoritativeCommandsEnd).includes('"commit_prepared_bootstrap_vj_show_authoritative"'),
+  "authoritative Bootstrap remains explicitly classified as a mutation",
+);
 const firstRunAvailabilityStart = app.indexOf("const vjFirstRunAvailable = createMemo(() =>");
 const firstRunAvailabilityEnd = app.indexOf("  createEffect(() =>", firstRunAvailabilityStart);
 assert.ok(firstRunAvailabilityStart >= 0 && firstRunAvailabilityEnd > firstRunAvailabilityStart, "first-run availability predicate is missing");
@@ -47,7 +69,10 @@ for (const forbidden of [
   assert.ok(!workflow.includes(forbidden), `first-run VJ workflow must not call ${forbidden}`);
 }
 assert.ok(workflow.includes("setSelectedVideoOutputId(result.output_id)"));
-assert.ok(workflow.includes("await stageVjPreviewLayer(firstLayerId)"));
+assert.ok(
+  workflow.includes("await stageVjPreviewLayer(firstLayerId, staged.terminalAuthority)"),
+  "automatic Preview staging must carry the exact committed project authority",
+);
 assert.ok(!workflow.includes("setVideoPreviewLayerId("), "first-run Preview must be staged by the runtime backend");
 assert.ok(backend.includes("enabled: false"));
 assert.ok(backend.includes("blackout: true"));
@@ -61,6 +86,21 @@ assert.ok(engine.includes("First-run VJ setup expired before engine execution"))
 // production App routing uses the staged name checked above.
 assert.ok(backend.includes("fn bootstrap_vj_show("), "legacy bootstrap compatibility command remains available");
 assert.ok(backend.includes("fn commit_prepared_bootstrap_vj_show("), "staged bootstrap backend command is available");
+const previewStageCommand = backend.slice(
+  backend.indexOf("fn stage_vj_preview_layer("),
+  backend.indexOf("fn set_vj_preview_playing(", backend.indexOf("fn stage_vj_preview_layer(")),
+);
+assert.match(
+  previewStageCommand,
+  /expected_epoch[\s\S]*?expected_revision[\s\S]*?expected_checkpoint_hash/,
+  "Preview stage backend accepts the exact E\/R\/H fence",
+);
+assert.match(
+  previewStageCommand,
+  /lock_project_external_command_admission[\s\S]*?lock_project_coordinator[\s\S]*?with_exact_vj_preview_project_authority/,
+  "Preview stage validates authority under the canonical admission boundary",
+);
+assert.ok(backend.includes("fn commit_prepared_bootstrap_vj_show_authoritative("), "authoritative Bootstrap backend command is available");
 assert.ok(backend.includes("tauri::async_runtime::spawn_blocking(move ||"));
 assert.ok(clipGrid.includes('aria-busy={props.firstRunBusy}'));
 assert.ok(clipGrid.includes('querySelector<HTMLButtonElement>(".videoClipLaunch")?.focus()'));

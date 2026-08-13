@@ -4,9 +4,11 @@ import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLa
 import {
   mediaAssetImportReportMessage,
   mediaAssetRelinkOutcomeMessage,
+  preflightAndBeginMediaAssetOperation,
   prepareFinalizeAndCommitMediaAssetRelink,
   prepareFinalizeAndCommitMediaAssets,
 } from "./mediaAssetAuthority";
+import type { ProjectAuthorityToken } from "./projectAuthority";
 import type {
   EngineSnapshot,
   ExternalVideoIoPlans,
@@ -14,7 +16,6 @@ import type {
   ExternalVideoTransportStatus,
   ExternalVideoTransportSyncReport,
   ExternalVideoTransportSyncResponse,
-  MediaAssetImportReport,
   VideoBlendMode,
   VideoAudioMonitorStatus,
   VideoFrame,
@@ -40,8 +41,14 @@ interface VideoRuntimeControllerOptions {
   videoSourceKind: Accessor<VideoSourceKind>;
   /** Captured before any picker/prepare so A cannot commit into a later B. */
   getCurrentProjectEpoch: Accessor<number>;
+  /** Operator-gated mapping flush; called before registering this operation. */
+  prepareMediaAssetOperationStart: (expectedEpoch: number) => Promise<number>;
+  /** Live E/R/H check immediately before any terminal UI side effect. */
+  isProjectAuthorityCurrent: (authority: ProjectAuthorityToken) => boolean;
   /** Uses the epoch captured before Browse, then clears that one-shot fence. */
   consumeVideoSourceExpectedEpoch: () => number;
+  /** Registers one picker/hash/commit operation for replacement/unmount abort. */
+  beginMediaAssetOperation: () => { signal: AbortSignal; release: () => void };
   projectTransactionOwnerId: string;
   videoLabel: Accessor<string>;
   setVideoLabel: Setter<string>;
@@ -83,28 +90,42 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
           return;
         }
         const expectedEpoch = options.consumeVideoSourceExpectedEpoch();
-        const staged = await prepareFinalizeAndCommitMediaAssets<number>({
-          invoke: options.invoke,
-          kind: sourceKind,
-          paths: [path],
+        const preparedStart = await preflightAndBeginMediaAssetOperation(
           expectedEpoch,
-          ownerId: options.projectTransactionOwnerId,
-          commitCommand: sourceKind === "StillImage"
-            ? "commit_prepared_still_image_layer"
-            : "commit_prepared_video_file_layer",
-          commitArgs: { label: options.videoLabel() },
-        });
-        const layerId = staged.committed;
-        if (layerId === null) {
-          options.setMessage(mediaAssetImportReportMessage(staged.report));
-          return;
-        }
-        options.setVideoLabel(`Layer ${options.snapshot().video.layers.length + 2}`);
-        const failures = staged.report.failed + staged.report.skipped;
-        options.setMessage(
-          `Added video layer ${layerId} from 1 prepared media source.${failures > 0 ? ` ${mediaAssetImportReportMessage(staged.report)}` : ""}`,
+          options.prepareMediaAssetOperationStart,
+          options.beginMediaAssetOperation,
         );
-        await options.refreshSnapshot();
+        const mediaOperation = preparedStart.operation;
+        try {
+          const staged = await prepareFinalizeAndCommitMediaAssets({
+            invoke: options.invoke,
+            kind: sourceKind,
+            paths: [path],
+            expectedEpoch: preparedStart.expectedEpoch,
+            ownerId: options.projectTransactionOwnerId,
+            signal: mediaOperation.signal,
+            commitCommand: sourceKind === "StillImage"
+              ? "commit_prepared_still_image_layer_authoritative"
+              : "commit_prepared_video_file_layer_authoritative",
+            commitArgs: { label: options.videoLabel() },
+          });
+          const layerId = staged.committed;
+          if (!staged.applicationCurrent || !options.isProjectAuthorityCurrent(staged.terminalAuthority)) {
+            return;
+          }
+          if (layerId === null) {
+            options.setMessage(mediaAssetImportReportMessage(staged.report));
+            return;
+          }
+          options.setVideoLabel(`Layer ${options.snapshot().video.layers.length + 2}`);
+          const failures = staged.report.failed + staged.report.skipped;
+          options.setMessage(
+            `Added video layer ${layerId} from 1 prepared media source.${failures > 0 ? ` ${mediaAssetImportReportMessage(staged.report)}` : ""}`,
+          );
+          await options.refreshSnapshot();
+        } finally {
+          mediaOperation.release();
+        }
         return;
       }
       const layerId = await options.invoke<number>("add_video_input_layer", {
@@ -125,24 +146,38 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       // Fence before the native picker: dialog A, hashing A, and commit A all
       // use this identity. App's mutation wrapper rejects a later project B.
       const expectedEpoch = options.getCurrentProjectEpoch();
-      const paths = await options.invoke<string[]>("select_video_source_files", { kind });
-      if (paths.length === 0) {
-        options.setMessage("Media import canceled.");
-        return;
-      }
-      const staged = await prepareFinalizeAndCommitMediaAssets<MediaAssetImportReport>({
-        invoke: options.invoke,
-        kind,
-        paths,
+      const preparedStart = await preflightAndBeginMediaAssetOperation(
         expectedEpoch,
-        ownerId: options.projectTransactionOwnerId,
-        commitCommand: "commit_prepared_media_assets",
-      });
-      const report = staged.committed ?? staged.report;
-      // Normal library import never creates layers: one selected file becomes
-      // one catalog entry (or a dedupe reuse), preserving the operator's mix.
-      options.setMessage(mediaAssetImportReportMessage(report));
-      await options.refreshSnapshot();
+        options.prepareMediaAssetOperationStart,
+        options.beginMediaAssetOperation,
+      );
+      const mediaOperation = preparedStart.operation;
+      try {
+        const paths = await options.invoke<string[]>("select_video_source_files", { kind });
+        if (paths.length === 0) {
+          options.setMessage("Media import canceled.");
+          return;
+        }
+        const staged = await prepareFinalizeAndCommitMediaAssets({
+          invoke: options.invoke,
+          kind,
+          paths,
+          expectedEpoch: preparedStart.expectedEpoch,
+          ownerId: options.projectTransactionOwnerId,
+          signal: mediaOperation.signal,
+          commitCommand: "commit_prepared_media_assets_authoritative",
+        });
+        const report = staged.committed ?? staged.report;
+        if (!staged.applicationCurrent || !options.isProjectAuthorityCurrent(staged.terminalAuthority)) {
+          return;
+        }
+        // Normal library import never creates layers: one selected file becomes
+        // one catalog entry (or a dedupe reuse), preserving the operator's mix.
+        options.setMessage(mediaAssetImportReportMessage(report));
+        await options.refreshSnapshot();
+      } finally {
+        mediaOperation.release();
+      }
     } catch (error) { options.setMessage(String(error)); }
   };
   const launchVideoClip = async (layerId: number, fadeMs: number) => {
@@ -283,20 +318,34 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
         return;
       }
       const expectedEpoch = options.getCurrentProjectEpoch();
-      const staged = await prepareFinalizeAndCommitMediaAssetRelink({
-        invoke: options.invoke,
-        assetId,
-        replacementPath: path,
-        policy: "RequireContentMatch",
+      const preparedStart = await preflightAndBeginMediaAssetOperation(
         expectedEpoch,
-        ownerId: options.projectTransactionOwnerId,
-      });
-      if (!staged.outcome) {
-        options.setMessage("Media metadata refresh did not return a result.");
-        return;
+        options.prepareMediaAssetOperationStart,
+        options.beginMediaAssetOperation,
+      );
+      const mediaOperation = preparedStart.operation;
+      try {
+        const staged = await prepareFinalizeAndCommitMediaAssetRelink({
+          invoke: options.invoke,
+          assetId,
+          replacementPath: path,
+          policy: "RequireContentMatch",
+          expectedEpoch: preparedStart.expectedEpoch,
+          ownerId: options.projectTransactionOwnerId,
+          signal: mediaOperation.signal,
+        });
+        if (!staged.applicationCurrent || !options.isProjectAuthorityCurrent(staged.terminalAuthority)) {
+          return;
+        }
+        if (!staged.outcome) {
+          options.setMessage("Media metadata refresh did not return a result.");
+          return;
+        }
+        options.setMessage(mediaAssetRelinkOutcomeMessage(staged.outcome));
+        await options.refreshSnapshot();
+      } finally {
+        mediaOperation.release();
       }
-      options.setMessage(mediaAssetRelinkOutcomeMessage(staged.outcome));
-      await options.refreshSnapshot();
     } catch (error) { options.setMessage(String(error)); }
   };
   const setVideoLayerIsfEffect = async (layerId: number, effect: VideoIsfEffectSummary | null) => {

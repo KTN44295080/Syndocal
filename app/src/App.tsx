@@ -272,6 +272,7 @@ import type {
   LfoEffectRequest,
   MappingEffectDirection,
   MappingEffectRequest,
+  MediaAssetAuthoritativeTerminalEnvelope,
   MidiControlAction,
   MidiControlMapping,
   MidiControlMessage,
@@ -350,6 +351,7 @@ import type {
   VideoRecordingStatus,
   VideoRuntimeStatus,
   VideoSourceKind,
+  VjFirstRunSetupResult,
   VjPreviewTransportSummary,
   VisualizerRenderPayload,
 } from "./types";
@@ -454,6 +456,7 @@ import { createTimelineAutomationController } from "./createTimelineAutomationCo
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
 import {
   mediaAssetImportReportMessage,
+  preflightAndBeginMediaAssetOperation,
   prepareFinalizeAndCommitMediaAssets,
 } from "./mediaAssetAuthority";
 import { createLiveVideoMonitorController } from "./createLiveVideoMonitorController";
@@ -734,7 +737,9 @@ const isTauriRuntime = () =>
   typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
 const projectHistoryChangedEvent = "syndocal:project-history-changed";
+const authoritativeApplicationCurrentProperty = "__syndocalAuthoritativeApplicationCurrent";
 let activeOperatorLockMode: OperatorLockMode | null = null;
+let applyServerAuthoritativeProjectMutationResult: ((result: ProjectHistoryMutationResult) => boolean) | null = null;
 
 const projectMutationCommands = new Set([
   "analyze_audio_file",
@@ -908,6 +913,66 @@ const projectMutationLabel = (command: string) =>
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 
+/**
+ * These mutations own their history/authority transaction in Rust. They still
+ * pass through the frontend operator and mapping fences, but must never open a
+ * renderer `begin_project_transaction` ticket around the authoritative IPC.
+ */
+const serverAuthoritativeProjectMutationCommands = new Set([
+  "commit_prepared_media_assets_authoritative",
+  "commit_prepared_media_asset_relink_authoritative",
+  "commit_prepared_video_file_layer_authoritative",
+  "commit_prepared_still_image_layer_authoritative",
+  "commit_prepared_local_media_layers_authoritative",
+  "commit_prepared_bootstrap_vj_show_authoritative",
+]);
+
+// These owner-scoped operations cannot create a project mutation. Full Lock
+// must still allow an already-admitted commit to reveal its definitive receipt
+// and allow a not-yet-admitted operation to release its retained file handles.
+const mediaAssetTerminalRecoveryCommands = new Set([
+  "get_media_asset_operation_terminal_result",
+  "cancel_media_asset_operation",
+]);
+
+const projectHistoryMutationFromUnknown = (value: unknown): ProjectHistoryMutationResult | null => {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.history_status && candidate.authority) {
+    return value as ProjectHistoryMutationResult;
+  }
+  if (candidate.mutation) return projectHistoryMutationFromUnknown(candidate.mutation);
+  if (candidate.terminal) return projectHistoryMutationFromUnknown(candidate.terminal);
+  if (candidate.result) return projectHistoryMutationFromUnknown(candidate.result);
+  return null;
+};
+
+const dispatchProjectHistoryMutationFromUnknown = (value: unknown): boolean => {
+  const mutation = projectHistoryMutationFromUnknown(value);
+  if (!mutation) return true;
+  if (applyServerAuthoritativeProjectMutationResult) {
+    return applyServerAuthoritativeProjectMutationResult(mutation);
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }));
+  }
+  return true;
+};
+
+const markAuthoritativeApplicationCurrent = (value: unknown, current: boolean) => {
+  if (!value || typeof value !== "object") return;
+  try {
+    Object.defineProperty(value, authoritativeApplicationCurrentProperty, {
+      configurable: true,
+      enumerable: false,
+      value: current,
+    });
+  } catch {
+    // Tauri result objects are mutable; a defensive frozen mock still must not
+    // prevent the authoritative mutation itself from being applied.
+  }
+};
+
 const projectMutationCoalesceKey = (command: string, args?: Record<string, unknown>) => {
   if (!/^(set|update|move|fade|refresh)_/.test(command) || !args) {
     return "";
@@ -922,15 +987,24 @@ const invoke = async <T,>(command: string, args?: Record<string, unknown>): Prom
   if (!isTauriRuntime()) {
     throw new Error(tauriBackendUnavailableMessage);
   }
-  if (!operatorCommandAllowed(activeOperatorLockMode, command, projectMutationCommands.has(command))) {
+  const rendererTicketedMutation = projectMutationCommands.has(command);
+  const serverAuthoritativeMutation = serverAuthoritativeProjectMutationCommands.has(command);
+  const projectMutation = rendererTicketedMutation || serverAuthoritativeMutation;
+  const terminalRecovery = mediaAssetTerminalRecoveryCommands.has(command);
+  if (!terminalRecovery && !operatorCommandAllowed(activeOperatorLockMode, command, projectMutation)) {
     throw new Error(
       activeOperatorLockMode === "Full"
         ? "Operator Full Lock allows only status reads and emergency blackout controls."
         : "Operator Partial Lock blocks programming and project replacement commands.",
     );
   }
-  if (!projectMutationCommands.has(command)) {
-    return tauriInvoke<T>(command, args);
+  if (!projectMutation) {
+    const result = await tauriInvoke<T>(command, args);
+    if (command === "get_media_asset_operation_terminal_result") {
+      const current = dispatchProjectHistoryMutationFromUnknown(result as MediaAssetAuthoritativeTerminalEnvelope | null);
+      markAuthoritativeApplicationCurrent(result, current);
+    }
+    return result;
   }
   const requestedExpectedEpoch = typeof args?.__expectedProjectEpoch === "number"
     ? args.__expectedProjectEpoch
@@ -938,14 +1012,22 @@ const invoke = async <T,>(command: string, args?: Record<string, unknown>): Prom
   const onProjectTransactionOpened = typeof args?.__onProjectTransactionOpened === "function"
     ? args.__onProjectTransactionOpened as () => void
     : null;
+  const shouldAbortProjectMutation = typeof args?.__shouldAbortProjectMutation === "function"
+    ? args.__shouldAbortProjectMutation as () => boolean
+    : null;
+  const awaitProjectMutationAbort = typeof args?.__awaitProjectMutationAbort === "function"
+    ? args.__awaitProjectMutationAbort as () => Promise<void> | void
+    : null;
   const commandArgs = { ...(args ?? {}) };
   delete commandArgs.__expectedProjectEpoch;
-  // Renderer-only lifecycle callback for staged long-I/O helpers. Never let a
-  // closure cross the Tauri boundary; it is fired only after the backend has
-  // returned an actual project ticket. It is a classification hook, not an
-  // AbortSignal barrier: a terminal cancellation guarantee needs backend
-  // Cancelable→Admitted linearization/receipt.
+  // Renderer-only lifecycle hooks for staged long-I/O helpers. Never let a
+  // closure cross the Tauri boundary. The ticket callback classifies a returned
+  // Begin ticket; the predicate lets this facade abandon a signal observed
+  // after mapping flush but before Begin dispatch. Neither resolves Begin
+  // reply-loss nor supplies a terminal receipt/history outcome.
   delete commandArgs.__onProjectTransactionOpened;
+  delete commandArgs.__shouldAbortProjectMutation;
+  delete commandArgs.__awaitProjectMutationAbort;
   // Mapping edits are debounced independently of the generic history wrapper.
   // Materialize their authoritative checkpoint before capturing this
   // transaction's `before` image, so a fast fader/edit cannot silently fold an
@@ -957,13 +1039,50 @@ const invoke = async <T,>(command: string, args?: Record<string, unknown>): Prom
     throw new Error("Project changed while the operation dialog was open; nothing was applied.");
   }
   const expectedEpoch = requestedExpectedEpoch ?? currentEpoch;
+  if (shouldAbortProjectMutation?.()) {
+    throw new DOMException("Project mutation was cancelled before dispatch.", "AbortError");
+  }
+  if (serverAuthoritativeMutation) {
+    const result = await tauriInvoke<T>(command, {
+      ...commandArgs,
+      expectedEpoch,
+      ownerId: projectTransactionOwnerId,
+    });
+    const current = dispatchProjectHistoryMutationFromUnknown(result);
+    markAuthoritativeApplicationCurrent(result, current);
+    return result;
+  }
   const transaction = await tauriInvoke<ProjectTransactionTicket>("begin_project_transaction", {
     label: projectMutationLabel(command),
     coalesceKey: projectMutationCoalesceKey(command, args),
     expectedEpoch,
     ownerId: projectTransactionOwnerId,
   });
+  let ticketCancellationAttempted = false;
+  const cancelOpenedProjectTransaction = async () => {
+    if (ticketCancellationAttempted) return;
+    ticketCancellationAttempted = true;
+    const cancellation = await tauriInvoke<ProjectHistoryMutationResult>("cancel_project_transaction", {
+      transactionId: transaction.transaction_id,
+      expectedEpoch: transaction.project_epoch,
+      ownerId: projectTransactionOwnerId,
+    }).catch(() => null);
+    if (cancellation) {
+      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: cancellation }));
+    }
+  };
   try {
+    // A signal can arrive while Begin itself is awaiting. Recheck after its
+    // reply, before issuing the staged mutation. Release this newly opened
+    // ticket immediately, then await the helper's exact media-operation cancel
+    // request when available. Neither step resolves lost Begin replies or
+    // terminal receipt/history delivery.
+    if (shouldAbortProjectMutation?.()) {
+      const mediaAbort = Promise.resolve(awaitProjectMutationAbort?.()).catch(() => undefined);
+      await cancelOpenedProjectTransaction();
+      await mediaAbort;
+      throw new DOMException("Project mutation was cancelled after Begin.", "AbortError");
+    }
     onProjectTransactionOpened?.();
     // Backend mutation commands may opt into server-authoritative transaction
     // ownership. Tauri ignores unused object fields for legacy commands, while
@@ -982,14 +1101,7 @@ const invoke = async <T,>(command: string, args?: Record<string, unknown>): Prom
     window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }));
     return result;
   } catch (error) {
-    const cancellation = await tauriInvoke<ProjectHistoryMutationResult>("cancel_project_transaction", {
-      transactionId: transaction.transaction_id,
-      expectedEpoch: transaction.project_epoch,
-      ownerId: projectTransactionOwnerId,
-    }).catch(() => null);
-    if (cancellation) {
-      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: cancellation }));
-    }
+    await cancelOpenedProjectTransaction();
     throw error;
   }
 };
@@ -1049,12 +1161,6 @@ type ViewportSceneMatrixBankMoveHistoryEntry = {
   beforeCues: CueSummary[];
   afterCues: CueSummary[];
 };
-
-interface VjFirstRunSetupResult {
-  layer_ids: number[];
-  composition_id: number;
-  output_id: number;
-}
 
 interface LiveAudioInputLevels {
   running: boolean;
@@ -1818,6 +1924,28 @@ export default function App() {
     setVideoPath(path);
     setVideoSourceSelectionEpoch(null);
   };
+  // Media operations may span a native picker, hashing, and a short project
+  // ticket. Keep their AbortControllers outside view state so an authority
+  // replacement or component teardown can stop every still-active operation
+  // without adding a permanent UI control.
+  const activeMediaAssetOperationControllers = new Set<AbortController>();
+  const beginMediaAssetOperation = () => {
+    const controller = new AbortController();
+    activeMediaAssetOperationControllers.add(controller);
+    let released = false;
+    return {
+      signal: controller.signal,
+      release: () => {
+        if (released) return;
+        released = true;
+        activeMediaAssetOperationControllers.delete(controller);
+      },
+    };
+  };
+  const abortActiveMediaAssetOperations = () => {
+    for (const controller of activeMediaAssetOperationControllers) controller.abort();
+  };
+  onCleanup(() => abortActiveMediaAssetOperations());
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
   const [videoPreviewLayerId, setVideoPreviewLayerId] = createSignal<number | null>(null);
@@ -2503,6 +2631,29 @@ export default function App() {
       await invoke("set_operator_policy", { policy });
       setOperatorPolicy(policy);
       setOperatorPolicyReady(true);
+      const desiredSessionMode = policy.lock_on_load ? policy.lock_mode : null;
+      // Rust resets the owner session when the policy value changes. Mirror
+      // that lazy server default immediately so the first authoritative media
+      // action cannot be allowed locally and then rejected by the backend.
+      setOperatorLockMode(desiredSessionMode);
+      if (desiredSessionMode !== null && isTauriRuntime()) {
+        try {
+          const serverMode = await tauriInvoke<OperatorLockMode>("lock_project_operator_session", {
+            ownerId: projectTransactionOwnerId,
+          });
+          if (operatorPolicy()?.credential.verifier_b64 === policy.credential.verifier_b64) {
+            setOperatorLockMode(serverMode);
+          }
+        } catch (error) {
+          // The policy itself is already authoritative. Keep the renderer
+          // fail-closed and report only the session-confirmation failure.
+          setOperatorLockMode(desiredSessionMode);
+          setCleanProjectSignature("__syndocal_operator_policy_changed__");
+          setProjectDirty(true);
+          setMessage(`Operator policy was saved, but the locked session could not be confirmed: ${String(error)}`);
+          return true;
+        }
+      }
       setCleanProjectSignature("__syndocal_operator_policy_changed__");
       setProjectDirty(true);
       setMessage(`Operator ${lockMode} Lock policy saved to this project; no plaintext password is stored.`);
@@ -2530,9 +2681,14 @@ export default function App() {
     const policy = operatorPolicy();
     if (!policy) return false;
     try {
-      if (!await verifyOperatorPassword(policy, password)) {
-        setMessage("Operator password is incorrect.");
-        return false;
+      if (isTauriRuntime()) {
+        await tauriInvoke<void>("unlock_project_operator_session", {
+          ownerId: projectTransactionOwnerId,
+          password,
+        });
+      } else if (!await verifyOperatorPassword(policy, password)) {
+          setMessage("Operator password is incorrect.");
+          return false;
       }
       setOperatorSessionLock(null);
       setMessage("Operator lock released.");
@@ -3382,7 +3538,11 @@ export default function App() {
     const candidate = authorityToken(result.authority);
     const current = projectMappingsAuthority();
     if (projectAuthorityTokenIsCurrent(candidate, current)) {
-      return applyAuthoritativeProjectHistoryStatus(result.history_status);
+      // History can advance independently of the content token. Drop an older
+      // status monotonically, but do not misclassify the exact current project
+      // image as stale merely because Clear/another history writer arrived first.
+      applyAuthoritativeProjectHistoryStatus(result.history_status);
+      return true;
     }
     if (!projectAuthorityCanApply(candidate, current)) return false;
 
@@ -3391,8 +3551,15 @@ export default function App() {
     // guard accept its status. A delayed A result after B is rejected before
     // either mappings or history can be touched.
     if (!applyPolledProjectAuthorityBundle(result.authority)) return false;
-    return applyAuthoritativeProjectHistoryStatus(result.history_status);
+    applyAuthoritativeProjectHistoryStatus(result.history_status);
+    return true;
   };
+  applyServerAuthoritativeProjectMutationResult = applyProjectHistoryMutationResult;
+  onCleanup(() => {
+    if (applyServerAuthoritativeProjectMutationResult === applyProjectHistoryMutationResult) {
+      applyServerAuthoritativeProjectMutationResult = null;
+    }
+  });
   const handleProjectHistoryChanged = (event: Event) => {
     applyProjectHistoryMutationResult(
       (event as CustomEvent<ProjectHistoryMutationResult>).detail,
@@ -3513,6 +3680,20 @@ export default function App() {
       return;
     }
     setOperatorLockMode(mode);
+    if (mode === null || !policy || !isTauriRuntime()) return;
+    const expectedVerifier = policy.credential.verifier_b64;
+    void tauriInvoke<OperatorLockMode>("lock_project_operator_session", {
+      ownerId: projectTransactionOwnerId,
+    }).then((serverMode) => {
+      if (operatorPolicy()?.credential.verifier_b64 !== expectedVerifier) return;
+      setOperatorLockMode(serverMode);
+    }).catch((error) => {
+      if (operatorPolicy()?.credential.verifier_b64 !== expectedVerifier) return;
+      // The backend may already have locked this owner before its reply was
+      // lost. Keep the requested mode locally so uncertainty fails closed.
+      setOperatorLockMode(mode);
+      setMessage(`Operator lock confirmation failed; this renderer remains locked: ${String(error)}`);
+    });
   };
   const refreshOperatorPolicy = async (projectBoundary = false) => {
     if (!isTauriRuntime()) {
@@ -3547,9 +3728,9 @@ export default function App() {
       setOperatorPolicyReady(true);
       const storedMode = matchingStoredOperatorLock(policy);
       if (storedMode) {
-        setOperatorLockMode(storedMode);
+        setOperatorSessionLock(storedMode);
       } else if (projectBoundary) {
-        setOperatorLockMode(policy?.lock_on_load ? policy.lock_mode : null);
+        setOperatorSessionLock(policy?.lock_on_load ? policy.lock_mode : null);
       }
       return policy;
     } catch (error) {
@@ -3581,7 +3762,14 @@ export default function App() {
   });
   const handleOperatorLockStorage = (event: StorageEvent) => {
     if (event.key !== operatorLockSessionStorageKey) return;
-    setOperatorLockMode(matchingStoredOperatorLock(operatorPolicy()));
+    const storedMode = matchingStoredOperatorLock(operatorPolicy());
+    if (storedMode) {
+      setOperatorSessionLock(storedMode);
+    } else if (!isTauriRuntime()) {
+      // Native unlock is owner-scoped and password-verified by Rust. A storage
+      // event from another WebView may lock this owner, but cannot unlock it.
+      setOperatorSessionLock(null);
+    }
   };
   window.addEventListener("storage", handleOperatorLockStorage);
   onCleanup(() => window.removeEventListener("storage", handleOperatorLockStorage));
@@ -11855,6 +12043,11 @@ export default function App() {
   });
   const isProjectAuthorityIdentityCurrent = (captured: ProjectAuthorityToken): boolean =>
     projectAuthorityTokenIsCurrent(captured, projectMappingsAuthority());
+  const abortMediaAssetOperationsForAuthorityChange = (next: ProjectAuthorityToken) => {
+    if (!projectAuthorityTokenIsCurrent(next, projectMappingsAuthority())) {
+      abortActiveMediaAssetOperations();
+    }
+  };
 
   const beginProjectReadGeneration = () => {
     if (!Number.isSafeInteger(projectReadGeneration) || projectReadGeneration >= Number.MAX_SAFE_INTEGER) {
@@ -11876,6 +12069,7 @@ export default function App() {
     if (!projectAuthorityCanApply(next, projectMappingsAuthority())) {
       return false;
     }
+    abortMediaAssetOperationsForAuthorityChange(next);
     setProjectMappingsAuthority(next);
     setProjectMappingsAuthorityReady(true);
     return true;
@@ -11925,6 +12119,7 @@ export default function App() {
   };
 
   const commitPreparedProjectControlMappings = (prepared: PreparedProjectControlMappings) => {
+    abortMediaAssetOperationsForAuthorityChange(prepared.token);
     mappingObservedSignature = projectControlMappingsSignature(prepared.midi, prepared.osc, prepared.dmx);
     setMidiMappings(prepared.midi);
     setOscMappings(prepared.osc);
@@ -12131,6 +12326,23 @@ export default function App() {
     return expectedEpoch;
   };
   flushProjectControlMappingsBeforeProjectMutation = flushProjectControlMappingsBeforeMutation;
+  const prepareMediaAssetOperationStart = async (expectedEpoch: number): Promise<number> => {
+    const mode = operatorLockMode();
+    if (!operatorCommandAllowed(mode, "start_media_asset_operation", true)) {
+      throw new Error(
+        mode === "Full"
+          ? "Operator Full Lock allows only status reads and emergency blackout controls."
+          : "Operator Partial Lock blocks programming and project replacement commands.",
+      );
+    }
+    // No new Media AbortController exists yet. Publishing a dirty mapping may
+    // abort older operations, but cannot self-abort the operation being started.
+    const currentEpoch = await flushProjectControlMappingsBeforeMutation();
+    if (currentEpoch !== expectedEpoch) {
+      throw new Error("Project changed while the media operation was starting; nothing was applied.");
+    }
+    return currentEpoch;
+  };
 
   createEffect(() => {
     const current = currentProjectControlMappings();
@@ -12322,6 +12534,9 @@ export default function App() {
       || !projectAuthorityApplicationIsCurrent(projectAuthoritySync, application)) return false;
     if (!preflightProjectAuthorityRecoveryDisposition(bundle)) return false;
     const storedMode = matchingStoredOperatorLock(bundle.operator_policy);
+    const nextOperatorLockMode = storedMode ?? (replacement && bundle.operator_policy?.lock_on_load
+      ? bundle.operator_policy.lock_mode
+      : null);
     if (replacement) invalidateProjectControlMappingsForIdentity();
 
     // From this point no await/fallible RPC is allowed. These values came
@@ -12334,6 +12549,7 @@ export default function App() {
         // Adopt C's CAS token but retain local B arrays. The pending/in-flight
         // B persist response was invalidated before this batch and a new B
         // request is scheduled below against this exact C token.
+        abortMediaAssetOperationsForAuthorityChange(candidate);
         setProjectMappingsAuthority(candidate);
         setProjectMappingsAuthorityReady(true);
       }
@@ -12352,9 +12568,7 @@ export default function App() {
       setViewportFixtureGroupDeleteUndo(null);
       setOperatorPolicy(bundle.operator_policy);
       setOperatorPolicyReady(true);
-      setOperatorLockMode(storedMode ?? (replacement && bundle.operator_policy?.lock_on_load
-        ? bundle.operator_policy.lock_mode
-        : null));
+      setOperatorLockMode(nextOperatorLockMode);
       applyAuthoritativeProjectHistoryStatus(bundle.history);
       setCurrentProjectPath(bundle.current_project_path);
       rememberRecentProjectPath(bundle.current_project_path);
@@ -12377,6 +12591,7 @@ export default function App() {
       observedRecoveryAuthoritySerial = bundle.recovery_authority_serial;
       setProjectRecoveryAuthoritySerial(bundle.recovery_authority_serial);
     });
+    if (nextOperatorLockMode) setOperatorSessionLock(nextOperatorLockMode);
     applyProjectAuthorityDirtyState(bundle);
     if (replacement) projectAuthoritySync = markProjectAuthorityPersisted(projectAuthoritySync);
     void consumePendingProjectRecoveryIntent(bundle);
@@ -15906,11 +16121,14 @@ export default function App() {
     setMessage,
     videoSourceKind,
     getCurrentProjectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
+    prepareMediaAssetOperationStart,
+    isProjectAuthorityCurrent: isProjectAuthorityIdentityCurrent,
     consumeVideoSourceExpectedEpoch: () => {
       const expectedEpoch = videoSourceSelectionEpoch();
       setVideoSourceSelectionEpoch(null);
       return expectedEpoch ?? captureProjectAuthorityIdentity().project_epoch;
     },
+    beginMediaAssetOperation,
     projectTransactionOwnerId,
     videoLabel,
     setVideoLabel,
@@ -15983,9 +16201,14 @@ export default function App() {
   const runVjPreviewTransportCommand = async (
     command: string,
     args?: Record<string, unknown>,
+    options?: {
+      resultIsCurrent?: () => boolean;
+      showError?: boolean;
+    },
   ) => {
+    if (options?.resultIsCurrent && !options.resultIsCurrent()) return null;
     if (!isTauriRuntime()) {
-      setVjPreviewTransportError(tauriBackendUnavailableMessage);
+      if (options?.showError !== false) setVjPreviewTransportError(tauriBackendUnavailableMessage);
       return null;
     }
     if (vjPreviewTransportBusy()) return null;
@@ -15995,14 +16218,20 @@ export default function App() {
     const requestGeneration = ++vjPreviewRequestGeneration;
     try {
       const response = await invoke<unknown>(command, args);
+      if (options?.resultIsCurrent && !options.resultIsCurrent()) return null;
       const summary = isVjPreviewTransportSummary(response)
         ? response
         : await invoke<VjPreviewTransportSummary>("get_vj_preview_transport");
       if (requestGeneration !== vjPreviewRequestGeneration) return null;
+      if (options?.resultIsCurrent && !options.resultIsCurrent()) return null;
       applyVjPreviewTransport(summary);
       return summary;
     } catch (error) {
-      if (requestGeneration === vjPreviewRequestGeneration) {
+      if (
+        requestGeneration === vjPreviewRequestGeneration &&
+        options?.showError !== false &&
+        (!options?.resultIsCurrent || options.resultIsCurrent())
+      ) {
         setVjPreviewTransportError(String(error));
       }
       return null;
@@ -16010,9 +16239,33 @@ export default function App() {
       if (requestGeneration === vjPreviewRequestGeneration) setVjPreviewTransportBusy(false);
     }
   };
-  const stageVjPreviewLayer = async (layerId: number) => {
-    const summary = await runVjPreviewTransportCommand("stage_vj_preview_layer", { layerId });
+  const stageVjPreviewLayer = async (
+    layerId: number,
+    expectedAuthority?: ProjectAuthorityToken,
+  ) => {
+    const resultIsCurrent = expectedAuthority
+      ? () => isProjectAuthorityIdentityCurrent(expectedAuthority)
+      : undefined;
+    const args = expectedAuthority
+      ? {
+          layerId,
+          expectedEpoch: expectedAuthority.project_epoch,
+          expectedRevision: expectedAuthority.project_revision,
+          expectedCheckpointHash: expectedAuthority.checkpoint_hash,
+        }
+      : { layerId };
+    const summary = await runVjPreviewTransportCommand(
+      "stage_vj_preview_layer",
+      args,
+      {
+        resultIsCurrent,
+        // Automatic Bootstrap staging reports through the first-run status;
+        // never let a stale B request write a transient Preview error into C.
+        showError: expectedAuthority === undefined,
+      },
+    );
     if (!summary) return false;
+    if (resultIsCurrent && !resultIsCurrent()) return false;
     if (summary.layer_id !== layerId) {
       setVjPreviewTransportError(`Preview staged layer ${summary.layer_id ?? "none"}, expected ${layerId}.`);
       return false;
@@ -16087,22 +16340,31 @@ export default function App() {
     }
     setVjFirstRunBusy(true);
     setVjFirstRunError(null);
+    let mediaOperation: ReturnType<typeof beginMediaAssetOperation> | null = null;
     try {
       // Capture before opening the picker. The staged helper passes this
-      // identity into Prepare/Finalize and App's short ticketed Commit.
+      // identity into Prepare/Finalize and the authoritative Commit. Flush
+      // mappings before registering this operation so it cannot self-abort.
       const expectedEpoch = captureProjectAuthorityIdentity().project_epoch;
+      const preparedStart = await preflightAndBeginMediaAssetOperation(
+        expectedEpoch,
+        prepareMediaAssetOperationStart,
+        beginMediaAssetOperation,
+      );
+      mediaOperation = preparedStart.operation;
       const paths = await invoke<string[]>("select_video_source_files", { kind: "File" });
       if (paths.length === 0) {
         setMessage("VJ setup canceled. No project changes were made.");
         return;
       }
-      const staged = await prepareFinalizeAndCommitMediaAssets<VjFirstRunSetupResult>({
+      const staged = await prepareFinalizeAndCommitMediaAssets({
         invoke,
         kind: "File",
         paths,
-        expectedEpoch,
+        expectedEpoch: preparedStart.expectedEpoch,
         ownerId: projectTransactionOwnerId,
-        commitCommand: "commit_prepared_bootstrap_vj_show",
+        signal: mediaOperation.signal,
+        commitCommand: "commit_prepared_bootstrap_vj_show_authoritative",
         requireAllPrepared: true,
         commitArgs: {
           kind: "File",
@@ -16110,14 +16372,35 @@ export default function App() {
       });
       const result = staged.committed;
       if (!result) {
+        if (!isProjectAuthorityIdentityCurrent(staged.terminalAuthority)) return;
         setMessage(mediaAssetImportReportMessage(staged.report));
         return;
       }
+      const terminalIsCurrent = () =>
+        staged.applicationCurrent && isProjectAuthorityIdentityCurrent(staged.terminalAuthority);
+      if (!terminalIsCurrent()) return;
+      // The staged media commit settled. Preview/snapshot reconciliation below
+      // is no longer part of the cancellable picker/hash/ticket operation.
+      mediaOperation.release();
       setVjFirstRunAwaitingSync(true);
       const refreshed = await refreshSnapshot();
-      setSelectedVideoOutputId(result.output_id);
+      if (!terminalIsCurrent()) {
+        setVjFirstRunAwaitingSync(false);
+        return;
+      }
       const firstLayerId = result.layer_ids[0] ?? null;
-      const previewStaged = firstLayerId === null ? false : await stageVjPreviewLayer(firstLayerId);
+      if (!terminalIsCurrent()) {
+        setVjFirstRunAwaitingSync(false);
+        return;
+      }
+      const previewStaged = firstLayerId === null
+        ? false
+        : await stageVjPreviewLayer(firstLayerId, staged.terminalAuthority);
+      if (!terminalIsCurrent()) {
+        setVjFirstRunAwaitingSync(false);
+        return;
+      }
+      setSelectedVideoOutputId(result.output_id);
       setVideoLabel(`Video Layer ${result.layer_ids.length + 1}`);
       if (!refreshed) {
         const detail = uiLocale() === "ja"
@@ -16145,6 +16428,7 @@ export default function App() {
       setVjFirstRunError(uiLocale() === "ja" ? `VJセットアップに失敗しました。${detail}` : detail);
       setMessage(detail);
     } finally {
+      mediaOperation?.release();
       setVjFirstRunBusy(false);
     }
   };

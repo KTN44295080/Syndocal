@@ -1155,6 +1155,15 @@ export interface MediaAssetImportEntryReport {
   message?: string | null;
 }
 
+/** Exact operation identity reserved before the first local-media hash begins. */
+export interface MediaAssetOperationStartReport {
+  request_id: number;
+  operation_generation: number;
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+}
+
 /** Long-I/O Prepare/Finalize and short ticketed Commit report. */
 export interface MediaAssetImportReport {
   request_id: number;
@@ -1180,6 +1189,7 @@ export interface MediaAssetAvailabilityReport {
   availability: MediaAssetAvailability[];
 }
 
+/** Start/Reserved Relink Prepare/Finalize report; tokenless outcomes are read-only. */
 export interface MediaAssetRelinkPrepareReport {
   request_id: number;
   operation_generation: number;
@@ -1197,6 +1207,62 @@ export interface MediaAssetRelinkReport {
   project_revision: number;
   checkpoint_hash: string;
   outcome: MediaAssetRelinkOutcome;
+}
+
+/** Backend-owned Media Asset commit families retained in terminal receipts. */
+export type MediaAssetAuthoritativeCommitKind =
+  | "import"
+  | "relink"
+  | "video_file_layer"
+  | "still_image_layer"
+  | "local_media_layers"
+  | "bootstrap_vj_show";
+
+export interface VjFirstRunSetupResult {
+  layer_ids: number[];
+  composition_id: number;
+  output_id: number;
+}
+
+export interface MediaAssetAuthoritativeImportResult {
+  report: MediaAssetImportReport;
+  mutation: ProjectHistoryMutationResult;
+}
+
+export interface MediaAssetAuthoritativeRelinkResult {
+  report: MediaAssetRelinkReport;
+  mutation: ProjectHistoryMutationResult;
+}
+
+export interface MediaAssetAuthoritativeLayerResult {
+  layer_ids: number[];
+  mutation: ProjectHistoryMutationResult;
+}
+
+export interface MediaAssetAuthoritativeBootstrapResult {
+  setup: VjFirstRunSetupResult;
+  mutation: ProjectHistoryMutationResult;
+}
+
+export interface MediaAssetAuthoritativeFailureResult {
+  message: string;
+}
+
+/**
+ * Exact terminal payload returned by the backend receipt query. The tagged
+ * union mirrors Rust's `#[serde(tag = "kind", content = "result")]` shape.
+ */
+export type MediaAssetAuthoritativeTerminalResult =
+  | { kind: "import"; result: MediaAssetAuthoritativeImportResult }
+  | { kind: "relink"; result: MediaAssetAuthoritativeRelinkResult }
+  | { kind: "layers"; result: MediaAssetAuthoritativeLayerResult }
+  | { kind: "bootstrap"; result: MediaAssetAuthoritativeBootstrapResult }
+  | { kind: "failure"; result: MediaAssetAuthoritativeFailureResult };
+
+export interface MediaAssetAuthoritativeTerminalEnvelope {
+  command_kind: MediaAssetAuthoritativeCommitKind;
+  shape_fingerprint: string;
+  terminal: MediaAssetAuthoritativeTerminalResult;
 }
 
 export interface VideoMediaMetadata {
