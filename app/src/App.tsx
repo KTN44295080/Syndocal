@@ -13083,6 +13083,20 @@ export default function App() {
   const moveTimelineGroup = async (groupId: number, deltaMs: number) => {
     await commitTimelineAdvanced({ kind: "move_group", group_id: groupId, delta_ms: deltaMs });
   };
+  const duplicateTimelineItems = async (items: TimelineItemRef[], offsetMs: number) => {
+    try {
+      const result = await commitTimelineAdvanced({
+        kind: "duplicate_items",
+        items,
+        offset_ms: offsetMs,
+      });
+      if (result) setMessage("Timeline selection duplicated.");
+      return result?.selected_items ?? [];
+    } catch (error) {
+      setMessage(`Timeline selection duplication failed: ${String(error)}`);
+      return [];
+    }
+  };
   const removeTimelineItems = async (items: TimelineItemRef[]) => {
     try {
       const result = await commitTimelineAdvanced({ kind: "delete_items", items });
@@ -23842,6 +23856,7 @@ export default function App() {
               onUpdateVideoClip={updateTimelineVideoClip}
               onGroupItems={groupTimelineItems}
               onUngroupItem={ungroupTimelineItem}
+              onDuplicateItems={duplicateTimelineItems}
               onRemoveItems={removeTimelineItems}
               onRemoveAudioClip={removeTimelineAudioClip}
               onSetAudioMaster={setTimelineAudioMaster}

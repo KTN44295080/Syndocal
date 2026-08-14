@@ -2039,6 +2039,7 @@ export interface TimelineAdvancedAuthoritativeResult {
   authoring: TimelineAdvancedAuthoringSummary;
   timeline_bank: TimelineSnapshot[];
   active_timeline_id: number;
+  selected_items: TimelineItemRef[];
   mutation: ProjectHistoryMutationResult;
 }
 
@@ -2666,6 +2667,7 @@ export type TimelineAdvancedMutationRequest =
   | { kind: "group"; members: TimelineItemRef[] }
   | { kind: "ungroup"; group_id: number }
   | { kind: "move_group"; group_id: number; delta_ms: number }
+  | { kind: "duplicate_items"; items: TimelineItemRef[]; offset_ms: number }
   | { kind: "delete_items"; items: TimelineItemRef[] }
   | { kind: "set_phases"; phases: TimelinePhaseSummary[] }
   | { kind: "set_loop"; loop_region?: TimelineLoopRegionSummary | null }

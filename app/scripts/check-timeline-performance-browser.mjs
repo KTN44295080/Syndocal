@@ -127,7 +127,12 @@ const measure = (client) => evaluate(client, `(() => {
     selectedAudio: selectedAudio.length,
     groupEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Group selected' && !button.disabled)),
     ungroupEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Ungroup' && !button.disabled)),
+    duplicateEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Duplicate selected' && !button.disabled)),
     deleteEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Delete selected' && !button.disabled)),
+    menuShortTargets: [...root.querySelectorAll('.timelineItemContextMenu button')].filter((button) => {
+      const bounds = button.getBoundingClientRect();
+      return bounds.width > 0 && bounds.height > 0 && bounds.height < 43.5;
+    }).length,
     shortTargets,
     fixedOuter: document.documentElement.scrollWidth === document.documentElement.clientWidth
       && document.documentElement.scrollHeight === document.documentElement.clientHeight
@@ -203,7 +208,8 @@ try {
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
     assert.deepEqual([state.videoClips, state.audioClips], [1, 2]);
     assert.deepEqual([state.selectedVideo, state.selectedAudio], [1, 1], "selecting either member selects the linked A/V group");
-    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.deleteEnabled], [false, true, true], "the context menu exposes linked-group release/delete and prevents nested grouping");
+    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.duplicateEnabled, state.deleteEnabled], [false, true, true, true], "the context menu exposes linked-group duplicate/release/delete and prevents nested grouping");
+    assert.equal(state.menuShortTargets, 0, "Timeline group context actions preserve 44px targets");
     assert.equal(await evaluate(client, `(() => {
       const button = [...document.querySelectorAll('.timelineItemContextMenu button')]
         .find((candidate) => candidate.textContent?.trim() === 'Delete selected');

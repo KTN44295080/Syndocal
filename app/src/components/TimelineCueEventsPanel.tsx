@@ -198,6 +198,7 @@ interface TimelineCueEventsPanelProps {
   onUpdateVideoClip: (clip: TimelineVideoClipSummary) => void | Promise<void>;
   onGroupItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onUngroupItem: (item: TimelineItemRef) => void | Promise<void>;
+  onDuplicateItems: (items: TimelineItemRef[], offsetMs: number) => Promise<TimelineItemRef[]>;
   onRemoveItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onRemoveAudioClip: (clipId: number) => void | Promise<void>;
   onSetAudioMaster: (offsetMs: number, muted: boolean) => void | Promise<void>;
@@ -1108,6 +1109,28 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               }}
             >
               Ungroup
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length === 0}
+              onClick={async () => {
+                const items = [...selectedTimelineItemRefs()];
+                setItemContextMenu(null);
+                const duplicates = await props.onDuplicateItems(
+                  items,
+                  Math.max(1, props.gridMs),
+                );
+                if (duplicates.length > 0) {
+                  setSelectedTimelineItems(duplicates);
+                  const audio = duplicates.find((item) => item.kind === "audio_clip");
+                  const video = duplicates.find((item) => item.kind === "video_clip");
+                  setSelectedAudioClipId(audio?.kind === "audio_clip" ? audio.clip_id : null);
+                  setSelectedVideoClipId(video?.kind === "video_clip" ? video.clip_id : null);
+                }
+              }}
+            >
+              Duplicate selected
             </button>
             <button
               type="button"

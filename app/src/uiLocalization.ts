@@ -2864,6 +2864,7 @@ const japaneseText: Record<string, string> = {
   "Remove Audio Clip?": "音声クリップを削除しますか？",
   "Remove this clip from the timeline?": "このクリップをタイムラインから削除しますか？",
   "Delete selected": "選択項目を削除",
+  "Duplicate selected": "選択項目を複製",
   "Delete selected Timeline items?": "選択したタイムライン項目を削除しますか？",
   "selected Timeline item(s) will be removed.": "件の選択したタイムライン項目を削除します。",
   "Linked group members are removed together in one Undo step.":
