@@ -1374,7 +1374,10 @@ deleted source references reject before mutation. Ripple move uses the earliest 
 logical group as its boundary, shifts every authored Lighting, Video, Audio, and Automation item at or
 after that boundary, expands any intersected group to its complete membership, and preserves the original
 logical selection; negative underflow rejects before mutation. Remaining grouped edit work is trim, split, lane-valid reorder,
-the temporary single-member modifier, and selection/focus restoration across Undo/Redo and reload.
+and full selection/focus restoration across Undo/Redo and reload. Normal horizontal Audio/Video clip
+drag now routes a linked member through the authoritative group nudge path, while holding `Alt` selects
+and edits only that member for the current gesture. Closing the item action menu restores focus to its
+invoking clip; the real-browser gate proves both the modifier selection and focus return.
 Duplicate is now authoritative across all five item domains: it allocates fresh item/group IDs,
 preserves group-relative offsets and musical beat placement, rewires duplicated internal jump targets,
 returns the fresh logical selection, and is exactly recoverable without a second allocation/history entry.

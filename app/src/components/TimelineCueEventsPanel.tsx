@@ -255,9 +255,12 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   const [selectedAudioClipId, setSelectedAudioClipId] = createSignal<number | null>(null);
   const [selectedVideoClipId, setSelectedVideoClipId] = createSignal<number | null>(null);
   const [selectedTimelineItems, setSelectedTimelineItems] = createSignal<TimelineItemRef[]>([]);
+  const [singleMemberEditKey, setSingleMemberEditKey] = createSignal<string | null>(null);
   const [copiedTimelineItems, setCopiedTimelineItems] = createSignal<TimelineItemRef[]>([]);
   let copiedProjectEpoch = props.projectEpoch;
   let copiedTimelineId = props.activeTimelineId;
+  let itemMenuReturnFocus: (Element & { focus: () => void }) | null = null;
+  let itemMenuWasOpen = false;
   const [itemContextMenu, setItemContextMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [pendingRemoveTimelineItems, setPendingRemoveTimelineItems] = createSignal<TimelineItemRef[]>([]);
   const [pendingRemoveAudioClipId, setPendingRemoveAudioClipId] = createSignal<number | null>(null);
@@ -345,12 +348,27 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   const itemGroupForSelection = createMemo(() => props.itemGroups.find((group) =>
     selectedTimelineItemRefs().some((selected) => group.members.some((member) =>
       JSON.stringify(member) === JSON.stringify(selected)))) ?? null);
-  const expandLinkedSelection = (item: TimelineItemRef, additive = false) => {
-    setSelectedTimelineItems(expandTimelineItemGroupSelection(
-      item,
-      props.itemGroups,
-      additive ? selectedTimelineItems() : [],
-    ));
+  const expandLinkedSelection = (
+    item: TimelineItemRef,
+    additive = false,
+    singleMember = false,
+  ) => {
+    if (singleMember) {
+      const key = timelineItemKey(item);
+      const base = additive ? selectedTimelineItems() : [];
+      setSelectedTimelineItems([
+        ...base.filter((candidate) => timelineItemKey(candidate) !== key),
+        item,
+      ]);
+      setSingleMemberEditKey(key);
+    } else {
+      setSelectedTimelineItems(expandTimelineItemGroupSelection(
+        item,
+        props.itemGroups,
+        additive ? selectedTimelineItems() : [],
+      ));
+      setSingleMemberEditKey(null);
+    }
     if (!additive) {
       setSelectedAudioClipId(null);
       setSelectedVideoClipId(null);
@@ -358,18 +376,23 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     if (item.kind === "audio_clip") setSelectedAudioClipId(item.clip_id);
     if (item.kind === "video_clip") setSelectedVideoClipId(item.clip_id);
   };
-  const selectAudioClip = (clipId: number, additive = false) =>
-    expandLinkedSelection({ kind: "audio_clip", clip_id: clipId }, additive);
-  const selectVideoClip = (clipId: number, additive = false) =>
-    expandLinkedSelection({ kind: "video_clip", clip_id: clipId }, additive);
+  const selectAudioClip = (clipId: number, additive = false, singleMember = false) =>
+    expandLinkedSelection({ kind: "audio_clip", clip_id: clipId }, additive, singleMember);
+  const selectVideoClip = (clipId: number, additive = false, singleMember = false) =>
+    expandLinkedSelection({ kind: "video_clip", clip_id: clipId }, additive, singleMember);
   const selectReturnedTimelineItems = (items: TimelineItemRef[]) => {
     setSelectedTimelineItems(items);
     const audio = items.find((item) => item.kind === "audio_clip");
     const video = items.find((item) => item.kind === "video_clip");
     setSelectedAudioClipId(audio?.kind === "audio_clip" ? audio.clip_id : null);
     setSelectedVideoClipId(video?.kind === "video_clip" ? video.clip_id : null);
+    setSingleMemberEditKey(null);
   };
   const openItemContextMenu = (point: { x: number; y: number }) => {
+    const active = document.activeElement;
+    itemMenuReturnFocus = active && "focus" in active
+      ? active as Element & { focus: () => void }
+      : null;
     setItemContextMenu({
       x: Math.max(8, Math.min(point.x, window.innerWidth - 226)),
       y: Math.max(8, Math.min(point.y, window.innerHeight - 552)),
@@ -393,11 +416,70 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     }
   });
   createEffect(() => {
+    const open = itemContextMenu() !== null;
+    if (!open && itemMenuWasOpen) {
+      const target = itemMenuReturnFocus;
+      itemMenuReturnFocus = null;
+      queueMicrotask(() => target?.focus());
+    }
+    itemMenuWasOpen = open;
+  });
+  createEffect(() => {
     if (selectedAudioClipId() !== null && !selectedAudioClip()) setSelectedAudioClipId(null);
     if (selectedVideoClipId() !== null && !selectedVideoClip()) setSelectedVideoClipId(null);
     const retained = selectedTimelineItemRefs();
     if (retained.length !== selectedTimelineItems().length) setSelectedTimelineItems(retained);
+    if (singleMemberEditKey() !== null
+      && !retained.some((item) => timelineItemKey(item) === singleMemberEditKey())) {
+      setSingleMemberEditKey(null);
+    }
   });
+
+  const updateAudioClipFromOverview = async (next: TimelineAudioClipSummary) => {
+    const previous = props.audioClips.find((clip) => clip.id === next.id);
+    if (!previous) return;
+    const item: TimelineItemRef = { kind: "audio_clip", clip_id: next.id };
+    const linked = props.itemGroups.some((group) => group.members.some((member) =>
+      timelineItemKey(member) === timelineItemKey(item)));
+    const positionOnly = next.layer_id === previous.layer_id
+      && next.media_asset_id === previous.media_asset_id
+      && next.path === previous.path
+      && next.offset_ms === previous.offset_ms
+      && next.duration_ms === previous.duration_ms
+      && next.gain === previous.gain
+      && next.fade_in_ms === previous.fade_in_ms
+      && next.fade_out_ms === previous.fade_out_ms;
+    const deltaMs = next.start_ms - previous.start_ms;
+    if (linked && singleMemberEditKey() !== timelineItemKey(item) && positionOnly) {
+      if (deltaMs === 0) return;
+      const selected = await props.onNudgeItems([item], deltaMs);
+      if (selected.length > 0) selectReturnedTimelineItems(selected);
+      return;
+    }
+    await props.onUpdateAudioClip(next);
+  };
+
+  const updateVideoClipFromOverview = async (next: TimelineVideoClipSummary) => {
+    const previous = props.videoClips.find((clip) => clip.id === next.id);
+    if (!previous) return;
+    const item: TimelineItemRef = { kind: "video_clip", clip_id: next.id };
+    const linked = props.itemGroups.some((group) => group.members.some((member) =>
+      timelineItemKey(member) === timelineItemKey(item)));
+    const positionOnly = next.layer_id === previous.layer_id
+      && next.media_asset_id === previous.media_asset_id
+      && next.offset_ms === previous.offset_ms
+      && next.duration_ms === previous.duration_ms
+      && next.fade_in_ms === previous.fade_in_ms
+      && next.fade_out_ms === previous.fade_out_ms;
+    const deltaMs = next.start_ms - previous.start_ms;
+    if (linked && singleMemberEditKey() !== timelineItemKey(item) && positionOnly) {
+      if (deltaMs === 0) return;
+      const selected = await props.onNudgeItems([item], deltaMs);
+      if (selected.length > 0) selectReturnedTimelineItems(selected);
+      return;
+    }
+    await props.onUpdateVideoClip(next);
+  };
   createEffect(() => {
     if (props.contextDrawer !== "block" && blockDrawerBrowserMode()) {
       setBlockDrawerBrowserMode(false);
@@ -1084,8 +1166,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onInspectOverlapCluster={inspectOverlapCluster}
         onUpdateLayer={(layer) => void props.onUpdateTimelineLayer(layer)}
         onAddAudioClip={(layerId) => void props.onAddAudioClip(layerId)}
-        onUpdateAudioClip={(clip) => void props.onUpdateAudioClip(clip)}
-        onUpdateVideoClip={(clip) => void props.onUpdateVideoClip(clip)}
+        onUpdateAudioClip={(clip) => void updateAudioClipFromOverview(clip)}
+        onUpdateVideoClip={(clip) => void updateVideoClipFromOverview(clip)}
         onStatus={props.onTimelineStatus}
         onMoveEventPlacement={(eventId, timeMs, layerId, snapEnabled) =>
           void props.onMoveEventPlacement(eventId, timeMs, layerId, snapEnabled)

@@ -135,8 +135,8 @@ interface TimelineOverviewProps {
   onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
   onSelectEvent: (eventId: number, openProperties?: boolean) => void;
   onOpenSuperScene: (cueId: number) => void;
-  onSelectAudioClip: (clipId: number, additive?: boolean) => void;
-  onSelectVideoClip: (clipId: number, additive?: boolean) => void;
+  onSelectAudioClip: (clipId: number, additive?: boolean, singleMember?: boolean) => void;
+  onSelectVideoClip: (clipId: number, additive?: boolean, singleMember?: boolean) => void;
   onOpenItemContextMenu: (point: { x: number; y: number }) => void;
   onInspectOverlapCluster: (cluster: TimelineOverviewOverlapCluster) => void;
   onUpdateLayer: (layer: TimelineLayerSummary) => void | Promise<void>;
@@ -993,7 +993,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     }
     event.preventDefault();
     event.stopPropagation();
-    props.onSelectAudioClip(clip.id, event.shiftKey || event.ctrlKey || event.metaKey);
+    props.onSelectAudioClip(
+      clip.id,
+      event.shiftKey || event.ctrlKey || event.metaKey,
+      event.altKey,
+    );
     const rect = event.currentTarget.getBoundingClientRect();
     const zone = timelineBlockGestureZone(
       event.clientX - rect.left,
@@ -1141,7 +1145,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     }
     event.preventDefault();
     event.stopPropagation();
-    props.onSelectVideoClip(clip.id, event.shiftKey || event.ctrlKey || event.metaKey);
+    props.onSelectVideoClip(
+      clip.id,
+      event.shiftKey || event.ctrlKey || event.metaKey,
+      event.altKey,
+    );
     event.currentTarget.setPointerCapture(event.pointerId);
     setVideoClipDrag({
       clipId: clip.id,
@@ -2397,24 +2405,34 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                props.onSelectVideoClip(clip.id, event.shiftKey || event.ctrlKey || event.metaKey);
+                props.onSelectVideoClip(
+                  clip.id,
+                  event.shiftKey || event.ctrlKey || event.metaKey,
+                  event.altKey,
+                );
                 props.onSeekTime(preview().start_ms);
               }}
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                if (!selectedVideoClipIds().has(clip.id)) {
-                  props.onSelectVideoClip(clip.id, event.shiftKey || event.ctrlKey || event.metaKey);
+                if (event.altKey || !selectedVideoClipIds().has(clip.id)) {
+                  props.onSelectVideoClip(
+                    clip.id,
+                    event.shiftKey || event.ctrlKey || event.metaKey,
+                    event.altKey,
+                  );
                 }
+                event.currentTarget.focus();
                 props.onOpenItemContextMenu({ x: event.clientX, y: event.clientY });
               }}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" && event.key !== " ") return;
                 event.preventDefault();
-                props.onSelectVideoClip(clip.id);
+                props.onSelectVideoClip(clip.id, false, event.altKey);
                 props.onSeekTime(preview().start_ms);
               }}
             >
+              <title>Hold Alt while selecting to edit only this linked member</title>
               <rect
                 class="timelineVideoClipBody"
                 x="0"
@@ -2490,24 +2508,34 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               onClick={(pointerEvent) => {
                 pointerEvent.preventDefault();
                 pointerEvent.stopPropagation();
-                props.onSelectAudioClip(clip.id, pointerEvent.shiftKey || pointerEvent.ctrlKey || pointerEvent.metaKey);
+                props.onSelectAudioClip(
+                  clip.id,
+                  pointerEvent.shiftKey || pointerEvent.ctrlKey || pointerEvent.metaKey,
+                  pointerEvent.altKey,
+                );
                 props.onSeekTime(preview().start_ms);
               }}
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                if (!selectedAudioClipIds().has(clip.id)) {
-                  props.onSelectAudioClip(clip.id, event.shiftKey || event.ctrlKey || event.metaKey);
+                if (event.altKey || !selectedAudioClipIds().has(clip.id)) {
+                  props.onSelectAudioClip(
+                    clip.id,
+                    event.shiftKey || event.ctrlKey || event.metaKey,
+                    event.altKey,
+                  );
                 }
+                event.currentTarget.focus();
                 props.onOpenItemContextMenu({ x: event.clientX, y: event.clientY });
               }}
               onKeyDown={(keyboardEvent) => {
                 if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
                 keyboardEvent.preventDefault();
-                props.onSelectAudioClip(clip.id);
+                props.onSelectAudioClip(clip.id, false, keyboardEvent.altKey);
                 props.onSeekTime(preview().start_ms);
               }}
             >
+              <title>Hold Alt while selecting to edit only this linked member</title>
               <Show when={audioClipDrag()?.clipId === clip.id}>
                 <rect
                   class="timelineAudioClipGhost"

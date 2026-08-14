@@ -206,6 +206,20 @@ try {
       })()`));
       await sleep(50);
     }
+    const singleMemberSelected = await evaluate(client, `(() => {
+      const clip = document.querySelector('[data-timeline-audio-clip-id="700"]');
+      if (!(clip instanceof Element)) return false;
+      clip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, altKey: true }));
+      return true;
+    })()`);
+    assert.equal(singleMemberSelected, true);
+    await sleep(50);
+    const singleMemberState = await measure(client);
+    assert.deepEqual(
+      [singleMemberState.selectedVideo, singleMemberState.selectedAudio],
+      [0, 1],
+      "Alt selection temporarily isolates one linked A/V member",
+    );
     const videoSelected = await evaluate(client, `(() => {
       const clip = document.querySelector('[data-timeline-video-clip-id="800"]');
       if (!(clip instanceof Element)) return false;
@@ -234,6 +248,15 @@ try {
         .find((candidate) => candidate.textContent?.trim() === 'Copy selected');
       if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
       button.click();
+      return true;
+    })()`), true);
+    await sleep(50);
+    assert.equal(
+      await evaluate(client, "document.activeElement?.getAttribute('data-timeline-video-clip-id') ?? ''"),
+      "800",
+      "closing the Timeline item menu returns focus to the invoking clip",
+    );
+    assert.equal(await evaluate(client, `(() => {
       const clip = document.querySelector('[data-timeline-video-clip-id="800"]');
       if (!(clip instanceof Element)) return false;
       clip.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 240, clientY: 180 }));
