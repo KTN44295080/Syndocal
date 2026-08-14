@@ -2670,6 +2670,7 @@ export type TimelineAdvancedMutationRequest =
   | { kind: "duplicate_items"; items: TimelineItemRef[]; offset_ms: number }
   | { kind: "nudge_items"; items: TimelineItemRef[]; delta_ms: number }
   | { kind: "quantize_items"; items: TimelineItemRef[]; grid_ms: number }
+  | { kind: "paste_items"; items: TimelineItemRef[]; target_ms: number }
   | { kind: "delete_items"; items: TimelineItemRef[] }
   | { kind: "set_phases"; phases: TimelinePhaseSummary[] }
   | { kind: "set_loop"; loop_region?: TimelineLoopRegionSummary | null }

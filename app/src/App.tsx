@@ -13125,6 +13125,20 @@ export default function App() {
       return [];
     }
   };
+  const pasteTimelineItems = async (items: TimelineItemRef[], targetMs: number) => {
+    try {
+      const result = await commitTimelineAdvanced({
+        kind: "paste_items",
+        items,
+        target_ms: targetMs,
+      });
+      if (result) setMessage("Timeline selection pasted at the playhead.");
+      return result?.selected_items ?? [];
+    } catch (error) {
+      setMessage(`Timeline selection paste failed: ${String(error)}`);
+      return [];
+    }
+  };
   const removeTimelineItems = async (items: TimelineItemRef[]) => {
     try {
       const result = await commitTimelineAdvanced({ kind: "delete_items", items });
@@ -23764,6 +23778,7 @@ export default function App() {
               childTimelineLabel={timelineChildCue()?.label ?? null}
               cueIdentities={cueIdentities()}
               positionMs={activeTimeline().position_ms}
+              projectEpoch={projectMappingsAuthority().project_epoch}
               bpm={snapshot().clock.bpm}
               durationMs={activeTimeline().duration_ms}
               playing={activeTimeline().playing}
@@ -23887,6 +23902,7 @@ export default function App() {
               onDuplicateItems={duplicateTimelineItems}
               onNudgeItems={nudgeTimelineItems}
               onQuantizeItems={quantizeTimelineItems}
+              onPasteItems={pasteTimelineItems}
               onRemoveItems={removeTimelineItems}
               onRemoveAudioClip={removeTimelineAudioClip}
               onSetAudioMaster={setTimelineAudioMaster}

@@ -2865,6 +2865,8 @@ const japaneseText: Record<string, string> = {
   "Remove this clip from the timeline?": "このクリップをタイムラインから削除しますか？",
   "Delete selected": "選択項目を削除",
   "Duplicate selected": "選択項目を複製",
+  "Copy selected": "選択項目をコピー",
+  "Paste at playhead": "再生ヘッド位置へ貼り付け",
   "Nudge earlier": "前へナッジ",
   "Nudge later": "後ろへナッジ",
   "Quantize to grid": "グリッドへクオンタイズ",

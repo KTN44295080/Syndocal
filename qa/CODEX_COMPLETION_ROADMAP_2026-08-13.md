@@ -1354,7 +1354,8 @@ physical multi-device routing acceptance remain part of the final L-TL7 boundary
 ### L-TL4. Linked groups and selection/edit semantics
 
 Status (2026-08-15): in progress. Stable cross-domain group membership, automatic linked A/V
-placement, linked selection, group/ungroup, relative group move, grid nudge, and grid quantize are implemented. Delete now
+placement, linked selection, group/ungroup, relative group move, grid nudge, grid quantize, and
+reference-scoped copy/paste are implemented. Delete now
 expands the captured authored group closure on the backend and removes Lighting events, Video clips,
 Audio clips, and both Automation domains in one authoritative publication/Undo; stale references
 fail before mutation and exact request retry returns the stored terminal result. Nudge earlier/later is
@@ -1364,7 +1365,12 @@ musical beat positions, preserves the selected logical group, and provides one h
 terminal recovery. Quantize uses the earliest temporal point in the captured selection/group as its
 anchor, rounds it to the nearest current grid boundary, and moves every member by the same delta so
 cross-domain relative timing and musical beat positions remain intact; zero/invalid grids reject before
-mutation. Remaining grouped edit work is ripple move, trim, split, copy/paste, lane-valid reorder,
+mutation. Copy stores the current logical selection in a session-local clipboard scoped to the project
+epoch and Timeline. Paste captures those references from the current authored A, expands their complete
+group closure, shifts the earliest temporal anchor to the snapped playhead (including an earlier target),
+allocates fresh item/group IDs, rewires internal jump targets, and returns the fresh logical selection in
+one exactly recoverable history mutation. Replacement or Timeline change clears the clipboard; stale or
+deleted source references reject before mutation. Remaining grouped edit work is ripple move, trim, split, lane-valid reorder,
 the temporary single-member modifier, and selection/focus restoration across Undo/Redo and reload.
 Duplicate is now authoritative across all five item domains: it allocates fresh item/group IDs,
 preserves group-relative offsets and musical beat placement, rewires duplicated internal jump targets,

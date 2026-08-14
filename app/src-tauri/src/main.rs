@@ -802,6 +802,10 @@ enum TimelineAdvancedMutationRequest {
         items: Vec<TimelineItemRef>,
         grid_ms: u64,
     },
+    PasteItems {
+        items: Vec<TimelineItemRef>,
+        target_ms: u64,
+    },
     DeleteItems {
         items: Vec<TimelineItemRef>,
     },
@@ -5844,18 +5848,13 @@ fn expanded_timeline_items(
     Ok(expanded)
 }
 
-fn duplicate_timeline_items(
+fn clone_timeline_items_with_delta(
     state: &AppState,
     timeline: &mut TimelineSnapshot,
     requested_items: &[TimelineItemRef],
-    offset_ms: u64,
+    delta_ms: i64,
     bpm: f32,
 ) -> Result<Vec<TimelineItemRef>, String> {
-    if offset_ms == 0 {
-        return Err("Timeline duplicate offset must be greater than zero".to_string());
-    }
-    let offset_delta_ms = i64::try_from(offset_ms)
-        .map_err(|_| "Timeline duplicate offset exceeds the supported time range".to_string())?;
     let expanded = expanded_timeline_items(timeline, requested_items)?;
     for item in &expanded {
         match item {
@@ -5865,10 +5864,8 @@ fn duplicate_timeline_items(
                     .iter()
                     .find(|event| event.id == *event_id)
                     .unwrap();
-                event.time_ms.checked_add(offset_ms).ok_or_else(|| {
-                    "Duplicated Timeline event exceeds the supported time range".to_string()
-                })?;
-                timeline_shift_beats(event.time_beats, offset_delta_ms, bpm)?;
+                timeline_shift_ms(event.time_ms, delta_ms)?;
+                timeline_shift_beats(event.time_beats, delta_ms, bpm)?;
             }
             TimelineItemRef::VideoClip { clip_id } => {
                 let clip = timeline
@@ -5876,9 +5873,7 @@ fn duplicate_timeline_items(
                     .iter()
                     .find(|clip| clip.id == *clip_id)
                     .unwrap();
-                clip.start_ms.checked_add(offset_ms).ok_or_else(|| {
-                    "Duplicated Video clip exceeds the supported time range".to_string()
-                })?;
+                timeline_shift_ms(clip.start_ms, delta_ms)?;
             }
             TimelineItemRef::AudioClip { clip_id } => {
                 let clip = timeline
@@ -5886,9 +5881,7 @@ fn duplicate_timeline_items(
                     .iter()
                     .find(|clip| clip.id == *clip_id)
                     .unwrap();
-                clip.start_ms.checked_add(offset_ms).ok_or_else(|| {
-                    "Duplicated Audio clip exceeds the supported time range".to_string()
-                })?;
+                timeline_shift_ms(clip.start_ms, delta_ms)?;
             }
             TimelineItemRef::LightingAutomation { automation_id } => {
                 let automation = timeline
@@ -5897,10 +5890,7 @@ fn duplicate_timeline_items(
                     .find(|automation| automation.id == *automation_id)
                     .unwrap();
                 for keyframe in &automation.keyframes {
-                    keyframe.time_ms.checked_add(offset_ms).ok_or_else(|| {
-                        "Duplicated Lighting automation exceeds the supported time range"
-                            .to_string()
-                    })?;
+                    timeline_shift_ms(keyframe.time_ms, delta_ms)?;
                 }
             }
             TimelineItemRef::VideoAutomation { automation_id } => {
@@ -5910,9 +5900,7 @@ fn duplicate_timeline_items(
                     .find(|automation| automation.id == *automation_id)
                     .unwrap();
                 for keyframe in &automation.keyframes {
-                    keyframe.time_ms.checked_add(offset_ms).ok_or_else(|| {
-                        "Duplicated Video automation exceeds the supported time range".to_string()
-                    })?;
+                    timeline_shift_ms(keyframe.time_ms, delta_ms)?;
                 }
             }
         }
@@ -5958,8 +5946,8 @@ fn duplicate_timeline_items(
                     .cloned()
                     .unwrap();
                 event.id = duplicate_id;
-                event.time_ms = event.time_ms.checked_add(offset_ms).unwrap();
-                event.time_beats = timeline_shift_beats(event.time_beats, offset_delta_ms, bpm)?;
+                event.time_ms = timeline_shift_ms(event.time_ms, delta_ms).unwrap();
+                event.time_beats = timeline_shift_beats(event.time_beats, delta_ms, bpm)?;
                 if let Some(target_id) = event.jump_to_event_id {
                     if let Some(TimelineItemRef::LightingEvent {
                         event_id: duplicate_target_id,
@@ -5984,7 +5972,7 @@ fn duplicate_timeline_items(
                     .cloned()
                     .unwrap();
                 clip.id = duplicate_id;
-                clip.start_ms = clip.start_ms.checked_add(offset_ms).unwrap();
+                clip.start_ms = timeline_shift_ms(clip.start_ms, delta_ms).unwrap();
                 timeline.video_clips.push(clip);
             }
             (
@@ -6000,7 +5988,7 @@ fn duplicate_timeline_items(
                     .cloned()
                     .unwrap();
                 clip.id = duplicate_id;
-                clip.start_ms = clip.start_ms.checked_add(offset_ms).unwrap();
+                clip.start_ms = timeline_shift_ms(clip.start_ms, delta_ms).unwrap();
                 timeline.audio_clips.push(clip);
             }
             (
@@ -6017,7 +6005,7 @@ fn duplicate_timeline_items(
                     .unwrap();
                 automation.id = duplicate_id;
                 for keyframe in &mut automation.keyframes {
-                    keyframe.time_ms = keyframe.time_ms.checked_add(offset_ms).unwrap();
+                    keyframe.time_ms = timeline_shift_ms(keyframe.time_ms, delta_ms).unwrap();
                 }
                 timeline.automations.push(automation);
             }
@@ -6035,7 +6023,7 @@ fn duplicate_timeline_items(
                     .unwrap();
                 automation.id = duplicate_id;
                 for keyframe in &mut automation.keyframes {
-                    keyframe.time_ms = keyframe.time_ms.checked_add(offset_ms).unwrap();
+                    keyframe.time_ms = timeline_shift_ms(keyframe.time_ms, delta_ms).unwrap();
                 }
                 timeline.video_automations.push(automation);
             }
@@ -6059,6 +6047,21 @@ fn duplicate_timeline_items(
         });
     }
     Ok(expanded.iter().map(|item| duplicate_refs[item]).collect())
+}
+
+fn duplicate_timeline_items(
+    state: &AppState,
+    timeline: &mut TimelineSnapshot,
+    requested_items: &[TimelineItemRef],
+    offset_ms: u64,
+    bpm: f32,
+) -> Result<Vec<TimelineItemRef>, String> {
+    if offset_ms == 0 {
+        return Err("Timeline duplicate offset must be greater than zero".to_string());
+    }
+    let delta_ms = i64::try_from(offset_ms)
+        .map_err(|_| "Timeline duplicate offset exceeds the supported time range".to_string())?;
+    clone_timeline_items_with_delta(state, timeline, requested_items, delta_ms, bpm)
 }
 
 fn nudge_timeline_items(
@@ -6172,17 +6175,11 @@ fn nudge_timeline_items(
     Ok(expanded.into_iter().collect())
 }
 
-fn quantize_timeline_items(
-    timeline: &mut TimelineSnapshot,
-    requested_items: &[TimelineItemRef],
-    grid_ms: u64,
-    bpm: f32,
-) -> Result<Vec<TimelineItemRef>, String> {
-    if grid_ms == 0 {
-        return Err("Timeline quantize grid must be greater than zero".to_string());
-    }
-    let expanded = expanded_timeline_items(timeline, requested_items)?;
-    let anchor_ms = expanded
+fn timeline_items_temporal_anchor_ms(
+    timeline: &TimelineSnapshot,
+    items: &BTreeSet<TimelineItemRef>,
+) -> Result<u64, String> {
+    items
         .iter()
         .filter_map(|item| match item {
             TimelineItemRef::LightingEvent { event_id } => timeline
@@ -6224,7 +6221,20 @@ fn quantize_timeline_items(
                 }),
         })
         .min()
-        .ok_or_else(|| "Selected Timeline items have no temporal anchor to quantize".to_string())?;
+        .ok_or_else(|| "Selected Timeline items have no temporal anchor".to_string())
+}
+
+fn quantize_timeline_items(
+    timeline: &mut TimelineSnapshot,
+    requested_items: &[TimelineItemRef],
+    grid_ms: u64,
+    bpm: f32,
+) -> Result<Vec<TimelineItemRef>, String> {
+    if grid_ms == 0 {
+        return Err("Timeline quantize grid must be greater than zero".to_string());
+    }
+    let expanded = expanded_timeline_items(timeline, requested_items)?;
+    let anchor_ms = timeline_items_temporal_anchor_ms(timeline, &expanded)?;
     let lower_ms = (anchor_ms / grid_ms) * grid_ms;
     let remainder_ms = anchor_ms % grid_ms;
     let target_ms = if remainder_ms >= grid_ms - remainder_ms {
@@ -6241,6 +6251,21 @@ fn quantize_timeline_items(
     let delta_ms = i64::try_from(delta_ms)
         .map_err(|_| "Timeline quantize shift exceeds the supported time range".to_string())?;
     nudge_timeline_items(timeline, requested_items, delta_ms, bpm)
+}
+
+fn paste_timeline_items(
+    state: &AppState,
+    timeline: &mut TimelineSnapshot,
+    requested_items: &[TimelineItemRef],
+    target_ms: u64,
+    bpm: f32,
+) -> Result<Vec<TimelineItemRef>, String> {
+    let expanded = expanded_timeline_items(timeline, requested_items)?;
+    let anchor_ms = timeline_items_temporal_anchor_ms(timeline, &expanded)?;
+    let delta_ms = i128::from(target_ms) - i128::from(anchor_ms);
+    let delta_ms = i64::try_from(delta_ms)
+        .map_err(|_| "Timeline paste shift exceeds the supported time range".to_string())?;
+    clone_timeline_items_with_delta(state, timeline, requested_items, delta_ms, bpm)
 }
 
 fn delete_timeline_items(
@@ -6549,6 +6574,7 @@ fn timeline_advanced_candidate_for_request(
         | TimelineAdvancedMutationRequest::DuplicateItems { .. }
         | TimelineAdvancedMutationRequest::NudgeItems { .. }
         | TimelineAdvancedMutationRequest::QuantizeItems { .. }
+        | TimelineAdvancedMutationRequest::PasteItems { .. }
         | TimelineAdvancedMutationRequest::DeleteItems { .. } => {
             return Err("Timeline bank commands require the bank mutation path".to_string());
         }
@@ -6571,6 +6597,12 @@ fn normalize_timeline_duration_for_engine(
     timeline: &mut TimelineSnapshot,
     video: &protocol::VideoSnapshot,
 ) {
+    // Mirror the engine's authored audio projection before authority hashing.
+    // Signed copy/paste and nudge operations can move a clip ahead of an
+    // earlier entry even though the cloned entry is appended to the vector.
+    timeline
+        .audio_clips
+        .sort_by_key(|clip| (clip.start_ms, clip.layer_id, clip.id));
     let event_duration = timeline
         .events
         .iter()
@@ -6805,6 +6837,14 @@ fn timeline_bank_candidate_for_request(
                 .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
             selected_items = quantize_timeline_items(active, items, *grid_ms, before.clock.bpm)?;
         }
+        TimelineAdvancedMutationRequest::PasteItems { items, target_ms } => {
+            let active = bank
+                .iter_mut()
+                .find(|timeline| timeline.id == active_timeline_id)
+                .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
+            selected_items =
+                paste_timeline_items(state, active, items, *target_ms, before.clock.bpm)?;
+        }
         TimelineAdvancedMutationRequest::DeleteItems { items } => {
             let active = bank
                 .iter_mut()
@@ -6916,6 +6956,7 @@ fn timeline_advanced_history_label(request: &TimelineAdvancedMutationRequest) ->
         TimelineAdvancedMutationRequest::DuplicateItems { .. } => "Duplicate Timeline items",
         TimelineAdvancedMutationRequest::NudgeItems { .. } => "Nudge Timeline items",
         TimelineAdvancedMutationRequest::QuantizeItems { .. } => "Quantize Timeline items",
+        TimelineAdvancedMutationRequest::PasteItems { .. } => "Paste Timeline items",
         TimelineAdvancedMutationRequest::DeleteItems { .. } => "Delete Timeline items",
         TimelineAdvancedMutationRequest::SetPhases { .. } => "Set Timeline Phases",
         TimelineAdvancedMutationRequest::SetLoop { .. } => "Set Timeline loop",
@@ -6961,6 +7002,7 @@ fn commit_authoritative_timeline_advanced(
             | TimelineAdvancedMutationRequest::DuplicateItems { .. }
             | TimelineAdvancedMutationRequest::NudgeItems { .. }
             | TimelineAdvancedMutationRequest::QuantizeItems { .. }
+            | TimelineAdvancedMutationRequest::PasteItems { .. }
             | TimelineAdvancedMutationRequest::DeleteItems { .. }
     );
     let (candidate_snapshot, bank_publication, selected_items) = if bank_request {
@@ -75561,6 +75603,77 @@ mod live_audio_input_tests {
         .contains("greater than zero"));
         assert_eq!(quantized, before_invalid_quantize);
 
+        let mut pasted_source = timeline.clone();
+        pasted_source.events[0].time_ms = 1_000;
+        pasted_source.events[0].time_beats = Some(2.0);
+        pasted_source.events[0].conform_to_tempo = true;
+        pasted_source.events[0].jump_to_event_id = Some(removed_event_id);
+        pasted_source.video_clips[0].start_ms = 1_250;
+        pasted_source.audio_clips[0].start_ms = 1_500;
+        pasted_source.automations[0].keyframes[0].time_ms = 1_750;
+        pasted_source.video_automations[0].keyframes[0].time_ms = 2_000;
+        let paste_refs = paste_timeline_items(
+            &duplicate_harness.state,
+            &mut pasted_source,
+            &[TimelineItemRef::AudioClip { clip_id: 31 }],
+            250,
+            120.0,
+        )
+        .expect("paste one member as a fresh complete group at an earlier target");
+        assert_eq!(paste_refs.len(), 5);
+        let pasted_event_id = paste_refs
+            .iter()
+            .find_map(|item| match item {
+                TimelineItemRef::LightingEvent { event_id } => Some(*event_id),
+                _ => None,
+            })
+            .expect("pasted Lighting event identity");
+        let pasted_event = pasted_source
+            .events
+            .iter()
+            .find(|event| event.id == pasted_event_id)
+            .expect("pasted Lighting event");
+        assert_eq!(pasted_event.time_ms, 250);
+        assert_eq!(pasted_event.time_beats, Some(0.5));
+        assert_eq!(pasted_event.jump_to_event_id, Some(pasted_event_id));
+        let pasted_video_id = paste_refs
+            .iter()
+            .find_map(|item| match item {
+                TimelineItemRef::VideoClip { clip_id } => Some(*clip_id),
+                _ => None,
+            })
+            .unwrap();
+        let pasted_audio_id = paste_refs
+            .iter()
+            .find_map(|item| match item {
+                TimelineItemRef::AudioClip { clip_id } => Some(*clip_id),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            pasted_source
+                .video_clips
+                .iter()
+                .find(|clip| clip.id == pasted_video_id)
+                .unwrap()
+                .start_ms,
+            500
+        );
+        assert_eq!(
+            pasted_source
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == pasted_audio_id)
+                .unwrap()
+                .start_ms,
+            750
+        );
+        assert_eq!(pasted_source.item_groups.len(), 2);
+        assert_eq!(
+            pasted_source.events[0].time_ms, 1_000,
+            "copy source remains unchanged"
+        );
+
         delete_timeline_items(&mut timeline, &[TimelineItemRef::AudioClip { clip_id: 31 }])
             .expect("deleting one member must close over the complete group");
         assert!(timeline
@@ -75588,8 +75701,7 @@ mod live_audio_input_tests {
     }
 
     #[test]
-    fn timeline_duplicate_nudge_quantize_and_delete_items_are_one_history_and_exactly_recoverable()
-    {
+    fn timeline_copy_paste_duplicate_nudge_quantize_and_delete_are_authoritative() {
         let harness = MediaAssetA6CommandHarness::new();
         let (_video_layer_id, media_asset_id, _alternate_asset_id, _slot_id) =
             seed_video_clip_slot_layer(&harness);
@@ -75870,17 +75982,103 @@ mod live_audio_input_tests {
         b3_assert_authority_matches_persistence(&harness);
         c1_stabilize_fixture_authority(&harness);
 
+        let paste_baseline = harness.mutation_baseline();
+        let paste_request = TimelineAdvancedMutationRequest::PasteItems {
+            items: duplicated.selected_items.clone(),
+            target_ms: 500,
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let pasted = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            paste_request.clone(),
+            84_684,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("paste the copied linked group at the playhead through the authoritative lane");
+        assert_eq!(pasted.authoring.video_clips.len(), 3);
+        assert_eq!(pasted.authoring.audio_clips.len(), 3);
+        assert_eq!(pasted.authoring.item_groups.len(), 3);
+        assert_eq!(pasted.selected_items.len(), 2);
+        let pasted_audio_clip_id = pasted
+            .selected_items
+            .iter()
+            .find_map(|item| match item {
+                TimelineItemRef::AudioClip { clip_id } => Some(*clip_id),
+                _ => None,
+            })
+            .expect("paste result selects the fresh Audio peer");
+        let pasted_video_clip_id = pasted
+            .selected_items
+            .iter()
+            .find_map(|item| match item {
+                TimelineItemRef::VideoClip { clip_id } => Some(*clip_id),
+                _ => None,
+            })
+            .expect("paste result selects the fresh Video peer");
+        assert!(!duplicated
+            .selected_items
+            .contains(&TimelineItemRef::AudioClip {
+                clip_id: pasted_audio_clip_id,
+            }));
+        assert_eq!(
+            pasted
+                .authoring
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == pasted_audio_clip_id)
+                .unwrap()
+                .start_ms,
+            500
+        );
+        assert_eq!(
+            pasted
+                .authoring
+                .video_clips
+                .iter()
+                .find(|clip| clip.id == pasted_video_clip_id)
+                .unwrap()
+                .start_ms,
+            500
+        );
+        let paste_retried = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            paste_request,
+            84_684,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("recover the exact linked paste terminal receipt");
+        assert_eq!(
+            serde_json::to_value(&pasted).unwrap(),
+            serde_json::to_value(&paste_retried).unwrap()
+        );
+        assert_one_authoritative_history_mutation(&harness, paste_baseline);
+        b3_assert_authority_matches_persistence(&harness);
+        c1_stabilize_fixture_authority(&harness);
+
         let delete_baseline = harness.mutation_baseline();
         let delete_request = TimelineAdvancedMutationRequest::DeleteItems {
-            items: vec![TimelineItemRef::AudioClip {
-                clip_id: duplicate_audio_clip_id,
-            }],
+            items: vec![
+                TimelineItemRef::AudioClip {
+                    clip_id: duplicate_audio_clip_id,
+                },
+                TimelineItemRef::AudioClip {
+                    clip_id: pasted_audio_clip_id,
+                },
+            ],
         };
         let (epoch, revision, hash) = b3_authority_arguments(&harness);
         let deleted = apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
             delete_request.clone(),
-            84_684,
+            84_685,
             epoch,
             revision,
             hash.clone(),
@@ -75896,7 +76094,7 @@ mod live_audio_input_tests {
         let delete_retried = apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
             delete_request,
-            84_684,
+            84_685,
             epoch,
             revision,
             hash,

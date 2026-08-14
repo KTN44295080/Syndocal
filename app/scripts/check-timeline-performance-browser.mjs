@@ -128,12 +128,22 @@ const measure = (client) => evaluate(client, `(() => {
     selectedAudio: selectedAudio.length,
     groupEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Group selected' && !button.disabled)),
     ungroupEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Ungroup' && !button.disabled)),
+    copyEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Copy selected' && !button.disabled)),
+    pasteEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Paste at playhead' && !button.disabled)),
     duplicateEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Duplicate selected' && !button.disabled)),
     nudgeEarlierEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Nudge earlier' && !button.disabled)),
     nudgeLaterEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Nudge later' && !button.disabled)),
     quantizeEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Quantize to grid' && !button.disabled)),
     deleteEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Delete selected' && !button.disabled)),
     itemMenuRect: itemMenu instanceof HTMLElement ? (() => { const bounds = itemMenu.getBoundingClientRect(); return [bounds.left, bounds.top, bounds.right, bounds.bottom]; })() : null,
+    itemMenuBottomReachable: itemMenu instanceof HTMLElement ? (() => {
+      itemMenu.scrollTop = itemMenu.scrollHeight;
+      const bounds = itemMenu.getBoundingClientRect();
+      const close = [...itemMenu.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Close');
+      if (!(close instanceof HTMLButtonElement)) return false;
+      const closeBounds = close.getBoundingClientRect();
+      return closeBounds.top >= bounds.top - 0.5 && closeBounds.bottom <= bounds.bottom + 0.5;
+    })() : false,
     menuShortTargets: [...root.querySelectorAll('.timelineItemContextMenu button')].filter((button) => {
       const bounds = button.getBoundingClientRect();
       return bounds.width > 0 && bounds.height > 0 && bounds.height < 43.5;
@@ -213,9 +223,22 @@ try {
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
     assert.deepEqual([state.videoClips, state.audioClips], [1, 2]);
     assert.deepEqual([state.selectedVideo, state.selectedAudio], [1, 1], "selecting either member selects the linked A/V group");
-    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.duplicateEnabled, state.nudgeEarlierEnabled, state.nudgeLaterEnabled, state.quantizeEnabled, state.deleteEnabled], [false, true, true, true, true, true, true], "the context menu exposes linked-group duplicate/nudge/quantize/release/delete and prevents nested grouping");
+    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.copyEnabled, state.pasteEnabled, state.duplicateEnabled, state.nudgeEarlierEnabled, state.nudgeLaterEnabled, state.quantizeEnabled, state.deleteEnabled], [false, true, true, false, true, true, true, true, true], "the context menu exposes linked-group copy/duplicate/nudge/quantize/release/delete and disables an empty clipboard");
     assert.ok(state.itemMenuRect && state.itemMenuRect[0] >= 0 && state.itemMenuRect[1] >= 0 && state.itemMenuRect[2] <= viewport.width && state.itemMenuRect[3] <= viewport.height, `Timeline group menu stays inside ${viewport.width}x${viewport.height}`);
+    assert.equal(state.itemMenuBottomReachable, true, "the internally scrolling Timeline item menu reaches its final action");
     assert.equal(state.menuShortTargets, 0, "Timeline group context actions preserve 44px targets");
+    assert.equal(await evaluate(client, `(() => {
+      const button = [...document.querySelectorAll('.timelineItemContextMenu button')]
+        .find((candidate) => candidate.textContent?.trim() === 'Copy selected');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      const clip = document.querySelector('[data-timeline-video-clip-id="800"]');
+      if (!(clip instanceof Element)) return false;
+      clip.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 240, clientY: 180 }));
+      return true;
+    })()`), true);
+    await sleep(50);
+    assert.equal((await measure(client)).pasteEnabled, true, "copy binds a pasteable linked selection to this Timeline");
     assert.equal(await evaluate(client, `(() => {
       const button = [...document.querySelectorAll('.timelineItemContextMenu button')]
         .find((candidate) => candidate.textContent?.trim() === 'Delete selected');

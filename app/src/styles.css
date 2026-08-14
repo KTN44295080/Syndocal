@@ -30073,6 +30073,9 @@ h3 {
   background: #202428;
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.58);
   padding: 6px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .timelineItemContextMenu button {

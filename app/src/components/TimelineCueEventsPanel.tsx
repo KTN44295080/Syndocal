@@ -74,6 +74,7 @@ interface TimelineCueEventsPanelProps {
   childTimelineLabel: string | null;
   cueIdentities?: Record<number, CueIdentitySource>;
   positionMs: number;
+  projectEpoch: number;
   bpm: number;
   durationMs: number;
   playing: boolean;
@@ -201,6 +202,7 @@ interface TimelineCueEventsPanelProps {
   onDuplicateItems: (items: TimelineItemRef[], offsetMs: number) => Promise<TimelineItemRef[]>;
   onNudgeItems: (items: TimelineItemRef[], deltaMs: number) => Promise<TimelineItemRef[]>;
   onQuantizeItems: (items: TimelineItemRef[], gridMs: number) => Promise<TimelineItemRef[]>;
+  onPasteItems: (items: TimelineItemRef[], targetMs: number) => Promise<TimelineItemRef[]>;
   onRemoveItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onRemoveAudioClip: (clipId: number) => void | Promise<void>;
   onSetAudioMaster: (offsetMs: number, muted: boolean) => void | Promise<void>;
@@ -252,6 +254,9 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   const [selectedAudioClipId, setSelectedAudioClipId] = createSignal<number | null>(null);
   const [selectedVideoClipId, setSelectedVideoClipId] = createSignal<number | null>(null);
   const [selectedTimelineItems, setSelectedTimelineItems] = createSignal<TimelineItemRef[]>([]);
+  const [copiedTimelineItems, setCopiedTimelineItems] = createSignal<TimelineItemRef[]>([]);
+  let copiedProjectEpoch = props.projectEpoch;
+  let copiedTimelineId = props.activeTimelineId;
   const [itemContextMenu, setItemContextMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [pendingRemoveTimelineItems, setPendingRemoveTimelineItems] = createSignal<TimelineItemRef[]>([]);
   const [pendingRemoveAudioClipId, setPendingRemoveAudioClipId] = createSignal<number | null>(null);
@@ -356,10 +361,17 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     expandLinkedSelection({ kind: "audio_clip", clip_id: clipId }, additive);
   const selectVideoClip = (clipId: number, additive = false) =>
     expandLinkedSelection({ kind: "video_clip", clip_id: clipId }, additive);
+  const selectReturnedTimelineItems = (items: TimelineItemRef[]) => {
+    setSelectedTimelineItems(items);
+    const audio = items.find((item) => item.kind === "audio_clip");
+    const video = items.find((item) => item.kind === "video_clip");
+    setSelectedAudioClipId(audio?.kind === "audio_clip" ? audio.clip_id : null);
+    setSelectedVideoClipId(video?.kind === "video_clip" ? video.clip_id : null);
+  };
   const openItemContextMenu = (point: { x: number; y: number }) => {
     setItemContextMenu({
       x: Math.max(8, Math.min(point.x, window.innerWidth - 226)),
-      y: Math.max(8, Math.min(point.y, window.innerHeight - 412)),
+      y: Math.max(8, Math.min(point.y, window.innerHeight - 552)),
     });
   };
   const pendingRemoveAudioClip = () =>
@@ -370,6 +382,15 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     return props.itemGroups.find((group) => group.members.some((member) =>
       member.kind === "audio_clip" && member.clip_id === clipId)) ?? null;
   };
+  createEffect(() => {
+    const projectEpoch = props.projectEpoch;
+    const timelineId = props.activeTimelineId;
+    if (projectEpoch !== copiedProjectEpoch || timelineId !== copiedTimelineId) {
+      setCopiedTimelineItems([]);
+      copiedProjectEpoch = projectEpoch;
+      copiedTimelineId = timelineId;
+    }
+  });
   createEffect(() => {
     if (selectedAudioClipId() !== null && !selectedAudioClip()) setSelectedAudioClipId(null);
     if (selectedVideoClipId() !== null && !selectedVideoClip()) setSelectedVideoClipId(null);
@@ -1122,6 +1143,35 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               type="button"
               role="menuitem"
               disabled={selectedTimelineItemRefs().length === 0}
+              onClick={() => {
+                setCopiedTimelineItems([...selectedTimelineItemRefs()]);
+                props.onTimelineStatus("Timeline selection copied.");
+                setItemContextMenu(null);
+              }}
+            >
+              Copy selected
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={copiedTimelineItems().length === 0}
+              onClick={async () => {
+                const items = [...copiedTimelineItems()];
+                const rawTargetMs = props.snapMode === "Off"
+                  ? props.positionMs
+                  : props.snapTimeMs(props.positionMs);
+                const targetMs = Math.max(0, Math.round(rawTargetMs));
+                setItemContextMenu(null);
+                const selected = await props.onPasteItems(items, targetMs);
+                if (selected.length > 0) selectReturnedTimelineItems(selected);
+              }}
+            >
+              Paste at playhead
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length === 0}
               onClick={async () => {
                 const items = [...selectedTimelineItemRefs()];
                 setItemContextMenu(null);
@@ -1129,13 +1179,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
                   items,
                   Math.max(1, props.gridMs),
                 );
-                if (duplicates.length > 0) {
-                  setSelectedTimelineItems(duplicates);
-                  const audio = duplicates.find((item) => item.kind === "audio_clip");
-                  const video = duplicates.find((item) => item.kind === "video_clip");
-                  setSelectedAudioClipId(audio?.kind === "audio_clip" ? audio.clip_id : null);
-                  setSelectedVideoClipId(video?.kind === "video_clip" ? video.clip_id : null);
-                }
+                if (duplicates.length > 0) selectReturnedTimelineItems(duplicates);
               }}
             >
               Duplicate selected
