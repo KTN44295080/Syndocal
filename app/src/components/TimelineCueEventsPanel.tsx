@@ -201,6 +201,7 @@ interface TimelineCueEventsPanelProps {
   onUngroupItem: (item: TimelineItemRef) => void | Promise<void>;
   onDuplicateItems: (items: TimelineItemRef[], offsetMs: number) => Promise<TimelineItemRef[]>;
   onNudgeItems: (items: TimelineItemRef[], deltaMs: number) => Promise<TimelineItemRef[]>;
+  onRippleItems: (items: TimelineItemRef[], deltaMs: number) => Promise<TimelineItemRef[]>;
   onQuantizeItems: (items: TimelineItemRef[], gridMs: number) => Promise<TimelineItemRef[]>;
   onPasteItems: (items: TimelineItemRef[], targetMs: number) => Promise<TimelineItemRef[]>;
   onRemoveItems: (items: TimelineItemRef[]) => void | Promise<void>;
@@ -1113,7 +1114,11 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
             class="timelineItemContextMenu"
             role="menu"
             aria-label="Timeline item group actions"
-            style={{ left: `${menu().x}px`, top: `${menu().y}px` }}
+            style={{
+              left: `${menu().x}px`,
+              top: `${menu().y}px`,
+              "max-height": `calc(100vh - ${menu().y + 8}px)`,
+            }}
             onContextMenu={(event) => event.preventDefault()}
           >
             <button
@@ -1209,6 +1214,32 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               }}
             >
               Nudge later
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length === 0}
+              onClick={async () => {
+                const items = [...selectedTimelineItemRefs()];
+                setItemContextMenu(null);
+                const selected = await props.onRippleItems(items, -Math.max(1, props.gridMs));
+                if (selected.length > 0) selectReturnedTimelineItems(selected);
+              }}
+            >
+              Ripple earlier
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length === 0}
+              onClick={async () => {
+                const items = [...selectedTimelineItemRefs()];
+                setItemContextMenu(null);
+                const selected = await props.onRippleItems(items, Math.max(1, props.gridMs));
+                if (selected.length > 0) selectReturnedTimelineItems(selected);
+              }}
+            >
+              Ripple later
             </button>
             <button
               type="button"

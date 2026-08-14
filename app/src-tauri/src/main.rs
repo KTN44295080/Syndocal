@@ -798,6 +798,10 @@ enum TimelineAdvancedMutationRequest {
         items: Vec<TimelineItemRef>,
         delta_ms: i64,
     },
+    RippleItems {
+        items: Vec<TimelineItemRef>,
+        delta_ms: i64,
+    },
     QuantizeItems {
         items: Vec<TimelineItemRef>,
         grid_ms: u64,
@@ -6224,6 +6228,55 @@ fn timeline_items_temporal_anchor_ms(
         .ok_or_else(|| "Selected Timeline items have no temporal anchor".to_string())
 }
 
+fn ripple_timeline_items(
+    timeline: &mut TimelineSnapshot,
+    requested_items: &[TimelineItemRef],
+    delta_ms: i64,
+    bpm: f32,
+) -> Result<Vec<TimelineItemRef>, String> {
+    if delta_ms == 0 {
+        return Err("Timeline ripple amount must not be zero".to_string());
+    }
+    let selected = expanded_timeline_items(timeline, requested_items)?;
+    let boundary_ms = timeline_items_temporal_anchor_ms(timeline, &selected)?;
+    let mut ripple_items = selected.clone();
+    ripple_items.extend(timeline.events.iter().filter_map(|event| {
+        (event.time_ms >= boundary_ms)
+            .then_some(TimelineItemRef::LightingEvent { event_id: event.id })
+    }));
+    ripple_items.extend(timeline.video_clips.iter().filter_map(|clip| {
+        (clip.start_ms >= boundary_ms).then_some(TimelineItemRef::VideoClip { clip_id: clip.id })
+    }));
+    ripple_items.extend(timeline.audio_clips.iter().filter_map(|clip| {
+        (clip.start_ms >= boundary_ms).then_some(TimelineItemRef::AudioClip { clip_id: clip.id })
+    }));
+    ripple_items.extend(timeline.automations.iter().filter_map(|automation| {
+        automation
+            .keyframes
+            .iter()
+            .map(|keyframe| keyframe.time_ms)
+            .min()
+            .filter(|anchor_ms| *anchor_ms >= boundary_ms)
+            .map(|_| TimelineItemRef::LightingAutomation {
+                automation_id: automation.id,
+            })
+    }));
+    ripple_items.extend(timeline.video_automations.iter().filter_map(|automation| {
+        automation
+            .keyframes
+            .iter()
+            .map(|keyframe| keyframe.time_ms)
+            .min()
+            .filter(|anchor_ms| *anchor_ms >= boundary_ms)
+            .map(|_| TimelineItemRef::VideoAutomation {
+                automation_id: automation.id,
+            })
+    }));
+    let ripple_items = ripple_items.into_iter().collect::<Vec<_>>();
+    nudge_timeline_items(timeline, &ripple_items, delta_ms, bpm)?;
+    Ok(selected.into_iter().collect())
+}
+
 fn quantize_timeline_items(
     timeline: &mut TimelineSnapshot,
     requested_items: &[TimelineItemRef],
@@ -6573,6 +6626,7 @@ fn timeline_advanced_candidate_for_request(
         | TimelineAdvancedMutationRequest::SelectTimeline { .. }
         | TimelineAdvancedMutationRequest::DuplicateItems { .. }
         | TimelineAdvancedMutationRequest::NudgeItems { .. }
+        | TimelineAdvancedMutationRequest::RippleItems { .. }
         | TimelineAdvancedMutationRequest::QuantizeItems { .. }
         | TimelineAdvancedMutationRequest::PasteItems { .. }
         | TimelineAdvancedMutationRequest::DeleteItems { .. } => {
@@ -6830,6 +6884,13 @@ fn timeline_bank_candidate_for_request(
                 .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
             selected_items = nudge_timeline_items(active, items, *delta_ms, before.clock.bpm)?;
         }
+        TimelineAdvancedMutationRequest::RippleItems { items, delta_ms } => {
+            let active = bank
+                .iter_mut()
+                .find(|timeline| timeline.id == active_timeline_id)
+                .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
+            selected_items = ripple_timeline_items(active, items, *delta_ms, before.clock.bpm)?;
+        }
         TimelineAdvancedMutationRequest::QuantizeItems { items, grid_ms } => {
             let active = bank
                 .iter_mut()
@@ -6955,6 +7016,7 @@ fn timeline_advanced_history_label(request: &TimelineAdvancedMutationRequest) ->
         TimelineAdvancedMutationRequest::MoveGroup { .. } => "Move Timeline group",
         TimelineAdvancedMutationRequest::DuplicateItems { .. } => "Duplicate Timeline items",
         TimelineAdvancedMutationRequest::NudgeItems { .. } => "Nudge Timeline items",
+        TimelineAdvancedMutationRequest::RippleItems { .. } => "Ripple Timeline items",
         TimelineAdvancedMutationRequest::QuantizeItems { .. } => "Quantize Timeline items",
         TimelineAdvancedMutationRequest::PasteItems { .. } => "Paste Timeline items",
         TimelineAdvancedMutationRequest::DeleteItems { .. } => "Delete Timeline items",
@@ -7001,6 +7063,7 @@ fn commit_authoritative_timeline_advanced(
             | TimelineAdvancedMutationRequest::SelectTimeline { .. }
             | TimelineAdvancedMutationRequest::DuplicateItems { .. }
             | TimelineAdvancedMutationRequest::NudgeItems { .. }
+            | TimelineAdvancedMutationRequest::RippleItems { .. }
             | TimelineAdvancedMutationRequest::QuantizeItems { .. }
             | TimelineAdvancedMutationRequest::PasteItems { .. }
             | TimelineAdvancedMutationRequest::DeleteItems { .. }
@@ -75568,6 +75631,36 @@ mod live_audio_input_tests {
         assert_eq!(nudged.automations[0].keyframes[0].time_ms, 0);
         assert_eq!(nudged.video_automations[0].keyframes[0].time_ms, 0);
 
+        let mut rippled = timeline.clone();
+        rippled.events[0].time_beats = Some(0.0);
+        rippled.events[0].conform_to_tempo = true;
+        let ripple_refs = ripple_timeline_items(
+            &mut rippled,
+            &[TimelineItemRef::AudioClip { clip_id: 31 }],
+            500,
+            120.0,
+        )
+        .expect("ripple one linked member and every following Timeline item");
+        assert_eq!(ripple_refs.len(), 5);
+        assert_eq!(rippled.events[0].time_ms, 500);
+        assert_eq!(rippled.events[0].time_beats, Some(1.0));
+        assert_eq!(rippled.events[1].time_ms, 1_500);
+        assert_eq!(rippled.video_clips[0].start_ms, 500);
+        assert_eq!(rippled.audio_clips[0].start_ms, 500);
+        assert_eq!(rippled.automations[0].keyframes[0].time_ms, 500);
+        assert_eq!(rippled.video_automations[0].keyframes[0].time_ms, 500);
+        let before_invalid_ripple = timeline.clone();
+        let mut invalid_ripple = before_invalid_ripple.clone();
+        assert!(ripple_timeline_items(
+            &mut invalid_ripple,
+            &[TimelineItemRef::AudioClip { clip_id: 31 }],
+            -1,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("before time zero"));
+        assert_eq!(invalid_ripple, before_invalid_ripple);
+
         let mut quantized = timeline.clone();
         quantized.events[0].time_ms = 750;
         quantized.events[0].time_beats = Some(1.5);
@@ -75701,7 +75794,7 @@ mod live_audio_input_tests {
     }
 
     #[test]
-    fn timeline_copy_paste_duplicate_nudge_quantize_and_delete_are_authoritative() {
+    fn timeline_copy_paste_duplicate_nudge_quantize_ripple_and_delete_are_authoritative() {
         let harness = MediaAssetA6CommandHarness::new();
         let (_video_layer_id, media_asset_id, _alternate_asset_id, _slot_id) =
             seed_video_clip_slot_layer(&harness);
@@ -76063,6 +76156,61 @@ mod live_audio_input_tests {
         b3_assert_authority_matches_persistence(&harness);
         c1_stabilize_fixture_authority(&harness);
 
+        let ripple_baseline = harness.mutation_baseline();
+        let ripple_request = TimelineAdvancedMutationRequest::RippleItems {
+            items: vec![TimelineItemRef::AudioClip {
+                clip_id: pasted_audio_clip_id,
+            }],
+            delta_ms: 250,
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let rippled = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            ripple_request.clone(),
+            84_685,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("ripple the pasted group and every following authored item");
+        assert_eq!(rippled.selected_items, pasted.selected_items);
+        assert_eq!(
+            rippled
+                .authoring
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == pasted_audio_clip_id)
+                .unwrap()
+                .start_ms,
+            750
+        );
+        assert!(rippled
+            .authoring
+            .audio_clips
+            .iter()
+            .filter(|clip| clip.id != pasted_audio_clip_id)
+            .all(|clip| clip.start_ms == 2_250));
+        let ripple_retried = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            ripple_request,
+            84_685,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("recover the exact linked ripple terminal receipt");
+        assert_eq!(
+            serde_json::to_value(&rippled).unwrap(),
+            serde_json::to_value(&ripple_retried).unwrap()
+        );
+        assert_one_authoritative_history_mutation(&harness, ripple_baseline);
+        b3_assert_authority_matches_persistence(&harness);
+        c1_stabilize_fixture_authority(&harness);
+
         let delete_baseline = harness.mutation_baseline();
         let delete_request = TimelineAdvancedMutationRequest::DeleteItems {
             items: vec![
@@ -76078,7 +76226,7 @@ mod live_audio_input_tests {
         let deleted = apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
             delete_request.clone(),
-            84_685,
+            84_686,
             epoch,
             revision,
             hash.clone(),
@@ -76094,7 +76242,7 @@ mod live_audio_input_tests {
         let delete_retried = apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
             delete_request,
-            84_685,
+            84_686,
             epoch,
             revision,
             hash,

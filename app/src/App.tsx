@@ -13111,6 +13111,20 @@ export default function App() {
       return [];
     }
   };
+  const rippleTimelineItems = async (items: TimelineItemRef[], deltaMs: number) => {
+    try {
+      const result = await commitTimelineAdvanced({
+        kind: "ripple_items",
+        items,
+        delta_ms: deltaMs,
+      });
+      if (result) setMessage("Timeline ripple moved from the selected boundary.");
+      return result?.selected_items ?? [];
+    } catch (error) {
+      setMessage(`Timeline ripple move failed: ${String(error)}`);
+      return [];
+    }
+  };
   const quantizeTimelineItems = async (items: TimelineItemRef[], gridMs: number) => {
     try {
       const result = await commitTimelineAdvanced({
@@ -23901,6 +23915,7 @@ export default function App() {
               onUngroupItem={ungroupTimelineItem}
               onDuplicateItems={duplicateTimelineItems}
               onNudgeItems={nudgeTimelineItems}
+              onRippleItems={rippleTimelineItems}
               onQuantizeItems={quantizeTimelineItems}
               onPasteItems={pasteTimelineItems}
               onRemoveItems={removeTimelineItems}

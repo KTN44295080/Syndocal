@@ -2869,6 +2869,8 @@ const japaneseText: Record<string, string> = {
   "Paste at playhead": "再生ヘッド位置へ貼り付け",
   "Nudge earlier": "前へナッジ",
   "Nudge later": "後ろへナッジ",
+  "Ripple earlier": "前へリップル移動",
+  "Ripple later": "後ろへリップル移動",
   "Quantize to grid": "グリッドへクオンタイズ",
   "Delete selected Timeline items?": "選択したタイムライン項目を削除しますか？",
   "selected Timeline item(s) will be removed.": "件の選択したタイムライン項目を削除します。",

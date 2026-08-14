@@ -1354,7 +1354,7 @@ physical multi-device routing acceptance remain part of the final L-TL7 boundary
 ### L-TL4. Linked groups and selection/edit semantics
 
 Status (2026-08-15): in progress. Stable cross-domain group membership, automatic linked A/V
-placement, linked selection, group/ungroup, relative group move, grid nudge, grid quantize, and
+placement, linked selection, group/ungroup, relative group move, grid nudge, grid quantize, ripple move, and
 reference-scoped copy/paste are implemented. Delete now
 expands the captured authored group closure on the backend and removes Lighting events, Video clips,
 Audio clips, and both Automation domains in one authoritative publication/Undo; stale references
@@ -1370,7 +1370,10 @@ epoch and Timeline. Paste captures those references from the current authored A,
 group closure, shifts the earliest temporal anchor to the snapped playhead (including an earlier target),
 allocates fresh item/group IDs, rewires internal jump targets, and returns the fresh logical selection in
 one exactly recoverable history mutation. Replacement or Timeline change clears the clipboard; stale or
-deleted source references reject before mutation. Remaining grouped edit work is ripple move, trim, split, lane-valid reorder,
+deleted source references reject before mutation. Ripple move uses the earliest point in the selected
+logical group as its boundary, shifts every authored Lighting, Video, Audio, and Automation item at or
+after that boundary, expands any intersected group to its complete membership, and preserves the original
+logical selection; negative underflow rejects before mutation. Remaining grouped edit work is trim, split, lane-valid reorder,
 the temporary single-member modifier, and selection/focus restoration across Undo/Redo and reload.
 Duplicate is now authoritative across all five item domains: it allocates fresh item/group IDs,
 preserves group-relative offsets and musical beat placement, rewires duplicated internal jump targets,
