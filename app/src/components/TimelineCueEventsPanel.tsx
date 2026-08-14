@@ -12,6 +12,8 @@ import type {
   TimelineFollowRuntimeSummary,
   TimelineFollowSummary,
   TimelineItemGroupSummary,
+  TimelineItemLaneMovePlan,
+  TimelineItemLanePlacement,
   TimelineItemRef,
   TimelinePhaseRole,
   TimelinePhaseSummary,
@@ -19,13 +21,14 @@ import type {
   TimelineTrackKind,
   TimelineVideoClipSummary,
 } from "../types";
+import { planTimelineItemLaneMove } from "../types";
 import type { CueIdentitySource } from "../identityColor";
 import type { TimelineCueDragState } from "../timelineCueDrag";
 import { expandTimelineItemGroupSelection, timelineItemKey } from "../timelineAdvancedAuthoring";
 import { applyTimelineDirectTrim } from "../timelineDirectResize";
 import { applyTimelineSplitAtPlayhead } from "../timelineSplitAction";
 import type { TimelineContextDrawer } from "../uiModes";
-import { timelineLayerIdForEvent } from "../timelineLayers";
+import { sortedTimelineLayers, timelineLayerIdForEvent } from "../timelineLayers";
 import {
   TIMELINE_MIN_VISIBLE_WINDOW_MS,
   timelineVisibleWindowSpanMs,
@@ -115,6 +118,7 @@ interface TimelineCueEventsPanelProps {
   videoClips: TimelineVideoClipSummary[];
   mediaAssets: MediaAssetSummary[];
   itemGroups: TimelineItemGroupSummary[];
+  itemLanePlacements: TimelineItemLanePlacement[];
   audioOffsetMs: number;
   audioMuted: boolean;
   audioWaveformPoints: string;
@@ -219,6 +223,7 @@ interface TimelineCueEventsPanelProps {
     boundaryMs: number,
     isolate: boolean,
   ) => Promise<TimelineItemRef[]>;
+  onMoveItemsToLanes: (plan: TimelineItemLaneMovePlan) => Promise<TimelineItemRef[]>;
   onRestoreReturnedItemSelection: (items: TimelineItemRef[]) => void;
   onRemoveItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onRemoveAudioClip: (clipId: number) => void | Promise<void>;
@@ -444,6 +449,83 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   };
   const isTimelineItemLinked = (item: TimelineItemRef) => props.itemGroups.some((group) =>
     group.members.some((member) => timelineItemKey(member) === timelineItemKey(item)));
+  const laneMoveFailureMessage = (reason: "missing" | "kind" | "locked" | "range" | "unchanged") => {
+    switch (reason) {
+      case "missing": return "A linked Timeline item or lane is missing. No changes were made.";
+      case "kind": return "Timeline items can only move within their matching lane section. No changes were made.";
+      case "locked": return "A source or target Timeline lane is locked. No changes were made.";
+      case "range": return "The linked Timeline group cannot move that far within every lane section. No changes were made.";
+      case "unchanged": return "The Timeline selection is already on that lane.";
+    }
+  };
+  const laneMoveItemsForPrimary = (primary: TimelineItemRef) => {
+    const selected = selectedTimelineItemRefs();
+    return selected.some((item) => timelineItemKey(item) === timelineItemKey(primary))
+      ? [...selected]
+      : [primary];
+  };
+  const plannedTimelineLaneMove = (
+    primary: TimelineItemRef,
+    targetLayerId: number,
+    deltaMs: number,
+    isolate: boolean,
+  ) => planTimelineItemLaneMove({
+    items: laneMoveItemsForPrimary(primary),
+    primary,
+    target_layer_id: targetLayerId,
+    delta_ms: deltaMs,
+    isolate,
+    layers: props.timelineLayers,
+    groups: props.itemGroups,
+    placements: props.itemLanePlacements,
+  });
+  const applyTimelineLaneMove = async (
+    primary: TimelineItemRef,
+    targetLayerId: number,
+    deltaMs: number,
+    isolate: boolean,
+  ) => {
+    const planned = plannedTimelineLaneMove(primary, targetLayerId, deltaMs, isolate);
+    if (!planned.ok) {
+      props.onTimelineStatus(laneMoveFailureMessage(planned.reason));
+      return [];
+    }
+    const selected = await props.onMoveItemsToLanes(planned.plan);
+    if (selected.length > 0) {
+      selectReturnedTimelineItems(selected);
+      focusReturnedTimelineItem(primary);
+    }
+    return selected;
+  };
+  const adjacentTimelineLaneTarget = (primary: TimelineItemRef, direction: -1 | 1) => {
+    const sourceLayerId = props.itemLanePlacements.find((placement) =>
+      timelineItemKey(placement.item) === timelineItemKey(primary))?.resolved_layer_id;
+    const source = props.timelineLayers.find((layer) => layer.id === sourceLayerId);
+    if (!source) return null;
+    const section = primary.kind === "lighting_event"
+      ? sortedTimelineLayers(props.timelineLayers).filter((layer) => layer.kind !== "Audio")
+      : props.timelineLayers
+        .filter((layer) => layer.kind === source.kind)
+        .sort((left, right) => left.order - right.order || left.id - right.id);
+    const sourceIndex = section.findIndex((layer) => layer.id === source.id);
+    return section[sourceIndex + direction] ?? null;
+  };
+  const canMoveTimelineItemLane = (primary: TimelineItemRef, direction: -1 | 1, isolate = false) => {
+    const target = adjacentTimelineLaneTarget(primary, direction);
+    return target !== null && plannedTimelineLaneMove(primary, target.id, 0, isolate).ok;
+  };
+  const moveTimelineItemLaneDirection = async (
+    primary: TimelineItemRef,
+    direction: -1 | 1,
+    isolate: boolean,
+  ) => {
+    const target = adjacentTimelineLaneTarget(primary, direction);
+    if (!target) {
+      props.onTimelineStatus(laneMoveFailureMessage("range"));
+      return;
+    }
+    await applyTimelineLaneMove(primary, target.id, 0, isolate);
+  };
   const trimTimelineItemFromOverview = async (
     item: TimelineItemRef,
     edge: "start" | "end",
@@ -525,6 +607,11 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       if (selected.length > 0) selectReturnedTimelineItems(selected);
       return;
     }
+    if (linked && singleMemberEditKey() === timelineItemKey(item) && positionOnly) {
+      if (deltaMs === 0) return;
+      await applyTimelineLaneMove(item, previous.layer_id, deltaMs, true);
+      return;
+    }
     await props.onUpdateAudioClip(next);
   };
 
@@ -545,6 +632,11 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       if (deltaMs === 0) return;
       const selected = await props.onNudgeItems([item], deltaMs);
       if (selected.length > 0) selectReturnedTimelineItems(selected);
+      return;
+    }
+    if (linked && singleMemberEditKey() === timelineItemKey(item) && positionOnly) {
+      if (deltaMs === 0) return;
+      await applyTimelineLaneMove(item, previous.layer_id, deltaMs, true);
       return;
     }
     await props.onUpdateVideoClip(next);
@@ -1242,6 +1334,12 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onTrimTimelineItem={(item, edge, boundaryMs, isolate) =>
           void trimTimelineItemFromOverview(item, edge, boundaryMs, isolate)
         }
+        onMoveTimelineItemToLane={(item, targetLayerId, deltaMs, isolate) =>
+          void applyTimelineLaneMove(item, targetLayerId, deltaMs, isolate)
+        }
+        onMoveTimelineItemLaneDirection={(item, direction, isolate) =>
+          void moveTimelineItemLaneDirection(item, direction, isolate)
+        }
         onStatus={props.onTimelineStatus}
         onMoveEventPlacement={(eventId, timeMs, layerId, snapEnabled) =>
           void props.onMoveEventPlacement(eventId, timeMs, layerId, snapEnabled)
@@ -1430,6 +1528,42 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               }}
             >
               Quantize to grid
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!canMoveTimelineItemLane(
+                menu().anchor,
+                -1,
+                singleMemberEditKey() === timelineItemKey(menu().anchor),
+              )}
+              onClick={() => {
+                const primary = menu().anchor;
+                const target = adjacentTimelineLaneTarget(primary, -1);
+                const isolate = singleMemberEditKey() === timelineItemKey(primary);
+                setItemContextMenu(null);
+                if (target) void applyTimelineLaneMove(primary, target.id, 0, isolate);
+              }}
+            >
+              Move lane up
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!canMoveTimelineItemLane(
+                menu().anchor,
+                1,
+                singleMemberEditKey() === timelineItemKey(menu().anchor),
+              )}
+              onClick={() => {
+                const primary = menu().anchor;
+                const target = adjacentTimelineLaneTarget(primary, 1);
+                const isolate = singleMemberEditKey() === timelineItemKey(primary);
+                setItemContextMenu(null);
+                if (target) void applyTimelineLaneMove(primary, target.id, 0, isolate);
+              }}
+            >
+              Move lane down
             </button>
             <button
               type="button"

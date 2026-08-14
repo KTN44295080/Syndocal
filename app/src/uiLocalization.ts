@@ -2876,6 +2876,23 @@ const japaneseText: Record<string, string> = {
   "Ripple later": "後ろへリップル移動",
   "Hold Alt while selecting to edit only this linked member": "Altを押しながら選択すると、このリンクメンバーだけを編集します",
   "Quantize to grid": "グリッドへクオンタイズ",
+  "Move lane up": "レーンを上へ移動",
+  "Move lane down": "レーンを下へ移動",
+  "Timeline selection moved between lanes.": "タイムラインの選択項目をレーン間で移動しました。",
+  "Timeline lane move failed:": "タイムラインのレーン移動に失敗しました:",
+  "A linked Timeline item or lane is missing. No changes were made.":
+    "リンクされたタイムライン項目またはレーンが見つからないため、変更しませんでした。",
+  "Timeline items can only move within their matching lane section. No changes were made.":
+    "タイムライン項目は対応するレーン区分内でのみ移動できます。変更は行われませんでした。",
+  "A source or target Timeline lane is locked. No changes were made.":
+    "移動元または移動先のタイムラインレーンがロック中のため、変更しませんでした。",
+  "The linked Timeline group cannot move that far within every lane section. No changes were made.":
+    "リンクされたタイムライングループをすべてのレーン区分でその位置へ移動できないため、変更しませんでした。",
+  "The Timeline selection is already on that lane.": "タイムラインの選択項目はすでにそのレーン上にあります。",
+  "The target automation lane is locked. No changes were made.":
+    "移動先のオートメーションレーンがロック中のため、変更しませんでした。",
+  "Automation can only move within its matching lane section. No changes were made.":
+    "オートメーションは対応するレーン区分内でのみ移動できます。変更は行われませんでした。",
   "Trim start to playhead": "開始端を再生ヘッドまでトリム",
   "Trim end to playhead": "終了端を再生ヘッドまでトリム",
   "Timeline selection split at the playhead.": "タイムラインの選択項目を再生ヘッドで分割しました。",
@@ -3399,6 +3416,7 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^Timeline layer reorder must contain all (\d+) layer ids exactly once$/, (count) => `レイヤーの並べ替えには全${count}件のIDを1回ずつ含めてください`],
   [/^Timeline layer reorder contains duplicate layer (\d+)$/, (id) => `レイヤーの並べ替えにタイムラインレイヤー ${id} が重複しています`],
   [/^Timeline layer (.+) is locked\. Unlock it before moving blocks\.$/, (label) => `タイムラインレイヤー ${label} のロックを解除してからブロックを移動してください。`],
+  [/^Timeline layer (.+) is locked\. Unlock it before moving automation\.$/, (label) => `タイムラインレイヤー ${label} のロックを解除してからオートメーションを移動してください。`],
   [/^Timeline layer (.+) is locked\. Unlock it before resizing blocks\.$/, (label) => `タイムラインレイヤー ${label} のロックを解除してからブロックをリサイズしてください。`],
   [/^Timeline layer (.+) is locked\. No changes were made\.$/, (label) => `タイムラインレイヤー ${label} はロック中のため、変更しませんでした。`],
   [/^Timeline layer (\d+) is locked; unlock it before (editing|placing) event (\d+)$/, (layerId, action, eventId) => `タイムラインレイヤー ${layerId} のロックを解除してからイベント ${eventId} を${action === "editing" ? "編集" : "配置"}してください`],

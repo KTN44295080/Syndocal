@@ -13062,6 +13062,7 @@ struct RuntimeTimelineAutomation {
     fixture_id: FixtureId,
     attribute: String,
     track: TimelineTrackKind,
+    timeline_layer_id: Option<u32>,
     keyframes: Vec<AutomationKeyframeSummary>,
     enabled: bool,
 }
@@ -13070,6 +13071,7 @@ struct RuntimeTimelineAutomation {
 struct RuntimeTimelineVideoAutomation {
     id: AutomationId,
     layer_id: VideoLayerId,
+    timeline_layer_id: Option<u32>,
     param: VideoParam,
     track: TimelineTrackKind,
     keyframes: Vec<VideoAutomationKeyframeSummary>,
@@ -13423,8 +13425,11 @@ enum PendingCommandRollback {
     RestoreTimelineLayers {
         timeline_layers: Vec<TimelineLayerSummary>,
         timeline_events: Vec<RuntimeTimelineEvent>,
+        timeline_automations: Vec<RuntimeTimelineAutomation>,
+        timeline_video_automations: Vec<RuntimeTimelineVideoAutomation>,
         timeline_audio: Option<AudioAnalysisSummary>,
         timeline_audio_clips: Vec<TimelineAudioClipSummary>,
+        timeline_video_clips: Vec<TimelineVideoClipSummary>,
         timeline_audio_clips_derived: bool,
         timeline_audio_duration_ms: u64,
         timeline_position_ms: u64,
@@ -15107,6 +15112,7 @@ impl EngineRuntime {
                     fixture_id: automation.fixture_id,
                     attribute,
                     track: TimelineTrackKind::Lighting,
+                    timeline_layer_id: automation.timeline_layer_id,
                     keyframes,
                     enabled: automation.enabled,
                 })
@@ -15123,6 +15129,7 @@ impl EngineRuntime {
                 Some(RuntimeTimelineVideoAutomation {
                     id: automation.id,
                     layer_id: automation.layer_id,
+                    timeline_layer_id: automation.timeline_layer_id,
                     param: automation.param,
                     track: TimelineTrackKind::Video,
                     keyframes,
@@ -19198,8 +19205,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_automations: self.timeline_automations.clone(),
+                    timeline_video_automations: self.timeline_video_automations.clone(),
                     timeline_audio: self.timeline_audio.clone(),
                     timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_video_clips: self.timeline_video_clips.clone(),
                     timeline_audio_clips_derived: self.timeline_audio_clips_derived,
                     timeline_audio_duration_ms: self.timeline_audio_duration_ms,
                     timeline_position_ms: self.timeline_position_ms,
@@ -19232,8 +19242,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_automations: self.timeline_automations.clone(),
+                    timeline_video_automations: self.timeline_video_automations.clone(),
                     timeline_audio: self.timeline_audio.clone(),
                     timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_video_clips: self.timeline_video_clips.clone(),
                     timeline_audio_clips_derived: self.timeline_audio_clips_derived,
                     timeline_audio_duration_ms: self.timeline_audio_duration_ms,
                     timeline_position_ms: self.timeline_position_ms,
@@ -19267,8 +19280,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_automations: self.timeline_automations.clone(),
+                    timeline_video_automations: self.timeline_video_automations.clone(),
                     timeline_audio: self.timeline_audio.clone(),
                     timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_video_clips: self.timeline_video_clips.clone(),
                     timeline_audio_clips_derived: self.timeline_audio_clips_derived,
                     timeline_audio_duration_ms: self.timeline_audio_duration_ms,
                     timeline_position_ms: self.timeline_position_ms,
@@ -19301,8 +19317,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_automations: self.timeline_automations.clone(),
+                    timeline_video_automations: self.timeline_video_automations.clone(),
                     timeline_audio: self.timeline_audio.clone(),
                     timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_video_clips: self.timeline_video_clips.clone(),
                     timeline_audio_clips_derived: self.timeline_audio_clips_derived,
                     timeline_audio_duration_ms: self.timeline_audio_duration_ms,
                     timeline_position_ms: self.timeline_position_ms,
@@ -19335,8 +19354,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_automations: self.timeline_automations.clone(),
+                    timeline_video_automations: self.timeline_video_automations.clone(),
                     timeline_audio: self.timeline_audio.clone(),
                     timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_video_clips: self.timeline_video_clips.clone(),
                     timeline_audio_clips_derived: self.timeline_audio_clips_derived,
                     timeline_audio_duration_ms: self.timeline_audio_duration_ms,
                     timeline_position_ms: self.timeline_position_ms,
@@ -19369,8 +19391,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_automations: self.timeline_automations.clone(),
+                    timeline_video_automations: self.timeline_video_automations.clone(),
                     timeline_audio: self.timeline_audio.clone(),
                     timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_video_clips: self.timeline_video_clips.clone(),
                     timeline_audio_clips_derived: self.timeline_audio_clips_derived,
                     timeline_audio_duration_ms: self.timeline_audio_duration_ms,
                     timeline_position_ms: self.timeline_position_ms,
@@ -19403,8 +19428,11 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreTimelineLayers {
                     timeline_layers: self.timeline_layers.clone(),
                     timeline_events: self.timeline_events.clone(),
+                    timeline_automations: self.timeline_automations.clone(),
+                    timeline_video_automations: self.timeline_video_automations.clone(),
                     timeline_audio: self.timeline_audio.clone(),
                     timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_video_clips: self.timeline_video_clips.clone(),
                     timeline_audio_clips_derived: self.timeline_audio_clips_derived,
                     timeline_audio_duration_ms: self.timeline_audio_duration_ms,
                     timeline_position_ms: self.timeline_position_ms,
@@ -19567,6 +19595,7 @@ impl EngineRuntime {
                     fixture_id,
                     attribute,
                     track: TimelineTrackKind::Lighting,
+                    timeline_layer_id: None,
                     keyframes,
                     enabled: true,
                 });
@@ -19621,6 +19650,7 @@ impl EngineRuntime {
                     .push(RuntimeTimelineVideoAutomation {
                         id: automation_id,
                         layer_id,
+                        timeline_layer_id: None,
                         param,
                         track: TimelineTrackKind::Video,
                         keyframes,
@@ -21712,8 +21742,11 @@ impl EngineRuntime {
             PendingCommandRollback::RestoreTimelineLayers {
                 timeline_layers,
                 timeline_events,
+                timeline_automations,
+                timeline_video_automations,
                 timeline_audio,
                 timeline_audio_clips,
+                timeline_video_clips,
                 timeline_audio_clips_derived,
                 timeline_audio_duration_ms,
                 timeline_position_ms,
@@ -21721,8 +21754,11 @@ impl EngineRuntime {
             } => {
                 self.timeline_layers = timeline_layers;
                 self.timeline_events = timeline_events;
+                self.timeline_automations = timeline_automations;
+                self.timeline_video_automations = timeline_video_automations;
                 self.timeline_audio = timeline_audio;
                 self.timeline_audio_clips = timeline_audio_clips;
+                self.timeline_video_clips = timeline_video_clips;
                 self.timeline_audio_clips_derived = timeline_audio_clips_derived;
                 self.timeline_audio_duration_ms = timeline_audio_duration_ms;
                 self.timeline_position_ms = timeline_position_ms;
@@ -27059,6 +27095,16 @@ impl EngineRuntime {
             for event in &mut self.timeline_events {
                 event.layer_id = Some(event.resolved_layer_id);
             }
+            for automation in &mut self.timeline_automations {
+                if automation.timeline_layer_id.is_none() {
+                    automation.timeline_layer_id = Some(0);
+                }
+            }
+            for automation in &mut self.timeline_video_automations {
+                if automation.timeline_layer_id.is_none() {
+                    automation.timeline_layer_id = Some(1);
+                }
+            }
         }
         if self.timeline_audio_clips_derived {
             if let Some(layer_id) = self.timeline_audio_clips.first().map(|clip| clip.layer_id) {
@@ -27127,7 +27173,10 @@ impl EngineRuntime {
     ) -> Result<(), String> {
         let previous_layers = self.timeline_layers.clone();
         let previous_events = self.timeline_events.clone();
+        let previous_automations = self.timeline_automations.clone();
+        let previous_video_automations = self.timeline_video_automations.clone();
         let previous_audio_clips = self.timeline_audio_clips.clone();
+        let previous_video_clips = self.timeline_video_clips.clone();
         let previous_audio_clips_derived = self.timeline_audio_clips_derived;
         let previous_audio_duration_ms = self.timeline_audio_duration_ms;
         let previous_position_ms = self.timeline_position_ms;
@@ -27135,7 +27184,10 @@ impl EngineRuntime {
         if result.is_err() {
             self.timeline_layers = previous_layers;
             self.timeline_events = previous_events;
+            self.timeline_automations = previous_automations;
+            self.timeline_video_automations = previous_video_automations;
             self.timeline_audio_clips = previous_audio_clips;
+            self.timeline_video_clips = previous_video_clips;
             self.timeline_audio_clips_derived = previous_audio_clips_derived;
             self.timeline_audio_duration_ms = previous_audio_duration_ms;
             self.timeline_position_ms = previous_position_ms;
@@ -27191,8 +27243,63 @@ impl EngineRuntime {
                 layer.id
             ));
         }
+        if !matches!(layer.kind, TimelineLayerKind::Video)
+            && self
+                .timeline_video_clips
+                .iter()
+                .any(|clip| clip.layer_id == layer.id)
+        {
+            return Err(format!(
+                "Timeline layer {} contains video clips and must remain Video",
+                layer.id
+            ));
+        }
+        if !matches!(layer.kind, TimelineLayerKind::Lighting)
+            && self
+                .timeline_automations
+                .iter()
+                .any(|automation| automation.timeline_layer_id == Some(layer.id))
+        {
+            return Err(format!(
+                "Timeline layer {} contains Lighting automation and must remain Lighting",
+                layer.id
+            ));
+        }
+        if !matches!(layer.kind, TimelineLayerKind::Video)
+            && self
+                .timeline_video_automations
+                .iter()
+                .any(|automation| automation.timeline_layer_id == Some(layer.id))
+        {
+            return Err(format!(
+                "Timeline layer {} contains Video automation and must remain Video",
+                layer.id
+            ));
+        }
         self.commit_timeline_layer_mutation(move |runtime| {
             runtime.materialize_legacy_timeline_layers();
+            if !matches!(layer.kind, TimelineLayerKind::Lighting)
+                && runtime
+                    .timeline_automations
+                    .iter()
+                    .any(|automation| automation.timeline_layer_id == Some(layer.id))
+            {
+                return Err(format!(
+                    "Timeline layer {} contains Lighting automation and must remain Lighting",
+                    layer.id
+                ));
+            }
+            if !matches!(layer.kind, TimelineLayerKind::Video)
+                && runtime
+                    .timeline_video_automations
+                    .iter()
+                    .any(|automation| automation.timeline_layer_id == Some(layer.id))
+            {
+                return Err(format!(
+                    "Timeline layer {} contains Video automation and must remain Video",
+                    layer.id
+                ));
+            }
             let index = runtime
                 .timeline_layers
                 .iter()
@@ -27231,6 +27338,18 @@ impl EngineRuntime {
             .timeline_audio_clips
             .iter()
             .any(|clip| clip.layer_id == layer_id);
+        let has_video_clips = self
+            .timeline_video_clips
+            .iter()
+            .any(|clip| clip.layer_id == layer_id);
+        let has_lighting_automations = self
+            .timeline_automations
+            .iter()
+            .any(|automation| automation.timeline_layer_id == Some(layer_id));
+        let has_video_automations = self
+            .timeline_video_automations
+            .iter()
+            .any(|automation| automation.timeline_layer_id == Some(layer_id));
         let target = match reassign_to_layer_id {
             Some(target_id) if target_id == layer_id => {
                 return Err("Timeline layer cannot be reassigned to itself".to_string());
@@ -27258,9 +27377,29 @@ impl EngineRuntime {
                         "Audio clips can only be reassigned to Audio timeline layer {target_id}"
                     ));
                 }
+                if !matches!(target.kind, TimelineLayerKind::Video) && has_video_clips {
+                    return Err(format!(
+                        "Video clips can only be reassigned to Video timeline layer {target_id}"
+                    ));
+                }
+                if !matches!(target.kind, TimelineLayerKind::Lighting) && has_lighting_automations {
+                    return Err(format!(
+                        "Lighting automation can only be reassigned to Lighting timeline layer {target_id}"
+                    ));
+                }
+                if !matches!(target.kind, TimelineLayerKind::Video) && has_video_automations {
+                    return Err(format!(
+                        "Video automation can only be reassigned to Video timeline layer {target_id}"
+                    ));
+                }
                 Some(target)
             }
-            None if has_events || has_audio_clips => {
+            None if has_events
+                || has_audio_clips
+                || has_video_clips
+                || has_lighting_automations
+                || has_video_automations =>
+            {
                 return Err(format!(
                     "Timeline layer {layer_id} is not empty; provide a reassign target"
                 ));
@@ -27269,6 +27408,36 @@ impl EngineRuntime {
         };
         self.commit_timeline_layer_mutation(move |runtime| {
             runtime.materialize_legacy_timeline_layers();
+            let has_materialized_lighting_automations = runtime
+                .timeline_automations
+                .iter()
+                .any(|automation| automation.timeline_layer_id == Some(layer_id));
+            let has_materialized_video_automations = runtime
+                .timeline_video_automations
+                .iter()
+                .any(|automation| automation.timeline_layer_id == Some(layer_id));
+            if let Some(target) = &target {
+                if !matches!(target.kind, TimelineLayerKind::Lighting)
+                    && has_materialized_lighting_automations
+                {
+                    return Err(format!(
+                        "Lighting automation can only be reassigned to Lighting timeline layer {}",
+                        target.id
+                    ));
+                }
+                if !matches!(target.kind, TimelineLayerKind::Video)
+                    && has_materialized_video_automations
+                {
+                    return Err(format!(
+                        "Video automation can only be reassigned to Video timeline layer {}",
+                        target.id
+                    ));
+                }
+            } else if has_materialized_lighting_automations || has_materialized_video_automations {
+                return Err(format!(
+                    "Timeline layer {layer_id} is not empty; provide a reassign target"
+                ));
+            }
             if let Some(target) = target {
                 if let Some(target_track) = timeline_track_for_layer_kind(target.kind) {
                     for event in &mut runtime.timeline_events {
@@ -27282,6 +27451,25 @@ impl EngineRuntime {
                     for clip in &mut runtime.timeline_audio_clips {
                         if clip.layer_id == layer_id {
                             clip.layer_id = target.id;
+                        }
+                    }
+                }
+                if matches!(target.kind, TimelineLayerKind::Video) {
+                    for clip in &mut runtime.timeline_video_clips {
+                        if clip.layer_id == layer_id {
+                            clip.layer_id = target.id;
+                        }
+                    }
+                    for automation in &mut runtime.timeline_video_automations {
+                        if automation.timeline_layer_id == Some(layer_id) {
+                            automation.timeline_layer_id = Some(target.id);
+                        }
+                    }
+                }
+                if matches!(target.kind, TimelineLayerKind::Lighting) {
+                    for automation in &mut runtime.timeline_automations {
+                        if automation.timeline_layer_id == Some(layer_id) {
+                            automation.timeline_layer_id = Some(target.id);
                         }
                     }
                 }
@@ -38385,6 +38573,7 @@ fn timeline_automation_summary(
         fixture_id: automation.fixture_id,
         attribute: automation.attribute.clone(),
         track: automation.track.clone(),
+        timeline_layer_id: automation.timeline_layer_id,
         keyframes: automation.keyframes.clone(),
         enabled: automation.enabled,
     }
@@ -38398,6 +38587,7 @@ fn runtime_timeline_automation_from_summary(
         fixture_id: automation.fixture_id,
         attribute: automation.attribute.clone(),
         track: automation.track.clone(),
+        timeline_layer_id: automation.timeline_layer_id,
         keyframes: automation.keyframes.clone(),
         enabled: automation.enabled,
     }
@@ -38409,6 +38599,7 @@ fn timeline_video_automation_summary(
     TimelineVideoAutomationSummary {
         id: automation.id,
         layer_id: automation.layer_id,
+        timeline_layer_id: automation.timeline_layer_id,
         param: automation.param.clone(),
         track: automation.track.clone(),
         keyframes: automation.keyframes.clone(),
@@ -38422,6 +38613,7 @@ fn runtime_timeline_video_automation_from_summary(
     RuntimeTimelineVideoAutomation {
         id: automation.id,
         layer_id: automation.layer_id,
+        timeline_layer_id: automation.timeline_layer_id,
         param: automation.param.clone(),
         track: automation.track.clone(),
         keyframes: automation.keyframes.clone(),
@@ -53312,6 +53504,7 @@ mod tests {
                     fixture_id: 40,
                     attribute: "Dimmer".to_string(),
                     track: TimelineTrackKind::Lighting,
+                    timeline_layer_id: None,
                     keyframes: vec![
                         AutomationKeyframeSummary {
                             time_ms: 0,
@@ -54789,6 +54982,7 @@ mod tests {
                         fixture_id: 1,
                         attribute: "dimmer".to_string(),
                         track: TimelineTrackKind::Lighting,
+                        timeline_layer_id: None,
                         keyframes: vec![
                             AutomationKeyframeSummary {
                                 time_ms: 500,
@@ -54808,6 +55002,7 @@ mod tests {
                         fixture_id: 1,
                         attribute: "Zoom".to_string(),
                         track: TimelineTrackKind::Lighting,
+                        timeline_layer_id: None,
                         keyframes: vec![AutomationKeyframeSummary {
                             time_ms: 0,
                             value: 65_535,
@@ -54820,6 +55015,7 @@ mod tests {
                     TimelineVideoAutomationSummary {
                         id: 40,
                         layer_id: 2,
+                        timeline_layer_id: None,
                         param: VideoParam::Opacity,
                         track: TimelineTrackKind::Video,
                         keyframes: vec![
@@ -54839,6 +55035,7 @@ mod tests {
                     TimelineVideoAutomationSummary {
                         id: 41,
                         layer_id: 2,
+                        timeline_layer_id: None,
                         param: VideoParam::Opacity,
                         track: TimelineTrackKind::Video,
                         keyframes: vec![VideoAutomationKeyframeSummary {
@@ -54851,6 +55048,7 @@ mod tests {
                     TimelineVideoAutomationSummary {
                         id: 42,
                         layer_id: 99,
+                        timeline_layer_id: None,
                         param: VideoParam::Opacity,
                         track: TimelineTrackKind::Video,
                         keyframes: vec![VideoAutomationKeyframeSummary {
@@ -55146,6 +55344,7 @@ mod tests {
                         fixture_id: 1,
                         attribute: "Dimmer".to_string(),
                         track: TimelineTrackKind::Lighting,
+                        timeline_layer_id: None,
                         keyframes: vec![AutomationKeyframeSummary {
                             time_ms: 0,
                             value: 0,
@@ -55158,6 +55357,7 @@ mod tests {
                         fixture_id: 2,
                         attribute: "Dimmer".to_string(),
                         track: TimelineTrackKind::Lighting,
+                        timeline_layer_id: None,
                         keyframes: vec![AutomationKeyframeSummary {
                             time_ms: 0,
                             value: 0,
@@ -56058,6 +56258,7 @@ mod tests {
             fixture_id,
             attribute: "Dimmer".to_string(),
             track: TimelineTrackKind::Lighting,
+            timeline_layer_id: None,
             keyframes: vec![
                 AutomationKeyframeSummary {
                     time_ms: 0,
@@ -56095,6 +56296,7 @@ mod tests {
                 fixture_id,
                 attribute: "Dimmer".to_string(),
                 track: TimelineTrackKind::Lighting,
+                timeline_layer_id: None,
                 keyframes: vec![AutomationKeyframeSummary {
                     time_ms: 0,
                     value: 0,
@@ -56105,6 +56307,7 @@ mod tests {
             video_automations: vec![TimelineVideoAutomationSummary {
                 id,
                 layer_id: id,
+                timeline_layer_id: None,
                 param: VideoParam::Opacity,
                 track: TimelineTrackKind::Video,
                 keyframes: vec![VideoAutomationKeyframeSummary {
@@ -56344,6 +56547,7 @@ mod tests {
                     fixture_id: 1,
                     attribute: "Dimmer".to_string(),
                     track: TimelineTrackKind::Lighting,
+                    timeline_layer_id: None,
                     keyframes: Vec::new(),
                     enabled: false,
                 }];
@@ -57009,6 +57213,7 @@ mod tests {
                     fixture_id: 1,
                     attribute: "Dimmer".to_string(),
                     track: TimelineTrackKind::Lighting,
+                    timeline_layer_id: None,
                     keyframes: Vec::new(),
                     enabled: true,
                 }];
@@ -57019,6 +57224,7 @@ mod tests {
                     fixture_id: id,
                     attribute: "Dimmer".to_string(),
                     track: TimelineTrackKind::Lighting,
+                    timeline_layer_id: None,
                     keyframes: Vec::new(),
                     enabled: true,
                 }];
@@ -57027,6 +57233,7 @@ mod tests {
                 child.video_automations = vec![TimelineVideoAutomationSummary {
                     id: 1,
                     layer_id: id,
+                    timeline_layer_id: None,
                     param: VideoParam::Opacity,
                     track: TimelineTrackKind::Video,
                     keyframes: Vec::new(),
@@ -100184,6 +100391,250 @@ mod tests {
     }
 
     #[test]
+    fn timeline_layer_legacy_none_automation_occupancy_rejects_update_and_remove_atomically() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_automations = vec![RuntimeTimelineAutomation {
+            id: 501,
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            track: TimelineTrackKind::Lighting,
+            timeline_layer_id: None,
+            keyframes: Vec::new(),
+            enabled: true,
+        }];
+        runtime.timeline_video_automations = vec![RuntimeTimelineVideoAutomation {
+            id: 502,
+            layer_id: 1,
+            timeline_layer_id: None,
+            param: VideoParam::Opacity,
+            track: TimelineTrackKind::Video,
+            keyframes: Vec::new(),
+            enabled: true,
+        }];
+        let assert_legacy_state = |runtime: &EngineRuntime| {
+            assert!(runtime.timeline_layers.is_empty());
+            assert_eq!(runtime.timeline_automations.len(), 1);
+            assert_eq!(runtime.timeline_automations[0].timeline_layer_id, None);
+            assert_eq!(runtime.timeline_video_automations.len(), 1);
+            assert_eq!(
+                runtime.timeline_video_automations[0].timeline_layer_id,
+                None
+            );
+        };
+
+        let lighting_update_error = runtime
+            .update_timeline_layer_state(timeline_test_layer(
+                0,
+                0,
+                false,
+                false,
+                false,
+                TimelineLayerKind::Video,
+            ))
+            .unwrap_err();
+        assert!(lighting_update_error.contains("Lighting automation"));
+        assert_legacy_state(&runtime);
+
+        let video_update_error = runtime
+            .update_timeline_layer_state(timeline_test_layer(
+                1,
+                1,
+                false,
+                false,
+                false,
+                TimelineLayerKind::Lighting,
+            ))
+            .unwrap_err();
+        assert!(video_update_error.contains("Video automation"));
+        assert_legacy_state(&runtime);
+
+        let lighting_remove_error = runtime.remove_timeline_layer_state(0, None).unwrap_err();
+        assert!(lighting_remove_error.contains("not empty"));
+        assert_legacy_state(&runtime);
+
+        let video_remove_error = runtime.remove_timeline_layer_state(1, None).unwrap_err();
+        assert!(video_remove_error.contains("not empty"));
+        assert_legacy_state(&runtime);
+
+        let lighting_target_error = runtime.remove_timeline_layer_state(0, Some(1)).unwrap_err();
+        assert!(lighting_target_error.contains("Lighting automation"));
+        assert_legacy_state(&runtime);
+
+        let video_target_error = runtime.remove_timeline_layer_state(1, Some(0)).unwrap_err();
+        assert!(video_target_error.contains("Video automation"));
+        assert_legacy_state(&runtime);
+    }
+
+    #[test]
+    fn timeline_layer_legacy_none_automations_materialize_and_reassign_by_kind() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_automations = vec![RuntimeTimelineAutomation {
+            id: 501,
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            track: TimelineTrackKind::Lighting,
+            timeline_layer_id: None,
+            keyframes: Vec::new(),
+            enabled: true,
+        }];
+        runtime.timeline_video_automations = vec![RuntimeTimelineVideoAutomation {
+            id: 502,
+            layer_id: 1,
+            timeline_layer_id: None,
+            param: VideoParam::Opacity,
+            track: TimelineTrackKind::Video,
+            keyframes: Vec::new(),
+            enabled: true,
+        }];
+
+        runtime.materialize_legacy_timeline_layers();
+        assert_eq!(
+            runtime
+                .timeline_layers
+                .iter()
+                .map(|layer| (layer.id, layer.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, TimelineLayerKind::Lighting),
+                (1, TimelineLayerKind::Video),
+            ]
+        );
+        assert_eq!(runtime.timeline_automations[0].timeline_layer_id, Some(0));
+        assert_eq!(
+            runtime.timeline_video_automations[0].timeline_layer_id,
+            Some(1)
+        );
+
+        runtime
+            .add_timeline_layer_state(timeline_test_layer(
+                2,
+                2,
+                false,
+                false,
+                false,
+                TimelineLayerKind::Lighting,
+            ))
+            .unwrap();
+        runtime
+            .add_timeline_layer_state(timeline_test_layer(
+                3,
+                3,
+                false,
+                false,
+                false,
+                TimelineLayerKind::Video,
+            ))
+            .unwrap();
+
+        assert!(runtime.remove_timeline_layer_state(0, None).is_err());
+        runtime.remove_timeline_layer_state(0, Some(2)).unwrap();
+        assert_eq!(runtime.timeline_automations[0].timeline_layer_id, Some(2));
+        assert!(runtime.timeline_layers.iter().all(|layer| layer.id != 0));
+
+        assert!(runtime.remove_timeline_layer_state(1, None).is_err());
+        runtime.remove_timeline_layer_state(1, Some(3)).unwrap();
+        assert_eq!(
+            runtime.timeline_video_automations[0].timeline_layer_id,
+            Some(3)
+        );
+        assert!(runtime.timeline_layers.iter().all(|layer| layer.id != 1));
+    }
+
+    #[test]
+    fn timeline_layer_reassignment_preserves_automation_lane_identity_and_rolls_back() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_layers = vec![
+            timeline_test_layer(10, 0, false, false, false, TimelineLayerKind::Lighting),
+            timeline_test_layer(11, 1, false, false, false, TimelineLayerKind::Lighting),
+            timeline_test_layer(20, 2, false, false, false, TimelineLayerKind::Video),
+            timeline_test_layer(21, 3, false, false, false, TimelineLayerKind::Video),
+        ];
+        runtime.timeline_automations = vec![RuntimeTimelineAutomation {
+            id: 501,
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            track: TimelineTrackKind::Lighting,
+            timeline_layer_id: Some(10),
+            keyframes: Vec::new(),
+            enabled: true,
+        }];
+        runtime.timeline_video_automations = vec![RuntimeTimelineVideoAutomation {
+            id: 502,
+            layer_id: 1,
+            timeline_layer_id: Some(20),
+            param: VideoParam::Opacity,
+            track: TimelineTrackKind::Video,
+            keyframes: Vec::new(),
+            enabled: true,
+        }];
+        runtime.timeline_video_clips = vec![TimelineVideoClipSummary {
+            id: TimelineVideoClipId(503),
+            layer_id: 20,
+            media_asset_id: 1,
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        }];
+
+        let kind_error = runtime
+            .update_timeline_layer_state(timeline_test_layer(
+                10,
+                0,
+                false,
+                false,
+                false,
+                TimelineLayerKind::Video,
+            ))
+            .unwrap_err();
+        assert!(kind_error.contains("Lighting automation"));
+        let target_error = runtime
+            .remove_timeline_layer_state(10, Some(21))
+            .unwrap_err();
+        assert!(target_error.contains("Lighting automation"));
+        assert_eq!(runtime.timeline_automations[0].timeline_layer_id, Some(10));
+
+        let lighting_before = runtime.timeline_automations.clone();
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.fail_next_pending_publication = true;
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::RemoveTimelineLayer {
+            layer_id: 10,
+            reassign_to_layer_id: Some(11),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert!(runtime.timeline_layers.iter().any(|layer| layer.id == 10));
+        assert_eq!(
+            runtime
+                .timeline_automations
+                .iter()
+                .map(|automation| automation.timeline_layer_id)
+                .collect::<Vec<_>>(),
+            lighting_before
+                .iter()
+                .map(|automation| automation.timeline_layer_id)
+                .collect::<Vec<_>>()
+        );
+
+        runtime.remove_timeline_layer_state(10, Some(11)).unwrap();
+        assert_eq!(runtime.timeline_automations[0].timeline_layer_id, Some(11));
+        assert!(runtime.timeline_layers.iter().all(|layer| layer.id != 10));
+
+        runtime.remove_timeline_layer_state(20, Some(21)).unwrap();
+        assert_eq!(runtime.timeline_video_automations[0].layer_id, 1);
+        assert_eq!(
+            runtime.timeline_video_automations[0].timeline_layer_id,
+            Some(21)
+        );
+        assert_eq!(runtime.timeline_video_clips[0].layer_id, 21);
+        assert!(runtime.timeline_layers.iter().all(|layer| layer.id != 20));
+    }
+
+    #[test]
     fn timeline_layer_failed_kind_update_rolls_back_layers_and_event_cache() {
         let mut runtime = runtime_with_lfo_effects(&[]);
         create_effect_only_cue(&mut runtime, 1, Vec::new());
@@ -102496,6 +102947,7 @@ mod tests {
             fixture_id: 1,
             attribute: "Dimmer".to_string(),
             track: TimelineTrackKind::Lighting,
+            timeline_layer_id: None,
             keyframes: vec![
                 AutomationKeyframeSummary {
                     time_ms: 0,
@@ -102927,5 +103379,43 @@ mod tests {
             .video_layer_transition_runtime_snapshot()
             .buses
             .is_empty());
+    }
+
+    #[test]
+    fn timeline_automation_lane_identity_survives_runtime_projection() {
+        let lighting = TimelineAutomationSummary {
+            id: 401,
+            fixture_id: 7,
+            attribute: "Dimmer".to_string(),
+            track: TimelineTrackKind::Lighting,
+            timeline_layer_id: Some(21),
+            keyframes: vec![AutomationKeyframeSummary {
+                time_ms: 250,
+                value: 32_768,
+                interpolation: AutomationInterpolation::Linear,
+            }],
+            enabled: true,
+        };
+        let lighting_runtime = runtime_timeline_automation_from_summary(&lighting);
+        assert_eq!(lighting_runtime.timeline_layer_id, Some(21));
+        assert_eq!(timeline_automation_summary(&lighting_runtime), lighting);
+
+        let video = TimelineVideoAutomationSummary {
+            id: 402,
+            layer_id: 91,
+            timeline_layer_id: Some(31),
+            param: VideoParam::Opacity,
+            track: TimelineTrackKind::Video,
+            keyframes: vec![VideoAutomationKeyframeSummary {
+                time_ms: 250,
+                value: 0.5,
+                interpolation: AutomationInterpolation::Linear,
+            }],
+            enabled: true,
+        };
+        let video_runtime = runtime_timeline_video_automation_from_summary(&video);
+        assert_eq!(video_runtime.layer_id, 91);
+        assert_eq!(video_runtime.timeline_layer_id, Some(31));
+        assert_eq!(timeline_video_automation_summary(&video_runtime), video);
     }
 }

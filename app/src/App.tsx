@@ -334,6 +334,8 @@ import type {
   TimelineFollowSummary,
   TimelineGuideAudioStatus,
   TimelineGroupAutomationAddResult,
+  TimelineItemLaneMovePlan,
+  TimelineItemLanePlacement,
   TimelineItemRef,
   TimelineLayerSummary,
   TimelineLoopRegionSummary,
@@ -6813,6 +6815,7 @@ export default function App() {
       targetId: number,
       label: string,
       track: TimelineTrackKind,
+      timelineLayerId: number | null | undefined,
       keyframes: { time_ms: number }[],
       enabled: boolean,
     ): TimelineOverviewAutomationRange | null => {
@@ -6832,7 +6835,9 @@ export default function App() {
         target_id: targetId,
         label,
         track,
-        layer_id: overviewLayers.find((layer) => layer.kind === track)?.id ?? (track === "Lighting" ? 0 : 1),
+        layer_id: timelineLayerId
+          ?? overviewLayers.find((layer) => layer.kind === track)?.id
+          ?? (track === "Lighting" ? 0 : 1),
         start_ms: startMs,
         end_ms: endMs,
         keyframes: keyframes
@@ -6862,6 +6867,7 @@ export default function App() {
           automation.fixture_id,
           `${fixture?.label ?? `Fixture ${automation.fixture_id}`} ${automation.attribute}`,
           automation.track,
+          automation.timeline_layer_id,
           automation.keyframes,
           automation.enabled,
         );
@@ -6878,12 +6884,47 @@ export default function App() {
           automation.layer_id,
           `${layer?.label ?? `Video Layer ${automation.layer_id}`} ${automation.param}`,
           automation.track,
+          automation.timeline_layer_id,
           automation.keyframes,
           automation.enabled,
         );
       })
       .filter((range): range is TimelineOverviewAutomationRange => Boolean(range));
     return [...lightingRanges, ...videoRanges];
+  });
+  const timelineItemLanePlacements = createMemo<TimelineItemLanePlacement[]>(() => {
+    const timeline = activeTimeline();
+    const layers = timelineLayers();
+    const fallbackLayerId = (kind: TimelineLayerSummary["kind"]) =>
+      layers.find((layer) => layer.kind === kind)?.id;
+    return [
+      ...timeline.events.map((event) => ({
+        item: { kind: "lighting_event" as const, event_id: event.id },
+        resolved_layer_id: timelineLayerIdForEvent(layers, event),
+      })),
+      ...(timeline.video_clips ?? []).map((clip) => ({
+        item: { kind: "video_clip" as const, clip_id: clip.id },
+        resolved_layer_id: clip.layer_id,
+      })),
+      ...(timeline.audio_clips ?? []).map((clip) => ({
+        item: { kind: "audio_clip" as const, clip_id: clip.id },
+        resolved_layer_id: clip.layer_id,
+      })),
+      ...timeline.automations.flatMap((automation) => {
+        const resolvedLayerId = automation.timeline_layer_id ?? fallbackLayerId("Lighting");
+        return resolvedLayerId === undefined ? [] : [{
+          item: { kind: "lighting_automation" as const, automation_id: automation.id },
+          resolved_layer_id: resolvedLayerId,
+        }];
+      }),
+      ...timeline.video_automations.flatMap((automation) => {
+        const resolvedLayerId = automation.timeline_layer_id ?? fallbackLayerId("Video");
+        return resolvedLayerId === undefined ? [] : [{
+          item: { kind: "video_automation" as const, automation_id: automation.id },
+          resolved_layer_id: resolvedLayerId,
+        }];
+      }),
+    ];
   });
   const selectedTimelineAutomationRangeId = createMemo(() => {
     const selected = selectedTimelineAutomation();
@@ -13231,6 +13272,39 @@ export default function App() {
       return result?.selected_items ?? [];
     } catch (error) {
       setMessage(`Timeline selection split failed: ${String(error)}`);
+      return [];
+    }
+  };
+  const moveTimelineItemsToLanes = async (plan: TimelineItemLaneMovePlan) => {
+    try {
+      const request: Extract<TimelineAdvancedMutationRequest, { kind: "move_items_to_lanes" }> = {
+        kind: "move_items_to_lanes",
+        ...plan,
+      };
+      const fixtureMove = viewportFixture === "timeline-layered"
+        ? (window as Window & {
+            __syndocalTimelineLaneMoveFixture?: (
+              request: Extract<TimelineAdvancedMutationRequest, { kind: "move_items_to_lanes" }>,
+              timelineBank: TimelineSnapshot[],
+              activeTimelineId: number,
+            ) => Promise<TimelineAdvancedAuthoritativeResult>;
+          }).__syndocalTimelineLaneMoveFixture
+        : undefined;
+      if (fixtureMove) {
+        const result = await fixtureMove(
+          request,
+          structuredClone(timelineBank()),
+          activeTimeline().id ?? timelineBank()[0]?.id ?? 0,
+        );
+        applyEngineSnapshot(engineSnapshotWithTimelineAdvancedResult(latestEngineSnapshot, result), false);
+        setMessage("Timeline selection moved between lanes.");
+        return result.selected_items;
+      }
+      const result = await commitTimelineAdvanced(request);
+      if (result) setMessage("Timeline selection moved between lanes.");
+      return result?.selected_items ?? [];
+    } catch (error) {
+      setMessage(`Timeline lane move failed: ${String(error)}`);
       return [];
     }
   };
@@ -23907,6 +23981,7 @@ export default function App() {
               timelineCueDrag={timelineCueDrag()}
               overviewMarkerAriaLabel={(event) => timelineOverviewMarkerAriaLabel(event, uiLocale())}
               overviewAutomationRanges={timelineOverviewAutomationRanges()}
+              itemLanePlacements={timelineItemLanePlacements()}
               overviewOverlapClusters={timelineOverviewOverlapClusters()}
               overviewOverlapLayerIds={[
                 ...new Set(timelineOverlapClusters().map((cluster) => cluster.layer_id)),
@@ -24001,6 +24076,7 @@ export default function App() {
               onPasteItems={pasteTimelineItems}
               onTrimItems={trimTimelineItems}
               onSplitItems={splitTimelineItems}
+              onMoveItemsToLanes={moveTimelineItemsToLanes}
               onRestoreReturnedItemSelection={(items) => {
                 const specialized = specializedTimelineSelectionFromItems(items);
                 setSelectedTimelineSceneBlockEventId(specialized.event_id);

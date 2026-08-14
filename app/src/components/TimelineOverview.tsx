@@ -154,6 +154,17 @@ interface TimelineOverviewProps {
     boundaryMs: number,
     isolate: boolean,
   ) => void | Promise<void>;
+  onMoveTimelineItemToLane: (
+    item: TimelineItemRef,
+    targetLayerId: number,
+    deltaMs: number,
+    isolate: boolean,
+  ) => void | Promise<void>;
+  onMoveTimelineItemLaneDirection: (
+    item: TimelineItemRef,
+    direction: -1 | 1,
+    isolate: boolean,
+  ) => void | Promise<void>;
   onStatus: (message: string) => void;
   onMoveEventPlacement: (eventId: number, timeMs: number, layerId: number, snapEnabled: boolean) => void;
   onResizeEventTime: (
@@ -199,6 +210,7 @@ interface TimelineMarkerDrag {
   hoverLayerId: number | null;
   rejection: "locked" | "kind" | "audio" | null;
   moved: boolean;
+  isolate: boolean;
 }
 
 interface TimelineEventResizeDrag {
@@ -297,11 +309,16 @@ interface TimelineAutomationRangeDrag {
   pointerId: number;
   mode: "move" | "resize-start" | "resize-end";
   startClientX: number;
+  startClientY: number;
   moved: boolean;
   originalStartMs: number;
   originalEndMs: number;
   startMs: number;
   endMs: number;
+  originalLayerId: number;
+  layerId: number;
+  hoverLayerId: number | null;
+  rejection: "locked" | "kind" | null;
   isolate: boolean;
 }
 
@@ -709,6 +726,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       hoverLayerId: overviewEvent.layer_id,
       rejection: null,
       moved: projection.moved,
+      isolate: event.altKey,
     });
   };
 
@@ -738,11 +756,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       ? null
       : targetLayer.kind === "Audio"
         ? "audio" as const
-        : targetLayer.kind !== sourceLayer.kind
-          ? "kind" as const
-          : targetLayer.locked
-            ? "locked" as const
-            : null;
+        : targetLayer.locked
+          ? "locked" as const
+          : null;
     const nextLayerId = targetLayer && rejection === null ? targetLayer.id : drag.originalLayerId;
     setMarkerDrag({
       ...drag,
@@ -781,6 +797,25 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       } else {
         props.onStatus("Scene Blocks can only move within the same timeline section. No changes were made.");
       }
+      return;
+    }
+    if (drag.layerId !== drag.originalLayerId) {
+      void props.onMoveTimelineItemToLane(
+        { kind: "lighting_event", event_id: drag.eventId },
+        drag.layerId,
+        drag.timeMs - drag.originalTimeMs,
+        drag.isolate,
+      );
+      return;
+    }
+    const item: TimelineItemRef = { kind: "lighting_event", event_id: drag.eventId };
+    if (drag.isolate && drag.timeMs !== drag.originalTimeMs) {
+      void props.onMoveTimelineItemToLane(
+        item,
+        drag.originalLayerId,
+        drag.timeMs - drag.originalTimeMs,
+        true,
+      );
       return;
     }
     props.onMoveEventPlacement(drag.eventId, drag.timeMs, drag.layerId, props.magnetEnabled);
@@ -1190,6 +1225,20 @@ export function TimelineOverview(props: TimelineOverviewProps) {
         return;
       }
     }
+    const item: TimelineItemRef = { kind: "audio_clip", clip_id: drag.clipId };
+    const deltaMs = drag.preview.start_ms - drag.original.start_ms;
+    if (drag.mode === "move" && (
+      drag.preview.layer_id !== drag.original.layer_id
+      || (drag.isolate && deltaMs !== 0)
+    )) {
+      void props.onMoveTimelineItemToLane(
+        item,
+        drag.preview.layer_id,
+        deltaMs,
+        drag.isolate,
+      );
+      return;
+    }
     void props.onUpdateAudioClip(drag.preview);
   };
 
@@ -1337,6 +1386,20 @@ export function TimelineOverview(props: TimelineOverviewProps) {
         return;
       }
     }
+    const item: TimelineItemRef = { kind: "video_clip", clip_id: drag.clipId };
+    const deltaMs = drag.preview.start_ms - drag.original.start_ms;
+    if (drag.mode === "move" && (
+      drag.preview.layer_id !== drag.original.layer_id
+      || (drag.isolate && deltaMs !== 0)
+    )) {
+      void props.onMoveTimelineItemToLane(
+        item,
+        drag.preview.layer_id,
+        deltaMs,
+        drag.isolate,
+      );
+      return;
+    }
     void props.onUpdateVideoClip(drag.preview);
   };
 
@@ -1475,6 +1538,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     if (!svg) {
       return;
     }
+    const sourceLayer = layerById().get(range.layer_id);
+    if (!sourceLayer) {
+      props.onStatus(`Timeline layer ${range.layer_id} was not found.`);
+      return;
+    }
+    if (sourceLayer.locked) {
+      props.onStatus(`Timeline layer ${sourceLayer.label} is locked. Unlock it before moving automation.`);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     props.onSelectAutomationRange(range);
@@ -1484,11 +1556,16 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       pointerId: event.pointerId,
       mode: "move",
       startClientX: event.clientX,
+      startClientY: event.clientY,
       moved: false,
       originalStartMs: range.start_ms,
       originalEndMs: range.end_ms,
       startMs: range.start_ms,
       endMs: range.end_ms,
+      originalLayerId: range.layer_id,
+      layerId: range.layer_id,
+      hoverLayerId: range.layer_id,
+      rejection: null,
       isolate: event.altKey,
     });
   };
@@ -1511,11 +1588,16 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       pointerId: event.pointerId,
       mode: edge === "start" ? "resize-start" : "resize-end",
       startClientX: event.clientX,
+      startClientY: event.clientY,
       moved: false,
       originalStartMs: range.start_ms,
       originalEndMs: range.end_ms,
       startMs: range.start_ms,
       endMs: range.end_ms,
+      originalLayerId: range.layer_id,
+      layerId: range.layer_id,
+      hoverLayerId: range.layer_id,
+      rejection: null,
       isolate: event.altKey,
     });
   };
@@ -1543,7 +1625,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       drag.mode === "resize-end" ? drag.originalStartMs + 1 : 0,
       drag.mode === "resize-start" ? drag.originalEndMs - 1 : Number.POSITIVE_INFINITY,
     );
-    if (!projection.moved) return;
+    const verticalMoved = drag.mode === "move" && Math.abs(event.clientY - drag.startClientY) >= 4;
+    if (!projection.moved && !verticalMoved) return;
     if (drag.mode === "resize-start") {
       setRangeDrag({
         ...drag,
@@ -1561,11 +1644,24 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       return;
     }
     const durationMs = Math.max(1, drag.originalEndMs - drag.originalStartMs);
+    const hoverLayerId = layerIdFromPoint(event.clientX, event.clientY);
+    const target = hoverLayerId === null ? undefined : layerById().get(hoverLayerId);
+    const expectedKind: TimelineLayerKind = range.kind === "lighting" ? "Lighting" : "Video";
+    const rejection = !target
+      ? null
+      : target.kind !== expectedKind
+        ? "kind" as const
+        : target.locked
+          ? "locked" as const
+          : null;
     setRangeDrag({
       ...drag,
-      moved: projection.moved,
+      moved: projection.moved || Math.abs(event.clientY - drag.startClientY) >= 4,
       startMs: projection.time_ms,
       endMs: projection.time_ms + durationMs,
+      layerId: target && rejection === null ? target.id : drag.originalLayerId,
+      hoverLayerId,
+      rejection,
     });
   };
 
@@ -1589,6 +1685,12 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     setSuppressClickRangeId(drag.rangeId);
     const range = props.automationRanges.find((candidate) => candidate.id === drag.rangeId);
     if (range) {
+      if (drag.rejection) {
+        props.onStatus(drag.rejection === "locked"
+          ? "The target automation lane is locked. No changes were made."
+          : "Automation can only move within its matching lane section. No changes were made.");
+        return;
+      }
       if (drag.mode === "resize-start" || drag.mode === "resize-end") {
         const item: TimelineItemRef = range.kind === "lighting"
           ? { kind: "lighting_automation", automation_id: range.automation_id }
@@ -1623,6 +1725,27 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           drag.endMs,
         );
       } else {
+        const item: TimelineItemRef = range.kind === "lighting"
+          ? { kind: "lighting_automation", automation_id: range.automation_id }
+          : { kind: "video_automation", automation_id: range.automation_id };
+        if (drag.layerId !== drag.originalLayerId) {
+          void props.onMoveTimelineItemToLane(
+            item,
+            drag.layerId,
+            drag.startMs - drag.originalStartMs,
+            drag.isolate,
+          );
+          return;
+        }
+        if (drag.isolate && drag.startMs !== drag.originalStartMs) {
+          void props.onMoveTimelineItemToLane(
+            item,
+            drag.originalLayerId,
+            drag.startMs - drag.originalStartMs,
+            true,
+          );
+          return;
+        }
         props.onMoveAutomationRangeTime(
           range,
           drag.startMs,
@@ -1770,7 +1893,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       return { ...layerRow(layerId, range.track), layerId };
     }
     const kind: TimelineLayerKind = range.kind === "lighting" ? "Lighting" : "Video";
-    const row = layerRowById().get(range.layer_id)
+    const previewLayerId = rangeDrag()?.rangeId === range.id && rangeDrag()?.mode === "move"
+      ? rangeDrag()!.layerId
+      : range.layer_id;
+    const row = layerRowById().get(previewLayerId)
       ?? sectionLayout().laneRows.find((candidate) => candidate.layer.kind === kind);
     return row ? { top: row.top, height: row.height, layerId: row.layer.id } : undefined;
   };
@@ -2439,8 +2565,12 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             ].filter(Boolean).join(" ")}
             data-timeline-automation-id={range.automation_id}
             data-timeline-automation-kind={range.kind}
+            data-timeline-layer-id={automationLayerRow(range)?.layerId}
+            data-timeline-layer-kind={range.kind === "lighting" ? "Lighting" : "Video"}
+            data-timeline-keyframe-times={range.keyframes.map((keyframe) => keyframe.time_ms).join(",")}
             role="button"
             tabindex={props.selectedRangeId === range.id ? 0 : -1}
+            aria-keyshortcuts="Shift+ArrowUp Shift+ArrowDown Alt+Shift+ArrowUp Alt+Shift+ArrowDown"
             aria-label={`${range.track} automation ${range.label}, ${range.start_ms}-${range.end_ms} milliseconds`}
             onPointerDown={(pointerEvent) => beginRangeDrag(pointerEvent, range)}
             onPointerMove={moveRangeDrag}
@@ -2468,6 +2598,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               );
               event.currentTarget.focus();
               props.onOpenItemContextMenu({ x: event.clientX, y: event.clientY }, item);
+            }}
+            onKeyDown={(event) => {
+              if (!event.shiftKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+              event.preventDefault();
+              event.stopPropagation();
+              const item: TimelineItemRef = range.kind === "lighting"
+                ? { kind: "lighting_automation", automation_id: range.automation_id }
+                : { kind: "video_automation", automation_id: range.automation_id };
+              void props.onMoveTimelineItemLaneDirection(item, event.key === "ArrowUp" ? -1 : 1, event.altKey);
             }}
           >
             <rect
@@ -2558,6 +2697,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               data-timeline-video-duration-ms={preview().duration_ms}
               role="button"
               tabindex={props.selectedVideoClipId === clip.id ? 0 : -1}
+              aria-keyshortcuts="Shift+ArrowUp Shift+ArrowDown Alt+Shift+ArrowUp Alt+Shift+ArrowDown"
               aria-label={`Video Clip ${videoClipLabel(clip)}, starts ${preview().start_ms} milliseconds, duration ${preview().duration_ms} milliseconds`}
               transform={`translate(${viewBoxX(timelineTimeToVisibleRawRatio(preview().start_ms, props.visibleWindow) * 100)} ${videoClipCenterYPx(clip)})`}
               onPointerDown={(event) => beginVideoClipGesture(event, clip)}
@@ -2591,6 +2731,16 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 );
               }}
               onKeyDown={(event) => {
+                if (event.shiftKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void props.onMoveTimelineItemLaneDirection(
+                    { kind: "video_clip", clip_id: clip.id },
+                    event.key === "ArrowUp" ? -1 : 1,
+                    event.altKey,
+                  );
+                  return;
+                }
                 if (event.key !== "Enter" && event.key !== " ") return;
                 event.preventDefault();
                 props.onSelectVideoClip(clip.id, false, event.altKey);
@@ -2688,6 +2838,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               }}
               role="button"
               tabindex={audioClipTabStopId() === clip.id ? 0 : -1}
+              aria-keyshortcuts="Shift+ArrowUp Shift+ArrowDown Alt+Shift+ArrowUp Alt+Shift+ArrowDown"
               aria-label={`Audio Clip ${timelineAudioClipName(clip.path)}, starts ${preview().start_ms} milliseconds, duration ${preview().duration_ms} milliseconds`}
               transform={`translate(${viewBoxX(timelineTimeToVisibleRawRatio(preview().start_ms, props.visibleWindow) * 100)} ${audioClipCenterYPx(clip)})`}
               onPointerDown={(pointerEvent) => beginAudioClipGesture(pointerEvent, clip)}
@@ -2721,6 +2872,16 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 );
               }}
               onKeyDown={(keyboardEvent) => {
+                if (keyboardEvent.shiftKey && (keyboardEvent.key === "ArrowUp" || keyboardEvent.key === "ArrowDown")) {
+                  keyboardEvent.preventDefault();
+                  keyboardEvent.stopPropagation();
+                  void props.onMoveTimelineItemLaneDirection(
+                    { kind: "audio_clip", clip_id: clip.id },
+                    keyboardEvent.key === "ArrowUp" ? -1 : 1,
+                    keyboardEvent.altKey,
+                  );
+                  return;
+                }
                 if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
                 keyboardEvent.preventDefault();
                 props.onSelectAudioClip(clip.id, false, keyboardEvent.altKey);
@@ -2911,6 +3072,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             data-timeline-preview-end-ms={eventPreviewEndMs(event)}
             role="button"
             tabindex={markerTabStopId() === event.id ? 0 : -1}
+            aria-keyshortcuts="Shift+ArrowUp Shift+ArrowDown Alt+Shift+ArrowUp Alt+Shift+ArrowDown"
             aria-label={props.markerAriaLabel(event)}
             transform={`translate(${viewBoxX(timelineTimeToVisibleRawRatio(eventPreviewStartMs(event), props.visibleWindow) * 100)} ${blockCenterYPx({
               layer_id: eventPreviewLayerId(event),
@@ -2951,6 +3113,16 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               props.onOpenSuperScene(event.cue_id);
             }}
             onKeyDown={(keyboardEvent) => {
+              if (keyboardEvent.shiftKey && (keyboardEvent.key === "ArrowUp" || keyboardEvent.key === "ArrowDown")) {
+                keyboardEvent.preventDefault();
+                keyboardEvent.stopPropagation();
+                void props.onMoveTimelineItemLaneDirection(
+                  { kind: "lighting_event", event_id: event.id },
+                  keyboardEvent.key === "ArrowUp" ? -1 : 1,
+                  keyboardEvent.altKey,
+                );
+                return;
+              }
               if (keyboardEvent.key === "ArrowRight" || keyboardEvent.key === "ArrowDown") {
                 keyboardEvent.preventDefault();
                 keyboardEvent.stopPropagation();

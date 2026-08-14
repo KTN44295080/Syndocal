@@ -14,8 +14,8 @@ const baseUrl = `http://${host}:${vitePort}/?syndocalViewportFixture=timeline-la
 const viewports = [
   { width: 1920, height: 1080 },
   { width: 1366, height: 768 },
-  { width: 1280, height: 720 },
   { width: 860, height: 520 },
+  { width: 1280, height: 720 },
 ];
 const browsers = [
   process.env.CHROME_PATH,
@@ -108,6 +108,110 @@ const dragTimelineResize = async (client, selector, handleSelector, edge, isolat
   await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: targetX, y: point.y, modifiers, button: "left", buttons: 1 });
   await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: targetX, y: point.y, modifiers, button: "left", buttons: 0, clickCount: 1 });
   await sleep(40);
+};
+const dragTimelineItemToLane = async (client, selector, targetLayerId, isolate = false) => {
+  const points = await evaluate(client, `(() => {
+    const item = document.querySelector(${JSON.stringify(selector)});
+    const target = document.querySelector('[data-timeline-layer-gutter][data-timeline-layer-id="${targetLayerId}"]');
+    if (!(item instanceof Element) || !(target instanceof Element)) return null;
+    const sourceLayerId = item.getAttribute('data-timeline-layer-id');
+    const sourceLane = document.querySelector('[data-timeline-layer-gutter][data-timeline-layer-id="' + sourceLayerId + '"]');
+    if (!(sourceLane instanceof Element)) return null;
+    const hitSurface = item.querySelector('.timelineVideoClipBody, .timelineAudioClipBody, .timelineSceneBlockBody, :scope > rect') ?? item;
+    const itemRect = hitSurface.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const safeInset = hitSurface.matches('.timelineSceneBlockBody') ? 24 : 8;
+    const sourceYs = item.matches('.timelineAutomationRange')
+      ? [itemRect.top + itemRect.height / 2]
+      : [itemRect.top + Math.min(4, Math.max(1, itemRect.height / 4))];
+    const excluded = '.timelineAutomationHandle, .timelineAutomationKeyframeGroup, .timelineSceneBlockResizeHandle, .timelineSceneBlockFadeHandle, .timelineVideoClipResizeHandle, .timelineVideoClipFadeHandle, .timelineAudioClipResizeHandle, .timelineAudioClipFadeHandle';
+    const sourceXs = [
+      itemRect.left + Math.min(safeInset, Math.max(1, itemRect.width / 2)),
+      itemRect.left + itemRect.width * 0.25,
+      itemRect.left + itemRect.width * 0.5,
+      itemRect.left + itemRect.width * 0.75,
+    ];
+    const preferredSourcePoints = sourceYs.flatMap((candidateY) => sourceXs.map((candidateX) => ({ x: candidateX, y: candidateY })));
+    const automationSourcePoints = [];
+    if (item.matches('.timelineAutomationRange')) {
+      for (let candidateY = itemRect.top + 0.25; candidateY < itemRect.bottom; candidateY += 0.25) {
+        for (let candidateX = itemRect.left + 3; candidateX < itemRect.right - 3; candidateX += 1) {
+          automationSourcePoints.push({ x: candidateX, y: candidateY });
+        }
+      }
+    }
+    const sourcePoint = [...preferredSourcePoints, ...automationSourcePoints].find((candidate) => {
+      const hit = document.elementFromPoint(candidate.x, candidate.y);
+      return hit && item.contains(hit) && !hit.closest(excluded);
+    });
+    const resolvedSource = sourcePoint ?? { x: itemRect.left + itemRect.width / 2, y: itemRect.top + itemRect.height / 2 };
+    return {
+      source: resolvedSource,
+      target: { x: Math.min(window.innerWidth - 8, resolvedSource.x + 12), y: targetRect.top + targetRect.height / 2 },
+      sourceSize: [itemRect.width, itemRect.height],
+      targetSize: [targetRect.width, targetRect.height],
+    };
+  })()`);
+  assert.ok(points && points.sourceSize[0] > 0 && points.sourceSize[1] > 0 && points.targetSize[0] > 0 && points.targetSize[1] > 0, `visible lane drag geometry for ${selector}`);
+  const modifiers = isolate ? 1 : 0;
+  await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...points.source, modifiers });
+  await client.send("Input.dispatchMouseEvent", { type: "mousePressed", ...points.source, modifiers, button: "left", buttons: 1, clickCount: 1 });
+  await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...points.target, modifiers, button: "left", buttons: 1 });
+  await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...points.target, modifiers, button: "left", buttons: 0, clickCount: 1 });
+  await sleep(100);
+};
+const timelineLaneItemKey = (item) => `${item.kind}:${item.event_id ?? item.clip_id ?? item.automation_id}`;
+const mountedTimelineItemTimes = (client, item) => {
+  const selector = item.kind === "lighting_event"
+    ? `[data-timeline-event-id="${item.event_id}"]`
+    : item.kind === "video_clip"
+      ? `[data-timeline-video-clip-id="${item.clip_id}"]`
+      : item.kind === "audio_clip"
+        ? `[data-timeline-audio-clip-id="${item.clip_id}"]`
+        : `[data-timeline-automation-kind="${item.kind === "lighting_automation" ? "lighting" : "video"}"][data-timeline-automation-id="${item.automation_id}"]`;
+  const attribute = item.kind === "lighting_event"
+    ? "data-timeline-start-ms"
+    : item.kind === "video_clip"
+      ? "data-timeline-video-start-ms"
+      : item.kind === "audio_clip"
+        ? "data-timeline-audio-start-ms"
+        : "data-timeline-keyframe-times";
+  return evaluate(client, `(() => {
+    const value = document.querySelector(${JSON.stringify(selector)})?.getAttribute(${JSON.stringify(attribute)});
+    return value === null || value === undefined || value === '' ? null : value.split(',').map(Number);
+  })()`);
+};
+const assertLaneTimeShiftMounted = async (client, callIndex, call, label) => {
+  assert.equal(Number.isInteger(call.delta_ms), true, `${label} carries an integer delta`);
+  assert.equal(Math.sign(call.delta_ms), 1, `${label} carries the positive signed pointer delta`);
+  const applied = await evaluate(client, `structuredClone(window.__syndocalTimelineLaneMoveFixtureApplied[${callIndex}])`);
+  const keys = call.items.map(timelineLaneItemKey);
+  for (const key of keys) {
+    assert.deepEqual(
+      applied.after[key],
+      applied.before[key].map((timeMs) => timeMs + call.delta_ms),
+      `${label} shifts every ${key} authored time by the same delta`,
+    );
+  }
+  const baselineKey = keys[0];
+  for (const key of keys.slice(1)) {
+    assert.equal(
+      applied.after[key][0] - applied.after[baselineKey][0],
+      applied.before[key][0] - applied.before[baselineKey][0],
+      `${label} preserves the ${key} relative offset`,
+    );
+  }
+  await waitFor(async () => {
+    const mounted = await Promise.all(call.items.map((item) => mountedTimelineItemTimes(client, item)));
+    return mounted.every((times, index) => JSON.stringify(times) === JSON.stringify(applied.after[keys[index]]));
+  }, `${label} ACK time state`);
+  for (const item of call.items) {
+    assert.deepEqual(
+      await mountedTimelineItemTimes(client, item),
+      applied.after[timelineLaneItemKey(item)],
+      `${label} mounts authoritative ${timelineLaneItemKey(item)} times`,
+    );
+  }
 };
 const measure = (client) => evaluate(client, `(() => {
   const root = document.querySelector('.timelineShowSurface');
@@ -478,14 +582,296 @@ try {
     assert.match(deleteDialog.text, /Linked group members/);
     assert.equal(deleteDialog.short, 0, "linked delete alert dialog preserves 44px actions");
     await evaluate(client, "document.querySelector('[data-timeline-item-remove-dialog]')?.close()");
+    if (viewport.width === 1280) {
+      await evaluate(client, `(() => {
+        window.__syndocalTimelineLaneMoveFixtureCalls = [];
+        window.__syndocalTimelineLaneMoveFixtureApplied = [];
+        const key = (item) => item.kind + ':' + (item.event_id ?? item.clip_id ?? item.automation_id);
+        window.__syndocalTimelineLaneMoveFixture = async (request, timelineBank, activeTimelineId) => {
+          window.__syndocalTimelineLaneMoveFixtureCalls.push(structuredClone(request));
+          const bank = structuredClone(timelineBank);
+          const active = bank.find((timeline) => timeline.id === activeTimelineId);
+          if (window.__syndocalTimelineLaneMoveFixtureCalls.length === 1) {
+            const event = active.events[0];
+            const group = active.item_groups.find((candidate) => candidate.members.some((member) => member.kind === 'video_clip' && member.clip_id === 800));
+            window.__syndocalTimelineLaneMoveEventId = event.id;
+            event.layer_id = 13;
+            event.time_ms = 1_000;
+            active.video_clips.find((clip) => clip.id === 800).layer_id = 15;
+            active.video_clips.find((clip) => clip.id === 800).start_ms = 5_000;
+            active.audio_clips.find((clip) => clip.id === 700).layer_id = 11;
+            active.audio_clips.find((clip) => clip.id === 700).start_ms = 3_500;
+            const lightingAutomation = active.automations.find((automation) => automation.id === 1);
+            lightingAutomation.timeline_layer_id = 13;
+            lightingAutomation.keyframes = lightingAutomation.keyframes.map((frame, index) => ({ ...frame, time_ms: 1_000 + index * 1_000 }));
+            const videoAutomation = active.video_automations.find((automation) => automation.id === 2);
+            videoAutomation.timeline_layer_id = 15;
+            videoAutomation.keyframes = videoAutomation.keyframes.map((frame, index) => ({ ...frame, time_ms: 1_500 + index * 1_000 }));
+            group.members = [
+              { kind: 'lighting_event', event_id: event.id },
+              { kind: 'video_clip', clip_id: 800 },
+              { kind: 'audio_clip', clip_id: 700 },
+              { kind: 'lighting_automation', automation_id: 1 },
+              { kind: 'video_automation', automation_id: 2 },
+            ];
+          }
+          const captureTimes = () => ({
+            [key({ kind: 'lighting_event', event_id: window.__syndocalTimelineLaneMoveEventId })]: [active.events.find((event) => event.id === window.__syndocalTimelineLaneMoveEventId).time_ms],
+            [key({ kind: 'video_clip', clip_id: 800 })]: [active.video_clips.find((clip) => clip.id === 800).start_ms],
+            [key({ kind: 'audio_clip', clip_id: 700 })]: [active.audio_clips.find((clip) => clip.id === 700).start_ms],
+            [key({ kind: 'lighting_automation', automation_id: 1 })]: active.automations.find((automation) => automation.id === 1).keyframes.map((frame) => frame.time_ms),
+            [key({ kind: 'video_automation', automation_id: 2 })]: active.video_automations.find((automation) => automation.id === 2).keyframes.map((frame) => frame.time_ms),
+          });
+          const beforeTimes = captureTimes();
+          const shift = (value) => Math.max(0, value + request.delta_ms);
+          for (const item of request.items) {
+            if (item.kind === 'lighting_event') {
+              const event = active.events.find((candidate) => candidate.id === item.event_id);
+              if (event) event.time_ms = shift(event.time_ms);
+            } else if (item.kind === 'video_clip') {
+              const clip = active.video_clips.find((candidate) => candidate.id === item.clip_id);
+              if (clip) clip.start_ms = shift(clip.start_ms);
+            } else if (item.kind === 'audio_clip') {
+              const clip = active.audio_clips.find((candidate) => candidate.id === item.clip_id);
+              if (clip) clip.start_ms = shift(clip.start_ms);
+            } else {
+              const collection = item.kind === 'lighting_automation' ? active.automations : active.video_automations;
+              const automation = collection.find((candidate) => candidate.id === item.automation_id);
+              if (automation) automation.keyframes = automation.keyframes.map((frame) => ({ ...frame, time_ms: shift(frame.time_ms) }));
+            }
+          }
+          for (const target of request.lane_targets) {
+            const item = target.item;
+            if (item.kind === 'lighting_event') {
+              const event = active.events.find((candidate) => candidate.id === item.event_id);
+              if (event) event.layer_id = target.target_layer_id;
+            } else if (item.kind === 'video_clip') {
+              const clip = active.video_clips.find((candidate) => candidate.id === item.clip_id);
+              if (clip) clip.layer_id = target.target_layer_id;
+            } else if (item.kind === 'audio_clip') {
+              const clip = active.audio_clips.find((candidate) => candidate.id === item.clip_id);
+              if (clip) clip.layer_id = target.target_layer_id;
+            } else {
+              const collection = item.kind === 'lighting_automation' ? active.automations : active.video_automations;
+              const automation = collection.find((candidate) => candidate.id === item.automation_id);
+              if (automation) automation.timeline_layer_id = target.target_layer_id;
+            }
+          }
+          window.__syndocalTimelineLaneMoveFixtureApplied.push({ before: beforeTimes, after: captureTimes() });
+          return {
+            authoring: {}, timeline_bank: bank, active_timeline_id: activeTimelineId,
+            selected_items: structuredClone(request.items), mutation: {},
+          };
+        };
+        window.__syndocalTimelineLaneMoveItemKey = key;
+      })()`);
+      await dragTimelineItemToLane(client, '[data-timeline-video-clip-id="800"]', 15);
+      await waitFor(() => evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls?.length === 1"), "Video linked lane move");
+      const firstLaneCall = await evaluate(client, "structuredClone(window.__syndocalTimelineLaneMoveFixtureCalls[0])");
+      assert.equal(firstLaneCall.kind, "move_items_to_lanes");
+      assert.deepEqual(firstLaneCall.items, [{ kind: "video_clip", clip_id: 800 }, { kind: "audio_clip", clip_id: 700 }]);
+      assert.deepEqual(firstLaneCall.lane_targets, [
+        { item: { kind: "video_clip", clip_id: 800 }, target_layer_id: 15 },
+        { item: { kind: "audio_clip", clip_id: 700 }, target_layer_id: 11 },
+      ]);
+      assert.equal(firstLaneCall.isolate, false);
+      await assertLaneTimeShiftMounted(client, 0, firstLaneCall, "Video linked lane move");
+      await waitFor(
+        () => evaluate(client, `document.querySelector('.timelineMarker[data-timeline-event-id="' + window.__syndocalTimelineLaneMoveEventId + '"]')?.getAttribute('data-timeline-layer-id') === '13'`),
+        "five-domain lane fixture ACK state",
+      );
+      const eventSelector = await evaluate(client, `'.timelineMarker[data-timeline-event-id="' + window.__syndocalTimelineLaneMoveEventId + '"]'`);
+      const laneMoveEventId = await evaluate(client, "Number(window.__syndocalTimelineLaneMoveEventId)");
+      assert.ok(eventSelector, "five-domain lane fixture exposes a Lighting event");
+      const pointerCases = [
+        [eventSelector, 14, "lighting_event"],
+        ['[data-timeline-audio-clip-id="700"]', 11, "audio_clip"],
+        ['[data-timeline-automation-kind="lighting"][data-timeline-automation-id="1"]', 12, "lighting_automation"],
+        ['[data-timeline-automation-kind="video"][data-timeline-automation-id="2"]', 15, "video_automation"],
+      ];
+      for (const [selector, targetLayerId, expectedKind] of pointerCases) {
+        const beforeCalls = await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length");
+        await dragTimelineItemToLane(client, selector, targetLayerId);
+        await waitFor(
+          () => evaluate(client, `window.__syndocalTimelineLaneMoveFixtureCalls?.length === ${beforeCalls + 1}`),
+          `${expectedKind} five-domain lane move`,
+        );
+        const call = await evaluate(client, `structuredClone(window.__syndocalTimelineLaneMoveFixtureCalls[${beforeCalls}])`);
+        assert.equal(call.primary.kind, expectedKind);
+        assert.equal(call.items.length, 5, `${expectedKind} pointer move expands all five linked domains`);
+        assert.equal(call.lane_targets.length, 5, `${expectedKind} pointer move carries five explicit targets`);
+        if (expectedKind === "lighting_event") {
+          assert.deepEqual(call.lane_targets, [
+            { item: { kind: "lighting_event", event_id: laneMoveEventId }, target_layer_id: 14 },
+            { item: { kind: "video_clip", clip_id: 800 }, target_layer_id: 14 },
+            { item: { kind: "audio_clip", clip_id: 700 }, target_layer_id: 10 },
+            { item: { kind: "lighting_automation", automation_id: 1 }, target_layer_id: 12 },
+            { item: { kind: "video_automation", automation_id: 2 }, target_layer_id: 14 },
+          ], "Scene pointer crosses Lighting to the explicit Video lane and projects the group ordinal");
+        }
+        await assertLaneTimeShiftMounted(client, beforeCalls, call, `${expectedKind} five-domain lane move`);
+      }
+      const isolatedHorizontalCases = [
+        ['[data-timeline-video-clip-id="800"]', "video_clip"],
+        [eventSelector, "lighting_event"],
+        ['[data-timeline-audio-clip-id="700"]', "audio_clip"],
+        ['[data-timeline-automation-kind="lighting"][data-timeline-automation-id="1"]', "lighting_automation"],
+        ['[data-timeline-automation-kind="video"][data-timeline-automation-id="2"]', "video_automation"],
+      ];
+      for (const [selector, expectedKind] of isolatedHorizontalCases) {
+        const currentLayerId = await evaluate(client, `Number(document.querySelector(${JSON.stringify(selector)})?.getAttribute('data-timeline-layer-id'))`);
+        assert.equal(Number.isInteger(currentLayerId), true, `${expectedKind} exposes its current resolved lane`);
+        const beforeCalls = await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length");
+        await dragTimelineItemToLane(client, selector, currentLayerId, true);
+        await waitFor(
+          () => evaluate(client, `window.__syndocalTimelineLaneMoveFixtureCalls?.length === ${beforeCalls + 1}`),
+          `${expectedKind} Alt horizontal lane move`,
+        );
+        const call = await evaluate(client, `structuredClone(window.__syndocalTimelineLaneMoveFixtureCalls[${beforeCalls}])`);
+        assert.deepEqual([call.primary.kind, call.items.length, call.lane_targets.length, call.isolate], [expectedKind, 1, 1, true]);
+        assert.equal(call.lane_targets[0].target_layer_id, currentLayerId, `${expectedKind} Alt horizontal move retains its resolved lane`);
+        assert.notEqual(call.delta_ms, 0, `${expectedKind} Alt horizontal move carries its real pointer delta`);
+      }
+      const beforeIsolatedPointer = await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length");
+      await dragTimelineItemToLane(client, '[data-timeline-audio-clip-id="700"]', 10, true);
+      await waitFor(() => evaluate(client, `window.__syndocalTimelineLaneMoveFixtureCalls?.length === ${beforeIsolatedPointer + 1}`), "Alt-isolated Audio lane move");
+      const isolatedPointerCall = await evaluate(client, `structuredClone(window.__syndocalTimelineLaneMoveFixtureCalls[${beforeIsolatedPointer}])`);
+      assert.deepEqual(isolatedPointerCall.items, [{ kind: "audio_clip", clip_id: 700 }]);
+      assert.deepEqual(isolatedPointerCall.lane_targets, [{ item: { kind: "audio_clip", clip_id: 700 }, target_layer_id: 10 }]);
+      assert.equal(isolatedPointerCall.isolate, true);
+      const beforeSceneAudioPointer = await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length");
+      await dragTimelineItemToLane(client, eventSelector, 10);
+      assert.equal(
+        await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"),
+        beforeSceneAudioPointer,
+        "Scene pointer drop on Audio invokes no authoritative command",
+      );
+      const beforeInvalidPointer = await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length");
+      await dragTimelineItemToLane(client, '[data-timeline-automation-kind="video"][data-timeline-automation-id="2"]', 10);
+      assert.equal(await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"), beforeInvalidPointer, "wrong-kind pointer drop invokes no authoritative command");
+      const beforeIsolatedKeyboard = beforeInvalidPointer;
+      assert.equal(await evaluate(client, `(() => {
+        const item = document.querySelector('[data-timeline-audio-clip-id="700"]');
+        if (!(item instanceof Element)) return false;
+        item.focus();
+        item.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, altKey: true, bubbles: true, cancelable: true }));
+        return true;
+      })()`), true);
+      await waitFor(() => evaluate(client, `window.__syndocalTimelineLaneMoveFixtureCalls?.length === ${beforeIsolatedKeyboard + 1}`), "Alt keyboard lane move");
+      const isolatedKeyboardCall = await evaluate(client, `structuredClone(window.__syndocalTimelineLaneMoveFixtureCalls[${beforeIsolatedKeyboard}])`);
+      assert.deepEqual([isolatedKeyboardCall.primary.kind, isolatedKeyboardCall.isolate, isolatedKeyboardCall.delta_ms], ["audio_clip", true, 0]);
+      assert.equal(isolatedKeyboardCall.items.length, 1);
+      const beforeGroupKeyboard = beforeIsolatedKeyboard + 1;
+      assert.equal(await evaluate(client, `(() => {
+        const item = document.querySelector(${JSON.stringify(eventSelector)});
+        if (!(item instanceof Element)) return false;
+        item.focus();
+        item.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', shiftKey: true, bubbles: true, cancelable: true }));
+        return true;
+      })()`), true);
+      await waitFor(() => evaluate(client, `window.__syndocalTimelineLaneMoveFixtureCalls?.length === ${beforeGroupKeyboard + 1}`), "group keyboard lane move");
+      const keyboardGroupCall = await evaluate(client, `structuredClone(window.__syndocalTimelineLaneMoveFixtureCalls[${beforeGroupKeyboard}])`);
+      assert.deepEqual([keyboardGroupCall.primary.kind, keyboardGroupCall.items.length, keyboardGroupCall.delta_ms], ["lighting_event", 5, 0]);
+      const beforeCrossKindKeyboard = beforeGroupKeyboard + 1;
+      assert.equal(await evaluate(client, `(() => {
+        const item = document.querySelector(${JSON.stringify(eventSelector)});
+        if (!(item instanceof Element)) return false;
+        item.focus();
+        item.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', shiftKey: true, bubbles: true, cancelable: true }));
+        return true;
+      })()`), true);
+      await waitFor(() => evaluate(client, `window.__syndocalTimelineLaneMoveFixtureCalls?.length === ${beforeCrossKindKeyboard + 1}`), "Scene Video-to-Lighting keyboard lane move");
+      const crossKindKeyboardCall = await evaluate(client, `structuredClone(window.__syndocalTimelineLaneMoveFixtureCalls[${beforeCrossKindKeyboard}])`);
+      assert.deepEqual(
+        [crossKindKeyboardCall.primary.kind, crossKindKeyboardCall.lane_targets[0].target_layer_id, crossKindKeyboardCall.items.length, crossKindKeyboardCall.delta_ms],
+        ["lighting_event", 13, 5, 0],
+        "Scene keyboard navigation crosses the canonical Video-to-Lighting boundary",
+      );
+      const beforeContextMove = beforeCrossKindKeyboard + 1;
+      assert.equal(await evaluate(client, `(() => {
+        const item = document.querySelector('[data-timeline-automation-kind="video"][data-timeline-automation-id="2"]');
+        if (!(item instanceof Element)) return false;
+        item.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 220 }));
+        return true;
+      })()`), true);
+      await sleep(50);
+      assert.equal(await evaluate(client, `(() => {
+        const button = [...document.querySelectorAll('.timelineItemContextMenu button')]
+          .find((candidate) => candidate.textContent?.trim() === 'Move lane up');
+        if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+        button.click();
+        return true;
+      })()`), true);
+      await waitFor(() => evaluate(client, `window.__syndocalTimelineLaneMoveFixtureCalls?.length === ${beforeContextMove + 1}`), "context menu lane move");
+      await sleep(100);
+      const laneMoveFinal = await evaluate(client, `(() => ({
+        call: structuredClone(window.__syndocalTimelineLaneMoveFixtureCalls[${beforeContextMove}]),
+        videoLane: Number(document.querySelector('[data-timeline-video-clip-id="800"]')?.getAttribute('data-timeline-layer-id')),
+        audioLane: Number(document.querySelector('[data-timeline-audio-clip-id="700"]')?.getAttribute('data-timeline-layer-id')),
+        eventLane: Number(document.querySelector(${JSON.stringify(eventSelector)})?.getAttribute('data-timeline-layer-id')),
+        lightingAutomationLane: Number(document.querySelector('[data-timeline-automation-kind="lighting"][data-timeline-automation-id="1"]')?.getAttribute('data-timeline-layer-id')),
+        videoAutomationLane: Number(document.querySelector('[data-timeline-automation-kind="video"][data-timeline-automation-id="2"]')?.getAttribute('data-timeline-layer-id')),
+        selectedVideo: document.querySelectorAll('.timelineVideoClip.selected').length,
+        selectedAudio: document.querySelectorAll('.timelineAudioClip.selected').length,
+        selectedEvent: document.querySelectorAll('.timelineMarker.selected').length,
+        selectedAutomation: document.querySelectorAll('.timelineAutomationRange.selected').length,
+        focusedKind: document.activeElement?.getAttribute('data-timeline-automation-kind') ?? '',
+        focusedId: document.activeElement?.getAttribute('data-timeline-automation-id') ?? '',
+      }))()`);
+      assert.deepEqual(
+        [laneMoveFinal.call.primary.kind, laneMoveFinal.call.items.length, laneMoveFinal.call.delta_ms, laneMoveFinal.call.isolate],
+        ["video_automation", 5, 0, false],
+        "keyboard-operable context action dispatches the exact five-domain group request",
+      );
+      assert.deepEqual(
+        [laneMoveFinal.audioLane, laneMoveFinal.eventLane, laneMoveFinal.videoLane, laneMoveFinal.lightingAutomationLane, laneMoveFinal.videoAutomationLane],
+        [10, 12, 14, 12, 14],
+        "ACK local apply mounts every explicit lane target",
+      );
+      assert.deepEqual(
+        [laneMoveFinal.selectedVideo, laneMoveFinal.selectedAudio, laneMoveFinal.selectedEvent, laneMoveFinal.selectedAutomation],
+        [1, 1, 1, 1],
+        "ACK preserves the logical linked selection across every visible domain",
+      );
+      assert.deepEqual([laneMoveFinal.focusedKind, laneMoveFinal.focusedId], ["video", "2"], "ACK restores focus to the logical primary item");
+      assert.equal(await evaluate(client, `(() => {
+        const item = document.querySelector(${JSON.stringify(eventSelector)});
+        if (!(item instanceof Element)) return false;
+        item.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', shiftKey: true, bubbles: true, cancelable: true }));
+        return true;
+      })()`), true);
+      await sleep(50);
+      assert.equal(
+        await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"),
+        beforeContextMove + 1,
+        "Scene keyboard move with no compatible canonical predecessor invokes no authoritative command",
+      );
+      assert.equal(await evaluate(client, `(() => {
+        const item = document.querySelector('[data-timeline-automation-kind="video"][data-timeline-automation-id="2"]');
+        if (!(item instanceof Element)) return false;
+        item.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', shiftKey: true, bubbles: true, cancelable: true }));
+        return true;
+      })()`), true);
+      await sleep(50);
+      assert.equal(await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"), beforeContextMove + 1, "boundary keyboard move invokes no authoritative command");
+    }
     assert.equal(targetProof.every((proof) => proof?.rect[0] > 0 && proof?.rect[1] > 0 && proof.count > 0 && proof.short === 0), true, `Timeline bank, Guide audio, Phase, and loop controls preserve 44px targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(targetProof)}`);
     assert.equal(state.shortTargets, 0, `Visible Timeline performance controls preserve 44px targets at ${viewport.width}x${viewport.height}`);
     assert.equal(state.fixedOuter, true, `Timeline disclosures keep app/document outer scroll fixed at ${viewport.width}x${viewport.height}`);
     console.log(`${viewport.width}x${viewport.height}: phases=${state.phaseLabels.join('/')} bank=${state.bankItems} media=${state.videoClips}+${state.audioClips} selected=${state.selectedVideo}+${state.selectedAudio}`);
   }
 
+  client.close();
+  const directResizeUrl = `http://${host}:${vitePort}/scripts/fixtures/timeline-direct-resize.html`;
+  const directResizeTarget = await waitFor(async () => {
+    const response = await fetch(`http://${host}:${cdpPort}/json/new?${encodeURIComponent(directResizeUrl)}`, { method: "PUT" });
+    return response.ok ? response.json() : null;
+  }, "direct-resize browser target");
+  client = new CdpClient(directResizeTarget.webSocketDebuggerUrl);
+  await client.ready();
+  await client.send("Page.enable");
+  await client.send("Runtime.enable");
   await client.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
-  await client.send("Page.navigate", { url: `http://${host}:${vitePort}/scripts/fixtures/timeline-direct-resize.html` });
   await waitFor(
     () => evaluate(client, "window.__timelineDirectResizeFixture?.ready === true"),
     "Timeline direct-resize fixture",

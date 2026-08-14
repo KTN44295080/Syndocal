@@ -2067,6 +2067,29 @@ async function clickVisibleSelector(client, selector) {
   }
 }
 
+async function ensureTimelineShowSurface(client) {
+  const state = await client.evaluate(`(() => {
+    const rendered = (node) => {
+      if (!(node instanceof HTMLElement)) return false;
+      const rect = node.getBoundingClientRect();
+      const style = window.getComputedStyle(node);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    if ([...document.querySelectorAll('.timelineShowSurface')].some(rendered)) return 'visible';
+    const button = [...document.querySelectorAll('[data-timeline-desk-surface="show"], [aria-label="Show Timeline"]')]
+      .find((candidate) => rendered(candidate) && !candidate.disabled);
+    if (!button) return 'missing';
+    button.click();
+    return 'clicked';
+  })()`);
+  if (state === 'missing') {
+    throw new Error('Could not reveal Timeline Show surface');
+  }
+  if (state === 'clicked') {
+    await sleep(80);
+  }
+}
+
 const workspaceOptionSelector = (workspace) => `[data-workspace-option="${workspace}"]`;
 const controlModeOptionSelector = (mode) =>
   `[data-edit-domain-navigation] [data-control-mode-option="${mode}"]`;
@@ -2179,7 +2202,7 @@ async function readTimelineRulerBounds(client) {
 async function checkWorkspaceLayoutPersistence(client) {
   await clickWorkspaceOption(client, "control");
   await clickLightingContextTab(client, "timeline");
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Playback");
+  await clickVisibleSelector(client, '[data-timeline-desk-surface="playback"]');
   await sleep(100);
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
@@ -6685,7 +6708,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, 'control');
   await selectControlSurface(client, 'live');
-  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
+  await ensureTimelineShowSurface(client);
   await sleep(120);
   const before = await measureLayeredTimelineDeskState(client);
   const expandToggleClicked = await client.evaluate(`(() => {
@@ -6820,7 +6843,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, 'control');
   await selectControlSurface(client, 'live');
-  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
+  await ensureTimelineShowSurface(client);
   await sleep(120);
   await client.evaluate(`document.querySelector('[data-timeline-stretch-mode="WINDOW"]')?.click()`);
   const windowBefore = await selectFirstSceneBlock();
@@ -6972,6 +6995,19 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     return true;
   })()`);
   await sleep(180);
+  const superSceneToolsOpened = await client.evaluate(`(() => {
+    const details = [...document.querySelectorAll('details.timelineToolsDisclosure')].find((candidate) => {
+      const summary = candidate.querySelector(':scope > summary');
+      if (!(summary instanceof HTMLElement)) return false;
+      const rect = summary.getBoundingClientRect();
+      const style = getComputedStyle(summary);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    });
+    if (!(details instanceof HTMLDetailsElement)) return false;
+    if (!details.open) details.querySelector(':scope > summary')?.click();
+    return details.open;
+  })()`);
+  await sleep(80);
   const childTimeline = await client.evaluate(`(() => {
     const visible = (selector) => [...document.querySelectorAll(selector)].filter((element) => {
       const rect = element.getBoundingClientRect();
@@ -6983,7 +7019,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     const body = document.body;
     const app = document.querySelector('.app');
     return {
-      breadcrumbVisible: visible('[data-timeline-breadcrumb]').length === 1,
+      breadcrumbVisible: visible('[data-timeline-breadcrumb] button').length === 1,
       breadcrumbLabel: document.querySelector('[data-child-timeline-label]')?.textContent?.trim() ?? '',
       layerIds: visible('[data-timeline-layer-id][data-timeline-layer-gutter]')
         .map((element) => element.getAttribute('data-timeline-layer-id') || ''),
@@ -7017,7 +7053,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     escape: { before: escapeBefore, during: escapeDuring, after: escapeAfter },
     wheel: { before: wheelBefore, after: wheelAfter, cursorDriftPx: wheelCursorDriftPx },
     placement: { before: placementBefore, after: placementAfter, dispatched: placementDispatched },
-    superScene: { opened: superSceneOpened, child: childTimeline, exitClicked: superSceneExitClicked, restored: superSceneRestored },
+    superScene: { opened: superSceneOpened, toolsOpened: superSceneToolsOpened, child: childTimeline, exitClicked: superSceneExitClicked, restored: superSceneRestored },
   };
   const expectedFrameHeight = before.frameHeight;
   const minimumFrameHeight = viewport.height <= 800 ? 120 : 148;
@@ -7055,6 +7091,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     ['superSceneSourceBlockAndLinkVisible', () => before.superSceneBlockCount === 1 && before.superSceneSourceLinkCount === 1],
     ['superSceneBreadcrumbOpensChildTimeline', () =>
       direct.superScene.opened &&
+      direct.superScene.toolsOpened &&
       direct.superScene.child?.breadcrumbVisible === true &&
       direct.superScene.child?.breadcrumbLabel === 'Shin'],
     ['superSceneChildTimelineShowsThreeSourceLinkedLanes', () =>
@@ -13262,13 +13299,13 @@ async function runViewport(client, viewport) {
       ));
       await clickVisibleSelector(client, ".sceneSettingsClose");
       await sleep(80);
-      await clickVisibleByText(client, ".timelineDeskTabs button", "Automation");
+      await clickVisibleSelector(client, '[data-timeline-desk-surface="automation"]');
       await sleep(120);
       results.push(await measure(client, `control-live-automation-${viewport.width}x${viewport.height}`));
-      await clickVisibleByText(client, ".timelineDeskTabs button", "Playback");
+      await clickVisibleSelector(client, '[data-timeline-desk-surface="playback"]');
       await sleep(120);
       results.push(await measure(client, `control-live-playback-${viewport.width}x${viewport.height}`));
-      await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+      await ensureTimelineShowSurface(client);
       if (shouldCaptureViewport(viewport)) {
         await captureSettledViewport(
           client,
@@ -18508,7 +18545,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
   await setTimelineToolsDisclosureOpen(client, true);
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await ensureTimelineShowSurface(client);
   await sleep(120);
   const before = await measureSceneMatrixPane(client);
   const wheelScroll = await exerciseSceneMatrixWheelScroll(client);
@@ -19057,7 +19094,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
   await setTimelineToolsDisclosureOpen(client, true);
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await ensureTimelineShowSurface(client);
   await sleep(120);
   const initialPane = await measureSceneMatrixPane(client);
   const reorder = await exerciseSceneMatrixStripReorder(client, 302, 301);
@@ -19066,7 +19103,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
   await setTimelineToolsDisclosureOpen(client, true);
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await ensureTimelineShowSurface(client);
   await sleep(120);
   const crossBank = await exerciseSceneMatrixCrossBankMoveAndUndo(client);
   const conditions = [
@@ -19719,7 +19756,7 @@ async function runSceneSettingsViewport(client, viewport) {
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
   await setTimelineToolsDisclosureOpen(client, true);
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await ensureTimelineShowSurface(client);
   await sleep(120);
 
   const initial = await readSceneSettingsState(client);
@@ -20074,7 +20111,7 @@ async function runSceneSettingsViewport(client, viewport) {
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
   await setTimelineToolsDisclosureOpen(client, true);
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await ensureTimelineShowSurface(client);
   await sleep(80);
   const oneClickStripGesture = await clickSceneSettingsStrip(
     client,
@@ -21587,7 +21624,7 @@ async function runTimelineSlimViewport(client, viewport) {
   await clickWorkspaceOption(client, 'control');
   await selectControlSurface(client, 'live');
   await setTimelineToolsDisclosureOpen(client, true);
-  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
+  await ensureTimelineShowSurface(client);
   await sleep(120);
   const visual = await measureTimelineSlimVisual(client);
   const deskSurfaceAria = await exerciseTimelineDeskSurfaceAria(client);
@@ -21603,7 +21640,7 @@ async function runTimelineSlimViewport(client, viewport) {
   await clickWorkspaceOption(client, 'control');
   await selectControlSurface(client, 'live');
   await setTimelineToolsDisclosureOpen(client, true);
-  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
+  await ensureTimelineShowSurface(client);
   await sleep(120);
   const implicitVisual = await measureTimelineSlimVisual(client);
   const expectedDeskSurfaceIds = ['automation', 'playback', 'show'];
@@ -21996,7 +22033,7 @@ async function openTimelineShowFixture(client, viewport, fixture) {
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
   await setTimelineToolsDisclosureOpen(client, true);
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await ensureTimelineShowSurface(client);
   await sleep(180);
 }
 
@@ -23053,7 +23090,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
   await setTimelineToolsDisclosureOpen(client, true);
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await ensureTimelineShowSurface(client);
   await sleep(180);
   await openSceneBlockBrowser(client);
   // T3: the Finder + fixed inspector is the default editor view. Verify it,
@@ -25094,7 +25131,7 @@ async function runFxVisualViewport(client, viewport) {
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
   await setTimelineToolsDisclosureOpen(client, true);
-  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await ensureTimelineShowSurface(client);
   const stripGesture = await clickSceneSettingsStrip(
     client,
     '[data-scene-matrix-edit-strip="401"]',

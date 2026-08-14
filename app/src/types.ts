@@ -2474,6 +2474,7 @@ export interface TimelineAutomationSummary {
   fixture_id: number;
   attribute: string;
   track: TimelineTrackKind;
+  timeline_layer_id?: number | null;
   keyframes: AutomationKeyframeSummary[];
   enabled: boolean;
 }
@@ -2519,6 +2520,7 @@ export interface TimelineVideoAutomationSummary {
   layer_id: number;
   param: VideoParam;
   track: TimelineTrackKind;
+  timeline_layer_id?: number | null;
   keyframes: VideoAutomationKeyframeSummary[];
   enabled: boolean;
 }
@@ -2577,6 +2579,137 @@ export interface TimelineItemGroupSummary {
   id: number;
   members: TimelineItemRef[];
 }
+
+export interface TimelineItemLaneTarget {
+  item: TimelineItemRef;
+  target_layer_id: number;
+}
+
+export interface TimelineItemLanePlacement {
+  item: TimelineItemRef;
+  resolved_layer_id: number;
+}
+
+export interface TimelineItemLaneMovePlan {
+  items: TimelineItemRef[];
+  primary: TimelineItemRef;
+  delta_ms: number;
+  lane_targets: TimelineItemLaneTarget[];
+  isolate: boolean;
+}
+
+export type TimelineItemLaneMovePlanResult =
+  | { ok: true; plan: TimelineItemLaneMovePlan }
+  | { ok: false; reason: "missing" | "kind" | "locked" | "range" | "unchanged" };
+
+const timelineItemLaneMoveKey = (item: TimelineItemRef) => {
+  switch (item.kind) {
+    case "lighting_event": return `lighting-event:${item.event_id}`;
+    case "video_clip": return `video-clip:${item.clip_id}`;
+    case "audio_clip": return `audio-clip:${item.clip_id}`;
+    case "lighting_automation": return `lighting-automation:${item.automation_id}`;
+    case "video_automation": return `video-automation:${item.automation_id}`;
+  }
+};
+
+export const planTimelineItemLaneMove = (input: {
+  items: TimelineItemRef[];
+  primary: TimelineItemRef;
+  target_layer_id: number;
+  delta_ms: number;
+  isolate: boolean;
+  layers: TimelineLayerSummary[];
+  groups: TimelineItemGroupSummary[];
+  placements: TimelineItemLanePlacement[];
+}): TimelineItemLaneMovePlanResult => {
+  const layerById = new Map(input.layers.map((layer) => [layer.id, layer]));
+  const placementByItem = new Map(input.placements.map((placement) => [
+    timelineItemLaneMoveKey(placement.item),
+    placement.resolved_layer_id,
+  ]));
+  const primaryKey = timelineItemLaneMoveKey(input.primary);
+  const primarySourceId = placementByItem.get(primaryKey);
+  const primarySource = primarySourceId === undefined ? undefined : layerById.get(primarySourceId);
+  const primaryTarget = layerById.get(input.target_layer_id);
+  if (!primarySource || !primaryTarget) return { ok: false, reason: "missing" };
+  const primaryIsScene = input.primary.kind === "lighting_event";
+  const sceneTargetCompatible = primaryIsScene
+    && primarySource.kind !== "Audio"
+    && primaryTarget.kind !== "Audio";
+  if (primarySource.kind !== primaryTarget.kind && !sceneTargetCompatible) {
+    return { ok: false, reason: "kind" };
+  }
+  if (primarySource.locked || primaryTarget.locked) return { ok: false, reason: "locked" };
+
+  const requested = input.isolate ? [input.primary] : [...input.items];
+  if (!requested.some((item) => timelineItemLaneMoveKey(item) === primaryKey)) {
+    requested.push(input.primary);
+  }
+  if (!input.isolate) {
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      const keys = new Set(requested.map(timelineItemLaneMoveKey));
+      for (const group of input.groups) {
+        if (!group.members.some((member) => keys.has(timelineItemLaneMoveKey(member)))) continue;
+        for (const member of group.members) {
+          const key = timelineItemLaneMoveKey(member);
+          if (keys.has(key)) continue;
+          keys.add(key);
+          requested.push(member);
+          expanded = true;
+        }
+      }
+    }
+  }
+  const uniqueItems = requested.filter((item, index) => requested.findIndex((candidate) =>
+    timelineItemLaneMoveKey(candidate) === timelineItemLaneMoveKey(item)) === index);
+  const layersByKind = new Map<TimelineLayerKind, TimelineLayerSummary[]>();
+  for (const kind of ["Audio", "Lighting", "Video"] as const) {
+    layersByKind.set(kind, input.layers
+      .filter((layer) => layer.kind === kind)
+      .sort((left, right) => left.order - right.order || left.id - right.id));
+  }
+  const primarySourceLayers = layersByKind.get(primarySource.kind) ?? [];
+  const primaryTargetLayers = layersByKind.get(primaryTarget.kind) ?? [];
+  const sourceIndex = primarySourceLayers.findIndex((layer) => layer.id === primarySource.id);
+  const targetIndex = primaryTargetLayers.findIndex((layer) => layer.id === primaryTarget.id);
+  if (sourceIndex < 0 || targetIndex < 0) return { ok: false, reason: "missing" };
+  const ordinalDelta = targetIndex - sourceIndex;
+  if (primarySource.id === primaryTarget.id && Math.round(input.delta_ms) === 0) {
+    return { ok: false, reason: "unchanged" };
+  }
+
+  const laneTargets: TimelineItemLaneTarget[] = [];
+  for (const item of uniqueItems) {
+    const resolvedLayerId = placementByItem.get(timelineItemLaneMoveKey(item));
+    const source = resolvedLayerId === undefined ? undefined : layerById.get(resolvedLayerId);
+    if (!source) return { ok: false, reason: "missing" };
+    if (source.locked) return { ok: false, reason: "locked" };
+    const sourceKindLayers = layersByKind.get(source.kind) ?? [];
+    const itemSourceIndex = sourceKindLayers.findIndex((layer) => layer.id === source.id);
+    const targetKind = primaryIsScene && item.kind === "lighting_event"
+      ? primaryTarget.kind
+      : source.kind;
+    const targetKindLayers = layersByKind.get(targetKind) ?? [];
+    const itemTarget = timelineItemLaneMoveKey(item) === primaryKey
+      ? primaryTarget
+      : targetKindLayers[itemSourceIndex + ordinalDelta];
+    if (itemSourceIndex < 0 || !itemTarget) return { ok: false, reason: "range" };
+    if (itemTarget.locked) return { ok: false, reason: "locked" };
+    laneTargets.push({ item, target_layer_id: itemTarget.id });
+  }
+  return {
+    ok: true,
+    plan: {
+      items: uniqueItems,
+      primary: input.primary,
+      delta_ms: Math.round(input.delta_ms),
+      lane_targets: laneTargets,
+      isolate: input.isolate,
+    },
+  };
+};
 
 export interface TimelineLoopRegionSummary {
   a_ms: number;
@@ -2674,6 +2807,7 @@ export type TimelineAdvancedMutationRequest =
   | { kind: "paste_items"; items: TimelineItemRef[]; target_ms: number }
   | { kind: "trim_items"; items: TimelineItemRef[]; primary: TimelineItemRef; edge: "start" | "end"; boundary_ms: number; isolate: boolean }
   | { kind: "split_items"; items: TimelineItemRef[]; primary: TimelineItemRef; boundary_ms: number; isolate: boolean }
+  | { kind: "move_items_to_lanes"; items: TimelineItemRef[]; primary: TimelineItemRef; delta_ms: number; lane_targets: TimelineItemLaneTarget[]; isolate: boolean }
   | { kind: "delete_items"; items: TimelineItemRef[] }
   | { kind: "set_phases"; phases: TimelinePhaseSummary[] }
   | { kind: "set_loop"; loop_region?: TimelineLoopRegionSummary | null }

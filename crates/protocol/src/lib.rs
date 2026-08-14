@@ -4152,6 +4152,10 @@ pub struct TimelineAutomationSummary {
     pub fixture_id: FixtureId,
     pub attribute: String,
     pub track: TimelineTrackKind,
+    /// Authored Timeline-lane placement. Legacy snapshots omit this and are
+    /// displayed in the first Lighting lane without rewriting the project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline_layer_id: Option<u32>,
     pub keyframes: Vec<AutomationKeyframeSummary>,
     pub enabled: bool,
 }
@@ -4198,7 +4202,12 @@ pub struct VideoAutomationKeyframeSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelineVideoAutomationSummary {
     pub id: AutomationId,
+    /// Target video-composition layer; this is not a Timeline lane identity.
     pub layer_id: VideoLayerId,
+    /// Authored Timeline-lane placement. Kept separate from `layer_id` so a
+    /// lane reorder cannot retarget the automated video layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline_layer_id: Option<u32>,
     pub param: VideoParam,
     pub track: TimelineTrackKind,
     pub keyframes: Vec<VideoAutomationKeyframeSummary>,
@@ -4477,6 +4486,11 @@ pub fn validate_timeline_authoring(
         .iter()
         .map(|layer| (layer.id, layer))
         .collect::<BTreeMap<_, _>>();
+    // Layer 0 remains the authored identity of the legacy implicit Lighting
+    // lane. Explicit and legacy lanes must nevertheless be unambiguous.
+    if layer_by_id.len() != timeline.layers.len() {
+        return Err("Timeline layer IDs must be unique".to_string());
+    }
     let asset_by_id = media_assets
         .iter()
         .map(|asset| (asset.id, asset))
@@ -4551,6 +4565,42 @@ pub fn validate_timeline_authoring(
             return Err(format!(
                 "Timeline Video clip {} has invalid duration or fades",
                 clip.id.0
+            ));
+        }
+    }
+
+    for automation in &timeline.automations {
+        let Some(layer_id) = automation.timeline_layer_id else {
+            continue;
+        };
+        let layer = layer_by_id.get(&layer_id).ok_or_else(|| {
+            format!(
+                "Timeline Lighting automation {} references missing Timeline layer {layer_id}",
+                automation.id
+            )
+        })?;
+        if !matches!(layer.kind, TimelineLayerKind::Lighting) {
+            return Err(format!(
+                "Timeline Lighting automation {} references non-Lighting Timeline layer {layer_id}",
+                automation.id
+            ));
+        }
+    }
+
+    for automation in &timeline.video_automations {
+        let Some(layer_id) = automation.timeline_layer_id else {
+            continue;
+        };
+        let layer = layer_by_id.get(&layer_id).ok_or_else(|| {
+            format!(
+                "Timeline Video automation {} references missing Timeline layer {layer_id}",
+                automation.id
+            )
+        })?;
+        if !matches!(layer.kind, TimelineLayerKind::Video) {
+            return Err(format!(
+                "Timeline Video automation {} references non-Video Timeline layer {layer_id}",
+                automation.id
             ));
         }
     }
@@ -7572,6 +7622,86 @@ mod tests {
         assert!(!layer.solo);
         assert!(!layer.expanded);
         assert_eq!(layer.kind, super::TimelineLayerKind::Lighting);
+    }
+
+    #[test]
+    fn timeline_automation_lane_identity_is_additive_and_kind_checked() {
+        let legacy_lighting: super::TimelineAutomationSummary =
+            serde_json::from_value(serde_json::json!({
+                "id": 31,
+                "fixture_id": 7,
+                "attribute": "Dimmer",
+                "track": "Lighting",
+                "keyframes": [],
+                "enabled": true
+            }))
+            .unwrap();
+        let legacy_video: super::TimelineVideoAutomationSummary =
+            serde_json::from_value(serde_json::json!({
+                "id": 32,
+                "layer_id": 91,
+                "param": "Opacity",
+                "track": "Video",
+                "keyframes": [],
+                "enabled": true
+            }))
+            .unwrap();
+        assert_eq!(legacy_lighting.timeline_layer_id, None);
+        assert_eq!(legacy_video.timeline_layer_id, None);
+        assert!(serde_json::to_value(&legacy_lighting)
+            .unwrap()
+            .get("timeline_layer_id")
+            .is_none());
+
+        let mut timeline = super::TimelineSnapshot {
+            layers: vec![
+                super::TimelineLayerSummary {
+                    id: 11,
+                    label: "Lighting A".to_string(),
+                    order: 0,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: true,
+                    kind: super::TimelineLayerKind::Lighting,
+                },
+                super::TimelineLayerSummary {
+                    id: 12,
+                    label: "Video A".to_string(),
+                    order: 1,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: true,
+                    kind: super::TimelineLayerKind::Video,
+                },
+            ],
+            automations: vec![super::TimelineAutomationSummary {
+                timeline_layer_id: Some(11),
+                ..legacy_lighting
+            }],
+            video_automations: vec![super::TimelineVideoAutomationSummary {
+                timeline_layer_id: Some(12),
+                ..legacy_video
+            }],
+            ..super::TimelineSnapshot::default()
+        };
+        super::validate_timeline_authoring(&timeline, &[]).unwrap();
+        let roundtrip: super::TimelineSnapshot =
+            serde_json::from_value(serde_json::to_value(&timeline).unwrap()).unwrap();
+        assert_eq!(roundtrip, timeline);
+        assert_eq!(roundtrip.video_automations[0].layer_id, 91);
+        assert_eq!(roundtrip.video_automations[0].timeline_layer_id, Some(12));
+
+        timeline.automations[0].timeline_layer_id = Some(12);
+        assert!(super::validate_timeline_authoring(&timeline, &[])
+            .unwrap_err()
+            .contains("non-Lighting Timeline layer"));
+        timeline.automations[0].timeline_layer_id = Some(11);
+        timeline.video_automations[0].timeline_layer_id = Some(99);
+        assert!(super::validate_timeline_authoring(&timeline, &[])
+            .unwrap_err()
+            .contains("missing Timeline layer 99"));
     }
 
     #[test]

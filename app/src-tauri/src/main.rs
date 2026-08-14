@@ -773,6 +773,12 @@ enum TimelineTrimEdge {
     End,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct TimelineItemLaneTarget {
+    item: TimelineItemRef,
+    target_layer_id: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum TimelineAdvancedMutationRequest {
@@ -804,6 +810,14 @@ enum TimelineAdvancedMutationRequest {
     NudgeItems {
         items: Vec<TimelineItemRef>,
         delta_ms: i64,
+    },
+    MoveItemsToLanes {
+        items: Vec<TimelineItemRef>,
+        primary: TimelineItemRef,
+        lane_targets: Vec<TimelineItemLaneTarget>,
+        delta_ms: i64,
+        #[serde(default)]
+        isolate: bool,
     },
     RippleItems {
         items: Vec<TimelineItemRef>,
@@ -6100,7 +6114,17 @@ fn nudge_timeline_items(
         return Err("Timeline nudge amount must not be zero".to_string());
     }
     let expanded = expanded_timeline_items(timeline, requested_items)?;
-    for item in &expanded {
+    nudge_timeline_item_set(timeline, &expanded, delta_ms, bpm)?;
+    Ok(expanded.into_iter().collect())
+}
+
+fn nudge_timeline_item_set(
+    timeline: &mut TimelineSnapshot,
+    items: &BTreeSet<TimelineItemRef>,
+    delta_ms: i64,
+    bpm: f32,
+) -> Result<(), String> {
+    for item in items {
         match item {
             TimelineItemRef::LightingEvent { event_id } => {
                 let event = timeline
@@ -6149,7 +6173,7 @@ fn nudge_timeline_items(
             }
         }
     }
-    for item in &expanded {
+    for item in items {
         match item {
             TimelineItemRef::LightingEvent { event_id } => {
                 let event = timeline
@@ -6198,7 +6222,7 @@ fn nudge_timeline_items(
             }
         }
     }
-    Ok(expanded.into_iter().collect())
+    Ok(())
 }
 
 fn timeline_items_temporal_anchor_ms(
@@ -6364,7 +6388,10 @@ fn timeline_trimmed_fades(
     }
 }
 
-fn timeline_item_is_on_locked_layer(timeline: &TimelineSnapshot, item: TimelineItemRef) -> bool {
+fn timeline_item_is_on_locked_layer(
+    timeline: &TimelineSnapshot,
+    item: TimelineItemRef,
+) -> Result<bool, String> {
     let layer_id = match item {
         TimelineItemRef::LightingEvent { event_id } => timeline
             .events
@@ -6390,38 +6417,391 @@ fn timeline_item_is_on_locked_layer(timeline: &TimelineSnapshot, item: TimelineI
             .iter()
             .find(|clip| clip.id == clip_id)
             .map(|clip| clip.layer_id),
-        TimelineItemRef::LightingAutomation { automation_id } => timeline
-            .automations
-            .iter()
-            .find(|automation| automation.id == automation_id)
-            .and_then(|automation| {
-                let kind = TimelineLayerKind::from(&automation.track);
-                timeline
-                    .layers
-                    .iter()
-                    .find(|layer| layer.kind == kind)
-                    .map(|layer| layer.id)
-            }),
-        TimelineItemRef::VideoAutomation { automation_id } => timeline
-            .video_automations
-            .iter()
-            .find(|automation| automation.id == automation_id)
-            .and_then(|automation| {
-                let kind = TimelineLayerKind::from(&automation.track);
-                timeline
-                    .layers
-                    .iter()
-                    .find(|layer| layer.kind == kind)
-                    .map(|layer| layer.id)
-            }),
+        TimelineItemRef::LightingAutomation { automation_id } => {
+            let automation = timeline
+                .automations
+                .iter()
+                .find(|automation| automation.id == automation_id)
+                .ok_or_else(|| format!("Timeline automation {automation_id} was not found"))?;
+            let expected_kind = TimelineLayerKind::Lighting;
+            let layer_id =
+                match automation.timeline_layer_id {
+                    Some(layer_id) => layer_id,
+                    // Legacy persistence intentionally stores no authored lanes.
+                    // Its `None` automation lane resolves to implicit Lighting=0,
+                    // which is necessarily unlocked and must not materialize A.
+                    None if timeline.layers.is_empty() => return Ok(false),
+                    None => timeline_first_lane_id_of_kind(timeline, expected_kind).ok_or_else(
+                        || format!("Timeline automation {automation_id} requires a Lighting lane"),
+                    )?,
+                };
+            let layer = timeline.layers.iter().find(|layer| layer.id == layer_id).ok_or_else(|| {
+                format!(
+                    "Timeline automation {automation_id} references missing Timeline lane {layer_id}"
+                )
+            })?;
+            if layer.kind != expected_kind {
+                return Err(format!(
+                    "Timeline automation {automation_id} references incompatible Timeline lane {layer_id}"
+                ));
+            }
+            return Ok(layer.locked);
+        }
+        TimelineItemRef::VideoAutomation { automation_id } => {
+            let automation = timeline
+                .video_automations
+                .iter()
+                .find(|automation| automation.id == automation_id)
+                .ok_or_else(|| {
+                    format!("Timeline Video automation {automation_id} was not found")
+                })?;
+            let expected_kind = TimelineLayerKind::Video;
+            let layer_id = match automation.timeline_layer_id {
+                Some(layer_id) => layer_id,
+                // As above, the historical `None` value is implicit Video=1,
+                // unlocked, and remains absent from persisted A/B.
+                None if timeline.layers.is_empty() => return Ok(false),
+                None => {
+                    timeline_first_lane_id_of_kind(timeline, expected_kind).ok_or_else(|| {
+                        format!("Timeline Video automation {automation_id} requires a Video lane")
+                    })?
+                }
+            };
+            let layer = timeline.layers.iter().find(|layer| layer.id == layer_id).ok_or_else(|| {
+                format!(
+                    "Timeline Video automation {automation_id} references missing Timeline lane {layer_id}"
+                )
+            })?;
+            if layer.kind != expected_kind {
+                return Err(format!(
+                    "Timeline Video automation {automation_id} references incompatible Timeline lane {layer_id}"
+                ));
+            }
+            return Ok(layer.locked);
+        }
     };
-    layer_id.is_some_and(|layer_id| {
+    Ok(layer_id.is_some_and(|layer_id| {
         timeline
             .layers
             .iter()
             .find(|layer| layer.id == layer_id)
             .is_some_and(|layer| layer.locked)
-    })
+    }))
+}
+
+fn timeline_first_lane_id_of_kind(
+    timeline: &TimelineSnapshot,
+    kind: TimelineLayerKind,
+) -> Option<u32> {
+    timeline
+        .layers
+        .iter()
+        .filter(|layer| layer.kind == kind)
+        .min_by_key(|layer| (layer.order, layer.id))
+        .map(|layer| layer.id)
+}
+
+/// Materialize only the active candidate's historical implicit lanes before a
+/// lane-addressed move.  Legacy persistence deliberately keeps `layers`
+/// empty, while the UI and engine expose Lighting=0 and Video=1.  An authored
+/// audio clip supplies its own derived Audio lane as the engine does.  The
+/// caller works on a clone, so a failed preflight leaves the legacy A image
+/// byte-for-byte untouched.
+fn materialize_legacy_timeline_layers_for_lane_move(
+    timeline: &mut TimelineSnapshot,
+) -> Result<(), String> {
+    if !timeline.layers.is_empty() {
+        return Ok(());
+    }
+
+    let mut layers = vec![
+        protocol::TimelineLayerSummary {
+            id: 0,
+            label: "Lighting".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: false,
+            kind: TimelineLayerKind::Lighting,
+        },
+        protocol::TimelineLayerSummary {
+            id: 1,
+            label: "Video".to_string(),
+            order: 1,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: false,
+            kind: TimelineLayerKind::Video,
+        },
+    ];
+    let audio_lane_ids = timeline
+        .audio_clips
+        .iter()
+        .map(|clip| clip.layer_id)
+        .collect::<BTreeSet<_>>();
+    for layer_id in audio_lane_ids {
+        if matches!(layer_id, 0 | 1) {
+            return Err(format!(
+                "Legacy Timeline Audio clip lane {layer_id} collides with implicit Lighting or Video"
+            ));
+        }
+        layers.push(protocol::TimelineLayerSummary {
+            id: layer_id,
+            label: "Audio".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: false,
+            kind: TimelineLayerKind::Audio,
+        });
+    }
+    layers.sort_by_key(|layer| (layer.kind.display_section_rank(), layer.order, layer.id));
+    for (index, layer) in layers.iter_mut().enumerate() {
+        layer.order = u32::try_from(index)
+            .map_err(|_| "Timeline has too many lanes to materialize".to_string())?;
+    }
+    for event in &mut timeline.events {
+        if event.layer_id.is_none() {
+            event.layer_id = Some(match event.track {
+                TimelineTrackKind::Lighting => 0,
+                TimelineTrackKind::Video => 1,
+            });
+        }
+    }
+    timeline.layers = layers;
+    Ok(())
+}
+
+fn timeline_reorder_item_source_lane(
+    timeline: &TimelineSnapshot,
+    item: TimelineItemRef,
+) -> Result<(u32, TimelineLayerKind), String> {
+    let (source_layer_id, required_kind) = match item {
+        TimelineItemRef::LightingEvent { event_id } => {
+            let event = timeline
+                .events
+                .iter()
+                .find(|event| event.id == event_id)
+                .ok_or_else(|| format!("Timeline event {event_id} was not found"))?;
+            (
+                event.layer_id.or_else(|| {
+                    timeline_first_lane_id_of_kind(timeline, TimelineLayerKind::from(&event.track))
+                }),
+                None,
+            )
+        }
+        TimelineItemRef::VideoClip { clip_id } => {
+            let clip = timeline
+                .video_clips
+                .iter()
+                .find(|clip| clip.id == clip_id)
+                .ok_or_else(|| format!("Timeline Video clip {} was not found", clip_id.0))?;
+            (Some(clip.layer_id), Some(TimelineLayerKind::Video))
+        }
+        TimelineItemRef::AudioClip { clip_id } => {
+            let clip = timeline
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == clip_id)
+                .ok_or_else(|| format!("Timeline Audio clip {clip_id} was not found"))?;
+            (Some(clip.layer_id), Some(TimelineLayerKind::Audio))
+        }
+        TimelineItemRef::LightingAutomation { automation_id } => {
+            let automation = timeline
+                .automations
+                .iter()
+                .find(|automation| automation.id == automation_id)
+                .ok_or_else(|| format!("Timeline automation {automation_id} was not found"))?;
+            (
+                automation.timeline_layer_id.or_else(|| {
+                    timeline_first_lane_id_of_kind(timeline, TimelineLayerKind::Lighting)
+                }),
+                Some(TimelineLayerKind::Lighting),
+            )
+        }
+        TimelineItemRef::VideoAutomation { automation_id } => {
+            let automation = timeline
+                .video_automations
+                .iter()
+                .find(|automation| automation.id == automation_id)
+                .ok_or_else(|| {
+                    format!("Timeline Video automation {automation_id} was not found")
+                })?;
+            (
+                automation
+                    .timeline_layer_id
+                    .or_else(|| timeline_first_lane_id_of_kind(timeline, TimelineLayerKind::Video)),
+                Some(TimelineLayerKind::Video),
+            )
+        }
+    };
+    let source_layer_id = source_layer_id.ok_or_else(|| {
+        "Timeline item has no compatible source lane; refresh and retry".to_string()
+    })?;
+    let source = timeline
+        .layers
+        .iter()
+        .find(|layer| layer.id == source_layer_id)
+        .ok_or_else(|| format!("Timeline source lane {source_layer_id} was not found"))?;
+    if required_kind.is_some_and(|required_kind| source.kind != required_kind) {
+        return Err(format!(
+            "Timeline source lane {source_layer_id} is incompatible with the selected item"
+        ));
+    }
+    if matches!(item, TimelineItemRef::LightingEvent { .. })
+        && source.kind == TimelineLayerKind::Audio
+    {
+        return Err("Timeline Scene events cannot be moved from an Audio lane".to_string());
+    }
+    Ok((source_layer_id, source.kind))
+}
+
+fn move_timeline_items_to_lanes(
+    timeline: &mut TimelineSnapshot,
+    requested_items: &[TimelineItemRef],
+    primary: TimelineItemRef,
+    lane_targets: &[TimelineItemLaneTarget],
+    delta_ms: i64,
+    isolate: bool,
+    bpm: f32,
+) -> Result<Vec<TimelineItemRef>, String> {
+    let mut candidate = timeline.clone();
+    materialize_legacy_timeline_layers_for_lane_move(&mut candidate)?;
+    let expanded = expanded_timeline_items(&candidate, requested_items)?;
+    if !expanded.contains(&primary) {
+        return Err("Timeline lane reorder primary item is outside the selected group".to_string());
+    }
+    let edited = if isolate {
+        BTreeSet::from([primary])
+    } else {
+        expanded
+    };
+    let mut target_by_item = BTreeMap::new();
+    for target in lane_targets {
+        if !edited.contains(&target.item) {
+            return Err("Timeline lane targets contain an unselected item".to_string());
+        }
+        if target_by_item
+            .insert(target.item, target.target_layer_id)
+            .is_some()
+        {
+            return Err("Timeline lane targets contain a duplicate item".to_string());
+        }
+    }
+    if target_by_item.len() != edited.len() {
+        return Err(
+            "Timeline lane targets must contain every edited item exactly once".to_string(),
+        );
+    }
+    let mut sources = BTreeMap::new();
+    for item in &edited {
+        let (source_layer_id, expected_kind) =
+            timeline_reorder_item_source_lane(&candidate, *item)?;
+        let target_layer_id = target_by_item[item];
+        let target = candidate
+            .layers
+            .iter()
+            .find(|layer| layer.id == target_layer_id)
+            .ok_or_else(|| format!("Timeline target lane {target_layer_id} was not found"))?;
+        let target_is_compatible = match item {
+            TimelineItemRef::LightingEvent { .. } => {
+                matches!(
+                    target.kind,
+                    TimelineLayerKind::Lighting | TimelineLayerKind::Video
+                )
+            }
+            _ => target.kind == expected_kind,
+        };
+        if !target_is_compatible {
+            return Err("Timeline target lane is incompatible with the selected item".to_string());
+        }
+        if target.locked {
+            return Err("Timeline lane move cannot target a locked lane".to_string());
+        }
+        let source = candidate
+            .layers
+            .iter()
+            .find(|layer| layer.id == source_layer_id)
+            .expect("validated Timeline source lane exists");
+        if source.locked {
+            return Err("Timeline lane move cannot move an item from a locked lane".to_string());
+        }
+        sources.insert(*item, source_layer_id);
+    }
+    if delta_ms == 0
+        && sources
+            .iter()
+            .all(|(item, source_layer_id)| *source_layer_id == target_by_item[item])
+    {
+        return Err("Timeline lane move target is already selected".to_string());
+    }
+
+    if delta_ms != 0 {
+        nudge_timeline_item_set(&mut candidate, &edited, delta_ms, bpm)?;
+    }
+    for item in &edited {
+        let target_layer_id = target_by_item[item];
+        match *item {
+            TimelineItemRef::LightingEvent { event_id } => {
+                let target_kind = candidate
+                    .layers
+                    .iter()
+                    .find(|layer| layer.id == target_layer_id)
+                    .expect("validated Scene target lane exists")
+                    .kind;
+                let event = candidate
+                    .events
+                    .iter_mut()
+                    .find(|event| event.id == event_id)
+                    .expect("validated Timeline event exists");
+                event.layer_id = Some(target_layer_id);
+                event.track = match target_kind {
+                    TimelineLayerKind::Lighting => TimelineTrackKind::Lighting,
+                    TimelineLayerKind::Video => TimelineTrackKind::Video,
+                    TimelineLayerKind::Audio => {
+                        unreachable!("preflight rejects Audio Scene lane targets")
+                    }
+                };
+            }
+            TimelineItemRef::VideoClip { clip_id } => {
+                candidate
+                    .video_clips
+                    .iter_mut()
+                    .find(|clip| clip.id == clip_id)
+                    .expect("validated Timeline Video clip exists")
+                    .layer_id = target_layer_id;
+            }
+            TimelineItemRef::AudioClip { clip_id } => {
+                candidate
+                    .audio_clips
+                    .iter_mut()
+                    .find(|clip| clip.id == clip_id)
+                    .expect("validated Timeline Audio clip exists")
+                    .layer_id = target_layer_id;
+            }
+            TimelineItemRef::LightingAutomation { automation_id } => {
+                candidate
+                    .automations
+                    .iter_mut()
+                    .find(|automation| automation.id == automation_id)
+                    .expect("validated Timeline automation exists")
+                    .timeline_layer_id = Some(target_layer_id);
+            }
+            TimelineItemRef::VideoAutomation { automation_id } => {
+                candidate
+                    .video_automations
+                    .iter_mut()
+                    .find(|automation| automation.id == automation_id)
+                    .expect("validated Timeline Video automation exists")
+                    .timeline_layer_id = Some(target_layer_id);
+            }
+        }
+    }
+    *timeline = candidate;
+    Ok(edited.into_iter().collect())
 }
 
 fn timeline_event_presented_end_ms(
@@ -6754,7 +7134,7 @@ fn trim_timeline_items(
         expanded.clone()
     };
     for item in &edited {
-        if timeline_item_is_on_locked_layer(timeline, *item) {
+        if timeline_item_is_on_locked_layer(timeline, *item)? {
             return Err("Timeline trim cannot edit an item on a locked lane".to_string());
         }
     }
@@ -7195,7 +7575,7 @@ fn split_timeline_items(
     };
     let mut item_boundaries = BTreeMap::new();
     for item in &edited {
-        if timeline_item_is_on_locked_layer(timeline, *item) {
+        if timeline_item_is_on_locked_layer(timeline, *item)? {
             return Err("Timeline Split cannot edit an item on a locked lane".to_string());
         }
         let start_ms = timeline_item_edge_ms(timeline, *item, TimelineTrimEdge::Start)?;
@@ -7859,6 +8239,7 @@ fn timeline_advanced_candidate_for_request(
         | TimelineAdvancedMutationRequest::SelectTimeline { .. }
         | TimelineAdvancedMutationRequest::DuplicateItems { .. }
         | TimelineAdvancedMutationRequest::NudgeItems { .. }
+        | TimelineAdvancedMutationRequest::MoveItemsToLanes { .. }
         | TimelineAdvancedMutationRequest::RippleItems { .. }
         | TimelineAdvancedMutationRequest::QuantizeItems { .. }
         | TimelineAdvancedMutationRequest::PasteItems { .. }
@@ -8119,6 +8500,27 @@ fn timeline_bank_candidate_for_request(
                 .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
             selected_items = nudge_timeline_items(active, items, *delta_ms, before.clock.bpm)?;
         }
+        TimelineAdvancedMutationRequest::MoveItemsToLanes {
+            items,
+            primary,
+            lane_targets,
+            delta_ms,
+            isolate,
+        } => {
+            let active = bank
+                .iter_mut()
+                .find(|timeline| timeline.id == active_timeline_id)
+                .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
+            selected_items = move_timeline_items_to_lanes(
+                active,
+                items,
+                *primary,
+                lane_targets,
+                *delta_ms,
+                *isolate,
+                before.clock.bpm,
+            )?;
+        }
         TimelineAdvancedMutationRequest::RippleItems { items, delta_ms } => {
             let active = bank
                 .iter_mut()
@@ -8294,6 +8696,7 @@ fn timeline_advanced_history_label(request: &TimelineAdvancedMutationRequest) ->
         TimelineAdvancedMutationRequest::MoveGroup { .. } => "Move Timeline group",
         TimelineAdvancedMutationRequest::DuplicateItems { .. } => "Duplicate Timeline items",
         TimelineAdvancedMutationRequest::NudgeItems { .. } => "Nudge Timeline items",
+        TimelineAdvancedMutationRequest::MoveItemsToLanes { .. } => "Move Timeline items to lanes",
         TimelineAdvancedMutationRequest::RippleItems { .. } => "Ripple Timeline items",
         TimelineAdvancedMutationRequest::QuantizeItems { .. } => "Quantize Timeline items",
         TimelineAdvancedMutationRequest::PasteItems { .. } => "Paste Timeline items",
@@ -8343,6 +8746,7 @@ fn commit_authoritative_timeline_advanced(
             | TimelineAdvancedMutationRequest::SelectTimeline { .. }
             | TimelineAdvancedMutationRequest::DuplicateItems { .. }
             | TimelineAdvancedMutationRequest::NudgeItems { .. }
+            | TimelineAdvancedMutationRequest::MoveItemsToLanes { .. }
             | TimelineAdvancedMutationRequest::RippleItems { .. }
             | TimelineAdvancedMutationRequest::QuantizeItems { .. }
             | TimelineAdvancedMutationRequest::PasteItems { .. }
@@ -67187,6 +67591,7 @@ f 1 2 3
                 layer_id: 10,
                 param: VideoParam::Opacity,
                 track: TimelineTrackKind::Video,
+                timeline_layer_id: None,
                 keyframes: vec![VideoAutomationKeyframeSummary {
                     time_ms: 0,
                     value: f32::NAN,
@@ -67936,6 +68341,7 @@ f 1 2 3
             fixture_id: 1,
             attribute: "Zoom".to_string(),
             track: TimelineTrackKind::Lighting,
+            timeline_layer_id: None,
             keyframes: sample_automation_keyframes(),
             enabled: true,
         }];
@@ -69328,6 +69734,7 @@ f 1 2 3
             fixture_id: 1,
             attribute: "Dimmer".to_string(),
             track: TimelineTrackKind::Lighting,
+            timeline_layer_id: None,
             keyframes: vec![AutomationKeyframeSummary {
                 time_ms: 100,
                 value: 1_000,
@@ -69341,6 +69748,7 @@ f 1 2 3
                 layer_id: 1,
                 param: VideoParam::Opacity,
                 track: TimelineTrackKind::Video,
+                timeline_layer_id: None,
                 keyframes: vec![VideoAutomationKeyframeSummary {
                     time_ms: 100,
                     value: 0.25,
@@ -69505,6 +69913,7 @@ f 1 2 3
             fixture_id: 1,
             attribute: "Dimmer".to_string(),
             track: TimelineTrackKind::Lighting,
+            timeline_layer_id: None,
             keyframes: vec![
                 AutomationKeyframeSummary {
                     time_ms: 1_000,
@@ -69530,6 +69939,7 @@ f 1 2 3
                 layer_id: 10,
                 param: VideoParam::Opacity,
                 track: TimelineTrackKind::Video,
+                timeline_layer_id: None,
                 keyframes: vec![
                     VideoAutomationKeyframeSummary {
                         time_ms: 250,
@@ -76765,6 +77175,7 @@ mod live_audio_input_tests {
                 fixture_id: 1,
                 attribute: "Dimmer".to_string(),
                 track: TimelineTrackKind::Lighting,
+                timeline_layer_id: None,
                 keyframes: vec![AutomationKeyframeSummary {
                     time_ms: 0,
                     value: 32_768,
@@ -76779,6 +77190,7 @@ mod live_audio_input_tests {
                 layer_id: 2,
                 param: protocol::VideoParam::Opacity,
                 track: TimelineTrackKind::Video,
+                timeline_layer_id: None,
                 keyframes: vec![VideoAutomationKeyframeSummary {
                     time_ms: 0,
                     value: 0.5,
@@ -77161,6 +77573,7 @@ mod live_audio_input_tests {
                 fixture_id: 1,
                 attribute: "Dimmer".to_string(),
                 track: TimelineTrackKind::Lighting,
+                timeline_layer_id: None,
                 keyframes: vec![
                     AutomationKeyframeSummary {
                         time_ms: 1_300,
@@ -77187,6 +77600,7 @@ mod live_audio_input_tests {
                 layer_id: 99,
                 param: protocol::VideoParam::Opacity,
                 track: TimelineTrackKind::Video,
+                timeline_layer_id: None,
                 keyframes: vec![
                     VideoAutomationKeyframeSummary {
                         time_ms: 1_400,
@@ -77469,6 +77883,7 @@ mod live_audio_input_tests {
                 fixture_id: 1,
                 attribute: "Dimmer".to_string(),
                 track: TimelineTrackKind::Lighting,
+                timeline_layer_id: None,
                 keyframes: vec![
                     AutomationKeyframeSummary {
                         time_ms: 1_200,
@@ -77495,6 +77910,7 @@ mod live_audio_input_tests {
                 layer_id: 99,
                 param: protocol::VideoParam::Opacity,
                 track: TimelineTrackKind::Video,
+                timeline_layer_id: None,
                 keyframes: vec![
                     VideoAutomationKeyframeSummary {
                         time_ms: 1_300,
@@ -77847,6 +78263,1193 @@ mod live_audio_input_tests {
         .unwrap_err()
         .contains("loop playback is ambiguous"));
         assert_eq!(looped, looped_before);
+    }
+
+    #[test]
+    fn timeline_automation_lock_preflight_uses_explicit_timeline_lane_ids() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let mut base = timeline_split_test_snapshot();
+        base.layers.extend([
+            protocol::TimelineLayerSummary {
+                id: 4,
+                label: "Lighting automation lane".to_string(),
+                order: 3,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: false,
+                kind: TimelineLayerKind::Lighting,
+            },
+            protocol::TimelineLayerSummary {
+                id: 5,
+                label: "Video automation lane".to_string(),
+                order: 4,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: false,
+                kind: TimelineLayerKind::Video,
+            },
+        ]);
+        base.layers[0].locked = true;
+        base.layers[1].locked = true;
+        base.automations[0].timeline_layer_id = Some(4);
+        base.video_automations[0].timeline_layer_id = Some(5);
+
+        // The first compatible lane of each kind is locked, but the explicit
+        // lane is not.  Trim/Split must use the automation's authored lane,
+        // not the historical first-lane fallback.
+        assert!(!timeline_item_is_on_locked_layer(
+            &base,
+            TimelineItemRef::LightingAutomation { automation_id: 24 },
+        )
+        .expect("explicit Lighting lane resolves"));
+        let mut lighting_explicit_unlocked = base.clone();
+        trim_timeline_items(
+            &mut lighting_explicit_unlocked,
+            &[],
+            &[TimelineItemRef::LightingAutomation { automation_id: 24 }],
+            TimelineItemRef::LightingAutomation { automation_id: 24 },
+            TimelineTrimEdge::Start,
+            1_600,
+            true,
+            120.0,
+        )
+        .expect("an explicit unlocked Lighting automation lane may be trimmed");
+
+        assert!(!timeline_item_is_on_locked_layer(
+            &base,
+            TimelineItemRef::VideoAutomation { automation_id: 25 },
+        )
+        .expect("explicit Video lane resolves"));
+        let mut video_explicit_unlocked = base.clone();
+        split_timeline_items(
+            &harness.state,
+            &mut video_explicit_unlocked,
+            &[],
+            &[TimelineItemRef::VideoAutomation { automation_id: 25 }],
+            TimelineItemRef::VideoAutomation { automation_id: 25 },
+            1_700,
+            true,
+            120.0,
+        )
+        .expect("an explicit unlocked Video automation lane may be split");
+
+        // Invert the locks: an unlocked first lane must not bypass an
+        // explicit locked automation lane.  Each operation retains A.
+        let mut lighting_explicit_locked = base.clone();
+        lighting_explicit_locked.layers[0].locked = false;
+        lighting_explicit_locked
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == 4)
+            .unwrap()
+            .locked = true;
+        let lighting_locked_before = lighting_explicit_locked.clone();
+        assert!(timeline_item_is_on_locked_layer(
+            &lighting_explicit_locked,
+            TimelineItemRef::LightingAutomation { automation_id: 24 },
+        )
+        .expect("explicit locked Lighting lane resolves"));
+        assert!(trim_timeline_items(
+            &mut lighting_explicit_locked,
+            &[],
+            &[TimelineItemRef::LightingAutomation { automation_id: 24 }],
+            TimelineItemRef::LightingAutomation { automation_id: 24 },
+            TimelineTrimEdge::Start,
+            1_600,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("locked lane"));
+        assert_eq!(lighting_explicit_locked, lighting_locked_before);
+
+        let mut video_explicit_locked = base.clone();
+        video_explicit_locked.layers[1].locked = false;
+        video_explicit_locked
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == 5)
+            .unwrap()
+            .locked = true;
+        let video_locked_before = video_explicit_locked.clone();
+        assert!(timeline_item_is_on_locked_layer(
+            &video_explicit_locked,
+            TimelineItemRef::VideoAutomation { automation_id: 25 },
+        )
+        .expect("explicit locked Video lane resolves"));
+        assert!(split_timeline_items(
+            &harness.state,
+            &mut video_explicit_locked,
+            &[],
+            &[TimelineItemRef::VideoAutomation { automation_id: 25 }],
+            TimelineItemRef::VideoAutomation { automation_id: 25 },
+            1_700,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("locked lane"));
+        assert_eq!(video_explicit_locked, video_locked_before);
+
+        // A stale explicit lane must be rejected by the lock preflight rather
+        // than treated as an unlocked lane and deferred to a later validator.
+        let mut missing_lighting_lane = base.clone();
+        missing_lighting_lane.automations[0].timeline_layer_id = Some(999);
+        let missing_lighting_before = missing_lighting_lane.clone();
+        assert!(trim_timeline_items(
+            &mut missing_lighting_lane,
+            &[],
+            &[TimelineItemRef::LightingAutomation { automation_id: 24 }],
+            TimelineItemRef::LightingAutomation { automation_id: 24 },
+            TimelineTrimEdge::Start,
+            1_600,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("missing Timeline lane"));
+        assert_eq!(missing_lighting_lane, missing_lighting_before);
+
+        let mut missing_video_lane = base;
+        missing_video_lane.video_automations[0].timeline_layer_id = Some(999);
+        let missing_video_before = missing_video_lane.clone();
+        assert!(split_timeline_items(
+            &harness.state,
+            &mut missing_video_lane,
+            &[],
+            &[TimelineItemRef::VideoAutomation { automation_id: 25 }],
+            TimelineItemRef::VideoAutomation { automation_id: 25 },
+            1_700,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("missing Timeline lane"));
+        assert_eq!(missing_video_lane, missing_video_before);
+    }
+
+    #[test]
+    fn timeline_automation_lock_preflight_preserves_legacy_implicit_lanes() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let mut legacy = timeline_split_test_snapshot();
+        legacy.layers.clear();
+        legacy.automations[0].timeline_layer_id = None;
+        legacy.video_automations[0].timeline_layer_id = None;
+        let legacy_a = legacy.clone();
+
+        // Historical persistence has no authored lanes.  `None` therefore
+        // means implicit unlocked Lighting=0 / Video=1 during preflight, not
+        // a missing lane and not an A mutation.
+        assert!(!timeline_item_is_on_locked_layer(
+            &legacy,
+            TimelineItemRef::LightingAutomation { automation_id: 24 },
+        )
+        .expect("legacy Lighting automation resolves its implicit lane"));
+        assert!(!timeline_item_is_on_locked_layer(
+            &legacy,
+            TimelineItemRef::VideoAutomation { automation_id: 25 },
+        )
+        .expect("legacy Video automation resolves its implicit lane"));
+
+        trim_timeline_items(
+            &mut legacy,
+            &[],
+            &[TimelineItemRef::LightingAutomation { automation_id: 24 }],
+            TimelineItemRef::LightingAutomation { automation_id: 24 },
+            TimelineTrimEdge::Start,
+            1_600,
+            true,
+            120.0,
+        )
+        .expect("legacy implicit Lighting automation may be trimmed");
+        split_timeline_items(
+            &harness.state,
+            &mut legacy,
+            &[],
+            &[TimelineItemRef::VideoAutomation { automation_id: 25 }],
+            TimelineItemRef::VideoAutomation { automation_id: 25 },
+            1_700,
+            true,
+            120.0,
+        )
+        .expect("legacy implicit Video automation may be split");
+
+        // B contains only the intended automation edits; its persisted
+        // legacy lane representation remains empty/None just as A did.
+        assert!(legacy.layers.is_empty());
+        assert!(legacy_a.layers.is_empty());
+        assert_eq!(legacy.automations[0].timeline_layer_id, None);
+        assert_eq!(legacy.video_automations[0].timeline_layer_id, None);
+        assert!(legacy
+            .video_automations
+            .iter()
+            .all(|automation| automation.timeline_layer_id.is_none()));
+        assert_eq!(legacy.automations[0].keyframes[0].time_ms, 1_600);
+        assert_eq!(legacy.video_automations.len(), 2);
+
+        // An explicit lane never adopts implicit semantics: it is stale in
+        // this legacy A and must still fail closed before mutation.
+        let mut stale_explicit = legacy_a;
+        stale_explicit.automations[0].timeline_layer_id = Some(0);
+        let stale_explicit_a = stale_explicit.clone();
+        assert!(trim_timeline_items(
+            &mut stale_explicit,
+            &[],
+            &[TimelineItemRef::LightingAutomation { automation_id: 24 }],
+            TimelineItemRef::LightingAutomation { automation_id: 24 },
+            TimelineTrimEdge::Start,
+            1_600,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("missing Timeline lane"));
+        assert_eq!(stale_explicit, stale_explicit_a);
+    }
+
+    #[test]
+    fn timeline_move_items_to_lanes_is_atomic_across_all_domains_and_isolate() {
+        let mut original = timeline_split_test_snapshot();
+        let target_layer = |id: u32, label: &str, order: u32, kind: TimelineLayerKind| {
+            protocol::TimelineLayerSummary {
+                id,
+                label: label.to_string(),
+                order,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: false,
+                kind,
+            }
+        };
+        original.layers.extend([
+            target_layer(4, "Lighting target", 3, TimelineLayerKind::Lighting),
+            target_layer(5, "Video target", 4, TimelineLayerKind::Video),
+            target_layer(6, "Audio target", 5, TimelineLayerKind::Audio),
+        ]);
+        let group_before = original.item_groups.clone();
+        let full_targets = vec![
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingEvent { event_id: 20 },
+                target_layer_id: 4,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingEvent { event_id: 21 },
+                target_layer_id: 4,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::VideoClip {
+                    clip_id: protocol::TimelineVideoClipId(22),
+                },
+                target_layer_id: 5,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::AudioClip { clip_id: 23 },
+                target_layer_id: 6,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingAutomation { automation_id: 24 },
+                target_layer_id: 4,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::VideoAutomation { automation_id: 25 },
+                target_layer_id: 5,
+            },
+        ];
+
+        let mut moved = original.clone();
+        let selected = move_timeline_items_to_lanes(
+            &mut moved,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            &full_targets,
+            120,
+            false,
+            120.0,
+        )
+        .expect("move the complete heterogeneous group with its exact lane targets");
+        assert_eq!(selected.len(), 6);
+        assert_eq!(moved.item_groups, group_before);
+        assert_eq!(moved.events[0].layer_id, Some(4));
+        assert_eq!(moved.events[0].track, original.events[0].track);
+        assert_eq!(moved.events[0].time_ms, original.events[0].time_ms + 120);
+        assert!(
+            (moved.events[0].time_beats.unwrap() - original.events[0].time_beats.unwrap() - 0.24)
+                .abs()
+                < 1.0e-9
+        );
+        assert_eq!(moved.video_clips[0].layer_id, 5);
+        assert_eq!(
+            moved.video_clips[0].start_ms,
+            original.video_clips[0].start_ms + 120
+        );
+        assert_eq!(moved.audio_clips[0].layer_id, 6);
+        assert_eq!(
+            moved.audio_clips[0].start_ms,
+            original.audio_clips[0].start_ms + 120
+        );
+        assert_eq!(moved.automations[0].timeline_layer_id, Some(4));
+        assert_eq!(
+            moved.automations[0].keyframes[0].time_ms,
+            original.automations[0].keyframes[0].time_ms + 120
+        );
+        assert_eq!(moved.video_automations[0].timeline_layer_id, Some(5));
+        assert_eq!(
+            moved.video_automations[0].layer_id, original.video_automations[0].layer_id,
+            "a Timeline lane move must not retarget the automated Video layer"
+        );
+        assert_eq!(
+            moved.video_automations[0].keyframes[0].time_ms,
+            original.video_automations[0].keyframes[0].time_ms + 120
+        );
+
+        let mut isolated = original.clone();
+        let isolated_selected = move_timeline_items_to_lanes(
+            &mut isolated,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::AudioClip { clip_id: 23 },
+            &[TimelineItemLaneTarget {
+                item: TimelineItemRef::AudioClip { clip_id: 23 },
+                target_layer_id: 6,
+            }],
+            -100,
+            true,
+            120.0,
+        )
+        .expect("Alt isolates one member for a diagonal lane move");
+        assert_eq!(
+            isolated_selected,
+            vec![TimelineItemRef::AudioClip { clip_id: 23 }]
+        );
+        assert_eq!(isolated.item_groups, group_before);
+        assert_eq!(isolated.audio_clips[0].layer_id, 6);
+        assert_eq!(
+            isolated.audio_clips[0].start_ms,
+            original.audio_clips[0].start_ms - 100
+        );
+        assert_eq!(isolated.events, original.events);
+        assert_eq!(isolated.video_clips, original.video_clips);
+        assert_eq!(isolated.automations, original.automations);
+        assert_eq!(isolated.video_automations, original.video_automations);
+
+        let mut horizontal_alt = original.clone();
+        move_timeline_items_to_lanes(
+            &mut horizontal_alt,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::AudioClip { clip_id: 23 },
+            &[TimelineItemLaneTarget {
+                item: TimelineItemRef::AudioClip { clip_id: 23 },
+                target_layer_id: 3,
+            }],
+            100,
+            true,
+            120.0,
+        )
+        .expect("Alt horizontal motion on the current lane is not a no-op");
+        assert_eq!(horizontal_alt.audio_clips[0].layer_id, 3);
+        assert_eq!(
+            horizontal_alt.audio_clips[0].start_ms,
+            original.audio_clips[0].start_ms + 100
+        );
+
+        let mut video_scene = original.clone();
+        video_scene.events[0].track = TimelineTrackKind::Video;
+        move_timeline_items_to_lanes(
+            &mut video_scene,
+            &[TimelineItemRef::LightingEvent { event_id: 20 }],
+            TimelineItemRef::LightingEvent { event_id: 20 },
+            &[TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingEvent { event_id: 20 },
+                target_layer_id: 2,
+            }],
+            0,
+            true,
+            120.0,
+        )
+        .expect("a Video-track Scene may move to a Video Timeline lane");
+        assert_eq!(video_scene.events[0].layer_id, Some(2));
+        assert_eq!(video_scene.events[0].track, TimelineTrackKind::Video);
+        assert_eq!(
+            video_scene.events[1], original.events[1],
+            "Alt Scene move keeps the rest of the authored group unchanged"
+        );
+
+        let mut audio_scene = original.clone();
+        let audio_scene_before = audio_scene.clone();
+        assert!(move_timeline_items_to_lanes(
+            &mut audio_scene,
+            &[TimelineItemRef::LightingEvent { event_id: 20 }],
+            TimelineItemRef::LightingEvent { event_id: 20 },
+            &[TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingEvent { event_id: 20 },
+                target_layer_id: 3,
+            }],
+            0,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("incompatible"));
+        assert_eq!(audio_scene, audio_scene_before);
+
+        let mut incompatible = original.clone();
+        let incompatible_before = incompatible.clone();
+        let mut incompatible_targets = full_targets.clone();
+        incompatible_targets[3].target_layer_id = 4;
+        assert!(move_timeline_items_to_lanes(
+            &mut incompatible,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            &incompatible_targets,
+            0,
+            false,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("incompatible"));
+        assert_eq!(incompatible, incompatible_before);
+
+        let mut locked_target = original.clone();
+        locked_target
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == 4)
+            .unwrap()
+            .locked = true;
+        let locked_target_before = locked_target.clone();
+        assert!(move_timeline_items_to_lanes(
+            &mut locked_target,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            &full_targets,
+            0,
+            false,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("locked lane"));
+        assert_eq!(locked_target, locked_target_before);
+
+        let mut locked_source = original.clone();
+        locked_source
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == 2)
+            .unwrap()
+            .locked = true;
+        let locked_source_before = locked_source.clone();
+        assert!(move_timeline_items_to_lanes(
+            &mut locked_source,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            &full_targets,
+            0,
+            false,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("locked lane"));
+        assert_eq!(locked_source, locked_source_before);
+
+        let no_op_targets = vec![
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingEvent { event_id: 20 },
+                target_layer_id: 1,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingEvent { event_id: 21 },
+                target_layer_id: 1,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::VideoClip {
+                    clip_id: protocol::TimelineVideoClipId(22),
+                },
+                target_layer_id: 2,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::AudioClip { clip_id: 23 },
+                target_layer_id: 3,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingAutomation { automation_id: 24 },
+                target_layer_id: 1,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::VideoAutomation { automation_id: 25 },
+                target_layer_id: 2,
+            },
+        ];
+        let mut no_op = original.clone();
+        let no_op_before = no_op.clone();
+        assert!(move_timeline_items_to_lanes(
+            &mut no_op,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            &no_op_targets,
+            0,
+            false,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("already selected"));
+        assert_eq!(no_op, no_op_before);
+
+        let mut duplicate_target = original.clone();
+        let duplicate_target_before = duplicate_target.clone();
+        let mut duplicate_targets = full_targets.clone();
+        duplicate_targets.push(full_targets[0].clone());
+        assert!(move_timeline_items_to_lanes(
+            &mut duplicate_target,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            &duplicate_targets,
+            0,
+            false,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("duplicate"));
+        assert_eq!(duplicate_target, duplicate_target_before);
+
+        let mut missing_target = original.clone();
+        let missing_target_before = missing_target.clone();
+        assert!(move_timeline_items_to_lanes(
+            &mut missing_target,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            &full_targets[..full_targets.len() - 1],
+            0,
+            false,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("exactly once"));
+        assert_eq!(missing_target, missing_target_before);
+
+        let mut extra_target = original.clone();
+        let extra_target_before = extra_target.clone();
+        let mut extra_targets = full_targets.clone();
+        extra_targets.push(TimelineItemLaneTarget {
+            item: TimelineItemRef::LightingEvent { event_id: 9_999 },
+            target_layer_id: 4,
+        });
+        assert!(move_timeline_items_to_lanes(
+            &mut extra_target,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            &extra_targets,
+            0,
+            false,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("unselected"));
+        assert_eq!(extra_target, extra_target_before);
+
+        let mut underflow = original.clone();
+        let underflow_before = underflow.clone();
+        assert!(move_timeline_items_to_lanes(
+            &mut underflow,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            &full_targets,
+            -2_000,
+            false,
+            120.0,
+        )
+        .is_err());
+        assert_eq!(underflow, underflow_before);
+
+        let mut overflow = original.clone();
+        overflow.events[0].time_ms = u64::MAX - 10;
+        let overflow_before = overflow.clone();
+        assert!(move_timeline_items_to_lanes(
+            &mut overflow,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            &full_targets,
+            120,
+            false,
+            120.0,
+        )
+        .is_err());
+        assert_eq!(overflow, overflow_before);
+    }
+
+    #[test]
+    fn timeline_move_items_to_lanes_materializes_legacy_effective_lanes_atomically() {
+        let mut legacy = timeline_split_test_snapshot();
+        legacy.layers.clear();
+        for event in &mut legacy.events {
+            event.layer_id = None;
+        }
+        legacy.events[1].track = TimelineTrackKind::Video;
+        legacy.video_clips[0].layer_id = 1;
+        legacy.audio_clips[0].layer_id = 2;
+        legacy.automations[0].timeline_layer_id = None;
+        legacy.video_automations[0].timeline_layer_id = None;
+        let targets = vec![
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingEvent { event_id: 20 },
+                target_layer_id: 0,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingEvent { event_id: 21 },
+                target_layer_id: 1,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::VideoClip {
+                    clip_id: protocol::TimelineVideoClipId(22),
+                },
+                target_layer_id: 1,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::AudioClip { clip_id: 23 },
+                target_layer_id: 2,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::LightingAutomation { automation_id: 24 },
+                target_layer_id: 0,
+            },
+            TimelineItemLaneTarget {
+                item: TimelineItemRef::VideoAutomation { automation_id: 25 },
+                target_layer_id: 1,
+            },
+        ];
+        move_timeline_items_to_lanes(
+            &mut legacy,
+            &[TimelineItemRef::LightingEvent { event_id: 20 }],
+            TimelineItemRef::LightingEvent { event_id: 20 },
+            &targets,
+            100,
+            false,
+            120.0,
+        )
+        .expect("legacy implicit lanes accept the UI Lighting/Video/Audio targets");
+        assert_eq!(
+            legacy
+                .layers
+                .iter()
+                .map(|layer| (layer.id, layer.kind, layer.order))
+                .collect::<Vec<_>>(),
+            vec![
+                (2, TimelineLayerKind::Audio, 0),
+                (0, TimelineLayerKind::Lighting, 1),
+                (1, TimelineLayerKind::Video, 2),
+            ],
+            "materialization preserves the engine's canonical Audio/Lighting/Video order"
+        );
+        assert_eq!(legacy.events[0].layer_id, Some(0));
+        assert_eq!(legacy.events[0].track, TimelineTrackKind::Lighting);
+        assert_eq!(legacy.events[1].layer_id, Some(1));
+        assert_eq!(legacy.events[1].track, TimelineTrackKind::Video);
+        assert_eq!(legacy.automations[0].timeline_layer_id, Some(0));
+        assert_eq!(legacy.video_automations[0].timeline_layer_id, Some(1));
+        assert_eq!(legacy.audio_clips[0].layer_id, 2);
+
+        let mut colliding_audio = timeline_split_test_snapshot();
+        colliding_audio.layers.clear();
+        colliding_audio.audio_clips[0].layer_id = 0;
+        let colliding_before = colliding_audio.clone();
+        assert!(move_timeline_items_to_lanes(
+            &mut colliding_audio,
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::AudioClip { clip_id: 23 },
+            &[TimelineItemLaneTarget {
+                item: TimelineItemRef::AudioClip { clip_id: 23 },
+                target_layer_id: 2,
+            }],
+            100,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("collides"));
+        assert_eq!(
+            colliding_audio, colliding_before,
+            "a failed legacy materialization must leave the complete implicit A image untouched"
+        );
+    }
+
+    #[test]
+    fn timeline_move_items_to_lanes_authoritative_is_receipted_persistent_and_atomic() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (_video_layer_id, media_asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let video_source_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        let audio_source_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        let video_target_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        let audio_target_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        for (id, label, order, kind) in [
+            (
+                video_source_lane_id,
+                "Move source video",
+                1,
+                TimelineLayerKind::Video,
+            ),
+            (
+                audio_source_lane_id,
+                "Move source audio",
+                2,
+                TimelineLayerKind::Audio,
+            ),
+            (
+                video_target_lane_id,
+                "Move target video",
+                3,
+                TimelineLayerKind::Video,
+            ),
+            (
+                audio_target_lane_id,
+                "Move target audio",
+                4,
+                TimelineLayerKind::Audio,
+            ),
+        ] {
+            harness
+                .state
+                .engine
+                .add_timeline_layer(protocol::TimelineLayerSummary {
+                    id,
+                    label: label.to_string(),
+                    order,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind,
+                })
+                .expect("seed lane-move Timeline lane");
+        }
+        c1_stabilize_fixture_authority(&harness);
+
+        let snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read lane-move authoritative seed");
+        let mut authoring = timeline_advanced_authoring_from_snapshot(&snapshot.timeline);
+        let video_clip_id = harness.state.engine.allocate_timeline_video_clip_id();
+        let audio_clip_id = harness.state.engine.allocate_timeline_audio_clip_id();
+        authoring.video_clips.push(TimelineVideoClipSummary {
+            id: video_clip_id,
+            layer_id: video_source_lane_id,
+            media_asset_id,
+            start_ms: 2_000,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        });
+        authoring.audio_clips.push(TimelineAudioClipSummary {
+            id: audio_clip_id,
+            layer_id: audio_source_lane_id,
+            media_asset_id: None,
+            path: "authoritative-lane-move.wav".to_string(),
+            start_ms: 2_100,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        });
+        authoring.item_groups.push(TimelineItemGroupSummary {
+            id: harness.state.engine.allocate_timeline_item_group_id(),
+            members: vec![
+                TimelineItemRef::VideoClip {
+                    clip_id: video_clip_id,
+                },
+                TimelineItemRef::AudioClip {
+                    clip_id: audio_clip_id,
+                },
+            ],
+        });
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            TimelineAdvancedMutationRequest::Apply { authoring },
+            85_100,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("seed lane-move items through the authoritative lane");
+        c1_stabilize_fixture_authority(&harness);
+
+        let baseline = harness.mutation_baseline();
+        let request = TimelineAdvancedMutationRequest::MoveItemsToLanes {
+            items: vec![TimelineItemRef::AudioClip {
+                clip_id: audio_clip_id,
+            }],
+            primary: TimelineItemRef::VideoClip {
+                clip_id: video_clip_id,
+            },
+            lane_targets: vec![
+                TimelineItemLaneTarget {
+                    item: TimelineItemRef::VideoClip {
+                        clip_id: video_clip_id,
+                    },
+                    target_layer_id: video_target_lane_id,
+                },
+                TimelineItemLaneTarget {
+                    item: TimelineItemRef::AudioClip {
+                        clip_id: audio_clip_id,
+                    },
+                    target_layer_id: audio_target_lane_id,
+                },
+            ],
+            delta_ms: 250,
+            isolate: false,
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let applied = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            85_101,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("move linked clips through the terminal authoritative lane");
+        let retried = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request,
+            85_101,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("reply-loss retry reuses the lane-move terminal receipt");
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::to_value(&retried).unwrap(),
+            "exact retry must not allocate or record a second lane move"
+        );
+        assert_eq!(
+            applied.selected_items,
+            vec![
+                TimelineItemRef::VideoClip {
+                    clip_id: video_clip_id,
+                },
+                TimelineItemRef::AudioClip {
+                    clip_id: audio_clip_id,
+                },
+            ],
+            "the terminal result selects the full moved group closure"
+        );
+        let video_clip = applied
+            .authoring
+            .video_clips
+            .iter()
+            .find(|clip| clip.id == video_clip_id)
+            .expect("moved Video clip remains authored");
+        assert_eq!(
+            (video_clip.layer_id, video_clip.start_ms),
+            (video_target_lane_id, 2_250)
+        );
+        let audio_clip = applied
+            .authoring
+            .audio_clips
+            .iter()
+            .find(|clip| clip.id == audio_clip_id)
+            .expect("moved Audio clip remains authored");
+        assert_eq!(
+            (audio_clip.layer_id, audio_clip.start_ms),
+            (audio_target_lane_id, 2_350)
+        );
+        assert_one_authoritative_history_mutation(&harness, baseline);
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read lane-move persistence");
+        assert_eq!(
+            timeline_advanced_authoring_from_snapshot(&persisted.timeline),
+            applied.authoring,
+            "engine persistence must equal the terminal lane-move candidate B"
+        );
+        b3_assert_authority_matches_persistence(&harness);
+
+        // A stale/cross-Timeline reference must fail before publication and
+        // leave both the persisted A image and history untouched.
+        let before_rejection = persisted;
+        let rejected_baseline = harness.mutation_baseline();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            TimelineAdvancedMutationRequest::CreateTimeline {
+                label: "Other Timeline".to_string(),
+            },
+            85_102,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("create another active Timeline for cross-Timeline rejection");
+        let before_cross_timeline = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("capture A before cross-Timeline lane move");
+        let cross_baseline = harness.mutation_baseline();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let error = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            TimelineAdvancedMutationRequest::MoveItemsToLanes {
+                items: vec![TimelineItemRef::AudioClip {
+                    clip_id: audio_clip_id,
+                }],
+                primary: TimelineItemRef::VideoClip {
+                    clip_id: video_clip_id,
+                },
+                lane_targets: vec![
+                    TimelineItemLaneTarget {
+                        item: TimelineItemRef::VideoClip {
+                            clip_id: video_clip_id,
+                        },
+                        target_layer_id: video_target_lane_id,
+                    },
+                    TimelineItemLaneTarget {
+                        item: TimelineItemRef::AudioClip {
+                            clip_id: audio_clip_id,
+                        },
+                        target_layer_id: audio_target_lane_id,
+                    },
+                ],
+                delta_ms: 1,
+                isolate: false,
+            },
+            85_103,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("a reference from a non-active Timeline must be rejected");
+        assert!(
+            error.contains("no longer exists"),
+            "unexpected cross-Timeline error: {error}"
+        );
+        let after_cross_rejection_snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read rejected cross-Timeline persistence");
+        assert_eq!(
+            after_cross_rejection_snapshot.timeline, before_cross_timeline.timeline,
+            "rejected cross-Timeline mutation must retain the active authored Timeline A"
+        );
+        assert_eq!(
+            after_cross_rejection_snapshot.timeline_bank, before_cross_timeline.timeline_bank,
+            "rejected cross-Timeline mutation must retain the complete authored Timeline bank A"
+        );
+        let after_cross_rejection = harness.mutation_baseline();
+        assert_eq!(after_cross_rejection.revision, cross_baseline.revision);
+        assert_eq!(
+            after_cross_rejection.history_generation,
+            cross_baseline.history_generation
+        );
+        assert_eq!(after_cross_rejection.undo_len, cross_baseline.undo_len);
+        assert_eq!(
+            after_cross_rejection.publication_generation, cross_baseline.publication_generation,
+            "rejected cross-Timeline mutation must not create history or publish"
+        );
+        assert_ne!(
+            before_rejection.timeline.id, before_cross_timeline.timeline.id,
+            "the successful create establishes a distinct active Timeline before rejection"
+        );
+        assert_eq!(rejected_baseline.revision + 1, cross_baseline.revision);
+    }
+
+    #[test]
+    fn timeline_move_items_to_lanes_authoritative_materializes_legacy_persistence_once() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (video_layer_id, _media_asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let cue_id = harness.state.engine.allocate_cue_id();
+        harness
+            .state
+            .engine
+            .create_cue_published(
+                cue_id,
+                protocol::DEFAULT_CUE_LIST_ID,
+                "Legacy lane move cue".to_string(),
+                None,
+                RecallMode::Coexist,
+                0,
+                None,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("seed cue for legacy Timeline Scene");
+        let mut loaded = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read legacy Timeline load seed");
+        let event_id = harness.state.engine.allocate_timeline_event_id();
+        let video_automation_id = harness.state.engine.allocate_automation_id();
+        let group_id = harness.state.engine.allocate_timeline_item_group_id();
+        let mut legacy = timeline_split_test_snapshot();
+        legacy.id = loaded.timeline.id;
+        legacy.label = loaded.timeline.label.clone();
+        legacy.layers.clear();
+        legacy.events.truncate(1);
+        legacy.events[0].id = event_id;
+        legacy.events[0].cue_id = cue_id;
+        legacy.events[0].layer_id = None;
+        legacy.events[0].track = TimelineTrackKind::Lighting;
+        legacy.events[0].conform_to_tempo = false;
+        legacy.events[0].time_beats = None;
+        legacy.events[0].duration_beats = None;
+        legacy.video_clips.clear();
+        legacy.audio_clips.clear();
+        legacy.automations.clear();
+        legacy.video_automations[0].id = video_automation_id;
+        legacy.video_automations[0].layer_id = video_layer_id;
+        legacy.video_automations[0].timeline_layer_id = None;
+        legacy.item_groups = vec![TimelineItemGroupSummary {
+            id: group_id,
+            members: vec![
+                TimelineItemRef::LightingEvent { event_id },
+                TimelineItemRef::VideoAutomation {
+                    automation_id: video_automation_id,
+                },
+            ],
+        }];
+        loaded.timeline = legacy.clone();
+        loaded.timeline_bank = vec![legacy];
+        harness
+            .state
+            .engine
+            .load_project_snapshot_and_wait(loaded)
+            .expect("load the historical empty-layer Timeline through EngineHandle");
+        c1_stabilize_fixture_authority(&harness);
+        let legacy_persistence = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read historical empty-layer persistence");
+        assert!(
+            legacy_persistence.timeline.layers.is_empty(),
+            "the test must begin at the authored legacy empty-layer A image"
+        );
+        assert!(legacy_persistence.timeline.events[0].layer_id.is_none());
+        assert!(legacy_persistence.timeline.video_automations[0]
+            .timeline_layer_id
+            .is_none());
+
+        let baseline = harness.mutation_baseline();
+        let request = TimelineAdvancedMutationRequest::MoveItemsToLanes {
+            items: vec![TimelineItemRef::LightingEvent { event_id }],
+            primary: TimelineItemRef::LightingEvent { event_id },
+            lane_targets: vec![
+                TimelineItemLaneTarget {
+                    item: TimelineItemRef::LightingEvent { event_id },
+                    target_layer_id: 0,
+                },
+                TimelineItemLaneTarget {
+                    item: TimelineItemRef::VideoAutomation {
+                        automation_id: video_automation_id,
+                    },
+                    target_layer_id: 1,
+                },
+            ],
+            delta_ms: 100,
+            isolate: false,
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let applied = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            85_104,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("move a historical empty-layer Timeline through the terminal lane");
+        let retried = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request,
+            85_104,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("reply-loss retry reuses the materialized legacy terminal receipt");
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::to_value(&retried).unwrap()
+        );
+        assert_one_authoritative_history_mutation(&harness, baseline);
+        let active = applied
+            .timeline_bank
+            .iter()
+            .find(|timeline| timeline.id == applied.active_timeline_id)
+            .expect("terminal result contains the active materialized Timeline");
+        assert_eq!(
+            active
+                .layers
+                .iter()
+                .map(|layer| (layer.id, layer.kind, layer.order))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, TimelineLayerKind::Lighting, 0),
+                (1, TimelineLayerKind::Video, 1),
+            ]
+        );
+        assert_eq!(active.events[0].layer_id, Some(0));
+        assert_eq!(active.video_automations[0].timeline_layer_id, Some(1));
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read materialized legacy terminal persistence");
+        assert_eq!(persisted.timeline.layers, active.layers);
+        assert_eq!(persisted.timeline.events[0].layer_id, Some(0));
+        assert_eq!(
+            persisted.timeline.video_automations[0].timeline_layer_id,
+            Some(1)
+        );
+        b3_assert_authority_matches_persistence(&harness);
     }
 
     #[test]
