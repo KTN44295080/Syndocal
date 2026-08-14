@@ -1376,9 +1376,13 @@ after that boundary, expands any intersected group to its complete membership, a
 logical selection; negative underflow rejects before mutation. Grouped Trim is now authoritative across all
 five item domains: one primary absolute edge becomes one signed group edge delta, media source offsets and
 fades remain coherent, Scene source time/tempo/whole-loop constraints fail closed, and Step/Linear automation
-is evaluated at the new boundary while unsupported Bezier cuts reject before mutation. The item menu exposes
-both playhead trim directions with the same exact receipt/history path. Remaining grouped edit work is direct
-resize-gesture routing, split, lane-valid reorder, and full selection/focus restoration across Undo/Redo and reload. Normal horizontal Audio/Video clip
+  is evaluated at the new boundary while unsupported Bezier cuts reject before mutation. The item menu exposes
+  both playhead trim directions with the same exact receipt/history path. Direct edge gestures for linked Scene,
+  Audio, Video, Lighting Automation, and Video Automation items now enter that same authoritative Trim path;
+  unlinked items retain their existing resize behavior, `Alt` isolates one member for the captured gesture, and
+  the returned logical selection is restored. A real Chromium fixture performs pointer resize on both linked and
+  unlinked representatives across all five domains and verifies both edges plus `Alt` isolation. Remaining grouped
+  edit work is split, lane-valid reorder, and full selection/focus restoration across Undo/Redo and reload. Normal horizontal Audio/Video clip
 drag now routes a linked member through the authoritative group nudge path, while holding `Alt` selects
 and edits only that member for the current gesture. Closing the item action menu restores focus to its
 invoking clip; the real-browser gate proves both the modifier selection and focus return.

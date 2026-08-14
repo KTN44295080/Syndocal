@@ -30084,11 +30084,13 @@ h3 {
 }
 
 .timelineAudioClipResizeHandle,
+.timelineVideoClipResizeHandle,
 .timelineAudioClipFadeHandle {
   fill: transparent;
 }
 
-.timelineAudioClipResizeHandle {
+.timelineAudioClipResizeHandle,
+.timelineVideoClipResizeHandle {
   cursor: ew-resize;
 }
 

@@ -2881,6 +2881,8 @@ const japaneseText: Record<string, string> = {
     "リンクされたグループのメンバーは、1回の取り消し操作でまとめて削除されます。",
   "Resize Audio Clip start": "音声クリップの開始端をリサイズ",
   "Resize Audio Clip end": "音声クリップの終了端をリサイズ",
+  "Resize Video Clip start": "映像クリップの開始端をリサイズ",
+  "Resize Video Clip end": "映像クリップの終了端をリサイズ",
   "Adjust Audio Clip Fade In": "音声クリップのフェードインを調整",
   "Adjust Audio Clip Fade Out": "音声クリップのフェードアウトを調整",
   "Audio Clips can only move within Audio lanes. No changes were made.":

@@ -13,6 +13,17 @@ const gestureTranspiled = ts.transpileModule(gestureSource, {
 const gestureModuleUrl = `data:text/javascript;base64,${Buffer.from(gestureTranspiled.outputText).toString("base64")}`;
 const gestures = await import(gestureModuleUrl);
 
+const directResizeSource = await readFile(new URL("../src/timelineDirectResize.ts", import.meta.url), "utf8");
+const directResizeTranspiled = ts.transpileModule(directResizeSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+    importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
+  },
+  fileName: "timelineDirectResize.ts",
+});
+const directResize = await import(`data:text/javascript;base64,${Buffer.from(directResizeTranspiled.outputText).toString("base64")}`);
+
 const source = await readFile(new URL("../src/timelineSceneBlocks.ts", import.meta.url), "utf8");
 const transpiled = ts.transpileModule(source.replace("./timelineBlockGestures", gestureModuleUrl), {
   compilerOptions: {
@@ -30,6 +41,45 @@ assert.equal(gestures.timelineBlockGestureZone(97, 4, 100, true), "stretch-end")
 assert.equal(gestures.timelineBlockGestureZone(8, 17, 100, true), "fade-in");
 assert.equal(gestures.timelineBlockGestureZone(92, 17, 100, true), "fade-out");
 assert.equal(gestures.timelineBlockGestureZone(50, 17, 100, true), "select");
+
+const directItems = [
+  { kind: "lighting_event", event_id: 10 },
+  { kind: "audio_clip", clip_id: 20 },
+  { kind: "video_clip", clip_id: 30 },
+  { kind: "lighting_automation", automation_id: 40 },
+  { kind: "video_automation", automation_id: 50 },
+];
+for (const [index, item] of directItems.entries()) {
+  const edge = index % 2 === 0 ? "start" : "end";
+  const gesture = directResize.timelineDirectTrimGesture(item, true, edge, 1_000.6 + index, index === 2);
+  assert.deepEqual(gesture, {
+    item,
+    edge,
+    boundary_ms: 1_001 + index,
+    isolate: index === 2,
+  });
+  assert.equal(
+    directResize.timelineDirectTrimGesture(item, false, edge, 1_000 + index, false),
+    null,
+    `${item.kind} keeps its legacy direct-resize route while unlinked`,
+  );
+}
+const returnedSelection = [directItems[1], directItems[2]];
+const directTrimCalls = [];
+let restoredSelection = [];
+const appliedSelection = await directResize.applyTimelineDirectTrim(
+  async (...args) => {
+    directTrimCalls.push(args);
+    return returnedSelection;
+  },
+  (items) => {
+    restoredSelection = items;
+  },
+  directResize.timelineDirectTrimGesture(directItems[2], true, "end", 2_400, true),
+);
+assert.deepEqual(directTrimCalls, [[[directItems[2]], directItems[2], "end", 2_400, true]]);
+assert.deepEqual(appliedSelection, returnedSelection);
+assert.deepEqual(restoredSelection, returnedSelection, "authoritative trim restores the returned logical selection");
 
 const rateStretch = gestures.projectTimelineBlockStretch({
   mode: "RATE",

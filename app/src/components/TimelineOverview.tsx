@@ -31,6 +31,7 @@ import type {
   TimelineVideoClipSummary,
 } from "../types";
 import type { TimelineCueDragState } from "../timelineCueDrag";
+import { timelineDirectTrimGesture } from "../timelineDirectResize";
 import {
   TIMELINE_BLOCK_FADE_EDGE_PX,
   TIMELINE_BLOCK_STRETCH_EDGE_PX,
@@ -145,6 +146,13 @@ interface TimelineOverviewProps {
   onAddAudioClip: (layerId: number) => void | Promise<void>;
   onUpdateAudioClip: (clip: TimelineAudioClipSummary) => void | Promise<void>;
   onUpdateVideoClip: (clip: TimelineVideoClipSummary) => void | Promise<void>;
+  isTimelineItemLinked: (item: TimelineItemRef) => boolean;
+  onTrimTimelineItem: (
+    item: TimelineItemRef,
+    edge: "start" | "end",
+    boundaryMs: number,
+    isolate: boolean,
+  ) => void | Promise<void>;
   onStatus: (message: string) => void;
   onMoveEventPlacement: (eventId: number, timeMs: number, layerId: number, snapEnabled: boolean) => void;
   onResizeEventTime: (
@@ -202,6 +210,7 @@ interface TimelineEventResizeDrag {
   originalEndMs: number;
   startMs: number;
   endMs: number;
+  isolate: boolean;
 }
 
 interface TimelineEventFadeDrag {
@@ -241,6 +250,7 @@ interface TimelineAudioClipDrag {
   hoverLayerId: number | null;
   rejection: "locked" | "kind" | null;
   moved: boolean;
+  isolate: boolean;
 }
 
 interface TimelineLayerRowLayout {
@@ -261,6 +271,7 @@ interface TimelineSectionRowLayout {
 interface TimelineVideoClipDrag {
   clipId: number;
   pointerId: number;
+  mode: "move" | "resize-start" | "resize-end";
   startClientX: number;
   startClientY: number;
   original: TimelineVideoClipSummary;
@@ -268,6 +279,7 @@ interface TimelineVideoClipDrag {
   hoverLayerId: number | null;
   rejection: "locked" | "kind" | null;
   moved: boolean;
+  isolate: boolean;
 }
 
 const timelineSectionKinds: TimelineLayerKind[] = ["Audio", "Lighting", "Video"];
@@ -289,6 +301,7 @@ interface TimelineAutomationRangeDrag {
   originalEndMs: number;
   startMs: number;
   endMs: number;
+  isolate: boolean;
 }
 
 interface TimelineAutomationKeyframeDrag {
@@ -802,6 +815,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       originalEndMs: overviewEvent.time_ms + overviewEvent.total_duration_ms,
       startMs: overviewEvent.time_ms,
       endMs: overviewEvent.time_ms + overviewEvent.total_duration_ms,
+      isolate: event.altKey,
     });
   };
 
@@ -846,6 +860,23 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     setEventResizeDrag(null);
     if (!shouldCommitTimelineMarkerDrag(drag, canceled)) return;
     setSuppressClickEventId(drag.eventId);
+    const item: TimelineItemRef = { kind: "lighting_event", event_id: drag.eventId };
+    const trim = timelineDirectTrimGesture(
+      item,
+      props.isTimelineItemLinked(item),
+      drag.edge,
+      drag.edge === "start" ? drag.startMs : drag.endMs,
+      drag.isolate,
+    );
+    if (trim) {
+      void props.onTrimTimelineItem(
+        trim.item,
+        trim.edge,
+        trim.boundary_ms,
+        trim.isolate,
+      );
+      return;
+    }
     props.onResizeEventTime(
       drag.eventId,
       drag.edge,
@@ -945,11 +976,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       beginMarkerDrag(event, overviewEvent);
       return;
     }
-    const rect = event.currentTarget.getBoundingClientRect();
+    const rect = event.currentTarget
+      .querySelector<SVGRectElement>(".timelineSceneBlockBody")
+      ?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
     const zone = timelineBlockGestureZone(
       event.clientX - rect.left,
       event.clientY - rect.top,
-      sceneBlockPixelWidth(overviewEvent),
+      Math.max(1, rect.width),
       props.selectedEventId === overviewEvent.id,
       blockHeightPx(),
     );
@@ -999,7 +1032,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       event.shiftKey || event.ctrlKey || event.metaKey,
       event.altKey,
     );
-    const rect = event.currentTarget.getBoundingClientRect();
+    const rect = event.currentTarget
+      .querySelector<SVGRectElement>(".timelineAudioClipBody")
+      ?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
     const zone = timelineBlockGestureZone(
       event.clientX - rect.left,
       event.clientY - rect.top,
@@ -1028,6 +1063,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       hoverLayerId: clip.layer_id,
       rejection: null,
       moved: false,
+      isolate: event.altKey,
     });
   };
 
@@ -1069,8 +1105,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       preview.start_ms = boundedStartMs;
       preview.offset_ms = Math.max(0, drag.original.offset_ms + trimDeltaMs);
       preview.duration_ms = Math.max(1, originalEndMs - boundedStartMs);
-      preview.fade_in_ms = Math.min(preview.fade_in_ms, preview.duration_ms);
-      preview.fade_out_ms = Math.min(preview.fade_out_ms, preview.duration_ms - preview.fade_in_ms);
+      preview.fade_out_ms = Math.min(preview.fade_out_ms, preview.duration_ms);
+      preview.fade_in_ms = Math.min(preview.fade_in_ms, preview.duration_ms - preview.fade_out_ms);
     } else if (drag.mode === "resize-end") {
       const rawEndMs = Math.max(drag.original.start_ms + 1, Math.round(originalEndMs + deltaMs));
       const endMs = props.magnetEnabled ? props.snapTimeMs(rawEndMs) : rawEndMs;
@@ -1132,6 +1168,27 @@ export function TimelineOverview(props: TimelineOverviewProps) {
         : "Audio Clips can only move within Audio lanes. No changes were made.");
       return;
     }
+    if (drag.mode === "resize-start" || drag.mode === "resize-end") {
+      const item: TimelineItemRef = { kind: "audio_clip", clip_id: drag.clipId };
+      const trim = timelineDirectTrimGesture(
+        item,
+        props.isTimelineItemLinked(item),
+        drag.mode === "resize-start" ? "start" : "end",
+        drag.mode === "resize-start"
+          ? drag.preview.start_ms
+          : drag.preview.start_ms + drag.preview.duration_ms,
+        drag.isolate,
+      );
+      if (trim) {
+        void props.onTrimTimelineItem(
+          trim.item,
+          trim.edge,
+          trim.boundary_ms,
+          trim.isolate,
+        );
+        return;
+      }
+    }
     void props.onUpdateAudioClip(drag.preview);
   };
 
@@ -1151,10 +1208,26 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       event.shiftKey || event.ctrlKey || event.metaKey,
       event.altKey,
     );
+    const rect = event.currentTarget
+      .querySelector<SVGRectElement>(".timelineVideoClipBody")
+      ?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+    const zone = timelineBlockGestureZone(
+      event.clientX - rect.left,
+      event.clientY - rect.top,
+      Math.max(1, rect.width),
+      selectedVideoClipIds().has(clip.id),
+      blockHeightPx(),
+    );
+    const mode = zone === "stretch-start"
+      ? "resize-start"
+      : zone === "stretch-end"
+        ? "resize-end"
+        : "move";
     event.currentTarget.setPointerCapture(event.pointerId);
     setVideoClipDrag({
       clipId: clip.id,
       pointerId: event.pointerId,
+      mode,
       startClientX: event.clientX,
       startClientY: event.clientY,
       original: { ...clip },
@@ -1162,6 +1235,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       hoverLayerId: clip.layer_id,
       rejection: null,
       moved: false,
+      isolate: event.altKey,
     });
   };
   const moveVideoClipGesture = (event: PointerEvent & { currentTarget: SVGGElement }) => {
@@ -1173,21 +1247,44 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const deltaMs = (event.clientX - drag.startClientX)
       / Math.max(1, svg.getBoundingClientRect().width)
       * timelineVisibleWindowSpanMs(props.visibleWindow);
-    const rawStartMs = Math.max(0, Math.round(drag.original.start_ms + deltaMs));
-    const preview = {
-      ...drag.preview,
-      start_ms: props.magnetEnabled ? props.snapTimeMs(rawStartMs) : rawStartMs,
-    };
-    const hoverLayerId = layerIdFromPoint(event.clientX, event.clientY);
-    const target = hoverLayerId === null ? undefined : layerById().get(hoverLayerId);
-    const rejection = !target
-      ? null
-      : target.kind !== "Video"
-        ? "kind" as const
-        : target.locked
-          ? "locked" as const
-          : null;
-    preview.layer_id = target && rejection === null ? target.id : drag.original.layer_id;
+    const originalEndMs = drag.original.start_ms + drag.original.duration_ms;
+    const preview = { ...drag.preview };
+    let hoverLayerId = drag.hoverLayerId;
+    let rejection = drag.rejection;
+    if (drag.mode === "move") {
+      const rawStartMs = Math.max(0, Math.round(drag.original.start_ms + deltaMs));
+      preview.start_ms = props.magnetEnabled ? props.snapTimeMs(rawStartMs) : rawStartMs;
+      hoverLayerId = layerIdFromPoint(event.clientX, event.clientY);
+      const target = hoverLayerId === null ? undefined : layerById().get(hoverLayerId);
+      rejection = !target
+        ? null
+        : target.kind !== "Video"
+          ? "kind" as const
+          : target.locked
+            ? "locked" as const
+            : null;
+      preview.layer_id = target && rejection === null ? target.id : drag.original.layer_id;
+    } else if (drag.mode === "resize-start") {
+      const earliestStartMs = Math.max(0, drag.original.start_ms - drag.original.offset_ms);
+      const rawStartMs = Math.min(
+        originalEndMs - 1,
+        Math.max(earliestStartMs, Math.round(drag.original.start_ms + deltaMs)),
+      );
+      const startMs = props.magnetEnabled ? props.snapTimeMs(rawStartMs) : rawStartMs;
+      const boundedStartMs = Math.min(originalEndMs - 1, Math.max(earliestStartMs, startMs));
+      const trimDeltaMs = boundedStartMs - drag.original.start_ms;
+      preview.start_ms = boundedStartMs;
+      preview.offset_ms = Math.max(0, drag.original.offset_ms + trimDeltaMs);
+      preview.duration_ms = Math.max(1, originalEndMs - boundedStartMs);
+      preview.fade_out_ms = Math.min(preview.fade_out_ms, preview.duration_ms);
+      preview.fade_in_ms = Math.min(preview.fade_in_ms, preview.duration_ms - preview.fade_out_ms);
+    } else {
+      const rawEndMs = Math.max(drag.original.start_ms + 1, Math.round(originalEndMs + deltaMs));
+      const endMs = props.magnetEnabled ? props.snapTimeMs(rawEndMs) : rawEndMs;
+      preview.duration_ms = Math.max(1, endMs - drag.original.start_ms);
+      preview.fade_in_ms = Math.min(preview.fade_in_ms, preview.duration_ms);
+      preview.fade_out_ms = Math.min(preview.fade_out_ms, preview.duration_ms - preview.fade_in_ms);
+    }
     setVideoClipDrag({
       ...drag,
       preview,
@@ -1217,6 +1314,27 @@ export function TimelineOverview(props: TimelineOverviewProps) {
         ? "The target Video lane is locked. No changes were made."
         : "Video Clips can only move within Video lanes. No changes were made.");
       return;
+    }
+    if (drag.mode === "resize-start" || drag.mode === "resize-end") {
+      const item: TimelineItemRef = { kind: "video_clip", clip_id: drag.clipId };
+      const trim = timelineDirectTrimGesture(
+        item,
+        props.isTimelineItemLinked(item),
+        drag.mode === "resize-start" ? "start" : "end",
+        drag.mode === "resize-start"
+          ? drag.preview.start_ms
+          : drag.preview.start_ms + drag.preview.duration_ms,
+        drag.isolate,
+      );
+      if (trim) {
+        void props.onTrimTimelineItem(
+          trim.item,
+          trim.edge,
+          trim.boundary_ms,
+          trim.isolate,
+        );
+        return;
+      }
     }
     void props.onUpdateVideoClip(drag.preview);
   };
@@ -1370,6 +1488,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       originalEndMs: range.end_ms,
       startMs: range.start_ms,
       endMs: range.end_ms,
+      isolate: event.altKey,
     });
   };
 
@@ -1396,6 +1515,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       originalEndMs: range.end_ms,
       startMs: range.start_ms,
       endMs: range.end_ms,
+      isolate: event.altKey,
     });
   };
 
@@ -1468,6 +1588,27 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     setSuppressClickRangeId(drag.rangeId);
     const range = props.automationRanges.find((candidate) => candidate.id === drag.rangeId);
     if (range) {
+      if (drag.mode === "resize-start" || drag.mode === "resize-end") {
+        const item: TimelineItemRef = range.kind === "lighting"
+          ? { kind: "lighting_automation", automation_id: range.automation_id }
+          : { kind: "video_automation", automation_id: range.automation_id };
+        const trim = timelineDirectTrimGesture(
+          item,
+          props.isTimelineItemLinked(item),
+          drag.mode === "resize-start" ? "start" : "end",
+          drag.mode === "resize-start" ? drag.startMs : drag.endMs,
+          drag.isolate,
+        );
+        if (trim) {
+          void props.onTrimTimelineItem(
+            trim.item,
+            trim.edge,
+            trim.boundary_ms,
+            trim.isolate,
+          );
+          return;
+        }
+      }
       if (drag.mode === "resize-start") {
         props.onResizeAutomationRangeTime(
           range,
@@ -2295,6 +2436,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               rangeDrag()?.rangeId === range.id ? "dragging" : "",
               props.legacyMode && !laneVisible(range.track) ? "laneDimmed" : "",
             ].filter(Boolean).join(" ")}
+            data-timeline-automation-id={range.automation_id}
+            data-timeline-automation-kind={range.kind}
             onPointerDown={(pointerEvent) => beginRangeDrag(pointerEvent, range)}
             onPointerMove={moveRangeDrag}
             onPointerUp={endRangeDrag}
@@ -2470,6 +2613,30 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               >
                 {formatCompactClock(preview().duration_ms)}
               </text>
+              <Show when={selectedVideoClipIds().has(clip.id) || videoClipDrag()?.clipId === clip.id}>
+                <rect
+                  class="timelineVideoClipResizeHandle start"
+                  data-timeline-video-resize="start"
+                  data-timeline-zone-band-px={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  data-timeline-zone-edge-px={TIMELINE_BLOCK_STRETCH_EDGE_PX}
+                  x="0"
+                  y={-blockHeightPx() / 2}
+                  width={TIMELINE_BLOCK_STRETCH_EDGE_PX}
+                  height={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  aria-label="Resize Video Clip start"
+                />
+                <rect
+                  class="timelineVideoClipResizeHandle end"
+                  data-timeline-video-resize="end"
+                  data-timeline-zone-band-px={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  data-timeline-zone-edge-px={TIMELINE_BLOCK_STRETCH_EDGE_PX}
+                  x={Math.max(0, videoClipPixelWidth(clip) - TIMELINE_BLOCK_STRETCH_EDGE_PX)}
+                  y={-blockHeightPx() / 2}
+                  width={TIMELINE_BLOCK_STRETCH_EDGE_PX}
+                  height={TIMELINE_BLOCK_UPPER_BAND_PX}
+                  aria-label="Resize Video Clip end"
+                />
+              </Show>
               <title>{`${videoClipLabel(clip)} / Video / ${preview().start_ms} ms / ${preview().duration_ms} ms`}</title>
             </g>
           );

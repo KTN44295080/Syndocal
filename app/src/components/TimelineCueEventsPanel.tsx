@@ -22,6 +22,7 @@ import type {
 import type { CueIdentitySource } from "../identityColor";
 import type { TimelineCueDragState } from "../timelineCueDrag";
 import { expandTimelineItemGroupSelection, timelineItemKey } from "../timelineAdvancedAuthoring";
+import { applyTimelineDirectTrim } from "../timelineDirectResize";
 import type { TimelineContextDrawer } from "../uiModes";
 import { timelineLayerIdForEvent } from "../timelineLayers";
 import {
@@ -398,6 +399,20 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     setSelectedAudioClipId(audio?.kind === "audio_clip" ? audio.clip_id : null);
     setSelectedVideoClipId(video?.kind === "video_clip" ? video.clip_id : null);
     setSingleMemberEditKey(null);
+  };
+  const isTimelineItemLinked = (item: TimelineItemRef) => props.itemGroups.some((group) =>
+    group.members.some((member) => timelineItemKey(member) === timelineItemKey(item)));
+  const trimTimelineItemFromOverview = async (
+    item: TimelineItemRef,
+    edge: "start" | "end",
+    boundaryMs: number,
+    isolate: boolean,
+  ) => {
+    await applyTimelineDirectTrim(
+      props.onTrimItems,
+      selectReturnedTimelineItems,
+      { item, edge, boundary_ms: boundaryMs, isolate },
+    );
   };
   const openItemContextMenu = (point: { x: number; y: number }, anchor: TimelineItemRef) => {
     const active = document.activeElement;
@@ -1180,6 +1195,10 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onAddAudioClip={(layerId) => void props.onAddAudioClip(layerId)}
         onUpdateAudioClip={(clip) => void updateAudioClipFromOverview(clip)}
         onUpdateVideoClip={(clip) => void updateVideoClipFromOverview(clip)}
+        isTimelineItemLinked={isTimelineItemLinked}
+        onTrimTimelineItem={(item, edge, boundaryMs, isolate) =>
+          void trimTimelineItemFromOverview(item, edge, boundaryMs, isolate)
+        }
         onStatus={props.onTimelineStatus}
         onMoveEventPlacement={(eventId, timeMs, layerId, snapEnabled) =>
           void props.onMoveEventPlacement(eventId, timeMs, layerId, snapEnabled)

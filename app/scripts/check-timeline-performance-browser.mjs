@@ -85,6 +85,30 @@ const click = (client, selector) => evaluate(client, `(() => {
   element.click();
   return true;
 })()`);
+const dragTimelineResize = async (client, selector, handleSelector, edge, isolate = false) => {
+  assert.equal(await evaluate(client, `(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!(element instanceof Element)) return false;
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return true;
+  })()`), true, `select ${selector}`);
+  await sleep(30);
+  const point = await evaluate(client, `(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    const handle = element?.querySelector(${JSON.stringify(handleSelector)});
+    if (!(handle instanceof Element)) return null;
+    const rect = handle.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: rect.width, height: rect.height };
+  })()`);
+  assert.ok(point && point.width > 0 && point.height > 0, `visible ${edge} resize handle for ${selector}`);
+  const modifiers = isolate ? 1 : 0;
+  const targetX = point.x + (edge === "start" ? 24 : 28);
+  await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y, modifiers });
+  await client.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, modifiers, button: "left", buttons: 1, clickCount: 1 });
+  await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: targetX, y: point.y, modifiers, button: "left", buttons: 1 });
+  await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: targetX, y: point.y, modifiers, button: "left", buttons: 0, clickCount: 1 });
+  await sleep(40);
+};
 const measure = (client) => evaluate(client, `(() => {
   const root = document.querySelector('.timelineShowSurface');
   const app = document.querySelector('.app');
@@ -126,6 +150,8 @@ const measure = (client) => evaluate(client, `(() => {
     audioClips: root.querySelectorAll('.timelineAudioClip').length,
     selectedVideo: selectedVideo.length,
     selectedAudio: selectedAudio.length,
+    videoResizeHandles: root.querySelectorAll('[data-timeline-video-resize]').length,
+    audioResizeHandles: root.querySelectorAll('[data-timeline-audio-resize]').length,
     groupEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Group selected' && !button.disabled)),
     ungroupEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Ungroup' && !button.disabled)),
     copyEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Copy selected' && !button.disabled)),
@@ -241,6 +267,11 @@ try {
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
     assert.deepEqual([state.videoClips, state.audioClips], [1, 2]);
     assert.deepEqual([state.selectedVideo, state.selectedAudio], [1, 1], "selecting either member selects the linked A/V group");
+    assert.deepEqual(
+      [state.videoResizeHandles, state.audioResizeHandles],
+      [2, 2],
+      "selected linked A/V members expose both direct trim edges",
+    );
     assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.copyEnabled, state.pasteEnabled, state.duplicateEnabled, state.nudgeEarlierEnabled, state.nudgeLaterEnabled, state.rippleEarlierEnabled, state.rippleLaterEnabled, state.quantizeEnabled, state.trimStartEnabled, state.trimEndEnabled, state.deleteEnabled], [false, true, true, false, true, true, true, true, true, true, true, true, true], "the context menu exposes linked-group copy/duplicate/nudge/ripple/quantize/trim/release/delete and disables an empty clipboard");
     assert.ok(state.itemMenuRect && state.itemMenuRect[0] >= 0 && state.itemMenuRect[1] >= 0 && state.itemMenuRect[2] <= viewport.width && state.itemMenuRect[3] <= viewport.height, `Timeline group menu stays inside ${viewport.width}x${viewport.height}`);
     assert.equal(state.itemMenuBottomReachable, true, "the internally scrolling Timeline item menu reaches its final action");
@@ -294,6 +325,65 @@ try {
     assert.equal(state.fixedOuter, true, `Timeline disclosures keep app/document outer scroll fixed at ${viewport.width}x${viewport.height}`);
     console.log(`${viewport.width}x${viewport.height}: phases=${state.phaseLabels.join('/')} bank=${state.bankItems} media=${state.videoClips}+${state.audioClips} selected=${state.selectedVideo}+${state.selectedAudio}`);
   }
+
+  await client.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+  await client.send("Page.navigate", { url: `http://${host}:${vitePort}/scripts/fixtures/timeline-direct-resize.html` });
+  await waitFor(
+    () => evaluate(client, "window.__timelineDirectResizeFixture?.ready === true"),
+    "Timeline direct-resize fixture",
+  );
+  await dragTimelineResize(client, '[data-timeline-event-id="101"]', '.timelineSceneBlockResizeHandle.start', "start");
+  await dragTimelineResize(client, '[data-timeline-event-id="102"]', '.timelineSceneBlockResizeHandle.end', "end");
+  await dragTimelineResize(client, '[data-timeline-audio-clip-id="201"]', '[data-timeline-audio-resize="end"]', "end");
+  await dragTimelineResize(client, '[data-timeline-audio-clip-id="202"]', '[data-timeline-audio-resize="start"]', "start");
+  await dragTimelineResize(client, '[data-timeline-video-clip-id="301"]', '[data-timeline-video-resize="start"]', "start", true);
+  await dragTimelineResize(client, '[data-timeline-video-clip-id="302"]', '[data-timeline-video-resize="end"]', "end");
+  await dragTimelineResize(client, '[data-timeline-automation-kind="lighting"][data-timeline-automation-id="401"]', '.timelineAutomationHandle.end', "end");
+  await dragTimelineResize(client, '[data-timeline-automation-kind="lighting"][data-timeline-automation-id="402"]', '.timelineAutomationHandle.start', "start");
+  await dragTimelineResize(client, '[data-timeline-automation-kind="video"][data-timeline-automation-id="501"]', '.timelineAutomationHandle.start', "start", true);
+  await dragTimelineResize(client, '[data-timeline-automation-kind="video"][data-timeline-automation-id="502"]', '.timelineAutomationHandle.end', "end");
+  const directResizeCalls = await evaluate(client, "structuredClone(window.__timelineDirectResizeFixture.calls)");
+  assert.deepEqual(
+    directResizeCalls.trim.map(({ item, edge, isolate }) => [item.kind, edge, isolate]),
+    [
+      ["lighting_event", "start", false],
+      ["audio_clip", "end", false],
+      ["video_clip", "start", true],
+      ["lighting_automation", "end", false],
+      ["video_automation", "start", true],
+    ],
+    "real pointer gestures route every linked Timeline domain to authoritative trim and preserve Alt isolate",
+  );
+  assert.deepEqual(
+    directResizeCalls.scene.map(({ event_id, edge }) => [event_id, edge]),
+    [[102, "end"]],
+    "unlinked Scene resize retains its legacy route",
+  );
+  assert.deepEqual(directResizeCalls.audio.map(({ id }) => id), [202], "unlinked Audio resize retains its legacy route");
+  assert.equal(directResizeCalls.audio[0].start_ms > 4_400, true, "unlinked Audio start edge moves later");
+  assert.equal(directResizeCalls.audio[0].offset_ms > 400, true, "unlinked Audio start trim advances source offset");
+  assert.equal(directResizeCalls.audio[0].duration_ms < 800, true, "unlinked Audio start trim shortens duration");
+  assert.deepEqual(directResizeCalls.video.map(({ id }) => id), [302], "unlinked Video resize retains its legacy route");
+  assert.equal(directResizeCalls.video[0].start_ms, 7_000, "unlinked Video end trim preserves start");
+  assert.equal(directResizeCalls.video[0].offset_ms, 400, "unlinked Video end trim preserves source offset");
+  assert.equal(directResizeCalls.video[0].duration_ms > 800, true, "unlinked Video end edge extends duration");
+  assert.deepEqual(
+    directResizeCalls.automation.map(({ kind, automation_id, edge }) => [kind, automation_id, edge]),
+    [["lighting", 402, "start"], ["video", 502, "end"]],
+    "unlinked Lighting and Video automation resize retain their legacy routes",
+  );
+  assert.equal(
+    directResizeCalls.trim.every(({ boundary_ms }) => Number.isInteger(boundary_ms) && boundary_ms >= 0),
+    true,
+    "linked direct-resize boundaries are finite non-negative integer milliseconds",
+  );
+  const trimByKind = new Map(directResizeCalls.trim.map((call) => [call.item.kind, call]));
+  assert.equal(trimByKind.get("lighting_event").boundary_ms > 500, true, "linked Scene start edge moves later");
+  assert.equal(trimByKind.get("audio_clip").boundary_ms > 3_900, true, "linked Audio end edge moves later");
+  assert.equal(trimByKind.get("video_clip").boundary_ms > 5_700, true, "linked Video start edge moves later");
+  assert.equal(trimByKind.get("lighting_automation").boundary_ms > 9_100, true, "linked Lighting automation end edge moves later");
+  assert.equal(trimByKind.get("video_automation").boundary_ms > 8_300, true, "linked Video automation start edge moves later");
+  console.log("direct resize: linked Scene/Audio/Video/Lighting automation/Video automation + unlinked legacy routes + Alt isolate ok");
 } finally {
   client?.close();
   await stopChild(browser);
