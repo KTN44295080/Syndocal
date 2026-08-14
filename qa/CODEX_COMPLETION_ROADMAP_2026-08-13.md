@@ -89,12 +89,12 @@ There is no longer one ambiguous “overall” percentage. Report these dimensio
 
 | Area | Frozen estimate | Basis |
 | --- | ---: | --- |
-| Software implementation toward the planned product target | 85% | Media terminal authority, compatibility, coherence, lifecycle, and command-level proof are implemented; Clip Slots, derived data, recording, distributed ShowClock, and cross-domain boundaries remain |
-| Product-surface coverage | 76% | Media Library and the corrected shared Edit Video grid exist; reusable slots, recording truth, distributed operation, and several operator paths remain incomplete |
-| Automated proof coverage | 78% | The complete ordered Media A7 gate is green; unified migration/security/performance and multiple external/hardware seams remain |
-| Current-source native and hardware proof | 32% | Media A8's fifteen-row Windows matrix plus the rebuilt thumbnail-grid/hover supplement are accepted; most real DMX/control/venue and non-Windows gates remain open |
+| Software implementation toward the planned product target | 90% | Media T1, authored/runtime Clip Slots, scoped Video FX C1, Timeline Guide/loop/link/group editing through direct trim, and their authority paths are implemented; Split/Follow/transition buses, derived data, recording closure, distributed ShowClock, AI Control Plane, and final cross-domain boundaries remain |
+| Product-surface coverage | 88% | Media Library, shared Edit/Control Clip Bank, scoped FX, Timeline phases/Guide/loop and linked editing surfaces exist; Split/Follow/transition-duration, AI administration, distributed operation, and several recording/recovery surfaces remain incomplete |
+| Automated proof coverage | 88% | Media, Clip Slot, scoped FX, Timeline link/edit, browser pointer, backend authority, and full-crate gates have substantial coverage; unified AI registry, migration/security/performance, and external/hardware seams remain |
+| Current-source native and hardware proof | 40% | Media/Clip/FX/Timeline Windows release builds and focused native workflows are accepted; most physical DMX/control/audio/video/venue, two-machine, clean-machine, non-Windows, and AI external-client gates remain open |
 | Distribution/legal/clean-machine readiness | 35% | Packaging/CI foundations exist; signing, notarization, license disposition, release artifact publication, and clean-machine acceptance remain |
-| Planning roll-up to public release candidate | 68.0% | `85*0.5 + 78*0.2 + 32*0.2 + 35*0.1`; unresolved P0-Release/P1 gates override the number |
+| Planning roll-up to public release candidate | 74.1% | `90*0.5 + 88*0.2 + 40*0.2 + 35*0.1`; unresolved P0-Release/P1 gates override the number |
 | Media Asset T1 overall | 100% for the declared Windows tranche | A1-A8 are implemented/reviewed; A7 and the native A8 matrix plus targeted rebuilt thumbnail/hover supplement are green |
 | Protocol Media Asset schema/migration/validation | 100% for T1 scope | Focused Protocol tests passed before commit |
 | Engine Media Asset runtime/allocator/Published rollback | 100% for A6 scope | Complete Bootstrap A restoration and allocator proof pass in A7 |
@@ -102,7 +102,10 @@ There is no longer one ambiguous “overall” percentage. Report these dimensio
 | Backend Media Asset prepare/finalize/registry | 100% for A1-A5 implementation scope | Authoritative terminal transaction, compatibility bridge, coherence, availability, and reaper are implemented |
 | Media Asset adversarial/final review | Accepted for current Windows tranche | Final thumbnail/session review returned P0=0/P1=0; remaining notes are proof/resource P2 only |
 | Native release/UI/hardware acceptance for this tranche | Accepted for current Windows tranche | Fifteen workflow rows plus rebuilt 3-column grid, explicit thumbnail authorization, moving single preview, Still fail-safe, and no-touch evidence are recorded |
-| Clip Slot T2 | design complete, implementation 0% | Transition model is accepted; code has not begun |
+| Clip Slot T2 | 100% for the declared Windows B1-B4 tranche | Protocol, authored/runtime Engine split, backend authority, shared Edit/Control UI, focused/browser/native proof, and independent review are accepted; C2 transition-duration execution remains separate |
+| Scoped Video FX C1 | 100% for the declared CPU/authority/UI tranche | Stable scope schema, Engine lifecycle/rollback, CPU renderer, backend authority, UI, transport/preview integration, and focused/native proof are accepted; Clip Take and transition buses remain C2/C3 |
+| Timeline L-TL | 72% for the requested editing/runtime surface | Phase/Guide and musical loop foundation, linked A/V import/grouping, selection, delete/duplicate/nudge/quantize/copy-paste/ripple/trim/direct resize are implemented; Split, lane-valid reorder, Follow/crossfade, and reload/focus closure remain |
+| AI Control Plane | 10% requirements/foundation | Full registry/MCP/API contract is accepted and authoritative/Remote building blocks exist; AI0-AI8 implementation and external-client acceptance have not begun |
 | Distributed ShowClock/2PC | architecture requirements drafted, implementation 0% | Local clock and machine-local output fence exist; authenticated distributed authority does not |
 
 After every checkpoint report at least: software implementation, automated proof, native/hardware proof, distribution/legal readiness, affected domain percentage, and the next blocking gate. Do not report a percentage without its denominator and evidence boundary.
@@ -1644,6 +1647,35 @@ Produce operator-facing and support-facing procedures for:
 - safe update/rollback;
 - emergency shutdown and post-incident evidence preservation.
 
+## 20A. Critical path R: AI Control Plane, MCP, and external API
+
+The product target includes full backend operability by AI and automation clients.
+The canonical detailed contract is `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`.
+
+Completion requires:
+
+- one generated typed Command/Query Registry covering every non-presentational
+  GUI, shortcut, MIDI/OSC, Remote, project, runtime, output, file, and
+  administrative operation;
+- strict authored/runtime/query/output/file separation, with existing E/R/H,
+  owner-incarnation, shape, terminal receipt, Undo/history, runtime generation,
+  and output-ownership invariants applied centrally;
+- thin Tauri, MCP, JSON-RPC/REST, and WebSocket adapters with no independent
+  domain logic, defaulting, retries, or direct Engine route;
+- MCP and external API discovery generated from the same Rust schemas and typed
+  machine errors;
+- scoped principals and risk classes `R0`-`R5`, default external safe mode,
+  local human-present single-use consent for disruptive/output/file/replacement
+  operations, audit/redaction, rate limits, revoke-all, and a priority kill switch;
+- a localhost-only optional MCP/API sidecar whose crash or overload cannot affect
+  realtime output or prevent Syndocal startup;
+- non-vacuous reply-loss, stale-writer, schema parity, consent, rate/DoS, event-gap,
+  sidecar-crash, file/recording, output/hardware, native, and security evidence.
+
+DOM automation is a QA aid, not a supported backend control path. Until AI0-AI8
+in the dedicated roadmap are accepted, do not claim full AI operability or safe
+unattended high-risk automation.
+
 ## 21. Master traceability, decision, risk, and evidence ledger
 
 This section is the mechanism that prevents future omissions. Before the product may be called complete, create and maintain the following tables in this file. A generated companion may mirror them for CI, but it may not replace or hide rows from this master index.
@@ -1656,8 +1688,8 @@ This is the minimum domain-level inventory. Each row must be decomposed into Q1 
 | --- | --- | --- | --- | --- |
 | `MEDIA-T1` | MediaAsset schema, import, relink, authority | A | A1-A8 accepted for current Windows tranche | macOS/Linux execution proof before any cross-platform safety claim |
 | `MEDIA-DERIVED` | thumbnails, proxies, waveform, analysis, cache | M | Asset-keyed thumbnail and immutable-copy hover-preview foundation accepted on Windows | general cache model, cancellation during Begin copy, eviction, proxies/waveform/analysis, performance |
-| `VIDEO-SLOT` | clip banks/slots, queue/Take | B | Design complete, code not started | full implementation and native acceptance |
-| `VIDEO-FX` | scoped effects and transition buses | C | Partial foundation | scope model, deterministic Take, mapping/timeline and faults |
+| `VIDEO-SLOT` | clip banks/slots, queue/Take | B | B1-B4 accepted for current Windows tranche | C2 transition-duration execution and broader hardware/venue acceptance |
+| `VIDEO-FX` | scoped effects and transition buses | C | C1 scoped CPU/authority/UI tranche accepted | C2 Clip Take, C3 Transition Bus, C4 mapping/timeline and GPU/hardware breadth |
 | `VIDEO-SOURCE` | camera, screen, NDI, Spout/Syphon, generators | L/K | Partial | authored/runtime identity, replacement fence, physical faults |
 | `AUDIO-AUTHORED` | audio asset/clip/timeline/waveform | L | Partial foundation | canonical authored/runtime model and migration |
 | `AUDIO-LIVE` | WASAPI/ASIO analysis and reactive paths | L/K | Advanced but externally incomplete | ownership, extended soak, devices, end-to-end latency, license decision |
@@ -1672,12 +1704,14 @@ This is the minimum domain-level inventory. Each row must be decomposed into Q1 
 | `REMOTE-TOUCH` | Web Remote, Touch, TouchOSC | N/K | Security foundation exists | current-source audit, physical clients, latency and stale-session proof |
 | `RDM` | RDM/TOD device operation | N/K | Partial | physical, timeout/cancellation, ownership proof |
 | `SHOWCLOCK` | shared time, actions, two-PC failover | G | Architecture draft | decisions, implementation, witness/fence, two-machine soak |
+| `TIMELINE-MUSICAL` | phases, Guide, loop, linked media, group editing, Follow | L-TL | Foundation and linked editing through direct trim implemented/reviewed | Split, lane-valid reorder, Follow/crossfade, persistence focus/selection, final native proof |
 | `UI-SHELL` | Setup/Edit/Control and shared shell | H | Product vision/roadmap exists | staged implementation and native/accessibility acceptance |
 | `ACCESSIBILITY` | keyboard, AT, contrast, DPI, IME | H | Basic static coverage | native screen-reader/contrast/scaling matrix |
 | `MIGRATION` | `.sdc`, recovery, backup, template compatibility | O | Per-feature tests exist | unified version/corruption/golden/fuzz matrix |
 | `SECURITY` | IPC, remote, LAN clock, parser, update threat model | N/J | Partial | unified threat model and release-blocking proof |
 | `PERFORMANCE` | latency/frame/tick/resource/soak budgets | M/K | Domain-specific evidence exists | fixed whole-product envelope and current-source soaks |
 | `OBSERVABILITY` | statuses, logs, diagnostics, runbooks | P | Partial | cross-domain generation truth and support acceptance |
+| `AI-CONTROL` | complete backend operation registry, MCP, JSON-RPC/REST/WS, consent and audit | R | Requirements accepted; selected backend/Remote seams exist | AI0-AI8 implementation, parity, native/external client, security and hardware acceptance |
 | `RELEASE` | packages, signing, legal, updater, clean machine | J | Partial CI/package foundation | all P0-Release items |
 | `COMPARE-VIDEO` | SynapseRack pinned benchmark | I | Acceptance plan only | pinned build/license and measured V01-V17 evidence |
 | `COMPARE-LIGHTING` | Daslight task/parity boundary | I | Partial measured evidence | unmeasured tasks, semantic/profile and physical output evidence |
@@ -1693,6 +1727,7 @@ Source-to-roadmap coverage:
 | `qa/SYNDOCAL_VIDEO_MODEL_GAP_AUDIT_2026-08-12.md` | A, B, C, L, M, I |
 | `qa/SYNDOCAL_SYNAPSERACK_VIDEO_OPERATOR_BENCHMARK.md` | I, K, L, M, Q4 |
 | `qa/SYNDOCAL_2PC_TRANCHE1_OUTPUT_OWNERSHIP.md` | F, G, K, L, N |
+| `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md` | R, E, F, G, J, K, N, P, Q |
 | `qa/DASLIGHT_PARITY_COMPLETION_PLAN.md` and comparison verdict | D, I, K, N, O |
 | `AGENTS.md` | section 4.5, 22.1, and 22.2 native completion procedure |
 
@@ -1746,6 +1781,8 @@ Initial decision state:
 | `DEC-RECORD-OWN-001` | recording ownership and two-PC behavior | Open |
 | `DEC-P2-001` | Which P2s block release | Accepted by section 4.7; security/migration/legal/platform/recovery/advertised-claim P2s block |
 | `DEC-COMPARE-001` | pinned Daslight/SynapseRack versions/licenses/hardware | Open before comparative measurement |
+| `DEC-AI-ARCH-001` | AI control architecture | Accepted: one in-process authoritative registry with optional localhost-only MCP/API sidecar; adapters contain no domain authority |
+| `DEC-AI-CONSENT-001` | unattended disruptive automation | Accepted: external principals start safe; R4/R5 require locally approved, fingerprint-bound, short-lived single-use consent unless a later explicit product decision narrows the class |
 
 ### Q3. Risk register
 
@@ -1767,6 +1804,8 @@ Initial high-severity register:
 | `R-RELEASE-LEGAL-001` | P0-Release | signing/notarization/licenses | Open; blocks public release |
 | `R-MIGRATION-001` | P2 release-blocking | unified compatibility/corruption proof | Open; blocks supported-upgrade claim |
 | `R-SECURITY-001` | P2 release-blocking | unified remote/parser/update threat model | Open; blocks public-network/security claims |
+| `R-AI-BYPASS-001` | P1/P0-Code when externally reachable | adapter or GUI mutation bypasses the registry/authority/receipt path | Open; blocks full AI-driven claim and external R2+ release |
+| `R-AI-SAFETY-001` | P0-Code | external disruptive/output/file action lacks bound consent, revocation, or fail-safe controller-loss behavior | Open; blocks external R4/R5 enablement |
 
 ### Q4. Evidence manifest
 
@@ -1887,6 +1926,9 @@ Recommended future commits:
 15. Audio/recording/live-source work remains separate by schema, runtime, backend, and UI.
 16. ShowClock work remains separate by decision record, protocol/simulator, peer transport, authority/fencing, UI, and hardware acceptance.
 17. Remote/RDM/security, migration/corruption, observability/updater, UI/accessibility, and release/distribution remain separate focused commits.
+18. AI Control Plane remains separate by registry inventory/schema, read surface,
+    authored/runtime bridge, principal/consent, sidecar adapters, administration UI,
+    adversarial proof, and native/external acceptance.
 
 After each commit report:
 
@@ -1952,6 +1994,8 @@ No confirmed P0-Code at the last frozen reviewed checkpoint. Current dirty `main
 - native screen-reader/high-contrast/DPI/text-scale acceptance;
 - observability/support/update failure matrix;
 - requirements traceability and evidence manifest completion.
+- AI Control Plane inventory, registry, MCP/API sidecar, scoped consent, parity,
+  adversarial security, and real external-client/native acceptance.
 
 ## 26. Claims that must not be made yet
 

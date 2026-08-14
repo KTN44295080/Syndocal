@@ -40,3 +40,9 @@ pnpm --dir app run check:dvc-midi-shortcuts
 ## 現在の境界
 
 Tauriコマンド群はDesktop内部からショー作成・編集・再生をバックエンド呼び出しできる。Remote WebSocketはライブ運用向けのサブセットであり、外部AIからプロジェクト作成・全編集コマンドを直接呼ぶ汎用RPCカタログまではまだ公開していない。将来それを追加する場合もTauriコマンドと同じ検証・Engine経路を再利用し、UI DOM操作を正規APIにしない。
+
+全操作をAI駆動可能にする正式なControl Plane契約とMCP/APIの段階的実装は
+`qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`を正とする。MCP、JSON-RPC/REST、
+WebSocketは単一の型付きCommand/Query Registryへのアダプタであり、独自の
+検証、既定値、再試行、Engine直通経路を持たない。MCPはリアルタイム本体へ
+埋め込まず、localhost限定の任意sidecarとして障害・負荷・権限を分離する。
