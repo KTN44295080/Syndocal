@@ -1,7 +1,8 @@
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import type {
   TimelineFollowRuntimeSummary,
   TimelineFollowSummary,
+  TimelineGuideAudioStatus,
   TimelineLoopRegionSummary,
   TimelinePhaseRole,
   TimelinePhaseSummary,
@@ -20,6 +21,8 @@ interface TimelinePerformanceEditorProps {
   visibleWindow: TimelineVisibleWindow;
   followRuntime: TimelineFollowRuntimeSummary;
   loopRegion: TimelineLoopRegionSummary | null;
+  guideAudioStatus: TimelineGuideAudioStatus;
+  guideAudioDevices: string[];
   onCreateTimeline: (label: string) => void | Promise<void>;
   onDuplicateTimeline: (timelineId: number) => void | Promise<void>;
   onRemoveTimeline: (timelineId: number) => void | Promise<void>;
@@ -28,6 +31,7 @@ interface TimelinePerformanceEditorProps {
   onSetFollow: (follow: TimelineFollowSummary | null) => void | Promise<void>;
   onSetPhases: (phases: TimelinePhaseSummary[]) => void | Promise<void>;
   onSetLoopRegion: (region: TimelineLoopRegionSummary | null) => void | Promise<void>;
+  onConfigureGuideAudio: (enabled: boolean, gain: number, deviceName: string | null) => void | Promise<void>;
   onSeek: (timeMs: number) => void | Promise<void>;
 }
 
@@ -69,6 +73,55 @@ export function TimelinePerformanceEditor(props: TimelinePerformanceEditorProps)
         onSelect={props.onSelectTimeline}
         onSetFollow={props.onSetFollow}
       />
+      <details class="timelineGuideAudioEditor" data-timeline-guide-audio-editor>
+        <summary>
+          <span>Guide Audio</span>
+          <output classList={{ fault: Boolean(props.guideAudioStatus.lastError) }} role="status">
+            {props.guideAudioStatus.lastError ? "Fault" : props.guideAudioStatus.enabled ? "Ready" : "Muted"}
+          </output>
+        </summary>
+        <div class="timelineGuideAudioEditorBody">
+          <label class="toggleRow">
+            <input
+              type="checkbox"
+              checked={props.guideAudioStatus.enabled}
+              onChange={(event) => void props.onConfigureGuideAudio(event.currentTarget.checked, props.guideAudioStatus.gain, props.guideAudioStatus.requestedDeviceName ?? null)}
+            />
+            <span>Guide monitor bus</span>
+          </label>
+          <label>
+            <span>Guide gain</span>
+            <input
+              type="range"
+              min="0"
+              max="2"
+              step="0.05"
+              value={props.guideAudioStatus.gain}
+              onChange={(event) => void props.onConfigureGuideAudio(props.guideAudioStatus.enabled, Number(event.currentTarget.value), props.guideAudioStatus.requestedDeviceName ?? null)}
+            />
+            <output class="tabularNums" data-no-localize>{Math.round(props.guideAudioStatus.gain * 100)}%</output>
+          </label>
+          <label>
+            <span>Guide device</span>
+            <select
+              value={props.guideAudioStatus.requestedDeviceName ?? ""}
+              onChange={(event) => void props.onConfigureGuideAudio(props.guideAudioStatus.enabled, props.guideAudioStatus.gain, event.currentTarget.value || null)}
+            >
+              <option value="">Default output</option>
+              <Show when={props.guideAudioStatus.requestedDeviceName && !props.guideAudioDevices.includes(props.guideAudioStatus.requestedDeviceName)}>
+                <option value={props.guideAudioStatus.requestedDeviceName ?? ""}>{props.guideAudioStatus.requestedDeviceName}</option>
+              </Show>
+              <For each={props.guideAudioDevices}>{(device) => <option value={device}>{device}</option>}</For>
+            </select>
+          </label>
+          <Show when={props.guideAudioStatus.lastSpokenLabel}>
+            {(label) => <output class="timelineGuideLastSpoken">Last: <span data-no-localize>{label()}</span></output>}
+          </Show>
+          <Show when={props.guideAudioStatus.lastError}>
+            {(error) => <p class="inlineError" role="alert">{error()}</p>}
+          </Show>
+        </div>
+      </details>
       <details class="timelinePhaseEditor" data-timeline-phase-editor>
         <summary>
           <span>Phases</span>

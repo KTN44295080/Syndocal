@@ -2833,6 +2833,11 @@ pub struct TimelineAudioRuntimeSnapshot {
     pub count_in_beats: u8,
     pub count_in_remaining_ms: u64,
     pub metronome_transport: Option<TimelineMetronomeTransport>,
+    /// Runtime-only operator Guide cues. The backend audio worker consumes
+    /// these from the same snapshot read as the Timeline transport so speech
+    /// can never be paired with a stale playhead or retired project image.
+    pub guide_enabled: bool,
+    pub guide_cues: Vec<TimelineGuideCueSummary>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5615,6 +5620,8 @@ impl EngineHandle {
                         count_in_beats,
                         count_in_remaining_ms,
                         metronome_transport,
+                        guide_enabled: snapshot.timeline.guide_enabled,
+                        guide_cues: snapshot.timeline.guide_cues.clone(),
                     },
                 }
             })
@@ -31673,7 +31680,12 @@ impl EngineRuntime {
             .last()
             .map_or(1, |entry| entry.sequence.saturating_add(1));
         self.timeline_guide_cues.push(TimelineGuideCueSummary {
-            generation: self.timeline_loop_runtime.generation,
+            // The audio transport revision is monotonic for the lifetime of
+            // this Engine runtime and advances whenever a Timeline/project
+            // image is replaced or re-cued. It is therefore the cancellation
+            // fence for queued speech; loop generation alone can repeat after
+            // a project replacement that reuses authored IDs.
+            generation: self.timeline_audio_transport_revision,
             sequence,
             at_ms,
             label,
@@ -94722,6 +94734,10 @@ mod tests {
             TimelineLoopRuntimeStatus::Armed
         ));
         assert_eq!(runtime.timeline_guide_cues[0].label, "Intro");
+        assert_eq!(
+            runtime.timeline_guide_cues[0].generation,
+            runtime.timeline_audio_transport_revision
+        );
 
         runtime.advance_timeline(started + Duration::from_millis(60));
         assert_eq!(runtime.timeline_position_ms, 120);

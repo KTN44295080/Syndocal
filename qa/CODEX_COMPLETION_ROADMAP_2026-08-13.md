@@ -1292,6 +1292,15 @@ Lighting/Video/Audio/Automation Timeline without creating a second transport or 
 
 ### L-TL1. Phase model and Guide voice
 
+Status (2026-08-15): authored Phase/runtime cue generation and the native offline Guide monitor
+path are implemented. The engine publishes Phase/`Looping`/`Break`/`Trans` cues under the same
+Timeline transport snapshot; native playback uses embedded deterministic English WAV assets on
+an independent session-local gain/device bus, cancels stale generations, and reports unsupported
+custom labels as text-only faults. Browser fixtures retain Web Speech only outside Tauri to prevent
+double announcements. Protocol/engine/backend decoding tests, localization, production build, and
+the real-browser 1920/1366/1280/860 containment proof are green. Custom-label offline TTS/cache and
+physical multi-device routing acceptance remain part of the final L-TL7 boundary.
+
 - Add stable authored `TimelinePhaseId` and ordered, non-overlapping Phase ranges on a Timeline.
 - A Phase has a canonical label and a typed role. Built-in roles include `Intro`, `Verse`,
   `PreChorus`, `Chorus`, `Bridge`, `Breakdown`, `Outro`, and `Custom`; Custom retains its authored label.

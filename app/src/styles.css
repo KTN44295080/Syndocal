@@ -504,6 +504,10 @@
 }
 
 @container (max-width: 680px) {
+  .timelineGuideAudioEditorBody {
+    grid-template-columns: 1fr;
+  }
+
   .timelinePerformanceEditor .timelinePhaseRow {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -4397,6 +4401,53 @@ h3 {
 
 .timelineLoopState.looping {
   color: #63d7ba;
+}
+
+.timelineGuideAudioFault,
+.timelineGuideAudioEditor summary output.fault {
+  color: #ff8c7b;
+}
+
+.timelineGuideAudioEditor {
+  min-width: 0;
+  border: 1px solid #24282b;
+  background: #151719;
+}
+
+.timelineGuideAudioEditor > summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.timelineGuideAudioEditorBody {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  border-top: 1px solid #24282b;
+  padding: 8px;
+}
+
+.timelineGuideAudioEditorBody > label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.timelineGuideAudioEditorBody > .toggleRow {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.timelineGuideAudioEditorBody > output,
+.timelineGuideAudioEditorBody > p {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .timelinePhaseEditor {

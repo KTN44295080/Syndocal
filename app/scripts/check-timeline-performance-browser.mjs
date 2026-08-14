@@ -113,6 +113,9 @@ const measure = (client) => evaluate(client, `(() => {
     followLegend: [...(bank?.querySelectorAll('legend') ?? [])].some((node) => node.textContent?.includes('Follow to next Timeline')),
     followState: bank?.querySelector('.timelineFollowState')?.textContent?.trim() ?? '',
     phaseEditorOpen: Boolean(document.querySelector('.timelinePerformanceEditor .timelinePhaseEditor[open]')),
+    guideAudioOpen: Boolean(document.querySelector('.timelinePerformanceEditor .timelineGuideAudioEditor[open]')),
+    guideAudioControls: document.querySelectorAll('.timelineGuideAudioEditorBody input, .timelineGuideAudioEditorBody select').length,
+    guideAudioState: document.querySelector('.timelineGuideAudioEditor > summary output')?.textContent?.trim() ?? '',
     phaseLabels: phases.map((phase) => phase.textContent?.trim() ?? ''),
     guidePressed: document.querySelector('.timelineOperatorBar [data-timeline-guide]')?.getAttribute('aria-pressed') ?? '',
     loopPressed: document.querySelector('.timelineOperatorBar [data-timeline-loop-toggle]')?.getAttribute('aria-pressed') ?? '',
@@ -162,10 +165,11 @@ try {
     assert.equal(await click(client, '.timelineToolsDisclosure > summary'), true);
     await waitFor(() => evaluate(client, "document.querySelector('.timelineToolsDisclosure[open] .timelinePerformanceEditor')?.getBoundingClientRect().height > 0"), "Timeline performance disclosure");
     assert.equal(await click(client, '.timelinePerformanceEditor [data-timeline-bank] > summary'), true);
+    assert.equal(await click(client, '.timelinePerformanceEditor .timelineGuideAudioEditor > summary'), true);
     assert.equal(await click(client, '.timelinePerformanceEditor .timelinePhaseEditor > summary'), true);
     await sleep(100);
     const targetProof = [];
-    for (const selector of ['.timelinePerformanceEditor [data-timeline-bank]', '.timelinePerformanceEditor .timelinePhaseEditor', '.timelineOperatorBar > .timelineLoopControls']) {
+    for (const selector of ['.timelinePerformanceEditor [data-timeline-bank]', '.timelinePerformanceEditor .timelineGuideAudioEditor', '.timelinePerformanceEditor .timelinePhaseEditor', '.timelineOperatorBar > .timelineLoopControls']) {
       targetProof.push(await evaluate(client, `(() => {
         const scope = document.querySelector(${JSON.stringify(selector)});
         if (!(scope instanceof HTMLElement)) return null;
@@ -193,12 +197,13 @@ try {
     assert.deepEqual([state.bankOpen, state.bankItems, state.bankActive, state.followLegend], [true, 2, 1, true]);
     assert.match(state.followState, /TRANS 50%/);
     assert.equal(state.phaseEditorOpen, true);
+    assert.deepEqual([state.guideAudioOpen, state.guideAudioControls, state.guideAudioState], [true, 3, 'Ready']);
     assert.deepEqual(state.phaseLabels, ["Intro", "Verse", "Chorus"]);
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
     assert.deepEqual([state.videoClips, state.audioClips], [1, 2]);
     assert.deepEqual([state.selectedVideo, state.selectedAudio], [1, 1], "selecting either member selects the linked A/V group");
     assert.deepEqual([state.groupEnabled, state.ungroupEnabled], [false, true], "the context menu exposes linked-group release and prevents nested grouping");
-    assert.equal(targetProof.every((proof) => proof?.rect[0] > 0 && proof?.rect[1] > 0 && proof.count > 0 && proof.short === 0), true, `Timeline bank, Phase, and loop controls preserve 44px targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(targetProof)}`);
+    assert.equal(targetProof.every((proof) => proof?.rect[0] > 0 && proof?.rect[1] > 0 && proof.count > 0 && proof.short === 0), true, `Timeline bank, Guide audio, Phase, and loop controls preserve 44px targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(targetProof)}`);
     assert.equal(state.shortTargets, 0, `Visible Timeline performance controls preserve 44px targets at ${viewport.width}x${viewport.height}`);
     assert.equal(state.fixedOuter, true, `Timeline disclosures keep app/document outer scroll fixed at ${viewport.width}x${viewport.height}`);
     console.log(`${viewport.width}x${viewport.height}: phases=${state.phaseLabels.join('/')} bank=${state.bankItems} media=${state.videoClips}+${state.audioClips} selected=${state.selectedVideo}+${state.selectedAudio}`);

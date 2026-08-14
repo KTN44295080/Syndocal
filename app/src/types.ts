@@ -2636,6 +2636,19 @@ export interface TimelineGuideCueSummary {
   cue: TimelineGuideCueKind;
 }
 
+/** Machine/session-local Guide monitor bus; never project-authored. */
+export interface TimelineGuideAudioStatus {
+  enabled: boolean;
+  gain: number;
+  requestedDeviceName?: string | null;
+  resolvedDeviceName?: string | null;
+  activeGeneration?: number | null;
+  lastSequence: number;
+  lastSpokenLabel?: string | null;
+  spokenCount: number;
+  lastError?: string | null;
+}
+
 export interface TimelineAdvancedAuthoringSummary {
   snap_request?: unknown | null;
   video_clips: TimelineVideoClipSummary[];

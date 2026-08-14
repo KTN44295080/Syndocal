@@ -3,6 +3,7 @@ import type { TimelineContextDrawer, TimelineDeskSurface } from "../uiModes";
 import type {
   TimelineFollowRuntimeSummary,
   TimelineFollowSummary,
+  TimelineGuideAudioStatus,
   TimelineLoopRegionSummary,
   TimelineLoopRuntimeSummary,
   TimelinePhaseSummary,
@@ -27,6 +28,8 @@ interface TimelineOperatorBarProps {
   countInRemainingMs: number;
   phases: TimelinePhaseSummary[];
   guideEnabled: boolean;
+  guideAudioStatus: TimelineGuideAudioStatus;
+  guideAudioDevices: string[];
   loopRegion: TimelineLoopRegionSummary | null;
   loopRuntime: TimelineLoopRuntimeSummary;
   timelines: TimelineSnapshot[];
@@ -50,6 +53,7 @@ interface TimelineOperatorBarProps {
   onPlay: () => void | Promise<void>;
   onSetMetronome: (enabled: boolean, countInBeats: number) => void | Promise<void>;
   onSetGuideEnabled: (enabled: boolean) => void | Promise<void>;
+  onConfigureGuideAudio: (enabled: boolean, gain: number, deviceName: string | null) => void | Promise<void>;
   onSetPhases: (phases: TimelinePhaseSummary[]) => void | Promise<void>;
   onSetLoopRegion: (region: TimelineLoopRegionSummary | null) => void | Promise<void>;
   onSetLoopEnabled: (enabled: boolean) => void | Promise<void>;
@@ -137,6 +141,9 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
           </output>
         </Show>
         <button type="button" classList={{ active: props.guideEnabled }} aria-pressed={props.guideEnabled} data-timeline-guide title="Announce phases and loop transitions" onClick={() => void props.onSetGuideEnabled(!props.guideEnabled)}>Guide</button>
+        <Show when={props.guideAudioStatus.lastError}>
+          {(error) => <output class="timelineGuideAudioFault" role="status" title={error()}>Guide fault</output>}
+        </Show>
       </div>
       <div class="timelineLoopControls" role="group" aria-label="Timeline A-B loop controls">
         <button type="button" data-timeline-loop-boundary title="Set loop A at playhead" onClick={() => setLoopBoundary("a")}>A</button>
@@ -286,6 +293,8 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
             visibleWindow={props.visibleWindow}
             followRuntime={props.followRuntime}
             loopRegion={props.loopRegion}
+            guideAudioStatus={props.guideAudioStatus}
+            guideAudioDevices={props.guideAudioDevices}
             onCreateTimeline={props.onCreateTimeline}
             onDuplicateTimeline={props.onDuplicateTimeline}
             onRemoveTimeline={props.onRemoveTimeline}
@@ -294,6 +303,7 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
             onSetFollow={props.onSetFollow}
             onSetPhases={props.onSetPhases}
             onSetLoopRegion={props.onSetLoopRegion}
+            onConfigureGuideAudio={props.onConfigureGuideAudio}
             onSeek={props.onSeek}
           />
         </div>

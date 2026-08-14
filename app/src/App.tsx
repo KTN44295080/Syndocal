@@ -333,6 +333,7 @@ import type {
   TimelineAdvancedMutationRequest,
   TimelineAutomationSummary,
   TimelineFollowSummary,
+  TimelineGuideAudioStatus,
   TimelineGroupAutomationAddResult,
   TimelineItemRef,
   TimelineLayerSummary,
@@ -2264,6 +2265,18 @@ export default function App() {
   const mediaAssetThumbnailSignatures = new Map<number, string>();
   const authorizeVideoThumbnailAccess = () => setVideoThumbnailAccessAuthorized(true);
   let spokenTimelineGuideKey = "";
+  const [timelineGuideAudioStatus, setTimelineGuideAudioStatus] = createSignal<TimelineGuideAudioStatus>({
+    enabled: true,
+    gain: 0.8,
+    requestedDeviceName: null,
+    resolvedDeviceName: null,
+    activeGeneration: null,
+    lastSequence: 0,
+    lastSpokenLabel: null,
+    spokenCount: 0,
+    lastError: null,
+  });
+  const [timelineGuideAudioDevices, setTimelineGuideAudioDevices] = createSignal<string[]>([]);
   const resetMediaAssetUiForProjectReplacement = () => {
     videoThumbnailGeneration += 1;
     mediaAssetThumbnailGeneration += 1;
@@ -13091,6 +13104,31 @@ export default function App() {
       setMessage(`Timeline Guide update failed: ${String(error)}`);
     }
   };
+  const configureTimelineGuideAudio = async (enabled: boolean, gain: number, deviceName: string | null) => {
+    if (!isTauriRuntime()) {
+      setTimelineGuideAudioStatus((current) => ({
+        enabled,
+        gain: Math.max(0, Math.min(2, gain)),
+        requestedDeviceName: deviceName,
+        resolvedDeviceName: deviceName,
+        activeGeneration: current?.activeGeneration ?? null,
+        lastSequence: current?.lastSequence ?? 0,
+        lastSpokenLabel: current?.lastSpokenLabel ?? null,
+        spokenCount: current?.spokenCount ?? 0,
+        lastError: null,
+      }));
+      return;
+    }
+    try {
+      setTimelineGuideAudioStatus(await invoke<TimelineGuideAudioStatus>("set_timeline_guide_audio_config", {
+        enabled,
+        gain,
+        deviceName,
+      }));
+    } catch (error) {
+      setMessage(`Timeline Guide audio update failed: ${String(error)}`);
+    }
+  };
   const setTimelinePhases = async (phases: TimelinePhaseSummary[]) => {
     try {
       await commitTimelineAdvanced({ kind: "set_phases", phases });
@@ -13198,6 +13236,10 @@ export default function App() {
   createEffect(() => {
     const cues = activeTimeline().guide_cues ?? [];
     const cue = cues.at(-1);
+    // Native playback is owned by the backend's dedicated Guide monitor bus.
+    // Keep Web Speech only for browser fixtures/non-Tauri previews so the
+    // desktop application never announces the same cue twice.
+    if (isTauriRuntime()) return;
     if (!cue || typeof window === "undefined" || !("speechSynthesis" in window)) return;
     const key = `${cue.generation}:${cue.sequence}`;
     if (key === spokenTimelineGuideKey) return;
@@ -13206,6 +13248,32 @@ export default function App() {
     utterance.lang = uiLocale() === "ja" ? "ja-JP" : "en-US";
     utterance.rate = 1;
     window.speechSynthesis.speak(utterance);
+  });
+
+  createEffect(() => {
+    const visible = workspaceTab() === "control" && controlMode() === "live";
+    if (!visible || !isTauriRuntime()) return;
+    let disposed = false;
+    const refresh = async () => {
+      try {
+        const [status, devices] = await Promise.all([
+          invoke<TimelineGuideAudioStatus>("get_timeline_guide_audio_status"),
+          invoke<string[]>("list_audio_output_devices"),
+        ]);
+        if (!disposed) {
+          setTimelineGuideAudioStatus(status);
+          setTimelineGuideAudioDevices(devices);
+        }
+      } catch (error) {
+        if (!disposed) setMessage(`Timeline Guide audio status failed: ${String(error)}`);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 1_000);
+    onCleanup(() => {
+      disposed = true;
+      window.clearInterval(timer);
+    });
   });
 
   createEffect(() => {
@@ -22995,6 +23063,8 @@ export default function App() {
                   countInRemainingMs={activeTimeline().count_in_remaining_ms ?? 0}
                   phases={activeTimeline().phases ?? []}
                   guideEnabled={activeTimeline().guide_enabled ?? false}
+                  guideAudioStatus={timelineGuideAudioStatus()}
+                  guideAudioDevices={timelineGuideAudioDevices()}
                   loopRegion={activeTimeline().loop_region ?? null}
                   loopRuntime={activeTimeline().loop_runtime ?? { generation: 0, status: "disabled", wrap_count: 0 }}
                   timelines={timelineBank()}
@@ -23020,6 +23090,7 @@ export default function App() {
                   onPlay={playTimeline}
                   onSetMetronome={setTimelineMetronome}
                   onSetGuideEnabled={setTimelineGuideEnabled}
+                  onConfigureGuideAudio={configureTimelineGuideAudio}
                   onSetPhases={setTimelinePhases}
                   onSetLoopRegion={setTimelineLoopRegion}
                   onSetLoopEnabled={setTimelineLoopEnabled}

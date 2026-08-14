@@ -1312,6 +1312,7 @@ mod tests {
             .unwrap();
         let creation_lease = activation.admit_resource_creation().unwrap();
         let (allow_constructor_tx, allow_constructor_rx) = mpsc::sync_channel(1);
+        let (constructor_entered_tx, constructor_entered_rx) = mpsc::sync_channel(1);
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
         let (start_tx, start_rx) = mpsc::sync_channel::<SpoutOutputStartDecision>(1);
         let constructor_attempts = Arc::new(AtomicUsize::new(0));
@@ -1320,6 +1321,7 @@ mod tests {
         let destroyed_for_thread = Arc::clone(&resource_destroyed);
         let worker = std::thread::spawn(move || {
             attempts_for_thread.fetch_add(1, Ordering::AcqRel);
+            constructor_entered_tx.send(()).unwrap();
             allow_constructor_rx.recv().unwrap();
             let resource = StartupResource(destroyed_for_thread);
             let _ = ready_tx.send(Ok(()));
@@ -1329,6 +1331,10 @@ mod tests {
             }
             Ok::<(), SpoutOutputWorkerStopError>(())
         });
+
+        constructor_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("delayed constructor worker must enter before timeout is measured");
 
         assert!(matches!(
             ready_rx.recv_timeout(Duration::from_millis(1)),
