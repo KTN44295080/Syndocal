@@ -13153,6 +13153,29 @@ export default function App() {
       return [];
     }
   };
+  const trimTimelineItems = async (
+    items: TimelineItemRef[],
+    primary: TimelineItemRef,
+    edge: "start" | "end",
+    boundaryMs: number,
+    isolate = false,
+  ) => {
+    try {
+      const result = await commitTimelineAdvanced({
+        kind: "trim_items",
+        items,
+        primary,
+        edge,
+        boundary_ms: Math.max(0, Math.round(boundaryMs)),
+        isolate,
+      });
+      if (result) setMessage(`Timeline selection trimmed from the ${edge}.`);
+      return result?.selected_items ?? [];
+    } catch (error) {
+      setMessage(`Timeline selection trim failed: ${String(error)}`);
+      return [];
+    }
+  };
   const removeTimelineItems = async (items: TimelineItemRef[]) => {
     try {
       const result = await commitTimelineAdvanced({ kind: "delete_items", items });
@@ -23918,6 +23941,7 @@ export default function App() {
               onRippleItems={rippleTimelineItems}
               onQuantizeItems={quantizeTimelineItems}
               onPasteItems={pasteTimelineItems}
+              onTrimItems={trimTimelineItems}
               onRemoveItems={removeTimelineItems}
               onRemoveAudioClip={removeTimelineAudioClip}
               onSetAudioMaster={setTimelineAudioMaster}

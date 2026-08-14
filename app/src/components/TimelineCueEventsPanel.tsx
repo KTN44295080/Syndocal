@@ -204,6 +204,13 @@ interface TimelineCueEventsPanelProps {
   onRippleItems: (items: TimelineItemRef[], deltaMs: number) => Promise<TimelineItemRef[]>;
   onQuantizeItems: (items: TimelineItemRef[], gridMs: number) => Promise<TimelineItemRef[]>;
   onPasteItems: (items: TimelineItemRef[], targetMs: number) => Promise<TimelineItemRef[]>;
+  onTrimItems: (
+    items: TimelineItemRef[],
+    primary: TimelineItemRef,
+    edge: "start" | "end",
+    boundaryMs: number,
+    isolate: boolean,
+  ) => Promise<TimelineItemRef[]>;
   onRemoveItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onRemoveAudioClip: (clipId: number) => void | Promise<void>;
   onSetAudioMaster: (offsetMs: number, muted: boolean) => void | Promise<void>;
@@ -261,7 +268,11 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   let copiedTimelineId = props.activeTimelineId;
   let itemMenuReturnFocus: (Element & { focus: () => void }) | null = null;
   let itemMenuWasOpen = false;
-  const [itemContextMenu, setItemContextMenu] = createSignal<{ x: number; y: number } | null>(null);
+  const [itemContextMenu, setItemContextMenu] = createSignal<{
+    x: number;
+    y: number;
+    anchor: TimelineItemRef;
+  } | null>(null);
   const [pendingRemoveTimelineItems, setPendingRemoveTimelineItems] = createSignal<TimelineItemRef[]>([]);
   const [pendingRemoveAudioClipId, setPendingRemoveAudioClipId] = createSignal<number | null>(null);
   const [layerMenu, setLayerMenu] = createSignal<{ layerId: number; x: number; y: number } | null>(null);
@@ -388,7 +399,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     setSelectedVideoClipId(video?.kind === "video_clip" ? video.clip_id : null);
     setSingleMemberEditKey(null);
   };
-  const openItemContextMenu = (point: { x: number; y: number }) => {
+  const openItemContextMenu = (point: { x: number; y: number }, anchor: TimelineItemRef) => {
     const active = document.activeElement;
     itemMenuReturnFocus = active && "focus" in active
       ? active as Element & { focus: () => void }
@@ -396,6 +407,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     setItemContextMenu({
       x: Math.max(8, Math.min(point.x, window.innerWidth - 226)),
       y: Math.max(8, Math.min(point.y, window.innerHeight - 552)),
+      anchor,
     });
   };
   const pendingRemoveAudioClip = () =>
@@ -1335,6 +1347,50 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               }}
             >
               Quantize to grid
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length === 0}
+              onClick={async () => {
+                const items = [...selectedTimelineItemRefs()];
+                const primary = menu().anchor;
+                if (!items.some((item) => timelineItemKey(item) === timelineItemKey(primary))) return;
+                const isolate = singleMemberEditKey() === timelineItemKey(primary);
+                setItemContextMenu(null);
+                const selected = await props.onTrimItems(
+                  items,
+                  primary,
+                  "start",
+                  props.positionMs,
+                  isolate,
+                );
+                if (selected.length > 0) selectReturnedTimelineItems(selected);
+              }}
+            >
+              Trim start to playhead
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length === 0}
+              onClick={async () => {
+                const items = [...selectedTimelineItemRefs()];
+                const primary = menu().anchor;
+                if (!items.some((item) => timelineItemKey(item) === timelineItemKey(primary))) return;
+                const isolate = singleMemberEditKey() === timelineItemKey(primary);
+                setItemContextMenu(null);
+                const selected = await props.onTrimItems(
+                  items,
+                  primary,
+                  "end",
+                  props.positionMs,
+                  isolate,
+                );
+                if (selected.length > 0) selectReturnedTimelineItems(selected);
+              }}
+            >
+              Trim end to playhead
             </button>
             <button
               type="button"

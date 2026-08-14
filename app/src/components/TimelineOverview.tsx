@@ -24,6 +24,7 @@ import type {
   AudioAnalysisSummary,
   MediaAssetSummary,
   TimelineAudioClipSummary,
+  TimelineItemRef,
   TimelineLayerKind,
   TimelineLayerSummary,
   TimelineTrackKind,
@@ -137,7 +138,7 @@ interface TimelineOverviewProps {
   onOpenSuperScene: (cueId: number) => void;
   onSelectAudioClip: (clipId: number, additive?: boolean, singleMember?: boolean) => void;
   onSelectVideoClip: (clipId: number, additive?: boolean, singleMember?: boolean) => void;
-  onOpenItemContextMenu: (point: { x: number; y: number }) => void;
+  onOpenItemContextMenu: (point: { x: number; y: number }, item: TimelineItemRef) => void;
   onInspectOverlapCluster: (cluster: TimelineOverviewOverlapCluster) => void;
   onUpdateLayer: (layer: TimelineLayerSummary) => void | Promise<void>;
   onOpenLayerMenu: (layer: TimelineLayerSummary, point: { x: number; y: number }) => void;
@@ -2423,7 +2424,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   );
                 }
                 event.currentTarget.focus();
-                props.onOpenItemContextMenu({ x: event.clientX, y: event.clientY });
+                props.onOpenItemContextMenu(
+                  { x: event.clientX, y: event.clientY },
+                  { kind: "video_clip", clip_id: clip.id },
+                );
               }}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" && event.key !== " ") return;
@@ -2526,7 +2530,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   );
                 }
                 event.currentTarget.focus();
-                props.onOpenItemContextMenu({ x: event.clientX, y: event.clientY });
+                props.onOpenItemContextMenu(
+                  { x: event.clientX, y: event.clientY },
+                  { kind: "audio_clip", clip_id: clip.id },
+                );
               }}
               onKeyDown={(keyboardEvent) => {
                 if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;

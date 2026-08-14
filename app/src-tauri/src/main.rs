@@ -766,6 +766,13 @@ struct VideoEffectCatalogAuthoritativeResult {
     mutation: ProjectHistoryMutationResult,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TimelineTrimEdge {
+    Start,
+    End,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum TimelineAdvancedMutationRequest {
@@ -809,6 +816,14 @@ enum TimelineAdvancedMutationRequest {
     PasteItems {
         items: Vec<TimelineItemRef>,
         target_ms: u64,
+    },
+    TrimItems {
+        items: Vec<TimelineItemRef>,
+        primary: TimelineItemRef,
+        edge: TimelineTrimEdge,
+        boundary_ms: u64,
+        #[serde(default)]
+        isolate: bool,
     },
     DeleteItems {
         items: Vec<TimelineItemRef>,
@@ -6321,6 +6336,637 @@ fn paste_timeline_items(
     clone_timeline_items_with_delta(state, timeline, requested_items, delta_ms, bpm)
 }
 
+fn timeline_trimmed_fades(
+    duration_ms: u64,
+    fade_in_ms: u64,
+    fade_out_ms: u64,
+    edge: TimelineTrimEdge,
+) -> (u64, u64) {
+    if fade_in_ms.saturating_add(fade_out_ms) <= duration_ms {
+        return (fade_in_ms, fade_out_ms);
+    }
+    match edge {
+        TimelineTrimEdge::Start => {
+            let fade_out_ms = fade_out_ms.min(duration_ms);
+            (fade_in_ms.min(duration_ms - fade_out_ms), fade_out_ms)
+        }
+        TimelineTrimEdge::End => {
+            let fade_in_ms = fade_in_ms.min(duration_ms);
+            (fade_in_ms, fade_out_ms.min(duration_ms - fade_in_ms))
+        }
+    }
+}
+
+fn timeline_item_is_on_locked_layer(timeline: &TimelineSnapshot, item: TimelineItemRef) -> bool {
+    let layer_id = match item {
+        TimelineItemRef::LightingEvent { event_id } => timeline
+            .events
+            .iter()
+            .find(|event| event.id == event_id)
+            .and_then(|event| {
+                event.layer_id.or_else(|| {
+                    let kind = TimelineLayerKind::from(&event.track);
+                    timeline
+                        .layers
+                        .iter()
+                        .find(|layer| layer.kind == kind)
+                        .map(|layer| layer.id)
+                })
+            }),
+        TimelineItemRef::VideoClip { clip_id } => timeline
+            .video_clips
+            .iter()
+            .find(|clip| clip.id == clip_id)
+            .map(|clip| clip.layer_id),
+        TimelineItemRef::AudioClip { clip_id } => timeline
+            .audio_clips
+            .iter()
+            .find(|clip| clip.id == clip_id)
+            .map(|clip| clip.layer_id),
+        TimelineItemRef::LightingAutomation { automation_id } => timeline
+            .automations
+            .iter()
+            .find(|automation| automation.id == automation_id)
+            .and_then(|automation| {
+                let kind = TimelineLayerKind::from(&automation.track);
+                timeline
+                    .layers
+                    .iter()
+                    .find(|layer| layer.kind == kind)
+                    .map(|layer| layer.id)
+            }),
+        TimelineItemRef::VideoAutomation { automation_id } => timeline
+            .video_automations
+            .iter()
+            .find(|automation| automation.id == automation_id)
+            .and_then(|automation| {
+                let kind = TimelineLayerKind::from(&automation.track);
+                timeline
+                    .layers
+                    .iter()
+                    .find(|layer| layer.kind == kind)
+                    .map(|layer| layer.id)
+            }),
+    };
+    layer_id.is_some_and(|layer_id| {
+        timeline
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .is_some_and(|layer| layer.locked)
+    })
+}
+
+fn timeline_event_presented_end_ms(
+    event: &protocol::TimelineCueEventSummary,
+) -> Result<u64, String> {
+    let span_ms = if event.conform_to_tempo {
+        event.duration_ms
+    } else {
+        event
+            .duration_ms
+            .checked_mul(u64::from(event.loop_count))
+            .ok_or_else(|| "Scene Block span exceeds the supported time range".to_string())?
+    };
+    event
+        .time_ms
+        .checked_add(span_ms)
+        .ok_or_else(|| "Scene Block end exceeds the supported time range".to_string())
+}
+
+fn timeline_item_edge_ms(
+    timeline: &TimelineSnapshot,
+    item: TimelineItemRef,
+    edge: TimelineTrimEdge,
+) -> Result<u64, String> {
+    let bounds = match item {
+        TimelineItemRef::LightingEvent { event_id } => {
+            let event = timeline
+                .events
+                .iter()
+                .find(|event| event.id == event_id)
+                .ok_or_else(|| format!("Timeline event {event_id} was not found"))?;
+            if event.duration_ms == 0 {
+                return Err("Timeline points cannot be trimmed".to_string());
+            }
+            (event.time_ms, timeline_event_presented_end_ms(event)?)
+        }
+        TimelineItemRef::VideoClip { clip_id } => {
+            let clip = timeline
+                .video_clips
+                .iter()
+                .find(|clip| clip.id == clip_id)
+                .ok_or_else(|| format!("Timeline Video clip {} was not found", clip_id.0))?;
+            (
+                clip.start_ms,
+                clip.start_ms.checked_add(clip.duration_ms).ok_or_else(|| {
+                    "Timeline Video clip end exceeds the supported time range".to_string()
+                })?,
+            )
+        }
+        TimelineItemRef::AudioClip { clip_id } => {
+            let clip = timeline
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == clip_id)
+                .ok_or_else(|| format!("Timeline Audio clip {clip_id} was not found"))?;
+            (
+                clip.start_ms,
+                clip.start_ms.checked_add(clip.duration_ms).ok_or_else(|| {
+                    "Timeline Audio clip end exceeds the supported time range".to_string()
+                })?,
+            )
+        }
+        TimelineItemRef::LightingAutomation { automation_id } => {
+            let automation = timeline
+                .automations
+                .iter()
+                .find(|automation| automation.id == automation_id)
+                .ok_or_else(|| format!("Timeline automation {automation_id} was not found"))?;
+            let start = automation
+                .keyframes
+                .first()
+                .ok_or_else(|| "Timeline automation has no keyframes".to_string())?
+                .time_ms;
+            let end = automation.keyframes.last().unwrap().time_ms;
+            (start, end)
+        }
+        TimelineItemRef::VideoAutomation { automation_id } => {
+            let automation = timeline
+                .video_automations
+                .iter()
+                .find(|automation| automation.id == automation_id)
+                .ok_or_else(|| {
+                    format!("Timeline Video automation {automation_id} was not found")
+                })?;
+            let start = automation
+                .keyframes
+                .first()
+                .ok_or_else(|| "Timeline Video automation has no keyframes".to_string())?
+                .time_ms;
+            let end = automation.keyframes.last().unwrap().time_ms;
+            (start, end)
+        }
+    };
+    if bounds.0 >= bounds.1 {
+        return Err("Timeline trim requires a non-empty item span".to_string());
+    }
+    Ok(match edge {
+        TimelineTrimEdge::Start => bounds.0,
+        TimelineTrimEdge::End => bounds.1,
+    })
+}
+
+fn timeline_media_duration_ms(
+    timeline: &TimelineSnapshot,
+    media_assets: &[protocol::MediaAssetSummary],
+    media_asset_id: Option<MediaAssetId>,
+    legacy_path: Option<&str>,
+) -> Option<u64> {
+    media_asset_id
+        .and_then(|asset_id| media_assets.iter().find(|asset| asset.id == asset_id))
+        .and_then(|asset| asset.source.metadata.as_ref())
+        .and_then(|metadata| metadata.duration_ms)
+        .or_else(|| {
+            let path = legacy_path?;
+            timeline
+                .audio
+                .as_ref()
+                .filter(|audio| audio.path == path)
+                .map(|audio| audio.duration_ms)
+        })
+}
+
+fn trim_lighting_automation_keyframes(
+    keyframes: &[protocol::AutomationKeyframeSummary],
+    edge: TimelineTrimEdge,
+    boundary_ms: u64,
+) -> Result<Vec<protocol::AutomationKeyframeSummary>, String> {
+    if keyframes.len() < 2 {
+        return Err("Timeline automation trim requires at least two keyframes".to_string());
+    }
+    if keyframes
+        .windows(2)
+        .any(|pair| pair[0].time_ms >= pair[1].time_ms)
+    {
+        return Err("Timeline automation keyframes must be strictly ordered".to_string());
+    }
+    let first = keyframes.first().unwrap();
+    let last = keyframes.last().unwrap();
+    if boundary_ms >= last.time_ms && matches!(edge, TimelineTrimEdge::Start)
+        || boundary_ms <= first.time_ms && matches!(edge, TimelineTrimEdge::End)
+    {
+        return Err("Timeline automation trim would remove its complete span".to_string());
+    }
+    let boundary = if let Some(exact) = keyframes
+        .iter()
+        .find(|keyframe| keyframe.time_ms == boundary_ms)
+    {
+        exact.clone()
+    } else if boundary_ms < first.time_ms {
+        protocol::AutomationKeyframeSummary {
+            time_ms: boundary_ms,
+            value: first.value,
+            interpolation: first.interpolation.clone(),
+        }
+    } else if boundary_ms > last.time_ms {
+        protocol::AutomationKeyframeSummary {
+            time_ms: boundary_ms,
+            value: last.value,
+            interpolation: last.interpolation.clone(),
+        }
+    } else {
+        let pair = keyframes
+            .windows(2)
+            .find(|pair| pair[0].time_ms < boundary_ms && boundary_ms < pair[1].time_ms)
+            .unwrap();
+        let value = match pair[0].interpolation {
+            protocol::AutomationInterpolation::Step => pair[0].value,
+            protocol::AutomationInterpolation::Linear => {
+                let numerator = boundary_ms - pair[0].time_ms;
+                let denominator = pair[1].time_ms - pair[0].time_ms;
+                let ratio = numerator as f64 / denominator as f64;
+                (f64::from(pair[0].value)
+                    + (f64::from(pair[1].value) - f64::from(pair[0].value)) * ratio)
+                    .round()
+                    .clamp(0.0, f64::from(u16::MAX)) as u16
+            }
+            protocol::AutomationInterpolation::Bezier => {
+                return Err("Bezier automation must be trimmed on an existing keyframe".to_string())
+            }
+        };
+        protocol::AutomationKeyframeSummary {
+            time_ms: boundary_ms,
+            value,
+            interpolation: pair[0].interpolation.clone(),
+        }
+    };
+    let mut trimmed = match edge {
+        TimelineTrimEdge::Start => keyframes
+            .iter()
+            .filter(|keyframe| keyframe.time_ms >= boundary_ms)
+            .cloned()
+            .collect::<Vec<_>>(),
+        TimelineTrimEdge::End => keyframes
+            .iter()
+            .filter(|keyframe| keyframe.time_ms <= boundary_ms)
+            .cloned()
+            .collect::<Vec<_>>(),
+    };
+    if !trimmed
+        .iter()
+        .any(|keyframe| keyframe.time_ms == boundary_ms)
+    {
+        trimmed.push(boundary);
+        trimmed.sort_by_key(|keyframe| keyframe.time_ms);
+    }
+    if trimmed.len() < 2 || trimmed.first().unwrap().time_ms >= trimmed.last().unwrap().time_ms {
+        return Err("Timeline automation trim must leave two distinct keyframes".to_string());
+    }
+    Ok(trimmed)
+}
+
+fn trim_video_automation_keyframes(
+    keyframes: &[protocol::VideoAutomationKeyframeSummary],
+    edge: TimelineTrimEdge,
+    boundary_ms: u64,
+) -> Result<Vec<protocol::VideoAutomationKeyframeSummary>, String> {
+    if keyframes.len() < 2 {
+        return Err("Timeline Video automation trim requires at least two keyframes".to_string());
+    }
+    if keyframes
+        .windows(2)
+        .any(|pair| pair[0].time_ms >= pair[1].time_ms)
+    {
+        return Err("Timeline Video automation keyframes must be strictly ordered".to_string());
+    }
+    let first = keyframes.first().unwrap();
+    let last = keyframes.last().unwrap();
+    if boundary_ms >= last.time_ms && matches!(edge, TimelineTrimEdge::Start)
+        || boundary_ms <= first.time_ms && matches!(edge, TimelineTrimEdge::End)
+    {
+        return Err("Timeline Video automation trim would remove its complete span".to_string());
+    }
+    let boundary = if let Some(exact) = keyframes
+        .iter()
+        .find(|keyframe| keyframe.time_ms == boundary_ms)
+    {
+        exact.clone()
+    } else if boundary_ms < first.time_ms {
+        protocol::VideoAutomationKeyframeSummary {
+            time_ms: boundary_ms,
+            value: first.value,
+            interpolation: first.interpolation.clone(),
+        }
+    } else if boundary_ms > last.time_ms {
+        protocol::VideoAutomationKeyframeSummary {
+            time_ms: boundary_ms,
+            value: last.value,
+            interpolation: last.interpolation.clone(),
+        }
+    } else {
+        let pair = keyframes
+            .windows(2)
+            .find(|pair| pair[0].time_ms < boundary_ms && boundary_ms < pair[1].time_ms)
+            .unwrap();
+        let value = match pair[0].interpolation {
+            protocol::AutomationInterpolation::Step => pair[0].value,
+            protocol::AutomationInterpolation::Linear => {
+                let numerator = boundary_ms - pair[0].time_ms;
+                let denominator = pair[1].time_ms - pair[0].time_ms;
+                let ratio = numerator as f64 / denominator as f64;
+                pair[0].value + (pair[1].value - pair[0].value) * ratio as f32
+            }
+            protocol::AutomationInterpolation::Bezier => {
+                return Err(
+                    "Bezier Video automation must be trimmed on an existing keyframe".to_string(),
+                )
+            }
+        };
+        if !value.is_finite() {
+            return Err("Timeline Video automation trim produced a non-finite value".to_string());
+        }
+        protocol::VideoAutomationKeyframeSummary {
+            time_ms: boundary_ms,
+            value,
+            interpolation: pair[0].interpolation.clone(),
+        }
+    };
+    let mut trimmed = match edge {
+        TimelineTrimEdge::Start => keyframes
+            .iter()
+            .filter(|keyframe| keyframe.time_ms >= boundary_ms)
+            .cloned()
+            .collect::<Vec<_>>(),
+        TimelineTrimEdge::End => keyframes
+            .iter()
+            .filter(|keyframe| keyframe.time_ms <= boundary_ms)
+            .cloned()
+            .collect::<Vec<_>>(),
+    };
+    if !trimmed
+        .iter()
+        .any(|keyframe| keyframe.time_ms == boundary_ms)
+    {
+        trimmed.push(boundary);
+        trimmed.sort_by_key(|keyframe| keyframe.time_ms);
+    }
+    if trimmed.len() < 2 || trimmed.first().unwrap().time_ms >= trimmed.last().unwrap().time_ms {
+        return Err("Timeline Video automation trim must leave two distinct keyframes".to_string());
+    }
+    Ok(trimmed)
+}
+
+fn trim_timeline_items(
+    timeline: &mut TimelineSnapshot,
+    media_assets: &[protocol::MediaAssetSummary],
+    requested_items: &[TimelineItemRef],
+    primary: TimelineItemRef,
+    edge: TimelineTrimEdge,
+    boundary_ms: u64,
+    isolate: bool,
+    bpm: f32,
+) -> Result<Vec<TimelineItemRef>, String> {
+    if !bpm.is_finite() || bpm <= 0.0 {
+        return Err("Timeline BPM must be finite and positive".to_string());
+    }
+    let expanded = expanded_timeline_items(timeline, requested_items)?;
+    if !expanded.contains(&primary) {
+        return Err("Timeline trim primary item is outside the selected group".to_string());
+    }
+    let primary_edge_ms = timeline_item_edge_ms(timeline, primary, edge)?;
+    let delta_ms = i128::from(boundary_ms) - i128::from(primary_edge_ms);
+    let delta_ms = i64::try_from(delta_ms)
+        .map_err(|_| "Timeline trim exceeds the supported time range".to_string())?;
+    if delta_ms == 0 {
+        return Err("Timeline trim boundary must move".to_string());
+    }
+    let edited = if isolate {
+        BTreeSet::from([primary])
+    } else {
+        expanded.clone()
+    };
+    for item in &edited {
+        if timeline_item_is_on_locked_layer(timeline, *item) {
+            return Err("Timeline trim cannot edit an item on a locked lane".to_string());
+        }
+    }
+
+    let mut candidate = timeline.clone();
+    for item in &edited {
+        let current_edge_ms = timeline_item_edge_ms(&candidate, *item, edge)?;
+        let item_boundary_ms = timeline_shift_ms(current_edge_ms, delta_ms)?;
+        match *item {
+            TimelineItemRef::LightingEvent { event_id } => {
+                let event = candidate
+                    .events
+                    .iter_mut()
+                    .find(|event| event.id == event_id)
+                    .unwrap();
+                let old_end_ms = timeline_event_presented_end_ms(event)?;
+                let (new_start_ms, new_end_ms) = match edge {
+                    TimelineTrimEdge::Start => (item_boundary_ms, old_end_ms),
+                    TimelineTrimEdge::End => (event.time_ms, item_boundary_ms),
+                };
+                let new_span_ms = new_end_ms
+                    .checked_sub(new_start_ms)
+                    .filter(|span| *span > 0)
+                    .ok_or_else(|| "Scene Block trim would remove its complete span".to_string())?;
+                let new_duration_ms = if event.conform_to_tempo {
+                    new_span_ms
+                } else {
+                    let loop_count = u64::from(event.loop_count);
+                    if loop_count == 0 || new_span_ms % loop_count != 0 {
+                        return Err(
+                            "Scene Block trim must preserve an exact whole-loop duration"
+                                .to_string(),
+                        );
+                    }
+                    new_span_ms / loop_count
+                };
+                if matches!(edge, TimelineTrimEdge::Start) {
+                    let rate = f64::from(event.rate.unwrap_or(1.0));
+                    if !rate.is_finite() || rate <= 0.0 {
+                        return Err("Scene Block trim requires a finite positive rate".to_string());
+                    }
+                    let source_delta = delta_ms as f64 * rate;
+                    if !source_delta.is_finite()
+                        || source_delta < i64::MIN as f64
+                        || source_delta > i64::MAX as f64
+                    {
+                        return Err(
+                            "Scene Block source trim exceeds the supported range".to_string()
+                        );
+                    }
+                    event.source_offset_ms = event
+                        .source_offset_ms
+                        .checked_add(source_delta.round() as i64)
+                        .ok_or_else(|| {
+                            "Scene Block source offset exceeds the supported range".to_string()
+                        })?;
+                    event.time_ms = new_start_ms;
+                    event.time_beats = timeline_shift_beats(event.time_beats, delta_ms, bpm)?;
+                }
+                event.duration_ms = new_duration_ms;
+                if event.conform_to_tempo {
+                    event.duration_beats = Some(new_duration_ms as f64 * f64::from(bpm) / 60_000.0);
+                }
+                let fades = timeline_trimmed_fades(
+                    new_duration_ms,
+                    event.fade_in_ms,
+                    event.fade_out_ms,
+                    edge,
+                );
+                event.fade_in_ms = fades.0;
+                event.fade_out_ms = fades.1;
+            }
+            TimelineItemRef::VideoClip { clip_id } => {
+                let media_asset_id = candidate
+                    .video_clips
+                    .iter()
+                    .find(|clip| clip.id == clip_id)
+                    .unwrap()
+                    .media_asset_id;
+                let source_duration_ms = timeline_media_duration_ms(
+                    &candidate,
+                    media_assets,
+                    Some(media_asset_id),
+                    None,
+                );
+                let clip = candidate
+                    .video_clips
+                    .iter_mut()
+                    .find(|clip| clip.id == clip_id)
+                    .unwrap();
+                let old_end_ms = clip.start_ms.checked_add(clip.duration_ms).ok_or_else(|| {
+                    "Timeline Video clip end exceeds the supported range".to_string()
+                })?;
+                match edge {
+                    TimelineTrimEdge::Start => {
+                        let new_duration_ms = old_end_ms
+                            .checked_sub(item_boundary_ms)
+                            .filter(|value| *value > 0)
+                            .ok_or_else(|| {
+                                "Timeline Video trim would remove its complete span".to_string()
+                            })?;
+                        clip.offset_ms = timeline_shift_ms(clip.offset_ms, delta_ms)?;
+                        clip.start_ms = item_boundary_ms;
+                        clip.duration_ms = new_duration_ms;
+                    }
+                    TimelineTrimEdge::End => {
+                        clip.duration_ms = item_boundary_ms
+                            .checked_sub(clip.start_ms)
+                            .filter(|value| *value > 0)
+                            .ok_or_else(|| {
+                                "Timeline Video trim would remove its complete span".to_string()
+                            })?;
+                    }
+                }
+                if let Some(source_duration_ms) = source_duration_ms {
+                    if clip
+                        .offset_ms
+                        .checked_add(clip.duration_ms)
+                        .is_none_or(|end| end > source_duration_ms)
+                    {
+                        return Err("Timeline Video trim exceeds the source duration".to_string());
+                    }
+                }
+                let fades = timeline_trimmed_fades(
+                    clip.duration_ms,
+                    clip.fade_in_ms,
+                    clip.fade_out_ms,
+                    edge,
+                );
+                clip.fade_in_ms = fades.0;
+                clip.fade_out_ms = fades.1;
+            }
+            TimelineItemRef::AudioClip { clip_id } => {
+                let (media_asset_id, path) = candidate
+                    .audio_clips
+                    .iter()
+                    .find(|clip| clip.id == clip_id)
+                    .map(|clip| (clip.media_asset_id, clip.path.clone()))
+                    .unwrap();
+                let source_duration_ms = timeline_media_duration_ms(
+                    &candidate,
+                    media_assets,
+                    media_asset_id,
+                    Some(&path),
+                );
+                let clip = candidate
+                    .audio_clips
+                    .iter_mut()
+                    .find(|clip| clip.id == clip_id)
+                    .unwrap();
+                let old_end_ms = clip.start_ms.checked_add(clip.duration_ms).ok_or_else(|| {
+                    "Timeline Audio clip end exceeds the supported range".to_string()
+                })?;
+                match edge {
+                    TimelineTrimEdge::Start => {
+                        let new_duration_ms = old_end_ms
+                            .checked_sub(item_boundary_ms)
+                            .filter(|value| *value > 0)
+                            .ok_or_else(|| {
+                                "Timeline Audio trim would remove its complete span".to_string()
+                            })?;
+                        clip.offset_ms = timeline_shift_ms(clip.offset_ms, delta_ms)?;
+                        clip.start_ms = item_boundary_ms;
+                        clip.duration_ms = new_duration_ms;
+                    }
+                    TimelineTrimEdge::End => {
+                        clip.duration_ms = item_boundary_ms
+                            .checked_sub(clip.start_ms)
+                            .filter(|value| *value > 0)
+                            .ok_or_else(|| {
+                                "Timeline Audio trim would remove its complete span".to_string()
+                            })?;
+                    }
+                }
+                if let Some(source_duration_ms) = source_duration_ms {
+                    if clip
+                        .offset_ms
+                        .checked_add(clip.duration_ms)
+                        .is_none_or(|end| end > source_duration_ms)
+                    {
+                        return Err("Timeline Audio trim exceeds the source duration".to_string());
+                    }
+                }
+                let fades = timeline_trimmed_fades(
+                    clip.duration_ms,
+                    clip.fade_in_ms,
+                    clip.fade_out_ms,
+                    edge,
+                );
+                clip.fade_in_ms = fades.0;
+                clip.fade_out_ms = fades.1;
+            }
+            TimelineItemRef::LightingAutomation { automation_id } => {
+                let automation = candidate
+                    .automations
+                    .iter_mut()
+                    .find(|automation| automation.id == automation_id)
+                    .unwrap();
+                automation.keyframes = trim_lighting_automation_keyframes(
+                    &automation.keyframes,
+                    edge,
+                    item_boundary_ms,
+                )?;
+            }
+            TimelineItemRef::VideoAutomation { automation_id } => {
+                let automation = candidate
+                    .video_automations
+                    .iter_mut()
+                    .find(|automation| automation.id == automation_id)
+                    .unwrap();
+                automation.keyframes =
+                    trim_video_automation_keyframes(&automation.keyframes, edge, item_boundary_ms)?;
+            }
+        }
+    }
+    *timeline = candidate;
+    Ok(expanded.into_iter().collect())
+}
+
 fn delete_timeline_items(
     timeline: &mut TimelineSnapshot,
     requested_items: &[TimelineItemRef],
@@ -6629,6 +7275,7 @@ fn timeline_advanced_candidate_for_request(
         | TimelineAdvancedMutationRequest::RippleItems { .. }
         | TimelineAdvancedMutationRequest::QuantizeItems { .. }
         | TimelineAdvancedMutationRequest::PasteItems { .. }
+        | TimelineAdvancedMutationRequest::TrimItems { .. }
         | TimelineAdvancedMutationRequest::DeleteItems { .. } => {
             return Err("Timeline bank commands require the bank mutation path".to_string());
         }
@@ -6906,6 +7553,28 @@ fn timeline_bank_candidate_for_request(
             selected_items =
                 paste_timeline_items(state, active, items, *target_ms, before.clock.bpm)?;
         }
+        TimelineAdvancedMutationRequest::TrimItems {
+            items,
+            primary,
+            edge,
+            boundary_ms,
+            isolate,
+        } => {
+            let active = bank
+                .iter_mut()
+                .find(|timeline| timeline.id == active_timeline_id)
+                .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
+            selected_items = trim_timeline_items(
+                active,
+                &before.video.media_assets,
+                items,
+                *primary,
+                *edge,
+                *boundary_ms,
+                *isolate,
+                before.clock.bpm,
+            )?;
+        }
         TimelineAdvancedMutationRequest::DeleteItems { items } => {
             let active = bank
                 .iter_mut()
@@ -7019,6 +7688,7 @@ fn timeline_advanced_history_label(request: &TimelineAdvancedMutationRequest) ->
         TimelineAdvancedMutationRequest::RippleItems { .. } => "Ripple Timeline items",
         TimelineAdvancedMutationRequest::QuantizeItems { .. } => "Quantize Timeline items",
         TimelineAdvancedMutationRequest::PasteItems { .. } => "Paste Timeline items",
+        TimelineAdvancedMutationRequest::TrimItems { .. } => "Trim Timeline items",
         TimelineAdvancedMutationRequest::DeleteItems { .. } => "Delete Timeline items",
         TimelineAdvancedMutationRequest::SetPhases { .. } => "Set Timeline Phases",
         TimelineAdvancedMutationRequest::SetLoop { .. } => "Set Timeline loop",
@@ -7066,6 +7736,7 @@ fn commit_authoritative_timeline_advanced(
             | TimelineAdvancedMutationRequest::RippleItems { .. }
             | TimelineAdvancedMutationRequest::QuantizeItems { .. }
             | TimelineAdvancedMutationRequest::PasteItems { .. }
+            | TimelineAdvancedMutationRequest::TrimItems { .. }
             | TimelineAdvancedMutationRequest::DeleteItems { .. }
     );
     let (candidate_snapshot, bank_publication, selected_items) = if bank_request {
@@ -75794,6 +76465,295 @@ mod live_audio_input_tests {
     }
 
     #[test]
+    fn timeline_trim_items_is_atomic_across_every_authored_domain_and_supports_isolate() {
+        let mut timeline = TimelineSnapshot {
+            id: TimelineId(1),
+            label: "Trim".to_string(),
+            layers: vec![
+                protocol::TimelineLayerSummary {
+                    id: 1,
+                    label: "Lighting".to_string(),
+                    order: 0,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind: TimelineLayerKind::Lighting,
+                },
+                protocol::TimelineLayerSummary {
+                    id: 2,
+                    label: "Video".to_string(),
+                    order: 1,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind: TimelineLayerKind::Video,
+                },
+                protocol::TimelineLayerSummary {
+                    id: 3,
+                    label: "Audio".to_string(),
+                    order: 2,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind: TimelineLayerKind::Audio,
+                },
+            ],
+            ..TimelineSnapshot::default()
+        };
+        timeline.events.push(protocol::TimelineCueEventSummary {
+            id: 20,
+            cue_id: 7,
+            time_ms: 1_000,
+            time_beats: Some(2.0),
+            track: TimelineTrackKind::Lighting,
+            layer_id: Some(1),
+            duration_ms: 1_000,
+            duration_beats: Some(2.0),
+            conform_to_tempo: true,
+            loop_fill: false,
+            source_offset_ms: 100,
+            rate: Some(2.0),
+            fade_in_ms: 400,
+            fade_out_ms: 400,
+            loop_count: 1,
+            jump_to_event_id: Some(20),
+        });
+        timeline.video_clips.push(TimelineVideoClipSummary {
+            id: protocol::TimelineVideoClipId(21),
+            layer_id: 2,
+            media_asset_id: 9,
+            start_ms: 1_100,
+            offset_ms: 500,
+            duration_ms: 1_000,
+            fade_in_ms: 400,
+            fade_out_ms: 400,
+        });
+        timeline.audio_clips.push(TimelineAudioClipSummary {
+            id: 22,
+            layer_id: 3,
+            media_asset_id: None,
+            path: "trim.wav".to_string(),
+            start_ms: 1_200,
+            offset_ms: 500,
+            duration_ms: 1_000,
+            gain: 1.0,
+            fade_in_ms: 400,
+            fade_out_ms: 400,
+        });
+        timeline
+            .automations
+            .push(protocol::TimelineAutomationSummary {
+                id: 23,
+                fixture_id: 1,
+                attribute: "Dimmer".to_string(),
+                track: TimelineTrackKind::Lighting,
+                keyframes: vec![
+                    AutomationKeyframeSummary {
+                        time_ms: 1_300,
+                        value: 10_000,
+                        interpolation: protocol::AutomationInterpolation::Linear,
+                    },
+                    AutomationKeyframeSummary {
+                        time_ms: 1_800,
+                        value: 20_000,
+                        interpolation: protocol::AutomationInterpolation::Linear,
+                    },
+                    AutomationKeyframeSummary {
+                        time_ms: 2_300,
+                        value: 30_000,
+                        interpolation: protocol::AutomationInterpolation::Step,
+                    },
+                ],
+                enabled: true,
+            });
+        timeline
+            .video_automations
+            .push(protocol::TimelineVideoAutomationSummary {
+                id: 24,
+                layer_id: 99,
+                param: protocol::VideoParam::Opacity,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![
+                    VideoAutomationKeyframeSummary {
+                        time_ms: 1_400,
+                        value: 0.25,
+                        interpolation: protocol::AutomationInterpolation::Linear,
+                    },
+                    VideoAutomationKeyframeSummary {
+                        time_ms: 1_900,
+                        value: 0.75,
+                        interpolation: protocol::AutomationInterpolation::Linear,
+                    },
+                    VideoAutomationKeyframeSummary {
+                        time_ms: 2_400,
+                        value: 1.0,
+                        interpolation: protocol::AutomationInterpolation::Step,
+                    },
+                ],
+                enabled: true,
+            });
+        let members = vec![
+            TimelineItemRef::LightingEvent { event_id: 20 },
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(21),
+            },
+            TimelineItemRef::AudioClip { clip_id: 22 },
+            TimelineItemRef::LightingAutomation { automation_id: 23 },
+            TimelineItemRef::VideoAutomation { automation_id: 24 },
+        ];
+        timeline.item_groups.push(TimelineItemGroupSummary {
+            id: TimelineItemGroupId(25),
+            members: members.clone(),
+        });
+
+        let untrimmed = timeline.clone();
+        let selected = trim_timeline_items(
+            &mut timeline,
+            &[],
+            &[TimelineItemRef::AudioClip { clip_id: 22 }],
+            TimelineItemRef::LightingEvent { event_id: 20 },
+            TimelineTrimEdge::Start,
+            1_250,
+            false,
+            120.0,
+        )
+        .expect("trim one member as the complete mixed group");
+        assert_eq!(
+            selected.into_iter().collect::<BTreeSet<_>>(),
+            members.iter().copied().collect::<BTreeSet<_>>()
+        );
+        let event = &timeline.events[0];
+        assert_eq!((event.time_ms, event.duration_ms), (1_250, 750));
+        assert_eq!(
+            (event.time_beats, event.duration_beats),
+            (Some(2.5), Some(1.5))
+        );
+        assert_eq!(
+            event.source_offset_ms, 600,
+            "2x source clock advances exactly"
+        );
+        assert_eq!((event.fade_in_ms, event.fade_out_ms), (350, 400));
+        assert_eq!(event.jump_to_event_id, Some(20));
+        assert_eq!(
+            (
+                timeline.video_clips[0].start_ms,
+                timeline.video_clips[0].offset_ms,
+                timeline.video_clips[0].duration_ms,
+                timeline.video_clips[0].fade_in_ms,
+                timeline.video_clips[0].fade_out_ms,
+            ),
+            (1_350, 750, 750, 350, 400)
+        );
+        assert_eq!(
+            (
+                timeline.audio_clips[0].start_ms,
+                timeline.audio_clips[0].offset_ms,
+                timeline.audio_clips[0].duration_ms,
+            ),
+            (1_450, 750, 750)
+        );
+        assert_eq!(timeline.automations[0].keyframes[0].time_ms, 1_550);
+        assert_eq!(timeline.automations[0].keyframes[0].value, 15_000);
+        assert_eq!(timeline.video_automations[0].keyframes[0].time_ms, 1_650);
+        assert!((timeline.video_automations[0].keyframes[0].value - 0.5).abs() < 1.0e-6);
+
+        let mut isolated = untrimmed.clone();
+        let isolated_selection = trim_timeline_items(
+            &mut isolated,
+            &[],
+            &[TimelineItemRef::AudioClip { clip_id: 22 }],
+            TimelineItemRef::AudioClip { clip_id: 22 },
+            TimelineTrimEdge::Start,
+            1_450,
+            true,
+            120.0,
+        )
+        .expect("Alt isolates exactly one trim without dissolving its group");
+        assert_eq!(isolated_selection.len(), 5);
+        assert_eq!(isolated.audio_clips[0].start_ms, 1_450);
+        assert_eq!(isolated.events, untrimmed.events);
+        assert_eq!(isolated.video_clips, untrimmed.video_clips);
+        assert_eq!(isolated.item_groups, untrimmed.item_groups);
+
+        let mut invalid = untrimmed.clone();
+        invalid.audio_clips[0].duration_ms = 100;
+        let invalid_before = invalid.clone();
+        assert!(trim_timeline_items(
+            &mut invalid,
+            &[],
+            &[TimelineItemRef::AudioClip { clip_id: 22 }],
+            TimelineItemRef::LightingEvent { event_id: 20 },
+            TimelineTrimEdge::Start,
+            1_250,
+            false,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("complete span"));
+        assert_eq!(
+            invalid, invalid_before,
+            "one invalid member preserves all of A"
+        );
+
+        let mut bezier = untrimmed.clone();
+        bezier.automations[0].keyframes[0].interpolation =
+            protocol::AutomationInterpolation::Bezier;
+        let bezier_before = bezier.clone();
+        assert!(trim_timeline_items(
+            &mut bezier,
+            &[],
+            &[TimelineItemRef::LightingAutomation { automation_id: 23 }],
+            TimelineItemRef::LightingAutomation { automation_id: 23 },
+            TimelineTrimEdge::Start,
+            1_550,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("existing keyframe"));
+        assert_eq!(bezier, bezier_before);
+
+        let mut looped = untrimmed;
+        looped.events[0].conform_to_tempo = false;
+        looped.events[0].duration_ms = 500;
+        looped.events[0].loop_count = 2;
+        let looped_before = looped.clone();
+        assert!(trim_timeline_items(
+            &mut looped,
+            &[],
+            &[TimelineItemRef::LightingEvent { event_id: 20 }],
+            TimelineItemRef::LightingEvent { event_id: 20 },
+            TimelineTrimEdge::End,
+            2_251,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("whole-loop"));
+        assert_eq!(looped, looped_before);
+
+        let mut loop_fill = timeline.clone();
+        loop_fill.events[0].loop_fill = true;
+        loop_fill.events[0].duration_beats = Some(99.0);
+        trim_timeline_items(
+            &mut loop_fill,
+            &[],
+            &[TimelineItemRef::LightingEvent { event_id: 20 }],
+            TimelineItemRef::LightingEvent { event_id: 20 },
+            TimelineTrimEdge::End,
+            1_750,
+            true,
+            120.0,
+        )
+        .expect("Loop-fill trim keeps millisecond and beat-domain spans coherent");
+        assert_eq!(loop_fill.events[0].duration_ms, 500);
+        assert_eq!(loop_fill.events[0].duration_beats, Some(1.0));
+    }
+
+    #[test]
     fn timeline_copy_paste_duplicate_nudge_quantize_ripple_and_delete_are_authoritative() {
         let harness = MediaAssetA6CommandHarness::new();
         let (_video_layer_id, media_asset_id, _alternate_asset_id, _slot_id) =
@@ -76211,6 +77171,77 @@ mod live_audio_input_tests {
         b3_assert_authority_matches_persistence(&harness);
         c1_stabilize_fixture_authority(&harness);
 
+        let trim_baseline = harness.mutation_baseline();
+        let trim_request = TimelineAdvancedMutationRequest::TrimItems {
+            items: vec![
+                TimelineItemRef::AudioClip {
+                    clip_id: pasted_audio_clip_id,
+                },
+                TimelineItemRef::VideoClip {
+                    clip_id: pasted_video_clip_id,
+                },
+            ],
+            primary: TimelineItemRef::VideoClip {
+                clip_id: pasted_video_clip_id,
+            },
+            edge: TimelineTrimEdge::Start,
+            boundary_ms: 1_000,
+            isolate: false,
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let trimmed = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            trim_request.clone(),
+            84_686,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("trim from a non-first primary as the complete linked group");
+        assert_eq!(trimmed.selected_items, pasted.selected_items);
+        for clip_id in [pasted_audio_clip_id] {
+            let clip = trimmed
+                .authoring
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == clip_id)
+                .unwrap();
+            assert_eq!(
+                (clip.start_ms, clip.offset_ms, clip.duration_ms),
+                (1_000, 250, 750)
+            );
+        }
+        let clip = trimmed
+            .authoring
+            .video_clips
+            .iter()
+            .find(|clip| clip.id == pasted_video_clip_id)
+            .unwrap();
+        assert_eq!(
+            (clip.start_ms, clip.offset_ms, clip.duration_ms),
+            (1_000, 250, 750)
+        );
+        let trim_retried = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            trim_request,
+            84_686,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("recover the exact linked trim terminal receipt");
+        assert_eq!(
+            serde_json::to_value(&trimmed).unwrap(),
+            serde_json::to_value(&trim_retried).unwrap()
+        );
+        assert_one_authoritative_history_mutation(&harness, trim_baseline);
+        b3_assert_authority_matches_persistence(&harness);
+        c1_stabilize_fixture_authority(&harness);
+
         let delete_baseline = harness.mutation_baseline();
         let delete_request = TimelineAdvancedMutationRequest::DeleteItems {
             items: vec![
@@ -76226,7 +77257,7 @@ mod live_audio_input_tests {
         let deleted = apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
             delete_request.clone(),
-            84_686,
+            84_687,
             epoch,
             revision,
             hash.clone(),
@@ -76242,7 +77273,7 @@ mod live_audio_input_tests {
         let delete_retried = apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
             delete_request,
-            84_686,
+            84_687,
             epoch,
             revision,
             hash,

@@ -136,6 +136,8 @@ const measure = (client) => evaluate(client, `(() => {
     rippleEarlierEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Ripple earlier' && !button.disabled)),
     rippleLaterEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Ripple later' && !button.disabled)),
     quantizeEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Quantize to grid' && !button.disabled)),
+    trimStartEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Trim start to playhead' && !button.disabled)),
+    trimEndEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Trim end to playhead' && !button.disabled)),
     deleteEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Delete selected' && !button.disabled)),
     itemMenuRect: itemMenu instanceof HTMLElement ? (() => { const bounds = itemMenu.getBoundingClientRect(); return [bounds.left, bounds.top, bounds.right, bounds.bottom]; })() : null,
     itemMenuBottomReachable: itemMenu instanceof HTMLElement ? (() => {
@@ -239,7 +241,7 @@ try {
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
     assert.deepEqual([state.videoClips, state.audioClips], [1, 2]);
     assert.deepEqual([state.selectedVideo, state.selectedAudio], [1, 1], "selecting either member selects the linked A/V group");
-    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.copyEnabled, state.pasteEnabled, state.duplicateEnabled, state.nudgeEarlierEnabled, state.nudgeLaterEnabled, state.rippleEarlierEnabled, state.rippleLaterEnabled, state.quantizeEnabled, state.deleteEnabled], [false, true, true, false, true, true, true, true, true, true, true], "the context menu exposes linked-group copy/duplicate/nudge/ripple/quantize/release/delete and disables an empty clipboard");
+    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.copyEnabled, state.pasteEnabled, state.duplicateEnabled, state.nudgeEarlierEnabled, state.nudgeLaterEnabled, state.rippleEarlierEnabled, state.rippleLaterEnabled, state.quantizeEnabled, state.trimStartEnabled, state.trimEndEnabled, state.deleteEnabled], [false, true, true, false, true, true, true, true, true, true, true, true, true], "the context menu exposes linked-group copy/duplicate/nudge/ripple/quantize/trim/release/delete and disables an empty clipboard");
     assert.ok(state.itemMenuRect && state.itemMenuRect[0] >= 0 && state.itemMenuRect[1] >= 0 && state.itemMenuRect[2] <= viewport.width && state.itemMenuRect[3] <= viewport.height, `Timeline group menu stays inside ${viewport.width}x${viewport.height}`);
     assert.equal(state.itemMenuBottomReachable, true, "the internally scrolling Timeline item menu reaches its final action");
     assert.equal(state.menuShortTargets, 0, "Timeline group context actions preserve 44px targets");

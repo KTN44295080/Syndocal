@@ -2873,6 +2873,8 @@ const japaneseText: Record<string, string> = {
   "Ripple later": "後ろへリップル移動",
   "Hold Alt while selecting to edit only this linked member": "Altを押しながら選択すると、このリンクメンバーだけを編集します",
   "Quantize to grid": "グリッドへクオンタイズ",
+  "Trim start to playhead": "開始端を再生ヘッドまでトリム",
+  "Trim end to playhead": "終了端を再生ヘッドまでトリム",
   "Delete selected Timeline items?": "選択したタイムライン項目を削除しますか？",
   "selected Timeline item(s) will be removed.": "件の選択したタイムライン項目を削除します。",
   "Linked group members are removed together in one Undo step.":
