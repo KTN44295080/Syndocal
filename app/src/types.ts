@@ -2666,6 +2666,7 @@ export type TimelineAdvancedMutationRequest =
   | { kind: "group"; members: TimelineItemRef[] }
   | { kind: "ungroup"; group_id: number }
   | { kind: "move_group"; group_id: number; delta_ms: number }
+  | { kind: "delete_items"; items: TimelineItemRef[] }
   | { kind: "set_phases"; phases: TimelinePhaseSummary[] }
   | { kind: "set_loop"; loop_region?: TimelineLoopRegionSummary | null }
   | { kind: "set_follow"; follow?: TimelineFollowSummary | null }

@@ -127,6 +127,7 @@ const measure = (client) => evaluate(client, `(() => {
     selectedAudio: selectedAudio.length,
     groupEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Group selected' && !button.disabled)),
     ungroupEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Ungroup' && !button.disabled)),
+    deleteEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Delete selected' && !button.disabled)),
     shortTargets,
     fixedOuter: document.documentElement.scrollWidth === document.documentElement.clientWidth
       && document.documentElement.scrollHeight === document.documentElement.clientHeight
@@ -202,7 +203,30 @@ try {
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
     assert.deepEqual([state.videoClips, state.audioClips], [1, 2]);
     assert.deepEqual([state.selectedVideo, state.selectedAudio], [1, 1], "selecting either member selects the linked A/V group");
-    assert.deepEqual([state.groupEnabled, state.ungroupEnabled], [false, true], "the context menu exposes linked-group release and prevents nested grouping");
+    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.deleteEnabled], [false, true, true], "the context menu exposes linked-group release/delete and prevents nested grouping");
+    assert.equal(await evaluate(client, `(() => {
+      const button = [...document.querySelectorAll('.timelineItemContextMenu button')]
+        .find((candidate) => candidate.textContent?.trim() === 'Delete selected');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`), true);
+    const deleteDialog = await waitFor(() => evaluate(client, `(() => {
+      const dialog = document.querySelector('[data-timeline-item-remove-dialog]');
+      if (!(dialog instanceof HTMLDialogElement) || !dialog.open) return null;
+      const rect = dialog.getBoundingClientRect();
+      const buttons = [...dialog.querySelectorAll('button')].filter((button) => button.getBoundingClientRect().height > 0);
+      return {
+        rect: [rect.width, rect.height],
+        text: dialog.textContent ?? '',
+        short: buttons.filter((button) => button.getBoundingClientRect().height < 43.5).length,
+      };
+    })()`), "linked delete confirmation");
+    assert.ok(deleteDialog.rect[0] > 0 && deleteDialog.rect[1] > 0, "linked delete alert dialog is visibly mounted");
+    assert.match(deleteDialog.text, /2\s+selected Timeline item\(s\)/);
+    assert.match(deleteDialog.text, /Linked group members/);
+    assert.equal(deleteDialog.short, 0, "linked delete alert dialog preserves 44px actions");
+    await evaluate(client, "document.querySelector('[data-timeline-item-remove-dialog]')?.close()");
     assert.equal(targetProof.every((proof) => proof?.rect[0] > 0 && proof?.rect[1] > 0 && proof.count > 0 && proof.short === 0), true, `Timeline bank, Guide audio, Phase, and loop controls preserve 44px targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(targetProof)}`);
     assert.equal(state.shortTargets, 0, `Visible Timeline performance controls preserve 44px targets at ${viewport.width}x${viewport.height}`);
     assert.equal(state.fixedOuter, true, `Timeline disclosures keep app/document outer scroll fixed at ${viewport.width}x${viewport.height}`);

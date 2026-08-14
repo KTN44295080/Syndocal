@@ -21,6 +21,7 @@ import type {
 } from "../types";
 import type { CueIdentitySource } from "../identityColor";
 import type { TimelineCueDragState } from "../timelineCueDrag";
+import { expandTimelineItemGroupSelection, timelineItemKey } from "../timelineAdvancedAuthoring";
 import type { TimelineContextDrawer } from "../uiModes";
 import { timelineLayerIdForEvent } from "../timelineLayers";
 import {
@@ -197,6 +198,7 @@ interface TimelineCueEventsPanelProps {
   onUpdateVideoClip: (clip: TimelineVideoClipSummary) => void | Promise<void>;
   onGroupItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onUngroupItem: (item: TimelineItemRef) => void | Promise<void>;
+  onRemoveItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onRemoveAudioClip: (clipId: number) => void | Promise<void>;
   onSetAudioMaster: (offsetMs: number, muted: boolean) => void | Promise<void>;
   onSnapMode: (mode: TimelineSnapMode) => void;
@@ -238,6 +240,7 @@ interface TimelineCueEventsPanelProps {
 
 export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   let audioClipRemoveDialog: HTMLDialogElement | undefined;
+  let itemRemoveDialog: HTMLDialogElement | undefined;
   let layerAddDialog: HTMLDialogElement | undefined;
   let layerRemoveDialog: HTMLDialogElement | undefined;
   let layerMenuElement: HTMLDivElement | undefined;
@@ -247,6 +250,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   const [selectedVideoClipId, setSelectedVideoClipId] = createSignal<number | null>(null);
   const [selectedTimelineItems, setSelectedTimelineItems] = createSignal<TimelineItemRef[]>([]);
   const [itemContextMenu, setItemContextMenu] = createSignal<{ x: number; y: number } | null>(null);
+  const [pendingRemoveTimelineItems, setPendingRemoveTimelineItems] = createSignal<TimelineItemRef[]>([]);
   const [pendingRemoveAudioClipId, setPendingRemoveAudioClipId] = createSignal<number | null>(null);
   const [layerMenu, setLayerMenu] = createSignal<{ layerId: number; x: number; y: number } | null>(null);
   const [layerRename, setLayerRename] = createSignal("");
@@ -316,15 +320,6 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   const layerRemoveDescriptionId = `${createUniqueId()}-timeline-layer-remove-description`;
   const selectedAudioClip = () => props.audioClips.find((clip) => clip.id === selectedAudioClipId()) ?? null;
   const selectedVideoClip = () => props.videoClips.find((clip) => clip.id === selectedVideoClipId()) ?? null;
-  const timelineItemKey = (item: TimelineItemRef) => {
-    switch (item.kind) {
-      case "video_clip": return `video:${item.clip_id}`;
-      case "audio_clip": return `audio:${item.clip_id}`;
-      case "lighting_event": return `event:${item.event_id}`;
-      case "lighting_automation": return `lighting-automation:${item.automation_id}`;
-      case "video_automation": return `video-automation:${item.automation_id}`;
-    }
-  };
   const selectedTimelineItemRefs = createMemo<TimelineItemRef[]>(() => {
     const videoIds = new Set(props.videoClips.map((clip) => clip.id));
     const audioIds = new Set(props.audioClips.map((clip) => clip.id));
@@ -342,15 +337,11 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     selectedTimelineItemRefs().some((selected) => group.members.some((member) =>
       JSON.stringify(member) === JSON.stringify(selected)))) ?? null);
   const expandLinkedSelection = (item: TimelineItemRef, additive = false) => {
-    const group = props.itemGroups.find((candidate) => candidate.members.some((member) =>
-      JSON.stringify(member) === JSON.stringify(item)));
-    const members = group?.members ?? [item];
-    const next = additive ? [...selectedTimelineItems()] : [];
-    const keys = new Set(next.map(timelineItemKey));
-    for (const member of members) {
-      if (!keys.has(timelineItemKey(member))) next.push(member);
-    }
-    setSelectedTimelineItems(next);
+    setSelectedTimelineItems(expandTimelineItemGroupSelection(
+      item,
+      props.itemGroups,
+      additive ? selectedTimelineItems() : [],
+    ));
     if (!additive) {
       setSelectedAudioClipId(null);
       setSelectedVideoClipId(null);
@@ -364,6 +355,12 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     expandLinkedSelection({ kind: "video_clip", clip_id: clipId }, additive);
   const pendingRemoveAudioClip = () =>
     props.audioClips.find((clip) => clip.id === pendingRemoveAudioClipId()) ?? null;
+  const pendingRemoveAudioClipGroup = () => {
+    const clipId = pendingRemoveAudioClipId();
+    if (clipId === null) return null;
+    return props.itemGroups.find((group) => group.members.some((member) =>
+      member.kind === "audio_clip" && member.clip_id === clipId)) ?? null;
+  };
   createEffect(() => {
     if (selectedAudioClipId() !== null && !selectedAudioClip()) setSelectedAudioClipId(null);
     if (selectedVideoClipId() !== null && !selectedVideoClip()) setSelectedVideoClipId(null);
@@ -1112,6 +1109,19 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
             >
               Ungroup
             </button>
+            <button
+              type="button"
+              class="danger"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length === 0}
+              onClick={() => {
+                setPendingRemoveTimelineItems([...selectedTimelineItemRefs()]);
+                setItemContextMenu(null);
+                if (!itemRemoveDialog?.open) itemRemoveDialog?.showModal();
+              }}
+            >
+              Delete selected
+            </button>
             <button type="button" role="menuitem" onClick={() => setItemContextMenu(null)}>Close</button>
           </div>
         )}
@@ -1597,6 +1607,46 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       </aside>
       </Show>
       <dialog
+        ref={(element) => { itemRemoveDialog = element; }}
+        class="timelineLayerRemoveDialog timelineItemRemoveDialog"
+        data-timeline-item-remove-dialog
+        role="alertdialog"
+        aria-labelledby="timeline-item-remove-title"
+        aria-describedby="timeline-item-remove-description"
+        onClose={() => setPendingRemoveTimelineItems([])}
+      >
+        <form method="dialog">
+          <h2 id="timeline-item-remove-title" class="textBalance">Delete selected Timeline items?</h2>
+          <div id="timeline-item-remove-description" class="textPretty">
+            <p>
+              <strong class="tabularNums" data-no-localize>{pendingRemoveTimelineItems().length}</strong>{" "}
+              selected Timeline item(s) will be removed.
+            </p>
+            <p>Linked group members are removed together in one Undo step.</p>
+          </div>
+          <div class="buttonRow">
+            <button value="cancel">Cancel</button>
+            <button
+              type="button"
+              class="danger"
+              data-timeline-item-remove-confirm
+              disabled={pendingRemoveTimelineItems().length === 0}
+              onClick={() => {
+                const items = [...pendingRemoveTimelineItems()];
+                if (items.length === 0) return;
+                itemRemoveDialog?.close();
+                void props.onRemoveItems(items);
+                setSelectedAudioClipId(null);
+                setSelectedVideoClipId(null);
+                setSelectedTimelineItems([]);
+              }}
+            >
+              Delete selected
+            </button>
+          </div>
+        </form>
+      </dialog>
+      <dialog
         ref={(element) => { audioClipRemoveDialog = element; }}
         class="timelineLayerRemoveDialog timelineAudioClipRemoveDialog"
         data-timeline-audio-clip-remove-dialog
@@ -1609,6 +1659,9 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           <h2 id="timeline-audio-clip-remove-title" class="textBalance">Remove Audio Clip?</h2>
           <div id="timeline-audio-clip-remove-description" class="textPretty">
             <p>Remove this clip from the timeline?</p>
+            <Show when={pendingRemoveAudioClipGroup()}>
+              <p>Linked group members are removed together in one Undo step.</p>
+            </Show>
             <strong data-no-localize>
               {pendingRemoveAudioClip()?.path.replaceAll("\\", "/").split("/").pop() ?? ""}
             </strong>

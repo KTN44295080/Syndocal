@@ -76,7 +76,6 @@ import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
 import { TimelineOperatorBar } from "./components/TimelineOperatorBar";
-import { removeTimelineAudioClipFromAdvancedAuthoring } from "./timelineAdvancedAuthoring";
 import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
 import { EditableTouchSurface } from "./components/EditableTouchSurface";
 import { TouchColorPalettePanel } from "./components/TouchColorPalettePanel";
@@ -13084,6 +13083,14 @@ export default function App() {
   const moveTimelineGroup = async (groupId: number, deltaMs: number) => {
     await commitTimelineAdvanced({ kind: "move_group", group_id: groupId, delta_ms: deltaMs });
   };
+  const removeTimelineItems = async (items: TimelineItemRef[]) => {
+    try {
+      const result = await commitTimelineAdvanced({ kind: "delete_items", items });
+      if (result) setMessage("Timeline selection removed.");
+    } catch (error) {
+      setMessage(`Timeline selection removal failed: ${String(error)}`);
+    }
+  };
 
   const insertMediaAssetOnTimeline = async (mediaAssetId: MediaAssetId) => {
     try {
@@ -15409,8 +15416,10 @@ export default function App() {
         group.members.some((member) => member.kind === "audio_clip" && member.clip_id === clipId));
       const currentClip = (activeTimeline().audio_clips ?? []).find((clip) => clip.id === clipId);
       if (linkedGroup || (currentClip?.media_asset_id !== null && currentClip?.media_asset_id !== undefined)) {
-        const authoring = removeTimelineAudioClipFromAdvancedAuthoring(currentTimelineAdvancedAuthoring(), clipId);
-        await commitTimelineAdvanced({ kind: "apply", authoring });
+        await commitTimelineAdvanced({
+          kind: "delete_items",
+          items: [{ kind: "audio_clip", clip_id: clipId }],
+        });
         return;
       }
       await invoke("remove_timeline_audio_clip", { clipId });
@@ -23833,6 +23842,7 @@ export default function App() {
               onUpdateVideoClip={updateTimelineVideoClip}
               onGroupItems={groupTimelineItems}
               onUngroupItem={ungroupTimelineItem}
+              onRemoveItems={removeTimelineItems}
               onRemoveAudioClip={removeTimelineAudioClip}
               onSetAudioMaster={setTimelineAudioMaster}
               onSnapMode={setTimelineSnapMode}

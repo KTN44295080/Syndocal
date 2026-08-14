@@ -2863,6 +2863,11 @@ const japaneseText: Record<string, string> = {
   "Remove Audio Clip": "音声クリップを削除",
   "Remove Audio Clip?": "音声クリップを削除しますか？",
   "Remove this clip from the timeline?": "このクリップをタイムラインから削除しますか？",
+  "Delete selected": "選択項目を削除",
+  "Delete selected Timeline items?": "選択したタイムライン項目を削除しますか？",
+  "selected Timeline item(s) will be removed.": "件の選択したタイムライン項目を削除します。",
+  "Linked group members are removed together in one Undo step.":
+    "リンクされたグループのメンバーは、1回の取り消し操作でまとめて削除されます。",
   "Resize Audio Clip start": "音声クリップの開始端をリサイズ",
   "Resize Audio Clip end": "音声クリップの終了端をリサイズ",
   "Adjust Audio Clip Fade In": "音声クリップのフェードインを調整",

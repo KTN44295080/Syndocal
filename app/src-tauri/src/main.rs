@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     env,
     ffi::{OsStr, OsString},
     fs,
@@ -789,6 +789,9 @@ enum TimelineAdvancedMutationRequest {
     MoveGroup {
         group_id: TimelineItemGroupId,
         delta_ms: i64,
+    },
+    DeleteItems {
+        items: Vec<TimelineItemRef>,
     },
     SetPhases {
         phases: Vec<TimelinePhaseSummary>,
@@ -5764,6 +5767,89 @@ fn timeline_shift_ms(value: u64, delta_ms: i64) -> Result<u64, String> {
     }
 }
 
+fn delete_timeline_items(
+    timeline: &mut TimelineSnapshot,
+    requested_items: &[TimelineItemRef],
+) -> Result<(), String> {
+    if requested_items.is_empty() {
+        return Err("Select at least one Timeline item to delete".to_string());
+    }
+    let mut removed = requested_items.iter().copied().collect::<BTreeSet<_>>();
+    loop {
+        let before = removed.len();
+        for group in &timeline.item_groups {
+            if group.members.iter().any(|member| removed.contains(member)) {
+                removed.extend(group.members.iter().copied());
+            }
+        }
+        if removed.len() == before {
+            break;
+        }
+    }
+    for item in &removed {
+        let exists = match item {
+            TimelineItemRef::LightingEvent { event_id } => {
+                timeline.events.iter().any(|event| event.id == *event_id)
+            }
+            TimelineItemRef::VideoClip { clip_id } => {
+                timeline.video_clips.iter().any(|clip| clip.id == *clip_id)
+            }
+            TimelineItemRef::AudioClip { clip_id } => {
+                timeline.audio_clips.iter().any(|clip| clip.id == *clip_id)
+            }
+            TimelineItemRef::LightingAutomation { automation_id } => timeline
+                .automations
+                .iter()
+                .any(|automation| automation.id == *automation_id),
+            TimelineItemRef::VideoAutomation { automation_id } => timeline
+                .video_automations
+                .iter()
+                .any(|automation| automation.id == *automation_id),
+        };
+        if !exists {
+            return Err("A selected Timeline item no longer exists; refresh and retry".to_string());
+        }
+    }
+    let removed_events = removed
+        .iter()
+        .filter_map(|item| match item {
+            TimelineItemRef::LightingEvent { event_id } => Some(*event_id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    timeline
+        .events
+        .retain(|event| !removed.contains(&TimelineItemRef::LightingEvent { event_id: event.id }));
+    for event in &mut timeline.events {
+        if event
+            .jump_to_event_id
+            .is_some_and(|event_id| removed_events.contains(&event_id))
+        {
+            event.jump_to_event_id = None;
+        }
+    }
+    timeline
+        .video_clips
+        .retain(|clip| !removed.contains(&TimelineItemRef::VideoClip { clip_id: clip.id }));
+    timeline
+        .audio_clips
+        .retain(|clip| !removed.contains(&TimelineItemRef::AudioClip { clip_id: clip.id }));
+    timeline.automations.retain(|automation| {
+        !removed.contains(&TimelineItemRef::LightingAutomation {
+            automation_id: automation.id,
+        })
+    });
+    timeline.video_automations.retain(|automation| {
+        !removed.contains(&TimelineItemRef::VideoAutomation {
+            automation_id: automation.id,
+        })
+    });
+    timeline
+        .item_groups
+        .retain(|group| !group.members.iter().any(|member| removed.contains(member)));
+    Ok(())
+}
+
 fn timeline_advanced_candidate_for_request(
     state: &AppState,
     before: &EngineSnapshot,
@@ -6017,7 +6103,8 @@ fn timeline_advanced_candidate_for_request(
         | TimelineAdvancedMutationRequest::DuplicateTimeline { .. }
         | TimelineAdvancedMutationRequest::RemoveTimeline { .. }
         | TimelineAdvancedMutationRequest::ReorderTimelines { .. }
-        | TimelineAdvancedMutationRequest::SelectTimeline { .. } => {
+        | TimelineAdvancedMutationRequest::SelectTimeline { .. }
+        | TimelineAdvancedMutationRequest::DeleteItems { .. } => {
             return Err("Timeline bank commands require the bank mutation path".to_string());
         }
     }
@@ -6171,6 +6258,13 @@ fn timeline_bank_candidate_for_request(
             active_timeline_id = *timeline_id;
             play = *next_play;
         }
+        TimelineAdvancedMutationRequest::DeleteItems { items } => {
+            let active = bank
+                .iter_mut()
+                .find(|timeline| timeline.id == active_timeline_id)
+                .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
+            delete_timeline_items(active, items)?;
+        }
         _ => return Err("Timeline authoring command is not a bank mutation".to_string()),
     }
     let mut validation = before.clone();
@@ -6266,6 +6360,7 @@ fn timeline_advanced_history_label(request: &TimelineAdvancedMutationRequest) ->
         TimelineAdvancedMutationRequest::Group { .. } => "Group Timeline items",
         TimelineAdvancedMutationRequest::Ungroup { .. } => "Ungroup Timeline items",
         TimelineAdvancedMutationRequest::MoveGroup { .. } => "Move Timeline group",
+        TimelineAdvancedMutationRequest::DeleteItems { .. } => "Delete Timeline items",
         TimelineAdvancedMutationRequest::SetPhases { .. } => "Set Timeline Phases",
         TimelineAdvancedMutationRequest::SetLoop { .. } => "Set Timeline loop",
         TimelineAdvancedMutationRequest::SetFollow { .. } => "Set Timeline Follow",
@@ -6307,6 +6402,7 @@ fn commit_authoritative_timeline_advanced(
             | TimelineAdvancedMutationRequest::RemoveTimeline { .. }
             | TimelineAdvancedMutationRequest::ReorderTimelines { .. }
             | TimelineAdvancedMutationRequest::SelectTimeline { .. }
+            | TimelineAdvancedMutationRequest::DeleteItems { .. }
     );
     let (candidate_snapshot, bank_publication) = if bank_request {
         let (timeline_bank, active_timeline_id, play) =
@@ -74645,6 +74741,272 @@ mod live_audio_input_tests {
         .expect("read C1 terminal receipt")
         .expect("C1 terminal receipt exists");
         assert_eq!(recovered.shape_fingerprint, request_shape.fingerprint);
+    }
+
+    #[test]
+    fn timeline_delete_items_expands_group_across_every_authored_domain_and_is_fail_closed() {
+        let mut timeline = TimelineSnapshot::default();
+        timeline.events = vec![
+            protocol::TimelineCueEventSummary {
+                id: 20,
+                cue_id: 7,
+                time_ms: 0,
+                time_beats: None,
+                track: TimelineTrackKind::Lighting,
+                layer_id: None,
+                duration_ms: 1_000,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                source_offset_ms: 0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+                rate: None,
+                loop_count: 1,
+                jump_to_event_id: None,
+            },
+            protocol::TimelineCueEventSummary {
+                id: 21,
+                cue_id: 7,
+                time_ms: 1_000,
+                time_beats: None,
+                track: TimelineTrackKind::Lighting,
+                layer_id: None,
+                duration_ms: 1_000,
+                duration_beats: None,
+                conform_to_tempo: false,
+                loop_fill: false,
+                source_offset_ms: 0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+                rate: None,
+                loop_count: 1,
+                jump_to_event_id: Some(20),
+            },
+        ];
+        timeline.audio_clips.push(TimelineAudioClipSummary {
+            id: 31,
+            layer_id: 3,
+            media_asset_id: None,
+            path: "linked.wav".to_string(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        });
+        timeline.video_clips.push(TimelineVideoClipSummary {
+            id: protocol::TimelineVideoClipId(32),
+            layer_id: 2,
+            media_asset_id: 9,
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        });
+        timeline
+            .automations
+            .push(protocol::TimelineAutomationSummary {
+                id: 33,
+                fixture_id: 1,
+                attribute: "Dimmer".to_string(),
+                track: TimelineTrackKind::Lighting,
+                keyframes: Vec::new(),
+                enabled: true,
+            });
+        timeline
+            .video_automations
+            .push(protocol::TimelineVideoAutomationSummary {
+                id: 34,
+                layer_id: 2,
+                param: protocol::VideoParam::Opacity,
+                track: TimelineTrackKind::Video,
+                keyframes: Vec::new(),
+                enabled: true,
+            });
+        let removed_event_id = timeline.events[0].id;
+        timeline.item_groups.push(TimelineItemGroupSummary {
+            id: TimelineItemGroupId(35),
+            members: vec![
+                TimelineItemRef::LightingEvent {
+                    event_id: removed_event_id,
+                },
+                TimelineItemRef::VideoClip {
+                    clip_id: protocol::TimelineVideoClipId(32),
+                },
+                TimelineItemRef::AudioClip { clip_id: 31 },
+                TimelineItemRef::LightingAutomation { automation_id: 33 },
+                TimelineItemRef::VideoAutomation { automation_id: 34 },
+            ],
+        });
+
+        delete_timeline_items(&mut timeline, &[TimelineItemRef::AudioClip { clip_id: 31 }])
+            .expect("deleting one member must close over the complete group");
+        assert!(timeline
+            .events
+            .iter()
+            .all(|event| event.id != removed_event_id));
+        assert!(timeline.video_clips.is_empty());
+        assert!(timeline.audio_clips.is_empty());
+        assert!(timeline.automations.is_empty());
+        assert!(timeline.video_automations.is_empty());
+        assert!(timeline.item_groups.is_empty());
+        assert_eq!(timeline.events[0].jump_to_event_id, None);
+
+        let before_stale = timeline.clone();
+        assert!(delete_timeline_items(
+            &mut timeline,
+            &[TimelineItemRef::AudioClip { clip_id: 9_999 }],
+        )
+        .unwrap_err()
+        .contains("no longer exists"));
+        assert_eq!(
+            timeline, before_stale,
+            "stale deletion must preserve A exactly"
+        );
+    }
+
+    #[test]
+    fn timeline_delete_items_authoritative_lane_is_one_history_and_exactly_recoverable() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (_video_layer_id, media_asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let video_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        harness
+            .state
+            .engine
+            .add_timeline_layer(protocol::TimelineLayerSummary {
+                id: video_lane_id,
+                label: "Video".to_string(),
+                order: 1,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: false,
+                kind: TimelineLayerKind::Video,
+            })
+            .expect("seed a Video Timeline lane");
+        let audio_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        harness
+            .state
+            .engine
+            .add_timeline_layer(protocol::TimelineLayerSummary {
+                id: audio_lane_id,
+                label: "Audio".to_string(),
+                order: 2,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: false,
+                kind: TimelineLayerKind::Audio,
+            })
+            .expect("seed an Audio Timeline lane");
+        c1_stabilize_fixture_authority(&harness);
+
+        let project = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read Timeline delete seed project");
+        let timeline = &project.timeline;
+        let video_clip_id = protocol::TimelineVideoClipId(9_101);
+        let audio_clip_id = 9_102;
+        let mut authoring = timeline_advanced_authoring_from_snapshot(timeline);
+        authoring.video_clips.push(TimelineVideoClipSummary {
+            id: video_clip_id,
+            layer_id: video_lane_id,
+            media_asset_id,
+            start_ms: 2_000,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        });
+        authoring.audio_clips.push(TimelineAudioClipSummary {
+            id: audio_clip_id,
+            layer_id: audio_lane_id,
+            media_asset_id: None,
+            path: "linked.wav".to_string(),
+            start_ms: 2_000,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        });
+        authoring.item_groups.push(TimelineItemGroupSummary {
+            id: TimelineItemGroupId(9_103),
+            members: vec![
+                TimelineItemRef::VideoClip {
+                    clip_id: video_clip_id,
+                },
+                TimelineItemRef::AudioClip {
+                    clip_id: audio_clip_id,
+                },
+            ],
+        });
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            TimelineAdvancedMutationRequest::Apply { authoring },
+            84_680,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("seed linked A/V items through the authoritative lane");
+        c1_stabilize_fixture_authority(&harness);
+
+        let baseline = harness.mutation_baseline();
+        let request = TimelineAdvancedMutationRequest::DeleteItems {
+            items: vec![TimelineItemRef::AudioClip {
+                clip_id: audio_clip_id,
+            }],
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let deleted = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            84_681,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("delete one grouped member through the authoritative lane");
+        assert!(deleted.authoring.video_clips.is_empty());
+        assert!(deleted.authoring.audio_clips.is_empty());
+        assert!(deleted.authoring.item_groups.is_empty());
+
+        let retried = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request,
+            84_681,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("recover the exact linked delete terminal receipt");
+        assert_eq!(
+            serde_json::to_value(&deleted).unwrap(),
+            serde_json::to_value(&retried).unwrap()
+        );
+        assert_one_authoritative_history_mutation(&harness, baseline);
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read linked delete persistence");
+        assert!(persisted.timeline.video_clips.is_empty());
+        assert!(persisted.timeline.audio_clips.is_empty());
+        assert!(persisted.timeline.item_groups.is_empty());
     }
 
     #[test]

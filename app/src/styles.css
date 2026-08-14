@@ -28281,6 +28281,10 @@ h3 {
   flex-wrap: wrap;
 }
 
+.timelineItemRemoveDialog button {
+  min-height: 44px;
+}
+
 /* The overview frame hosts a ResizeObserver-driven pixel-space SVG (T2). Inside
    this scrolling pane its height must never derive from its own content, or
    observer viewBox writes and intrinsic row sizing oscillate into an

@@ -1353,6 +1353,14 @@ physical multi-device routing acceptance remain part of the final L-TL7 boundary
 
 ### L-TL4. Linked groups and selection/edit semantics
 
+Status (2026-08-15): in progress. Stable cross-domain group membership, automatic linked A/V
+placement, linked selection, group/ungroup, and relative group move are implemented. Delete now
+expands the captured authored group closure on the backend and removes Lighting events, Video clips,
+Audio clips, and both Automation domains in one authoritative publication/Undo; stale references
+fail before mutation and exact request retry returns the stored terminal result. Remaining grouped
+edit work is ripple move, duplicate, trim, split, nudge, quantize, copy/paste, lane-valid reorder,
+the temporary single-member modifier, and selection/focus restoration across Undo/Redo and reload.
+
 - Add stable `TimelineItemGroupId` and an authored group table. A group may contain two or more compatible
   Timeline items across Lighting, Video, Audio, and Automation lanes; membership is explicit, unique, and
   validated against the same Timeline.
