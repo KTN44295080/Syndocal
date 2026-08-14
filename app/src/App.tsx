@@ -13097,6 +13097,20 @@ export default function App() {
       return [];
     }
   };
+  const nudgeTimelineItems = async (items: TimelineItemRef[], deltaMs: number) => {
+    try {
+      const result = await commitTimelineAdvanced({
+        kind: "nudge_items",
+        items,
+        delta_ms: deltaMs,
+      });
+      if (result) setMessage("Timeline selection nudged.");
+      return result?.selected_items ?? [];
+    } catch (error) {
+      setMessage(`Timeline selection nudge failed: ${String(error)}`);
+      return [];
+    }
+  };
   const removeTimelineItems = async (items: TimelineItemRef[]) => {
     try {
       const result = await commitTimelineAdvanced({ kind: "delete_items", items });
@@ -23857,6 +23871,7 @@ export default function App() {
               onGroupItems={groupTimelineItems}
               onUngroupItem={ungroupTimelineItem}
               onDuplicateItems={duplicateTimelineItems}
+              onNudgeItems={nudgeTimelineItems}
               onRemoveItems={removeTimelineItems}
               onRemoveAudioClip={removeTimelineAudioClip}
               onSetAudioMaster={setTimelineAudioMaster}

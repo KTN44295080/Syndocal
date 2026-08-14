@@ -98,6 +98,7 @@ const measure = (client) => evaluate(client, `(() => {
   };
   const buttons = [...document.querySelectorAll('.timelineOperatorBar button')];
   const phases = [...document.querySelectorAll('.timelinePerformanceEditor .timelinePhaseBand')];
+  const itemMenu = root.querySelector('.timelineItemContextMenu');
   const selectedVideo = [...root.querySelectorAll('.timelineVideoClip.selected')];
   const selectedAudio = [...root.querySelectorAll('.timelineAudioClip.selected')];
   const bank = document.querySelector('.timelinePerformanceEditor [data-timeline-bank]');
@@ -128,7 +129,10 @@ const measure = (client) => evaluate(client, `(() => {
     groupEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Group selected' && !button.disabled)),
     ungroupEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Ungroup' && !button.disabled)),
     duplicateEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Duplicate selected' && !button.disabled)),
+    nudgeEarlierEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Nudge earlier' && !button.disabled)),
+    nudgeLaterEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Nudge later' && !button.disabled)),
     deleteEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Delete selected' && !button.disabled)),
+    itemMenuRect: itemMenu instanceof HTMLElement ? (() => { const bounds = itemMenu.getBoundingClientRect(); return [bounds.left, bounds.top, bounds.right, bounds.bottom]; })() : null,
     menuShortTargets: [...root.querySelectorAll('.timelineItemContextMenu button')].filter((button) => {
       const bounds = button.getBoundingClientRect();
       return bounds.width > 0 && bounds.height > 0 && bounds.height < 43.5;
@@ -208,7 +212,8 @@ try {
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
     assert.deepEqual([state.videoClips, state.audioClips], [1, 2]);
     assert.deepEqual([state.selectedVideo, state.selectedAudio], [1, 1], "selecting either member selects the linked A/V group");
-    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.duplicateEnabled, state.deleteEnabled], [false, true, true, true], "the context menu exposes linked-group duplicate/release/delete and prevents nested grouping");
+    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.duplicateEnabled, state.nudgeEarlierEnabled, state.nudgeLaterEnabled, state.deleteEnabled], [false, true, true, true, true, true], "the context menu exposes linked-group duplicate/nudge/release/delete and prevents nested grouping");
+    assert.ok(state.itemMenuRect && state.itemMenuRect[0] >= 0 && state.itemMenuRect[1] >= 0 && state.itemMenuRect[2] <= viewport.width && state.itemMenuRect[3] <= viewport.height, `Timeline group menu stays inside ${viewport.width}x${viewport.height}`);
     assert.equal(state.menuShortTargets, 0, "Timeline group context actions preserve 44px targets");
     assert.equal(await evaluate(client, `(() => {
       const button = [...document.querySelectorAll('.timelineItemContextMenu button')]

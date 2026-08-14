@@ -199,6 +199,7 @@ interface TimelineCueEventsPanelProps {
   onGroupItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onUngroupItem: (item: TimelineItemRef) => void | Promise<void>;
   onDuplicateItems: (items: TimelineItemRef[], offsetMs: number) => Promise<TimelineItemRef[]>;
+  onNudgeItems: (items: TimelineItemRef[], deltaMs: number) => Promise<TimelineItemRef[]>;
   onRemoveItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onRemoveAudioClip: (clipId: number) => void | Promise<void>;
   onSetAudioMaster: (offsetMs: number, muted: boolean) => void | Promise<void>;
@@ -354,6 +355,12 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     expandLinkedSelection({ kind: "audio_clip", clip_id: clipId }, additive);
   const selectVideoClip = (clipId: number, additive = false) =>
     expandLinkedSelection({ kind: "video_clip", clip_id: clipId }, additive);
+  const openItemContextMenu = (point: { x: number; y: number }) => {
+    setItemContextMenu({
+      x: Math.max(8, Math.min(point.x, window.innerWidth - 226)),
+      y: Math.max(8, Math.min(point.y, window.innerHeight - 360)),
+    });
+  };
   const pendingRemoveAudioClip = () =>
     props.audioClips.find((clip) => clip.id === pendingRemoveAudioClipId()) ?? null;
   const pendingRemoveAudioClipGroup = () => {
@@ -1050,7 +1057,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onOpenSuperScene={props.onOpenSuperScene}
         onSelectAudioClip={selectAudioClip}
         onSelectVideoClip={selectVideoClip}
-        onOpenItemContextMenu={setItemContextMenu}
+        onOpenItemContextMenu={openItemContextMenu}
         onInspectOverlapCluster={inspectOverlapCluster}
         onUpdateLayer={(layer) => void props.onUpdateTimelineLayer(layer)}
         onAddAudioClip={(layerId) => void props.onAddAudioClip(layerId)}
@@ -1131,6 +1138,32 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               }}
             >
               Duplicate selected
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length === 0}
+              onClick={async () => {
+                const items = [...selectedTimelineItemRefs()];
+                setItemContextMenu(null);
+                const selected = await props.onNudgeItems(items, -Math.max(1, props.gridMs));
+                if (selected.length > 0) setSelectedTimelineItems(selected);
+              }}
+            >
+              Nudge earlier
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length === 0}
+              onClick={async () => {
+                const items = [...selectedTimelineItemRefs()];
+                setItemContextMenu(null);
+                const selected = await props.onNudgeItems(items, Math.max(1, props.gridMs));
+                if (selected.length > 0) setSelectedTimelineItems(selected);
+              }}
+            >
+              Nudge later
             </button>
             <button
               type="button"
