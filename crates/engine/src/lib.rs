@@ -26,8 +26,9 @@ use io::{
 #[cfg(test)]
 use protocol::StageObjectKind;
 use protocol::{
-    normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
-    set_video_output_mapping_field_value, validate_engine_ready_video_clip_slots,
+    normalize_legacy_video_clip_slots, normalize_legacy_video_effect_chains,
+    normalize_legacy_video_media_assets, set_video_output_mapping_field_value,
+    validate_engine_ready_video_clip_slots, validate_engine_ready_video_effect_chains,
     validate_video_clip_runtime_against_authored_slots, ActiveFadeSummary, AttributeControl,
     AttributeResolution, AttributeValueSummary, AudioAnalysisSummary, AudioReactiveCurve,
     AudioReactiveFeature, AudioSpectrumBand, AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction,
@@ -65,13 +66,16 @@ use protocol::{
     ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
     VideoBlendMode, VideoClipLaunchQuantization, VideoClipLayerRuntimeSummary, VideoClipLoopMode,
     VideoClipPendingLaunchSummary, VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary,
-    VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoColorAdjust, VideoCuePointSummary, VideoEffectChainId, VideoEffectChainSummary,
+    VideoEffectId, VideoEffectKind, VideoEffectPresetId, VideoEffectPresetSummary,
+    VideoEffectScope, VideoEffectStageId, VideoEffectStageSummary, VideoEffectTarget,
+    VideoFxAdjust, VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
+    VideoLayerGroupId, VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerSummary,
+    VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
-    LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
-    MIN_CUE_AUTHORED_BEATS,
+    VideoSnapshot, VideoSourceKind, VideoSourceSummary, VideoTransitionBusId,
+    VideoTransitionEffectOwner, DEFAULT_CUE_LIST_ID, LIVE_AUDIO_FEATURE_BAND_CAPACITY,
+    MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS, MIN_CUE_AUTHORED_BEATS,
 };
 use thiserror::Error;
 
@@ -1133,6 +1137,12 @@ enum AllocatorDomain {
     VideoClipSlots,
     Compositions,
     VideoOutputs,
+    VideoEffectChains,
+    VideoEffectStages,
+    VideoEffects,
+    VideoEffectPresets,
+    VideoLayerGroups,
+    VideoTransitionBuses,
     NodeGraphs,
     StageObjects,
 }
@@ -1155,6 +1165,12 @@ impl AllocatorDomain {
             Self::VideoClipSlots => "video clip slots",
             Self::Compositions => "compositions",
             Self::VideoOutputs => "video outputs",
+            Self::VideoEffectChains => "video effect chains",
+            Self::VideoEffectStages => "video effect stages",
+            Self::VideoEffects => "video effects",
+            Self::VideoEffectPresets => "video effect presets",
+            Self::VideoLayerGroups => "video layer groups",
+            Self::VideoTransitionBuses => "video transition buses",
             Self::NodeGraphs => "node graphs",
             Self::StageObjects => "stage objects",
         }
@@ -1332,6 +1348,28 @@ pub enum VideoIsfStackMutation {
         control_name: String,
         value: [f32; 4],
     },
+}
+
+/// IDs reserved by `EngineHandle` for a legacy ISF adapter.  Legacy commands
+/// have no stable-ID fields on the wire; converting them before enqueue keeps
+/// the C1 central model monotonic while preserving the old public request.
+#[doc(hidden)]
+#[derive(Debug, Clone, Default)]
+pub struct VideoEffectLegacyAdapterIds {
+    chain_id: VideoEffectChainId,
+    stage_ids: Vec<VideoEffectStageId>,
+    effect_ids: Vec<VideoEffectId>,
+}
+
+/// Allocator-gated identity plan for a duplicated Layer's complete owned C1
+/// catalog. The source IDs are an ordered fingerprint of the source Layer,
+/// its Clip slot chains, and its ClipTake transition chain; any queued
+/// topology drift fails closed before a clone can be committed.
+#[doc(hidden)]
+#[derive(Debug, Clone, Default)]
+pub struct VideoLayerDuplicateEffectCatalogPlan {
+    expected_source_owned_chain_ids: Vec<VideoEffectChainId>,
+    duplicate_chain_ids: Vec<VideoEffectLegacyAdapterIds>,
 }
 
 #[derive(Debug)]
@@ -2157,6 +2195,7 @@ pub enum EngineCommand {
         label: String,
         expected_source_slot_ids: Vec<VideoClipSlotId>,
         new_clip_slot_ids: Vec<VideoClipSlotId>,
+        duplicate_effect_plan: VideoLayerDuplicateEffectCatalogPlan,
     },
     DuplicateVideoLayerPublished {
         source_layer_id: VideoLayerId,
@@ -2171,6 +2210,7 @@ pub enum EngineCommand {
         label: String,
         expected_source_slot_ids: Vec<VideoClipSlotId>,
         new_clip_slot_ids: Vec<VideoClipSlotId>,
+        duplicate_effect_plan: VideoLayerDuplicateEffectCatalogPlan,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     RemoveVideoLayer(VideoLayerId),
@@ -2287,14 +2327,46 @@ pub enum EngineCommand {
         layer_id: VideoLayerId,
         effect: Option<VideoIsfEffectSummary>,
     },
+    #[doc(hidden)]
+    SetVideoLayerIsfEffectWithAllocatedIds {
+        layer_id: VideoLayerId,
+        effect: Option<VideoIsfEffectSummary>,
+        ids: VideoEffectLegacyAdapterIds,
+    },
     SetVideoLayerIsfEffectPublished {
         layer_id: VideoLayerId,
         effect: Option<VideoIsfEffectSummary>,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    #[doc(hidden)]
+    SetVideoLayerIsfEffectPublishedWithAllocatedIds {
+        layer_id: VideoLayerId,
+        effect: Option<VideoIsfEffectSummary>,
+        ids: VideoEffectLegacyAdapterIds,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// Atomically installs the complete C1 authored effect catalog. Callers
+    /// allocate every new stable ID through `EngineHandle`; the runtime then
+    /// validates scopes/projections and publishes all three central tables as
+    /// one image, or restores its complete prior A state.
+    ApplyVideoEffectCatalogPublished {
+        effect_chains: Vec<VideoEffectChainSummary>,
+        effect_presets: Vec<VideoEffectPresetSummary>,
+        layer_groups: Vec<VideoLayerGroupSummary>,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     MutateVideoLayerIsfStack {
         layer_id: VideoLayerId,
         mutation: VideoIsfStackMutation,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    #[doc(hidden)]
+    MutateVideoLayerIsfStackWithAllocatedIds {
+        layer_id: VideoLayerId,
+        mutation: VideoIsfStackMutation,
+        ids: VideoEffectLegacyAdapterIds,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     PulseVideoLayerIsfEvent {
@@ -2662,6 +2734,14 @@ pub struct EngineHandle {
     next_video_clip_slot_id: Arc<AtomicU64>,
     next_composition_id: Arc<AtomicU64>,
     next_video_output_id: Arc<AtomicU64>,
+    next_video_effect_chain_id: Arc<AtomicU64>,
+    next_video_effect_stage_id: Arc<AtomicU64>,
+    next_video_effect_id: Arc<AtomicU64>,
+    next_video_effect_preset_id: Arc<AtomicU64>,
+    next_video_layer_group_id: Arc<AtomicU64>,
+    /// C3 owns the bus catalog; C1 still reserves a disjoint stable-ID
+    /// domain so future transition references cannot share any effect ID.
+    next_video_transition_bus_id: Arc<AtomicU64>,
     next_node_graph_id: Arc<AtomicU64>,
     next_stage_object_id: Arc<AtomicU64>,
     #[cfg(test)]
@@ -2882,6 +2962,12 @@ impl EngineHandle {
         let next_video_clip_slot_id = Arc::new(AtomicU64::new(1));
         let next_composition_id = Arc::new(AtomicU64::new(2));
         let next_video_output_id = Arc::new(AtomicU64::new(1));
+        let next_video_effect_chain_id = Arc::new(AtomicU64::new(1));
+        let next_video_effect_stage_id = Arc::new(AtomicU64::new(1));
+        let next_video_effect_id = Arc::new(AtomicU64::new(1));
+        let next_video_effect_preset_id = Arc::new(AtomicU64::new(1));
+        let next_video_layer_group_id = Arc::new(AtomicU64::new(1));
+        let next_video_transition_bus_id = Arc::new(AtomicU64::new(1));
         let next_node_graph_id = Arc::new(AtomicU64::new(1));
         let next_stage_object_id = Arc::new(AtomicU64::new(1));
         #[cfg(test)]
@@ -2949,6 +3035,12 @@ impl EngineHandle {
             next_video_clip_slot_id,
             next_composition_id,
             next_video_output_id,
+            next_video_effect_chain_id,
+            next_video_effect_stage_id,
+            next_video_effect_id,
+            next_video_effect_preset_id,
+            next_video_layer_group_id,
+            next_video_transition_bus_id,
             next_node_graph_id,
             next_stage_object_id,
             #[cfg(test)]
@@ -3031,6 +3123,49 @@ impl EngineHandle {
 
     pub fn allocate_video_output_id(&self) -> VideoOutputId {
         self.allocate_u64_id(&self.next_video_output_id, AllocatorDomain::VideoOutputs)
+    }
+
+    pub fn allocate_video_effect_chain_id(&self) -> VideoEffectChainId {
+        VideoEffectChainId(self.allocate_u64_id(
+            &self.next_video_effect_chain_id,
+            AllocatorDomain::VideoEffectChains,
+        ))
+    }
+
+    pub fn allocate_video_effect_stage_id(&self) -> VideoEffectStageId {
+        VideoEffectStageId(self.allocate_u64_id(
+            &self.next_video_effect_stage_id,
+            AllocatorDomain::VideoEffectStages,
+        ))
+    }
+
+    pub fn allocate_video_effect_id(&self) -> VideoEffectId {
+        VideoEffectId(
+            self.allocate_u64_id(&self.next_video_effect_id, AllocatorDomain::VideoEffects),
+        )
+    }
+
+    pub fn allocate_video_effect_preset_id(&self) -> VideoEffectPresetId {
+        VideoEffectPresetId(self.allocate_u64_id(
+            &self.next_video_effect_preset_id,
+            AllocatorDomain::VideoEffectPresets,
+        ))
+    }
+
+    pub fn allocate_video_layer_group_id(&self) -> VideoLayerGroupId {
+        VideoLayerGroupId(self.allocate_u64_id(
+            &self.next_video_layer_group_id,
+            AllocatorDomain::VideoLayerGroups,
+        ))
+    }
+
+    /// Reserve a stable C3 LayerTransitionBus identity.  C1 deliberately
+    /// does not persist a bus catalog or admit `LayerBus` effect owners.
+    pub fn allocate_video_transition_bus_id(&self) -> VideoTransitionBusId {
+        VideoTransitionBusId(self.allocate_u64_id(
+            &self.next_video_transition_bus_id,
+            AllocatorDomain::VideoTransitionBuses,
+        ))
     }
 
     pub fn allocate_node_graph_id(&self) -> NodeGraphId {
@@ -3212,6 +3347,67 @@ impl EngineHandle {
                     ack,
                 }
             }
+            EngineCommand::SetVideoLayerIsfEffect { layer_id, effect } => {
+                let video = self.persistence_video_for_legacy_effect_adapter_locked()?;
+                let ids = self.allocate_video_effect_legacy_adapter_ids_for_layer_locked(
+                    &video,
+                    layer_id,
+                    legacy_video_isf_stage_count(effect.as_ref()),
+                )?;
+                EngineCommand::SetVideoLayerIsfEffectWithAllocatedIds {
+                    layer_id,
+                    effect,
+                    ids,
+                }
+            }
+            EngineCommand::SetVideoLayerIsfEffectPublished {
+                layer_id,
+                effect,
+                ack,
+            } => {
+                let video = self.persistence_video_for_legacy_effect_adapter_locked()?;
+                let ids = self.allocate_video_effect_legacy_adapter_ids_for_layer_locked(
+                    &video,
+                    layer_id,
+                    legacy_video_isf_stage_count(effect.as_ref()),
+                )?;
+                EngineCommand::SetVideoLayerIsfEffectPublishedWithAllocatedIds {
+                    layer_id,
+                    effect,
+                    ids,
+                    ack,
+                }
+            }
+            EngineCommand::MutateVideoLayerIsfStack {
+                layer_id,
+                mutation,
+                ack,
+            } => {
+                let ids = if matches!(&mutation, VideoIsfStackMutation::Add(_)) {
+                    let video = self.persistence_video_for_legacy_effect_adapter_locked()?;
+                    let layer = video
+                        .layers
+                        .iter()
+                        .find(|layer| layer.id == layer_id)
+                        .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+                    self.allocate_video_effect_legacy_adapter_ids_for_layer_locked(
+                        &video,
+                        layer_id,
+                        legacy_video_isf_stage_count(layer.isf_effect.as_ref()).saturating_add(1),
+                    )?
+                } else {
+                    // Reorder/remove/value-only mutations preserve existing
+                    // central identities and must remain available even when
+                    // an allocator domain is exhausted.
+                    VideoEffectLegacyAdapterIds::default()
+                };
+                EngineCommand::MutateVideoLayerIsfStackWithAllocatedIds {
+                    layer_id,
+                    mutation,
+                    ids,
+                    ack,
+                }
+            }
             command => command,
         };
 
@@ -3267,6 +3463,83 @@ impl EngineHandle {
                 Err(observed) => current = observed,
             }
         }
+    }
+
+    /// The allocator gate is held while this asks the runtime for the exact
+    /// queued authored image.  That makes a legacy command's compatibility
+    /// IDs reflect every command already ahead of it, while later senders
+    /// cannot interleave a competing allocation before the command is queued.
+    fn persistence_video_for_legacy_effect_adapter_locked(&self) -> Result<VideoSnapshot, String> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        self.queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::RequestPersistenceSnapshot { response },
+                queued_at: Instant::now(),
+            })
+            .map_err(|_| {
+                self.shared_telemetry.record_queue_push_failure();
+                "Engine command queue is full while resolving legacy ISF identities".to_string()
+            })?;
+        self.wake.notify_command();
+        let snapshot = receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Legacy ISF identity resolution failed: {error}"))?;
+        Ok(snapshot.authored_video.unwrap_or(snapshot.video))
+    }
+
+    /// Reserves only structural IDs which cannot be reused positionally from
+    /// the canonical Layer chain.  Value, order, bypass and removal changes
+    /// intentionally consume no IDs, including at allocator exhaustion.
+    fn allocate_video_effect_legacy_adapter_ids_for_layer_locked(
+        &self,
+        video: &VideoSnapshot,
+        layer_id: VideoLayerId,
+        target_stage_count: usize,
+    ) -> Result<VideoEffectLegacyAdapterIds, String> {
+        if !video.layers.iter().any(|layer| layer.id == layer_id) {
+            return Err(format!("Video layer {layer_id} was not found"));
+        }
+        let existing = video
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id });
+        let needs_chain = target_stage_count != 0 && existing.is_none();
+        let stage_count = existing
+            .map(|chain| target_stage_count.saturating_sub(chain.stages.len()))
+            .unwrap_or(target_stage_count);
+        self.allocate_video_effect_legacy_adapter_ids_locked(needs_chain, stage_count)
+    }
+
+    fn allocate_video_effect_legacy_adapter_ids_locked(
+        &self,
+        needs_chain: bool,
+        stage_count: usize,
+    ) -> Result<VideoEffectLegacyAdapterIds, String> {
+        let chain_id = if needs_chain {
+            VideoEffectChainId(allocate_u64_id_locked(
+                &self.next_video_effect_chain_id,
+                AllocatorDomain::VideoEffectChains,
+            )?)
+        } else {
+            VideoEffectChainId(0)
+        };
+        let mut stage_ids = Vec::with_capacity(stage_count);
+        let mut effect_ids = Vec::with_capacity(stage_count);
+        for _ in 0..stage_count {
+            stage_ids.push(VideoEffectStageId(allocate_u64_id_locked(
+                &self.next_video_effect_stage_id,
+                AllocatorDomain::VideoEffectStages,
+            )?));
+            effect_ids.push(VideoEffectId(allocate_u64_id_locked(
+                &self.next_video_effect_id,
+                AllocatorDomain::VideoEffects,
+            )?));
+        }
+        Ok(VideoEffectLegacyAdapterIds {
+            chain_id,
+            stage_ids,
+            effect_ids,
+        })
     }
 
     pub fn clear_live_audio_input(&self, generation: u64) -> Result<(), String> {
@@ -4580,18 +4853,20 @@ impl EngineHandle {
         new_layer_id: VideoLayerId,
         label: String,
     ) -> Result<(), String> {
-        // This queue-ordered request is a fence for preceding compatibility
-        // Add/Bootstrap commands. Reading the asynchronous published snapshot
-        // directly here could otherwise see a source bank before it exists.
-        let persistence = self.persistence_snapshot()?;
-        let expected_source_slot_ids = persistence
-            .authored_video
-            .as_ref()
-            .unwrap_or(&persistence.video)
+        // Hold the allocator gate across this queue-ordered authored read and
+        // every fresh clone identity. No allocator user may interleave an ID
+        // allocation between the source fingerprint and its duplicate plan.
+        let _allocator_guard = self
+            .allocator_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let video = self.persistence_video_for_legacy_effect_adapter_locked()?;
+        let source = video
             .layers
             .iter()
             .find(|layer| layer.id == source_layer_id)
-            .ok_or_else(|| format!("Video layer {source_layer_id} was not found"))?
+            .ok_or_else(|| format!("Video layer {source_layer_id} was not found"))?;
+        let expected_source_slot_ids = source
             .clip_slots
             .iter()
             .map(|slot| slot.id)
@@ -4603,8 +4878,32 @@ impl EngineHandle {
         }
         let new_clip_slot_ids = expected_source_slot_ids
             .iter()
-            .map(|_| self.allocate_video_clip_slot_id())
+            .map(|_| self.allocate_legacy_video_clip_slot_id_locked())
+            .collect::<Result<Vec<_>, _>>()?;
+        let source_owned_chains = video
+            .effect_chains
+            .iter()
+            .filter(|chain| {
+                video_effect_chain_is_owned_by_layer(
+                    chain,
+                    source_layer_id,
+                    &expected_source_slot_ids,
+                )
+            })
             .collect::<Vec<_>>();
+        let duplicate_effect_plan = VideoLayerDuplicateEffectCatalogPlan {
+            expected_source_owned_chain_ids: source_owned_chains
+                .iter()
+                .map(|chain| chain.id)
+                .collect(),
+            duplicate_chain_ids: source_owned_chains
+                .iter()
+                .map(|chain| {
+                    self.allocate_video_effect_legacy_adapter_ids_locked(true, chain.stages.len())
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        drop(_allocator_guard);
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(
             EngineCommand::DuplicateVideoLayerPublishedWithAllocatedSlots {
@@ -4613,6 +4912,7 @@ impl EngineHandle {
                 label,
                 expected_source_slot_ids,
                 new_clip_slot_ids,
+                duplicate_effect_plan,
                 ack,
             },
         )
@@ -4637,6 +4937,32 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Video ISF effect acknowledgement failed: {error}"))?
+    }
+
+    /// Replace the C1 canonical authored effect catalog behind one admission
+    /// and one definitive shared-snapshot publication.  This is intentionally
+    /// whole-catalog: create/update/remove/reorder/bypass/preset/group edits
+    /// are all represented by a validated next image rather than a sequence
+    /// of partially visible table mutations.
+    pub fn apply_video_effect_catalog(
+        &self,
+        effect_chains: Vec<VideoEffectChainSummary>,
+        effect_presets: Vec<VideoEffectPresetSummary>,
+        layer_groups: Vec<VideoLayerGroupSummary>,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::ApplyVideoEffectCatalogPublished {
+            effect_chains,
+            effect_presets,
+            layer_groups,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, Duration::from_secs(2))
     }
 
     pub fn pulse_video_layer_isf_event(
@@ -4994,6 +5320,22 @@ impl EngineHandle {
                 let snapshot = normalized_engine_snapshot_video_for_load(snapshot.clone())?;
                 observe_project_snapshot_allocator_sources(&mut maxima, &snapshot)?;
             }
+            EngineCommand::ApplyVideoEffectCatalogPublished {
+                effect_chains,
+                effect_presets,
+                layer_groups,
+                ..
+            } => observe_video_effect_catalog_allocator_sources(
+                &mut maxima,
+                effect_chains,
+                effect_presets,
+                layer_groups,
+            ),
+            EngineCommand::SetVideoLayerIsfEffectWithAllocatedIds { ids, .. }
+            | EngineCommand::SetVideoLayerIsfEffectPublishedWithAllocatedIds { ids, .. }
+            | EngineCommand::MutateVideoLayerIsfStackWithAllocatedIds { ids, .. } => {
+                observe_video_effect_legacy_adapter_allocator_sources(&mut maxima, ids)
+            }
             EngineCommand::PatchFixture { fixture_id, .. }
             | EngineCommand::RepairFixtureProfilePublished { fixture_id, .. }
             | EngineCommand::ReplaceFixtureProfile { fixture_id, .. } => {
@@ -5188,16 +5530,24 @@ impl EngineHandle {
             EngineCommand::DuplicateVideoLayerWithAllocatedSlots {
                 new_layer_id,
                 new_clip_slot_ids,
+                duplicate_effect_plan,
                 ..
             }
             | EngineCommand::DuplicateVideoLayerPublishedWithAllocatedSlots {
                 new_layer_id,
                 new_clip_slot_ids,
+                duplicate_effect_plan,
                 ..
             } => {
                 maxima.observe_u64(AllocatorDomain::VideoLayers, *new_layer_id);
                 for slot_id in new_clip_slot_ids {
                     maxima.observe_u64(AllocatorDomain::VideoClipSlots, slot_id.0);
+                }
+                for duplicate_chain_ids in &duplicate_effect_plan.duplicate_chain_ids {
+                    observe_video_effect_legacy_adapter_allocator_sources(
+                        &mut maxima,
+                        duplicate_chain_ids,
+                    );
                 }
             }
             EngineCommand::MediaAssetTransactionPublished { transaction, .. } => {
@@ -5499,6 +5849,12 @@ struct AllocatorMaximums {
     video_clip_slots: Option<u64>,
     compositions: Option<u64>,
     video_outputs: Option<u64>,
+    video_effect_chains: Option<u64>,
+    video_effect_stages: Option<u64>,
+    video_effects: Option<u64>,
+    video_effect_presets: Option<u64>,
+    video_layer_groups: Option<u64>,
+    video_transition_buses: Option<u64>,
     node_graphs: Option<u64>,
     stage_objects: Option<u64>,
 }
@@ -5520,6 +5876,12 @@ impl AllocatorMaximums {
             AllocatorDomain::VideoClipSlots => &mut self.video_clip_slots,
             AllocatorDomain::Compositions => &mut self.compositions,
             AllocatorDomain::VideoOutputs => &mut self.video_outputs,
+            AllocatorDomain::VideoEffectChains => &mut self.video_effect_chains,
+            AllocatorDomain::VideoEffectStages => &mut self.video_effect_stages,
+            AllocatorDomain::VideoEffects => &mut self.video_effects,
+            AllocatorDomain::VideoEffectPresets => &mut self.video_effect_presets,
+            AllocatorDomain::VideoLayerGroups => &mut self.video_layer_groups,
+            AllocatorDomain::VideoTransitionBuses => &mut self.video_transition_buses,
             AllocatorDomain::NodeGraphs => &mut self.node_graphs,
             AllocatorDomain::StageObjects => &mut self.stage_objects,
             AllocatorDomain::TimelineLayers => return,
@@ -5555,6 +5917,18 @@ impl AllocatorMaximums {
             (AllocatorDomain::VideoClipSlots, self.video_clip_slots),
             (AllocatorDomain::Compositions, self.compositions),
             (AllocatorDomain::VideoOutputs, self.video_outputs),
+            (AllocatorDomain::VideoEffectChains, self.video_effect_chains),
+            (AllocatorDomain::VideoEffectStages, self.video_effect_stages),
+            (AllocatorDomain::VideoEffects, self.video_effects),
+            (
+                AllocatorDomain::VideoEffectPresets,
+                self.video_effect_presets,
+            ),
+            (AllocatorDomain::VideoLayerGroups, self.video_layer_groups),
+            (
+                AllocatorDomain::VideoTransitionBuses,
+                self.video_transition_buses,
+            ),
             (AllocatorDomain::NodeGraphs, self.node_graphs),
             (AllocatorDomain::StageObjects, self.stage_objects),
         ] {
@@ -5653,6 +6027,45 @@ impl AllocatorMaximums {
                 checked_next_allocator_u64_after_max(maximum, AllocatorDomain::VideoOutputs)?,
             );
         }
+        if let Some(maximum) = self.video_effect_chains {
+            store_next_id(
+                &engine.next_video_effect_chain_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::VideoEffectChains)?,
+            );
+        }
+        if let Some(maximum) = self.video_effect_stages {
+            store_next_id(
+                &engine.next_video_effect_stage_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::VideoEffectStages)?,
+            );
+        }
+        if let Some(maximum) = self.video_effects {
+            store_next_id(
+                &engine.next_video_effect_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::VideoEffects)?,
+            );
+        }
+        if let Some(maximum) = self.video_effect_presets {
+            store_next_id(
+                &engine.next_video_effect_preset_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::VideoEffectPresets)?,
+            );
+        }
+        if let Some(maximum) = self.video_layer_groups {
+            store_next_id(
+                &engine.next_video_layer_group_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::VideoLayerGroups)?,
+            );
+        }
+        if let Some(maximum) = self.video_transition_buses {
+            store_next_id(
+                &engine.next_video_transition_bus_id,
+                checked_next_allocator_u64_after_max(
+                    maximum,
+                    AllocatorDomain::VideoTransitionBuses,
+                )?,
+            );
+        }
         if let Some(maximum) = self.node_graphs {
             store_next_id(
                 &engine.next_node_graph_id,
@@ -5681,6 +6094,33 @@ fn allocator_capacity_error(domain: AllocatorDomain, maximum: impl std::fmt::Dis
         "allocator domain '{}' cannot reserve a valid next ID after maximum {maximum}",
         domain.label()
     )
+}
+
+fn allocate_u64_id_locked(counter: &AtomicU64, domain: AllocatorDomain) -> Result<u64, String> {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        if current == 0 {
+            return Err(format!(
+                "allocator domain '{}' attempted to issue reserved ID 0",
+                domain.label()
+            ));
+        }
+        if current >= u64::MAX {
+            return Err(format!(
+                "allocator domain '{}' is exhausted",
+                domain.label()
+            ));
+        }
+        let next = current + 1;
+        match counter.compare_exchange(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(current),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn legacy_video_isf_stage_count(effect: Option<&VideoIsfEffectSummary>) -> usize {
+    effect.map_or(0, |effect| 1 + effect.stack.len())
 }
 
 fn validate_allocator_u64_candidate(domain: AllocatorDomain, candidate: u64) -> Result<(), String> {
@@ -5790,6 +6230,48 @@ fn observe_video_allocator_sources(maxima: &mut AllocatorMaximums, video: &Video
     for output in &video.outputs {
         maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
     }
+    observe_video_effect_catalog_allocator_sources(
+        maxima,
+        &video.effect_chains,
+        &video.effect_presets,
+        &video.layer_groups,
+    );
+}
+
+fn observe_video_effect_catalog_allocator_sources(
+    maxima: &mut AllocatorMaximums,
+    effect_chains: &[VideoEffectChainSummary],
+    effect_presets: &[VideoEffectPresetSummary],
+    layer_groups: &[VideoLayerGroupSummary],
+) {
+    for chain in effect_chains {
+        maxima.observe_u64(AllocatorDomain::VideoEffectChains, chain.id.0);
+        for stage in &chain.stages {
+            maxima.observe_u64(AllocatorDomain::VideoEffectStages, stage.id.0);
+            maxima.observe_u64(AllocatorDomain::VideoEffects, stage.effect.id.0);
+        }
+    }
+    for preset in effect_presets {
+        maxima.observe_u64(AllocatorDomain::VideoEffectPresets, preset.id.0);
+    }
+    for group in layer_groups {
+        maxima.observe_u64(AllocatorDomain::VideoLayerGroups, group.id.0);
+    }
+}
+
+fn observe_video_effect_legacy_adapter_allocator_sources(
+    maxima: &mut AllocatorMaximums,
+    ids: &VideoEffectLegacyAdapterIds,
+) {
+    if ids.chain_id.0 != 0 {
+        maxima.observe_u64(AllocatorDomain::VideoEffectChains, ids.chain_id.0);
+    }
+    for id in &ids.stage_ids {
+        maxima.observe_u64(AllocatorDomain::VideoEffectStages, id.0);
+    }
+    for id in &ids.effect_ids {
+        maxima.observe_u64(AllocatorDomain::VideoEffects, id.0);
+    }
 }
 
 /// Prepare the authored video image before either project-load reservation or
@@ -5798,8 +6280,8 @@ fn observe_video_allocator_sources(maxima: &mut AllocatorMaximums, video: &Video
 /// discarded layers cannot consume generated catalog or slot identities.
 ///
 /// Both routes must use this exact order: reconcile layer identities, migrate
-/// media assets, migrate clip slots, validate the engine-ready result, then
-/// enforce the per-layer bank limit.
+/// media assets, migrate clip slots, migrate canonical effects, validate the
+/// complete engine-ready result, then enforce the per-layer bank limit.
 fn normalized_engine_snapshot_video_for_load(
     mut snapshot: EngineSnapshot,
 ) -> Result<EngineSnapshot, String> {
@@ -5814,8 +6296,156 @@ fn normalized_engine_snapshot_video_for_load(
     normalize_legacy_video_media_assets(&mut snapshot.video)?;
     normalize_legacy_video_clip_slots(&mut snapshot.video)?;
     validate_engine_ready_video_clip_slots(&snapshot.video)?;
+    snapshot.video = reconcile_video_effect_hosts_for_load(&snapshot.video);
+    normalize_legacy_video_effect_chains(&mut snapshot.video)?;
+    normalize_transient_video_effect_events_for_load(&mut snapshot.video)?;
+    validate_engine_ready_video_effect_chains(&snapshot.video)?;
     validate_video_clip_slot_bank_limits(&snapshot.video)?;
     Ok(snapshot)
+}
+
+/// Reconcile the legacy video graph before C1 validates scopes against it.
+/// Runtime loading has always retained the first valid layer/output, rebuilt
+/// Main, and discarded duplicate composition hosts.  Effect validation must
+/// see that same graph, otherwise a previously recoverable legacy snapshot is
+/// rejected before the runtime gets its normal reconciliation opportunity.
+///
+/// This is intentionally clone-based: callers either install the complete
+/// reconciled image or leave their original snapshot untouched.  Catalog
+/// entries rooted at a host that reconciliation discarded are dropped rather
+/// than retargeted to a different scope.
+fn reconcile_video_effect_hosts_for_load(video: &VideoSnapshot) -> VideoSnapshot {
+    let mut candidate = video.clone();
+    let runtime_layers = sanitize_loaded_video_layers(&candidate.layers);
+    let layer_ids = runtime_layers
+        .iter()
+        .map(|layer| layer.id)
+        .collect::<HashSet<_>>();
+    let mut runtime_compositions = vec![RuntimeVideoComposition {
+        summary: CompositionSummary {
+            id: 1,
+            label: "Main".to_string(),
+            layer_ids: runtime_layers.iter().map(|layer| layer.id).collect(),
+            output_ids: Vec::new(),
+        },
+    }];
+    runtime_compositions.extend(sanitize_loaded_video_compositions(
+        &candidate.compositions,
+        &runtime_layers,
+    ));
+    let runtime_outputs = sanitize_loaded_video_outputs(&candidate.outputs, &runtime_compositions);
+    let composition_ids = runtime_compositions
+        .iter()
+        .map(|composition| composition.summary.id)
+        .collect::<HashSet<_>>();
+    let output_ids = runtime_outputs
+        .iter()
+        .map(|output| output.summary.id)
+        .collect::<HashSet<_>>();
+
+    candidate.compositions = runtime_compositions
+        .iter()
+        .map(|composition| {
+            let mut summary = composition.summary.clone();
+            summary.output_ids = output_ids_for_composition(
+                &runtime_outputs
+                    .iter()
+                    .map(|output| output.summary.clone())
+                    .collect::<Vec<_>>(),
+                summary.id,
+            );
+            summary
+        })
+        .collect();
+    candidate.outputs = runtime_outputs
+        .into_iter()
+        .map(|output| output.summary)
+        .collect();
+
+    // Retain groups only when their composition/layer hosts survived this
+    // established graph reconciliation.  Other structural group violations
+    // remain validator errors; this helper only prevents dangling hosts.
+    candidate.layer_groups.retain(|group| {
+        composition_ids.contains(&group.composition_id)
+            && group
+                .layer_ids
+                .iter()
+                .all(|layer_id| layer_ids.contains(layer_id))
+    });
+    let group_ids = candidate
+        .layer_groups
+        .iter()
+        .map(|group| group.id)
+        .collect::<HashSet<_>>();
+
+    candidate.effect_chains.retain(|chain| match &chain.scope {
+        VideoEffectScope::Clip { layer_id, slot_id } => candidate
+            .layers
+            .iter()
+            .find(|layer| layer.id == *layer_id)
+            .is_some_and(|layer| layer.clip_slots.iter().any(|slot| slot.id == *slot_id)),
+        VideoEffectScope::Layer { layer_id }
+        | VideoEffectScope::Transition {
+            owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id },
+        } => layer_ids.contains(layer_id),
+        // A LayerBus is not a discarded legacy host.  Preserve it so the C1
+        // validator continues to reject the forward-only C3 seam explicitly.
+        VideoEffectScope::Transition {
+            owner: protocol::VideoTransitionEffectOwner::LayerBus { .. },
+        } => true,
+        VideoEffectScope::Composition { composition_id } => {
+            composition_ids.contains(composition_id)
+        }
+        VideoEffectScope::Group { group_id } => group_ids.contains(group_id),
+        VideoEffectScope::Output { output_id } => output_ids.contains(output_id),
+    });
+
+    candidate
+}
+
+/// Event controls are runtime pulses rather than authored project state.
+///
+/// This runs on the clone that is shared by allocator reservation and runtime
+/// installation.  After the legacy migration has established stable Layer
+/// chains, zero canonical Event controls and regenerate each renderer-facing
+/// Layer projection from that canonical image.  A saved snapshot captured
+/// while a pulse was high therefore cannot install a durable canonical `1`
+/// beside a runtime-sanitized legacy `0`.
+fn normalize_transient_video_effect_events_for_load(
+    video: &mut VideoSnapshot,
+) -> Result<(), String> {
+    for chain in &mut video.effect_chains {
+        for stage in &mut chain.stages {
+            clear_transient_video_effect_kind(&mut stage.effect.kind);
+        }
+    }
+    for preset in &mut video.effect_presets {
+        for stage in &mut preset.payload.stages {
+            clear_transient_video_effect_kind(&mut stage.effect);
+        }
+    }
+
+    for layer in &mut video.layers {
+        let layer_chain = video
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id: layer.id })
+            .cloned();
+        layer.isf_effect = match layer_chain.as_ref() {
+            Some(chain) => project_legacy_isf_from_canonical_chain(chain)?,
+            // The legacy migration leaves no renderer-owned ISF without its
+            // corresponding canonical Layer chain. Keep this defensive path
+            // idempotent for a malformed candidate; the validator decides
+            // whether the remaining topology is admissible.
+            None => {
+                if let Some(effect) = &mut layer.isf_effect {
+                    clear_transient_video_isf_event_controls(effect);
+                }
+                layer.isf_effect.clone()
+            }
+        };
+    }
+    Ok(())
 }
 
 fn validate_video_clip_slot_bank_limits(video: &VideoSnapshot) -> Result<(), String> {
@@ -12171,9 +12801,18 @@ struct RuntimeVideoLayerFade {
 struct PendingVideoIsfEventReset {
     pulse_id: u64,
     layer_id: VideoLayerId,
-    stage_source: Arc<str>,
+    /// Stable canonical identities, never legacy shader-source pointers.
+    /// A legal stack may contain duplicate Arc/source/control triples.
+    stage_id: VideoEffectStageId,
+    effect_id: VideoEffectId,
     control_name: String,
     due_at: Instant,
+}
+
+#[derive(Clone, Copy)]
+enum LegacyIsfStageIdentityTransform {
+    Move { from: usize, to: usize },
+    Remove { index: usize },
 }
 
 struct AppliedVideoIsfEventPulse {
@@ -12225,6 +12864,10 @@ enum PendingCommandRollback {
     RestoreVideoLayersAndCompositions {
         video_layers: Vec<RuntimeVideoLayer>,
         video_compositions: Vec<RuntimeVideoComposition>,
+        effect_chains: Vec<VideoEffectChainSummary>,
+        effect_presets: Vec<VideoEffectPresetSummary>,
+        layer_groups: Vec<VideoLayerGroupSummary>,
+        pending_video_isf_event_resets: Vec<PendingVideoIsfEventReset>,
         last_error: Option<String>,
     },
     RestoreMediaAssetTransaction {
@@ -12242,11 +12885,25 @@ enum PendingCommandRollback {
     /// publication boundary.
     RestoreVideoClipSlots {
         video_layers: Vec<RuntimeVideoLayer>,
+        video_effect_chains: Vec<VideoEffectChainSummary>,
+        video_effect_presets: Vec<VideoEffectPresetSummary>,
+        video_layer_groups: Vec<VideoLayerGroupSummary>,
+        pending_video_isf_event_resets: Vec<PendingVideoIsfEventReset>,
         last_error: Option<String>,
     },
     RestoreVideoLayerIsfEffect {
         layer_id: VideoLayerId,
         effect: Option<VideoIsfEffectSummary>,
+        last_error: Option<String>,
+    },
+    /// Complete C1 A image.  Layer projections are included because the
+    /// renderer consumes them while persistence consumes the central tables.
+    RestoreVideoEffectCatalog {
+        effect_chains: Vec<VideoEffectChainSummary>,
+        effect_presets: Vec<VideoEffectPresetSummary>,
+        layer_groups: Vec<VideoLayerGroupSummary>,
+        video_layers: Vec<RuntimeVideoLayer>,
+        pending_video_isf_event_resets: Vec<PendingVideoIsfEventReset>,
         last_error: Option<String>,
     },
     RestoreVideoLayerIsfEffectAndCancelEventPulse {
@@ -12351,6 +13008,7 @@ impl PendingCommandRollback {
                 | Self::RestoreMediaAssetTransaction { .. }
                 | Self::RestoreVideoClipSlots { .. }
                 | Self::RestoreVideoLayerIsfEffect { .. }
+                | Self::RestoreVideoEffectCatalog { .. }
                 | Self::RestoreVideoLayerIsfEffectAndCancelEventPulse { .. }
                 | Self::RestoreAutoVj { .. }
                 | Self::RestoreFixturePatchBatch { .. }
@@ -12535,6 +13193,11 @@ struct EngineRuntime {
     #[cfg(test)]
     timeline_reconform_count: u64,
     media_assets: Vec<MediaAssetSummary>,
+    /// C1 canonical authored effect tables.  `RuntimeVideoLayer::isf_effect`
+    /// remains only the renderer compatibility projection of its Layer chain.
+    video_effect_chains: Vec<VideoEffectChainSummary>,
+    video_effect_presets: Vec<VideoEffectPresetSummary>,
+    video_layer_groups: Vec<VideoLayerGroupSummary>,
     video_layers: Vec<RuntimeVideoLayer>,
     clip_clock_tracker: RuntimeClipClockTracker,
     video_layer_fades: Vec<RuntimeVideoLayerFade>,
@@ -12680,6 +13343,10 @@ impl EngineRuntime {
     ) {
         let rollback = PendingCommandRollback::RestoreVideoClipSlots {
             video_layers: self.video_layers.clone(),
+            video_effect_chains: self.video_effect_chains.clone(),
+            video_effect_presets: self.video_effect_presets.clone(),
+            video_layer_groups: self.video_layer_groups.clone(),
+            pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
             last_error: self.last_error.clone(),
         };
         let result = if admission.try_admit_before(expires_at) {
@@ -12803,6 +13470,9 @@ impl EngineRuntime {
             #[cfg(test)]
             timeline_reconform_count: 0,
             media_assets: Vec::new(),
+            video_effect_chains: Vec::new(),
+            video_effect_presets: Vec::new(),
+            video_layer_groups: Vec::new(),
             video_layers: Vec::new(),
             clip_clock_tracker: RuntimeClipClockTracker::default(),
             video_layer_fades: Vec::new(),
@@ -13230,7 +13900,11 @@ impl EngineRuntime {
             self.last_error = Some(error.clone());
             return Err(error);
         }
-        let source_budget_result = video_isf_project_summary_source_bytes(&snapshot.video.layers)
+        // A legacy layer ISF is an exact renderer projection of its canonical
+        // Layer chain, not a second authored shader allocation.  Count every
+        // canonical entity and preset once, then use legacy data only for a
+        // pre-normalization fallback which has no corresponding Layer chain.
+        let source_budget_result = video_effect_project_source_bytes(&snapshot.video)
             .and_then(validate_video_isf_project_source_budget);
         if let Err(error) = source_budget_result {
             self.last_error = Some(error.clone());
@@ -13391,6 +14065,9 @@ impl EngineRuntime {
         // validated this image, so catalog entries (including legal orphans)
         // are retained verbatim through authored/rendered/persistence paths.
         self.media_assets = snapshot.video.media_assets.clone();
+        self.video_effect_chains = snapshot.video.effect_chains.clone();
+        self.video_effect_presets = snapshot.video.effect_presets.clone();
+        self.video_layer_groups = snapshot.video.layer_groups.clone();
         self.video_layers = sanitize_loaded_video_layers(&snapshot.video.layers);
         self.video_compositions =
             sanitize_loaded_video_compositions(&snapshot.video.compositions, &self.video_layers);
@@ -14118,6 +14795,9 @@ impl EngineRuntime {
                     | EngineCommand::LaunchVideoClipSlotPublished { .. }
                     | EngineCommand::SeekVideoClipSlotPublished { .. }
                     | EngineCommand::LoadProjectSnapshotPublished { .. }
+                    | EngineCommand::ApplyVideoEffectCatalogPublished { .. }
+                    | EngineCommand::SetVideoLayerIsfEffectPublishedWithAllocatedIds { .. }
+                    | EngineCommand::MutateVideoLayerIsfStackWithAllocatedIds { .. }
                     | EngineCommand::ApplyFixtureGroupStatePublished { .. }
                     | EngineCommand::PatchFixturesPublished { .. }
                     | EngineCommand::RepairFixtureProfilePublished { .. }
@@ -18656,13 +19336,15 @@ impl EngineRuntime {
                 label,
                 expected_source_slot_ids,
                 new_clip_slot_ids,
+                duplicate_effect_plan,
             } => {
-                let result = self.duplicate_video_layer(
+                let result = self.duplicate_video_layer_with_effect_catalog(
                     source_layer_id,
                     new_layer_id,
                     label,
                     &expected_source_slot_ids,
                     &new_clip_slot_ids,
+                    &duplicate_effect_plan,
                 );
                 self.last_error = result.as_ref().err().cloned();
             }
@@ -18678,19 +19360,25 @@ impl EngineRuntime {
                 label,
                 expected_source_slot_ids,
                 new_clip_slot_ids,
+                duplicate_effect_plan,
                 ack,
             } => {
                 let rollback = PendingCommandRollback::RestoreVideoLayersAndCompositions {
                     video_layers: self.video_layers.clone(),
                     video_compositions: self.video_compositions.clone(),
+                    effect_chains: self.video_effect_chains.clone(),
+                    effect_presets: self.video_effect_presets.clone(),
+                    layer_groups: self.video_layer_groups.clone(),
+                    pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
                     last_error: self.last_error.clone(),
                 };
-                let result = self.duplicate_video_layer(
+                let result = self.duplicate_video_layer_with_effect_catalog(
                     source_layer_id,
                     new_layer_id,
                     label,
                     &expected_source_slot_ids,
                     &new_clip_slot_ids,
+                    &duplicate_effect_plan,
                 );
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
@@ -18708,6 +19396,7 @@ impl EngineRuntime {
             }
             EngineCommand::SetVideoLayerOrder(layer_ids) => {
                 reorder_video_layers(&mut self.video_layers, layer_ids);
+                self.sanitize_video_effect_catalog_lifecycle();
                 self.last_error = None;
             }
             EngineCommand::SetVideoLayerLabel { layer_id, label } => {
@@ -18898,7 +19587,23 @@ impl EngineRuntime {
                 runtime.seek_video_clip_slot(layer_id, position_ms)
             }),
             EngineCommand::SetVideoLayerIsfEffect { layer_id, effect } => {
-                let result = self.set_video_layer_isf_effect(layer_id, effect);
+                let result = self
+                    .next_runtime_video_effect_legacy_adapter_ids(
+                        layer_id,
+                        legacy_video_isf_stage_count(effect.as_ref()),
+                    )
+                    .and_then(|ids| {
+                        self.set_video_layer_isf_effect_from_legacy_ingress(layer_id, effect, &ids)
+                    });
+                self.last_error = result.as_ref().err().cloned();
+            }
+            EngineCommand::SetVideoLayerIsfEffectWithAllocatedIds {
+                layer_id,
+                effect,
+                ids,
+            } => {
+                let result =
+                    self.set_video_layer_isf_effect_from_legacy_ingress(layer_id, effect, &ids);
                 self.last_error = result.as_ref().err().cloned();
             }
             EngineCommand::SetVideoLayerIsfEffectPublished {
@@ -18906,16 +19611,22 @@ impl EngineRuntime {
                 effect,
                 ack,
             } => {
-                let rollback = PendingCommandRollback::RestoreVideoLayerIsfEffect {
-                    layer_id,
-                    effect: self
-                        .video_layers
-                        .iter()
-                        .find(|layer| layer.id == layer_id)
-                        .and_then(|layer| layer.isf_effect.clone()),
+                let rollback = PendingCommandRollback::RestoreVideoEffectCatalog {
+                    effect_chains: self.video_effect_chains.clone(),
+                    effect_presets: self.video_effect_presets.clone(),
+                    layer_groups: self.video_layer_groups.clone(),
+                    video_layers: self.video_layers.clone(),
+                    pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
                     last_error: self.last_error.clone(),
                 };
-                let result = self.set_video_layer_isf_effect(layer_id, effect);
+                let result = self
+                    .next_runtime_video_effect_legacy_adapter_ids(
+                        layer_id,
+                        legacy_video_isf_stage_count(effect.as_ref()),
+                    )
+                    .and_then(|ids| {
+                        self.set_video_layer_isf_effect_from_legacy_ingress(layer_id, effect, &ids)
+                    });
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
                     ack,
@@ -18925,42 +19636,126 @@ impl EngineRuntime {
                         "Engine snapshot was busy; video ISF effect update was rolled back",
                 });
             }
+            EngineCommand::SetVideoLayerIsfEffectPublishedWithAllocatedIds {
+                layer_id,
+                effect,
+                ids,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreVideoEffectCatalog {
+                    effect_chains: self.video_effect_chains.clone(),
+                    effect_presets: self.video_effect_presets.clone(),
+                    layer_groups: self.video_layer_groups.clone(),
+                    video_layers: self.video_layers.clone(),
+                    pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result =
+                    self.set_video_layer_isf_effect_from_legacy_ingress(layer_id, effect, &ids);
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; video ISF effect update was rolled back",
+                });
+            }
+            EngineCommand::ApplyVideoEffectCatalogPublished {
+                effect_chains,
+                effect_presets,
+                layer_groups,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreVideoEffectCatalog {
+                    effect_chains: self.video_effect_chains.clone(),
+                    effect_presets: self.video_effect_presets.clone(),
+                    layer_groups: self.video_layer_groups.clone(),
+                    video_layers: self.video_layers.clone(),
+                    pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if admission.try_admit_before(expires_at) {
+                    self.apply_video_effect_catalog_state(
+                        effect_chains,
+                        effect_presets,
+                        layer_groups,
+                    )
+                } else {
+                    Err("Video effect catalog operation expired or was cancelled before engine admission".to_string())
+                };
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot publication failed; video effect catalog was rolled back",
+                });
+            }
             EngineCommand::MutateVideoLayerIsfStack {
                 layer_id,
                 mutation,
                 ack,
             } => {
-                let previous_last_error = self.last_error.clone();
-                let previous_effect = self
-                    .video_layers
-                    .iter()
-                    .find(|layer| layer.id == layer_id)
-                    .and_then(|layer| layer.isf_effect.clone());
-                let result = self
-                    .video_layers
-                    .iter()
-                    .position(|layer| layer.id == layer_id)
-                    .ok_or_else(|| format!("Video layer {layer_id} was not found"))
-                    .and_then(|layer_index| {
-                        let current = self.video_layers[layer_index].isf_effect.clone();
-                        let replacement = mutate_video_isf_effect_stack(current, mutation)?;
-                        validate_video_isf_project_source_budget_after_replacement(
-                            &self.video_layers,
-                            layer_index,
-                            replacement.as_ref(),
-                        )?;
-                        self.video_layers[layer_index].isf_effect = replacement;
-                        Ok(())
-                    });
+                let rollback = PendingCommandRollback::RestoreVideoEffectCatalog {
+                    effect_chains: self.video_effect_chains.clone(),
+                    effect_presets: self.video_effect_presets.clone(),
+                    layer_groups: self.video_layer_groups.clone(),
+                    video_layers: self.video_layers.clone(),
+                    pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if matches!(&mutation, VideoIsfStackMutation::Add(_)) {
+                    let stage_count = self
+                        .video_layers
+                        .iter()
+                        .find(|layer| layer.id == layer_id)
+                        .map(|layer| legacy_video_isf_stage_count(layer.isf_effect.as_ref()))
+                        .unwrap_or(0)
+                        .saturating_add(1);
+                    self.next_runtime_video_effect_legacy_adapter_ids(layer_id, stage_count)
+                        .and_then(|ids| {
+                            self.mutate_video_layer_isf_stack_canonical(layer_id, mutation, &ids)
+                        })
+                } else {
+                    self.mutate_video_layer_isf_stack_canonical(
+                        layer_id,
+                        mutation,
+                        &VideoEffectLegacyAdapterIds::default(),
+                    )
+                };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
                     ack,
                     result,
-                    rollback: PendingCommandRollback::RestoreVideoLayerIsfEffect {
-                        layer_id,
-                        effect: previous_effect,
-                        last_error: previous_last_error,
-                    },
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; video ISF stack update was rolled back",
+                });
+            }
+            EngineCommand::MutateVideoLayerIsfStackWithAllocatedIds {
+                layer_id,
+                mutation,
+                ids,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreVideoEffectCatalog {
+                    effect_chains: self.video_effect_chains.clone(),
+                    effect_presets: self.video_effect_presets.clone(),
+                    layer_groups: self.video_layer_groups.clone(),
+                    video_layers: self.video_layers.clone(),
+                    pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = self.mutate_video_layer_isf_stack_canonical(layer_id, mutation, &ids);
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
                     publication_error:
                         "Engine snapshot was busy; video ISF stack update was rolled back",
                 });
@@ -18972,12 +19767,14 @@ impl EngineRuntime {
                 hold,
                 ack,
             } => {
-                let previous_last_error = self.last_error.clone();
-                let previous_effect = self
-                    .video_layers
-                    .iter()
-                    .find(|layer| layer.id == layer_id)
-                    .and_then(|layer| layer.isf_effect.clone());
+                let rollback = PendingCommandRollback::RestoreVideoEffectCatalog {
+                    effect_chains: self.video_effect_chains.clone(),
+                    effect_presets: self.video_effect_presets.clone(),
+                    layer_groups: self.video_layer_groups.clone(),
+                    video_layers: self.video_layers.clone(),
+                    pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
+                    last_error: self.last_error.clone(),
+                };
                 let pulse_result = self.pulse_video_layer_isf_event(
                     layer_id,
                     stage_index,
@@ -18985,22 +19782,12 @@ impl EngineRuntime {
                     hold,
                     Instant::now(),
                 );
-                let (result, pulse_id, replaced_resets) = match pulse_result {
-                    Ok(applied) => (Ok(()), applied.pulse_id, applied.replaced_resets),
-                    Err(error) => (Err(error), 0, Vec::new()),
-                };
+                let result = pulse_result.map(|_| ());
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
                     ack,
                     result,
-                    rollback:
-                        PendingCommandRollback::RestoreVideoLayerIsfEffectAndCancelEventPulse {
-                            layer_id,
-                            effect: previous_effect,
-                            pulse_id,
-                            replaced_resets,
-                            last_error: previous_last_error,
-                        },
+                    rollback,
                     publication_error:
                         "Engine snapshot was busy; video ISF Event pulse was rolled back",
                 });
@@ -19341,6 +20128,7 @@ impl EngineRuntime {
                     self.video_compositions.push(RuntimeVideoComposition {
                         summary: composition,
                     });
+                    self.sanitize_video_effect_catalog_lifecycle();
                     self.last_error = None;
                 }
             }
@@ -19355,6 +20143,7 @@ impl EngineRuntime {
                             output.summary.composition_id = 1;
                         }
                     }
+                    self.sanitize_video_effect_catalog_lifecycle();
                     self.last_error = None;
                 }
             }
@@ -19372,6 +20161,7 @@ impl EngineRuntime {
                 {
                     composition.summary.layer_ids =
                         valid_unique_layer_ids(layer_ids, &self.video_layers);
+                    self.sanitize_video_effect_catalog_lifecycle();
                     self.last_error = None;
                 } else {
                     self.last_error =
@@ -19683,6 +20473,7 @@ impl EngineRuntime {
                         | PendingCommandRollback::RestoreMediaAssetTransaction { .. }
                         | PendingCommandRollback::RestoreVideoLayersAndCompositions { .. }
                         | PendingCommandRollback::RestoreVideoClipSlots { .. }
+                        | PendingCommandRollback::RestoreVideoEffectCatalog { .. }
                 )
         });
         #[cfg(test)]
@@ -19863,10 +20654,18 @@ impl EngineRuntime {
             PendingCommandRollback::RestoreVideoLayersAndCompositions {
                 video_layers,
                 video_compositions,
+                effect_chains,
+                effect_presets,
+                layer_groups,
+                pending_video_isf_event_resets,
                 last_error,
             } => {
                 self.video_layers = video_layers;
                 self.video_compositions = video_compositions;
+                self.video_effect_chains = effect_chains;
+                self.video_effect_presets = effect_presets;
+                self.video_layer_groups = layer_groups;
+                self.pending_video_isf_event_resets = pending_video_isf_event_resets;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreMediaAssetTransaction {
@@ -19888,9 +20687,17 @@ impl EngineRuntime {
             }
             PendingCommandRollback::RestoreVideoClipSlots {
                 video_layers,
+                video_effect_chains,
+                video_effect_presets,
+                video_layer_groups,
+                pending_video_isf_event_resets,
                 last_error,
             } => {
                 self.video_layers = video_layers;
+                self.video_effect_chains = video_effect_chains;
+                self.video_effect_presets = video_effect_presets;
+                self.video_layer_groups = video_layer_groups;
+                self.pending_video_isf_event_resets = pending_video_isf_event_resets;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreVideoLayerIsfEffect {
@@ -19905,6 +20712,21 @@ impl EngineRuntime {
                 {
                     layer.isf_effect = effect;
                 }
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreVideoEffectCatalog {
+                effect_chains,
+                effect_presets,
+                layer_groups,
+                video_layers,
+                pending_video_isf_event_resets,
+                last_error,
+            } => {
+                self.video_effect_chains = effect_chains;
+                self.video_effect_presets = effect_presets;
+                self.video_layer_groups = layer_groups;
+                self.video_layers = video_layers;
+                self.pending_video_isf_event_resets = pending_video_isf_event_resets;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreVideoLayerIsfEffectAndCancelEventPulse {
@@ -20323,6 +21145,7 @@ impl EngineRuntime {
         self.sanitize_cue_effect_targets();
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
+        self.sanitize_video_effect_catalog_lifecycle();
     }
 
     fn remove_video_output_references(&mut self, output_id: VideoOutputId) {
@@ -20343,6 +21166,119 @@ impl EngineRuntime {
             fade.video_output_timings.remove(&output_id);
         }
         self.clear_empty_active_fade();
+        self.sanitize_video_effect_catalog_lifecycle();
+    }
+
+    /// Existing video lifecycle commands predate C1's central effect tables.
+    /// Keep those compatibility operations fail-closed: every surviving scope
+    /// must still point at a current layer/slot/composition/group/output, and
+    /// a group must retain its flat contiguous membership.  This runs only
+    /// after destructive topology changes; catalog mutation itself remains
+    /// the one validated whole-image publication path.
+    fn sanitize_video_effect_catalog_lifecycle(&mut self) {
+        let layers = self
+            .video_layers
+            .iter()
+            .map(|layer| layer.id)
+            .collect::<HashSet<_>>();
+        let compositions = std::iter::once(1)
+            .chain(
+                self.video_compositions
+                    .iter()
+                    .map(|composition| composition.summary.id),
+            )
+            .collect::<HashSet<_>>();
+        let outputs = self
+            .video_outputs
+            .iter()
+            .map(|output| output.summary.id)
+            .collect::<HashSet<_>>();
+
+        self.video_layer_groups.retain_mut(|group| {
+            if !compositions.contains(&group.composition_id) {
+                return false;
+            }
+            let Some(composition_layers) = (if group.composition_id == 1 {
+                Some(
+                    self.video_layers
+                        .iter()
+                        .map(|layer| layer.id)
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                self.video_compositions
+                    .iter()
+                    .find(|composition| composition.summary.id == group.composition_id)
+                    .map(|composition| composition.summary.layer_ids.clone())
+            }) else {
+                return false;
+            };
+            group.layer_ids.retain(|layer_id| layers.contains(layer_id));
+            if group.layer_ids.is_empty() {
+                return false;
+            }
+            let positions = group
+                .layer_ids
+                .iter()
+                .map(|layer_id| composition_layers.iter().position(|id| id == layer_id))
+                .collect::<Option<Vec<_>>>();
+            positions.is_some_and(|positions| {
+                positions
+                    .windows(2)
+                    .all(|pair| pair[1] == pair[0].saturating_add(1))
+            })
+        });
+        let groups = self
+            .video_layer_groups
+            .iter()
+            .map(|group| group.id)
+            .collect::<HashSet<_>>();
+        self.video_effect_chains.retain(|chain| match &chain.scope {
+            VideoEffectScope::Clip { layer_id, slot_id } => self
+                .video_layers
+                .iter()
+                .find(|layer| layer.id == *layer_id)
+                .is_some_and(|layer| layer.clip_slots.iter().any(|slot| slot.id == *slot_id)),
+            VideoEffectScope::Layer { layer_id }
+            | VideoEffectScope::Transition {
+                owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id },
+            } => layers.contains(layer_id),
+            VideoEffectScope::Transition {
+                owner: protocol::VideoTransitionEffectOwner::LayerBus { .. },
+            } => false,
+            VideoEffectScope::Composition { composition_id } => {
+                compositions.contains(composition_id)
+            }
+            VideoEffectScope::Group { group_id } => groups.contains(group_id),
+            VideoEffectScope::Output { output_id } => outputs.contains(output_id),
+        });
+        self.retain_valid_pending_video_isf_event_resets();
+    }
+
+    /// Pending Event pulses follow the exact canonical entity, so a stack
+    /// move preserves the reset while a removal/replacement simply drops it.
+    fn retain_valid_pending_video_isf_event_resets(&mut self) {
+        self.pending_video_isf_event_resets.retain(|pending| {
+            self.video_effect_chains
+                .iter()
+                .find(|chain| {
+                    chain.scope
+                        == VideoEffectScope::Layer {
+                            layer_id: pending.layer_id,
+                        }
+                })
+                .and_then(|chain| {
+                    chain.stages.iter().find(|stage| {
+                        stage.id == pending.stage_id && stage.effect.id == pending.effect_id
+                    })
+                })
+                .is_some_and(|stage| match &stage.effect.kind {
+                    VideoEffectKind::Isf { effect } => effect.controls.iter().any(|control| {
+                        control.name == pending.control_name
+                            && control.kind == VideoIsfControlKind::Event
+                    }),
+                })
+        });
     }
 
     fn clear_empty_active_fade(&mut self) {
@@ -29661,6 +30597,9 @@ impl EngineRuntime {
                 .map(|layer| self.video_layer_summary_with_effects(layer, now))
                 .collect(),
             media_assets: self.media_assets.clone(),
+            effect_chains: self.video_effect_chains.clone(),
+            effect_presets: self.video_effect_presets.clone(),
+            layer_groups: self.video_layer_groups.clone(),
             compositions,
             outputs,
             mapping_presets: self.video_output_mapping_presets.clone(),
@@ -29799,6 +30738,9 @@ impl EngineRuntime {
                 .map(|layer| authored_video_layer_summary(layer, &self.media_assets))
                 .collect(),
             media_assets: self.media_assets.clone(),
+            effect_chains: self.video_effect_chains.clone(),
+            effect_presets: self.video_effect_presets.clone(),
+            layer_groups: self.video_layer_groups.clone(),
             compositions: rendered.compositions.clone(),
             outputs: rendered.outputs.clone(),
             mapping_presets: rendered.mapping_presets.clone(),
@@ -29825,6 +30767,146 @@ impl EngineRuntime {
             .checked_add(1)
             .filter(|id| *id != 0)
             .ok_or_else(|| "Media asset ID allocation overflow".to_string())
+    }
+
+    /// Direct runtime tests may exercise legacy commands without an
+    /// `EngineHandle`.  Production always supplies handle-reserved IDs; this
+    /// fallback derives a collision-free candidate solely for those tests.
+    fn next_runtime_video_effect_legacy_adapter_ids(
+        &self,
+        layer_id: VideoLayerId,
+        target_stage_count: usize,
+    ) -> Result<VideoEffectLegacyAdapterIds, String> {
+        let next = |values: Vec<u64>, label: &str| {
+            values
+                .into_iter()
+                .max()
+                .unwrap_or(0)
+                .checked_add(1)
+                .filter(|value| *value != 0)
+                .ok_or_else(|| format!("{label} ID allocation overflow"))
+        };
+        if !self.video_layers.iter().any(|layer| layer.id == layer_id) {
+            return Err(format!("Video layer {layer_id} was not found"));
+        }
+        let existing = self
+            .video_effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id });
+        let needs_chain = target_stage_count != 0 && existing.is_none();
+        let stage_count = existing
+            .map(|chain| target_stage_count.saturating_sub(chain.stages.len()))
+            .unwrap_or(target_stage_count);
+        let chain_id = if needs_chain {
+            VideoEffectChainId(next(
+                self.video_effect_chains
+                    .iter()
+                    .map(|chain| chain.id.0)
+                    .collect(),
+                "Video effect chain",
+            )?)
+        } else {
+            VideoEffectChainId(0)
+        };
+        let mut stage_ids = Vec::with_capacity(stage_count);
+        let mut effect_ids = Vec::with_capacity(stage_count);
+        let mut stage_next = next(
+            self.video_effect_chains
+                .iter()
+                .flat_map(|chain| chain.stages.iter().map(|stage| stage.id.0))
+                .collect(),
+            "Video effect stage",
+        )?;
+        let mut effect_next = next(
+            self.video_effect_chains
+                .iter()
+                .flat_map(|chain| chain.stages.iter().map(|stage| stage.effect.id.0))
+                .collect(),
+            "Video effect",
+        )?;
+        for _ in 0..stage_count {
+            stage_ids.push(VideoEffectStageId(stage_next));
+            effect_ids.push(VideoEffectId(effect_next));
+            stage_next = stage_next
+                .checked_add(1)
+                .filter(|value| *value != 0)
+                .ok_or_else(|| "Video effect stage ID allocation overflow".to_string())?;
+            effect_next = effect_next
+                .checked_add(1)
+                .filter(|value| *value != 0)
+                .ok_or_else(|| "Video effect ID allocation overflow".to_string())?;
+        }
+        Ok(VideoEffectLegacyAdapterIds {
+            chain_id,
+            stage_ids,
+            effect_ids,
+        })
+    }
+
+    fn next_runtime_video_effect_duplicate_ids(
+        &self,
+        source_chains: &[VideoEffectChainSummary],
+    ) -> Result<VideoLayerDuplicateEffectCatalogPlan, String> {
+        let next = |values: Vec<u64>, label: &str| {
+            values
+                .into_iter()
+                .max()
+                .unwrap_or(0)
+                .checked_add(1)
+                .filter(|value| *value != 0)
+                .ok_or_else(|| format!("{label} ID allocation overflow"))
+        };
+        let mut stage_next = next(
+            self.video_effect_chains
+                .iter()
+                .flat_map(|chain| chain.stages.iter().map(|stage| stage.id.0))
+                .collect(),
+            "Video effect stage",
+        )?;
+        let mut effect_next = next(
+            self.video_effect_chains
+                .iter()
+                .flat_map(|chain| chain.stages.iter().map(|stage| stage.effect.id.0))
+                .collect(),
+            "Video effect",
+        )?;
+        let mut chain_next = next(
+            self.video_effect_chains
+                .iter()
+                .map(|chain| chain.id.0)
+                .collect(),
+            "Video effect chain",
+        )?;
+        let mut duplicate_chain_ids = Vec::with_capacity(source_chains.len());
+        for source_chain in source_chains {
+            let mut stage_ids = Vec::with_capacity(source_chain.stages.len());
+            let mut effect_ids = Vec::with_capacity(source_chain.stages.len());
+            for _ in &source_chain.stages {
+                stage_ids.push(VideoEffectStageId(stage_next));
+                effect_ids.push(VideoEffectId(effect_next));
+                stage_next = stage_next
+                    .checked_add(1)
+                    .filter(|value| *value != 0)
+                    .ok_or_else(|| "Video effect stage ID allocation overflow".to_string())?;
+                effect_next = effect_next
+                    .checked_add(1)
+                    .filter(|value| *value != 0)
+                    .ok_or_else(|| "Video effect ID allocation overflow".to_string())?;
+            }
+            duplicate_chain_ids.push(VideoEffectLegacyAdapterIds {
+                chain_id: VideoEffectChainId(chain_next),
+                stage_ids,
+                effect_ids,
+            });
+            chain_next = chain_next
+                .checked_add(1)
+                .filter(|value| *value != 0)
+                .ok_or_else(|| "Video effect chain ID allocation overflow".to_string())?;
+        }
+        Ok(VideoLayerDuplicateEffectCatalogPlan {
+            expected_source_owned_chain_ids: source_chains.iter().map(|chain| chain.id).collect(),
+            duplicate_chain_ids,
+        })
     }
 
     fn next_runtime_legacy_video_clip_slot_id(&self) -> Result<VideoClipSlotId, String> {
@@ -29868,6 +30950,36 @@ impl EngineRuntime {
             ));
         }
         let label = sanitize_video_layer_label(label, layer_id);
+        // This legacy command has always treated a repeated layer ID as a
+        // replacement.  C1's stable catalog must not give the replacement
+        // ownership of the retired layer's chains, clip/take effects, group
+        // membership, or deferred Event reset.  Prune that old topology
+        // before inserting the fresh layer with the same public ID.
+        if self.video_layers.iter().any(|layer| layer.id == layer_id) {
+            self.video_effect_chains.retain(|chain| match &chain.scope {
+                VideoEffectScope::Layer {
+                    layer_id: chain_layer_id,
+                }
+                | VideoEffectScope::Clip {
+                    layer_id: chain_layer_id,
+                    ..
+                }
+                | VideoEffectScope::Transition {
+                    owner:
+                        protocol::VideoTransitionEffectOwner::ClipTake {
+                            layer_id: chain_layer_id,
+                        },
+                } => *chain_layer_id != layer_id,
+                _ => true,
+            });
+            for group in &mut self.video_layer_groups {
+                group
+                    .layer_ids
+                    .retain(|group_layer_id| *group_layer_id != layer_id);
+            }
+            self.pending_video_isf_event_resets
+                .retain(|pending| pending.layer_id != layer_id);
+        }
         self.video_layers.retain(|layer| layer.id != layer_id);
         self.video_layer_fades
             .retain(|fade| fade.layer_id != layer_id);
@@ -29907,6 +31019,7 @@ impl EngineRuntime {
         };
         initialize_runtime_default_clip_slot(&mut layer);
         self.video_layers.push(layer);
+        self.sanitize_video_effect_catalog_lifecycle();
         Ok(())
     }
 
@@ -30039,6 +31152,7 @@ impl EngineRuntime {
                     // catalog byte-identical while preserving that contract.
                     return Ok(());
                 }
+                reject_media_asset_candidate_c1_effects(&candidate, "Media asset import")?;
                 let existing_asset_ids = next_assets
                     .iter()
                     .map(|asset| asset.id)
@@ -30069,12 +31183,12 @@ impl EngineRuntime {
                     .map(|layer| authored_video_layer_summary(layer, &next_assets))
                     .collect::<Vec<_>>();
                 candidate_layer_summaries.extend(candidate.layers);
-                let candidate_video = VideoSnapshot {
-                    layers: candidate_layer_summaries.clone(),
-                    media_assets: next_assets.clone(),
-                    ..VideoSnapshot::default()
-                };
+                let rendered = self.video_snapshot();
+                let mut candidate_video = self.authored_video_snapshot_from_rendered(&rendered);
+                candidate_video.layers = candidate_layer_summaries.clone();
+                candidate_video.media_assets = next_assets.clone();
                 validate_engine_ready_video_clip_slots(&candidate_video)?;
+                validate_engine_ready_video_effect_chains(&candidate_video)?;
                 validate_video_clip_slot_bank_limits(&candidate_video)?;
                 next_layers.extend(
                     candidate_layer_summaries
@@ -30099,6 +31213,7 @@ impl EngineRuntime {
                 if candidate.layers.is_empty() {
                     return Err("First-run VJ setup requires at least one media layer".to_string());
                 }
+                reject_media_asset_candidate_c1_effects(&candidate, "First-run VJ setup")?;
                 if candidate.layers.iter().any(|layer| {
                     layer.source.kind != protocol::VideoSourceKind::File
                         || layer.source.path.as_deref().is_none_or(str::is_empty)
@@ -30136,6 +31251,7 @@ impl EngineRuntime {
                     ..VideoSnapshot::default()
                 };
                 validate_engine_ready_video_clip_slots(&candidate_video)?;
+                validate_engine_ready_video_effect_chains(&candidate_video)?;
                 validate_video_clip_slot_bank_limits(&candidate_video)?;
                 let next_layers = candidate_video
                     .layers
@@ -30193,6 +31309,61 @@ impl EngineRuntime {
         Ok(())
     }
 
+    /// Slot authoring is an adapter boundary: old callers may omit the stable
+    /// effect identity, while C1 persistence must never do so.  Validate the
+    /// candidate against the currently owned canonical tables, allowing the
+    /// protocol normalizer to fill an omitted ID but rejecting a conflicting
+    /// supplied one before any runtime state is committed.
+    fn reconcile_and_validate_authored_video_clip_slot_candidate(
+        &self,
+        layers: &mut [RuntimeVideoLayer],
+        assets: &[MediaAssetSummary],
+    ) -> Result<(), String> {
+        let rendered = self.video_snapshot();
+        let mut candidate = self.authored_video_snapshot_from_rendered(&rendered);
+        candidate.layers = layers
+            .iter()
+            .map(|layer| authored_video_layer_summary(layer, assets))
+            .collect();
+        candidate.media_assets = assets.to_vec();
+
+        normalize_legacy_video_effect_chains(&mut candidate)?;
+        validate_engine_ready_video_clip_slots(&candidate)?;
+        validate_engine_ready_video_effect_chains(&candidate)?;
+        validate_video_clip_slot_bank_limits(&candidate)?;
+
+        // The only normalizer-owned change on existing runtime layers is the
+        // additive stable effect identity in clip overrides.  Copy exactly
+        // that authored data back without disturbing queue/take/playhead
+        // runtime state or the canonical Layer projection.
+        for layer in layers {
+            let normalized_layer = candidate
+                .layers
+                .iter()
+                .find(|candidate_layer| candidate_layer.id == layer.id)
+                .ok_or_else(|| {
+                    format!(
+                        "Video layer {} disappeared while validating clip slot authoring",
+                        layer.id
+                    )
+                })?;
+            for slot in &mut layer.clip_slots {
+                let normalized_slot = normalized_layer
+                    .clip_slots
+                    .iter()
+                    .find(|candidate_slot| candidate_slot.id == slot.id)
+                    .ok_or_else(|| {
+                        format!(
+                            "Video clip slot {} disappeared while validating layer {}",
+                            slot.id.0, layer.id
+                        )
+                    })?;
+                slot.effect_overrides = normalized_slot.effect_overrides.clone();
+            }
+        }
+        Ok(())
+    }
+
     fn import_and_assign_video_clip_slots(
         &mut self,
         candidate: VideoClipSlotImportAndAssignCandidate,
@@ -30221,7 +31392,10 @@ impl EngineRuntime {
         for layer in &mut next_layers {
             sync_authored_default_projection(layer, &next_assets)?;
         }
-        validate_runtime_video_clip_slot_candidate(&next_layers, &next_assets)?;
+        self.reconcile_and_validate_authored_video_clip_slot_candidate(
+            &mut next_layers,
+            &next_assets,
+        )?;
         self.media_assets = next_assets;
         self.video_layers = next_layers;
         Ok(())
@@ -30244,8 +31418,12 @@ impl EngineRuntime {
         )?;
         let layer = runtime_video_layer_mut(&mut next_layers, layer_id)?;
         sync_authored_default_projection(layer, &self.media_assets)?;
-        validate_runtime_video_clip_slot_candidate(&next_layers, &self.media_assets)?;
+        self.reconcile_and_validate_authored_video_clip_slot_candidate(
+            &mut next_layers,
+            &self.media_assets,
+        )?;
         self.video_layers = next_layers;
+        self.sanitize_video_effect_catalog_lifecycle();
         Ok(())
     }
 
@@ -30261,7 +31439,10 @@ impl EngineRuntime {
         let slot = runtime_clip_slot_mut(layer, slot_id)?;
         slot.media_asset_id = media_asset_id;
         sync_authored_default_projection(layer, &self.media_assets)?;
-        validate_runtime_video_clip_slot_candidate(&next_layers, &self.media_assets)?;
+        self.reconcile_and_validate_authored_video_clip_slot_candidate(
+            &mut next_layers,
+            &self.media_assets,
+        )?;
         self.video_layers = next_layers;
         Ok(())
     }
@@ -30277,7 +31458,10 @@ impl EngineRuntime {
         let previous = runtime_clip_slot_mut(layer, slot.id)?;
         *previous = slot;
         sync_authored_default_projection(layer, &self.media_assets)?;
-        validate_runtime_video_clip_slot_candidate(&next_layers, &self.media_assets)?;
+        self.reconcile_and_validate_authored_video_clip_slot_candidate(
+            &mut next_layers,
+            &self.media_assets,
+        )?;
         self.video_layers = next_layers;
         Ok(())
     }
@@ -30331,6 +31515,7 @@ impl EngineRuntime {
         sync_authored_default_projection(layer, &self.media_assets)?;
         validate_runtime_video_clip_slot_candidate(&next_layers, &self.media_assets)?;
         self.video_layers = next_layers;
+        self.sanitize_video_effect_catalog_lifecycle();
         Ok(())
     }
 
@@ -30537,6 +31722,9 @@ impl EngineRuntime {
         Ok(())
     }
 
+    /// Direct runtime tests retain the legacy convenience form. Production
+    /// uses the pre-reserved path below; tests derive fresh IDs from the
+    /// complete in-memory catalog without sharing an EngineHandle allocator.
     fn duplicate_video_layer(
         &mut self,
         source_layer_id: VideoLayerId,
@@ -30544,6 +31732,39 @@ impl EngineRuntime {
         label: String,
         expected_source_slot_ids: &[VideoClipSlotId],
         new_clip_slot_ids: &[VideoClipSlotId],
+    ) -> Result<(), String> {
+        let source_owned_chains = self
+            .video_effect_chains
+            .iter()
+            .filter(|chain| {
+                video_effect_chain_is_owned_by_layer(
+                    chain,
+                    source_layer_id,
+                    expected_source_slot_ids,
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let duplicate_effect_plan =
+            self.next_runtime_video_effect_duplicate_ids(&source_owned_chains)?;
+        self.duplicate_video_layer_with_effect_catalog(
+            source_layer_id,
+            new_layer_id,
+            label,
+            expected_source_slot_ids,
+            new_clip_slot_ids,
+            &duplicate_effect_plan,
+        )
+    }
+
+    fn duplicate_video_layer_with_effect_catalog(
+        &mut self,
+        source_layer_id: VideoLayerId,
+        new_layer_id: VideoLayerId,
+        label: String,
+        expected_source_slot_ids: &[VideoClipSlotId],
+        new_clip_slot_ids: &[VideoClipSlotId],
+        duplicate_effect_plan: &VideoLayerDuplicateEffectCatalogPlan,
     ) -> Result<(), String> {
         if source_layer_id == new_layer_id
             || self
@@ -30578,16 +31799,29 @@ impl EngineRuntime {
                 "Video layer {source_layer_id} clip bank changed before duplicate admission"
             ));
         }
-        let added_source_bytes = self.video_layers[source_index]
-            .isf_effect
-            .as_ref()
-            .map(video_isf_effect_source_bytes)
-            .transpose()?
-            .unwrap_or(0);
-        validate_video_isf_project_source_budget_after_addition(
-            &self.video_layers,
-            added_source_bytes,
-        )?;
+        let source_owned_chains = self
+            .video_effect_chains
+            .iter()
+            .filter(|chain| {
+                video_effect_chain_is_owned_by_layer(
+                    chain,
+                    source_layer_id,
+                    expected_source_slot_ids,
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if source_owned_chains
+            .iter()
+            .map(|chain| chain.id)
+            .collect::<Vec<_>>()
+            != duplicate_effect_plan.expected_source_owned_chain_ids
+            || source_owned_chains.len() != duplicate_effect_plan.duplicate_chain_ids.len()
+        {
+            return Err(format!(
+                "Video layer {source_layer_id} owned effect catalog changed before duplicate admission"
+            ));
+        }
 
         let mut duplicate = self.video_layers[source_index].clone();
         duplicate.id = new_layer_id;
@@ -30613,7 +31847,61 @@ impl EngineRuntime {
         if let Some(effect) = &mut duplicate.isf_effect {
             clear_transient_video_isf_event_controls(effect);
         }
+        let mut duplicate_chains = source_owned_chains
+            .iter()
+            .zip(&duplicate_effect_plan.duplicate_chain_ids)
+            .map(|(chain, ids)| {
+                duplicate_video_effect_chain_for_layer(
+                    chain,
+                    new_layer_id,
+                    expected_source_slot_ids,
+                    new_clip_slot_ids,
+                    ids,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some((source_chain, duplicate_chain)) = source_owned_chains
+            .iter()
+            .zip(&duplicate_chains)
+            .find(|(chain, _)| {
+                chain.scope
+                    == VideoEffectScope::Layer {
+                        layer_id: source_layer_id,
+                    }
+            })
+        {
+            rebind_duplicate_layer_clip_overrides(
+                &mut duplicate.clip_slots,
+                source_chain,
+                duplicate_chain,
+            )?;
+        }
+
+        let mut candidate = self.authored_video_snapshot_from_rendered(&self.video_snapshot());
+        candidate.layers.insert(
+            source_index + 1,
+            authored_video_layer_summary(&duplicate, &self.media_assets),
+        );
+        insert_duplicate_layer_into_candidate_topology(
+            &mut candidate,
+            source_layer_id,
+            new_layer_id,
+        )?;
+        candidate.effect_chains.append(&mut duplicate_chains);
+        normalize_legacy_video_effect_chains(&mut candidate)?;
+        validate_engine_ready_video_effect_chains(&candidate)?;
+        validate_video_isf_project_source_budget(video_effect_project_source_bytes(&candidate)?)?;
+        let candidate_duplicate = candidate
+            .layers
+            .iter()
+            .find(|layer| layer.id == new_layer_id)
+            .ok_or_else(|| {
+                format!("Video layer {new_layer_id} disappeared during duplicate validation")
+            })?;
+        install_validated_layer_effect_projection(&mut duplicate, candidate_duplicate);
         self.video_layers.insert(source_index + 1, duplicate);
+        self.video_effect_chains = candidate.effect_chains;
+        self.video_layer_groups = candidate.layer_groups;
 
         for composition in &mut self.video_compositions {
             if composition.summary.layer_ids.contains(&new_layer_id) {
@@ -30637,22 +31925,253 @@ impl EngineRuntime {
     fn set_video_layer_isf_effect(
         &mut self,
         layer_id: VideoLayerId,
+        effect: Option<VideoIsfEffectSummary>,
+        ids: &VideoEffectLegacyAdapterIds,
+    ) -> Result<(), String> {
+        self.set_video_layer_isf_effect_with_stage_identity_transform(layer_id, effect, ids, None)
+    }
+
+    /// Legacy effect replacement has no pulse lifecycle metadata. Event is
+    /// therefore runtime-only at this ingress: a high input is normalized to
+    /// zero before it can become either canonical authored state or the
+    /// renderer's compatibility projection. `PulseVideoLayerIsfEvent` uses
+    /// the lower-level setter directly because it owns the matching reset.
+    fn set_video_layer_isf_effect_from_legacy_ingress(
+        &mut self,
+        layer_id: VideoLayerId,
         mut effect: Option<VideoIsfEffectSummary>,
+        ids: &VideoEffectLegacyAdapterIds,
+    ) -> Result<(), String> {
+        if let Some(effect) = &mut effect {
+            clear_transient_video_isf_event_controls(effect);
+        }
+        self.set_video_layer_isf_effect(layer_id, effect, ids)
+    }
+
+    fn set_video_layer_isf_effect_with_stage_identity_transform(
+        &mut self,
+        layer_id: VideoLayerId,
+        effect: Option<VideoIsfEffectSummary>,
+        ids: &VideoEffectLegacyAdapterIds,
+        stage_identity_transform: Option<LegacyIsfStageIdentityTransform>,
     ) -> Result<(), String> {
         let layer_index = self
             .video_layers
             .iter()
             .position(|layer| layer.id == layer_id)
             .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
-        if let Some(effect) = &mut effect {
-            clear_transient_video_isf_event_controls(effect);
+        let mut candidate = self.authored_video_snapshot_from_rendered(&self.video_snapshot());
+        let existing_chain_index = candidate
+            .effect_chains
+            .iter()
+            .position(|chain| chain.scope == VideoEffectScope::Layer { layer_id });
+        if let (Some(chain_index), Some(transform)) =
+            (existing_chain_index, stage_identity_transform)
+        {
+            let stages = &mut candidate.effect_chains[chain_index].stages;
+            match transform {
+                LegacyIsfStageIdentityTransform::Move { from, to } => stages.swap(from, to),
+                LegacyIsfStageIdentityTransform::Remove { index } => {
+                    stages.remove(index);
+                }
+            }
         }
-        validate_video_isf_project_source_budget_after_replacement(
-            &self.video_layers,
-            layer_index,
-            effect.as_ref(),
-        )?;
-        self.video_layers[layer_index].isf_effect = effect;
+        if effect.is_none() {
+            if let Some(index) = existing_chain_index {
+                candidate.effect_chains.remove(index);
+            }
+        } else {
+            let existing_stages = existing_chain_index
+                .and_then(|index| candidate.effect_chains.get(index))
+                .map(|chain| chain.stages.as_slice())
+                .unwrap_or_default();
+            let stages = canonical_stages_from_legacy_isf(
+                effect.as_ref().expect("checked is_some"),
+                existing_stages,
+                ids,
+            )?;
+            if let Some(index) = existing_chain_index {
+                candidate.effect_chains[index].bypassed = false;
+                candidate.effect_chains[index].stages = stages;
+            } else {
+                if ids.chain_id.0 == 0 {
+                    return Err(
+                        "Legacy ISF adapter is missing a chain ID for a new Layer chain"
+                            .to_string(),
+                    );
+                }
+                candidate.effect_chains.push(VideoEffectChainSummary {
+                    id: ids.chain_id,
+                    scope: VideoEffectScope::Layer { layer_id },
+                    bypassed: false,
+                    stages,
+                });
+            }
+        }
+        candidate.layers[layer_index].isf_effect = effect;
+        let layer_chain = candidate
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+            .cloned();
+        reconcile_legacy_clip_overrides_against_layer_chain(
+            &mut candidate.layers[layer_index],
+            layer_chain.as_ref(),
+        );
+        normalize_legacy_video_effect_chains(&mut candidate)?;
+        validate_engine_ready_video_effect_chains(&candidate)?;
+        validate_video_isf_project_source_budget(video_effect_project_source_bytes(&candidate)?)?;
+        self.video_effect_chains = candidate.effect_chains;
+        install_validated_layer_effect_projection(
+            &mut self.video_layers[layer_index],
+            &candidate.layers[layer_index],
+        );
+        self.retain_valid_pending_video_isf_event_resets();
+        Ok(())
+    }
+
+    fn mutate_video_layer_isf_stack_canonical(
+        &mut self,
+        layer_id: VideoLayerId,
+        mut mutation: VideoIsfStackMutation,
+        ids: &VideoEffectLegacyAdapterIds,
+    ) -> Result<(), String> {
+        let layer_index = self
+            .video_layers
+            .iter()
+            .position(|layer| layer.id == layer_id)
+            .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+        let current = self.video_layers[layer_index].isf_effect.clone();
+        if let VideoIsfStackMutation::SetControl {
+            stage_index,
+            control_name,
+            ..
+        } = &mutation
+        {
+            let existing_control = current.as_ref().and_then(|effect| {
+                if *stage_index == 0 {
+                    effect
+                        .controls
+                        .iter()
+                        .find(|control| control.name == control_name.as_str())
+                } else {
+                    effect.stack.get(*stage_index - 1).and_then(|stage| {
+                        stage
+                            .controls
+                            .iter()
+                            .find(|control| control.name == control_name.as_str())
+                    })
+                }
+            });
+            if existing_control.is_some_and(|control| control.kind == VideoIsfControlKind::Event) {
+                return Err(format!(
+                    "ISF Event control '{}' may only be triggered by PulseVideoLayerIsfEvent",
+                    control_name
+                ));
+            }
+        }
+        if let VideoIsfStackMutation::Add(stage) = &mut mutation {
+            for control in &mut stage.controls {
+                if control.kind == VideoIsfControlKind::Event {
+                    control.value = [0.0; 4];
+                }
+            }
+        }
+        let stage_identity_transform = match &mutation {
+            VideoIsfStackMutation::Move { stage_index, delta } => {
+                let target = (*stage_index as i64 + i64::from(*delta)) as usize;
+                Some(LegacyIsfStageIdentityTransform::Move {
+                    from: *stage_index,
+                    to: target,
+                })
+            }
+            VideoIsfStackMutation::Remove { stage_index } => {
+                Some(LegacyIsfStageIdentityTransform::Remove {
+                    index: *stage_index,
+                })
+            }
+            VideoIsfStackMutation::Add(_)
+            | VideoIsfStackMutation::SetEnabled { .. }
+            | VideoIsfStackMutation::Reset { .. }
+            | VideoIsfStackMutation::SetControl { .. } => None,
+        };
+        let replacement = mutate_video_isf_effect_stack(current, mutation)?;
+        self.set_video_layer_isf_effect_with_stage_identity_transform(
+            layer_id,
+            replacement,
+            ids,
+            stage_identity_transform,
+        )
+    }
+
+    /// Validate a complete authored catalog first, then install the central
+    /// tables and the renderer's exact legacy Layer projection together.  The
+    /// projection is never independently authored after C1.
+    fn apply_video_effect_catalog_state(
+        &mut self,
+        effect_chains: Vec<VideoEffectChainSummary>,
+        effect_presets: Vec<VideoEffectPresetSummary>,
+        layer_groups: Vec<VideoLayerGroupSummary>,
+    ) -> Result<(), String> {
+        let rendered = self.video_snapshot();
+        let mut candidate = self.authored_video_snapshot_from_rendered(&rendered);
+        candidate.effect_chains = effect_chains;
+        candidate.effect_presets = effect_presets;
+        candidate.layer_groups = layer_groups;
+
+        // Event controls are pulses, never authored catalog state.  A caller
+        // can have taken its replacement image from the live snapshot while a
+        // pulse is high; accepting that high value would make the pulse
+        // durable when the replacement arrives before its scheduled reset.
+        // Normalize the incoming B image at the same authoritative boundary
+        // used by persistence before projecting it to legacy renderer state.
+        for chain in &mut candidate.effect_chains {
+            for stage in &mut chain.stages {
+                clear_transient_video_effect_kind(&mut stage.effect.kind);
+            }
+        }
+        for preset in &mut candidate.effect_presets {
+            for stage in &mut preset.payload.stages {
+                clear_transient_video_effect_kind(&mut stage.effect);
+            }
+        }
+
+        for layer in &mut candidate.layers {
+            let layer_chain = candidate
+                .effect_chains
+                .iter()
+                .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id: layer.id })
+                .cloned();
+            layer.isf_effect = match layer_chain.as_ref() {
+                Some(chain) => project_legacy_isf_from_canonical_chain(chain)?,
+                None => None,
+            };
+            reconcile_legacy_clip_overrides_against_layer_chain(layer, layer_chain.as_ref());
+        }
+        validate_engine_ready_video_effect_chains(&candidate)?;
+        validate_video_isf_project_source_budget(video_effect_project_source_bytes(&candidate)?)?;
+
+        for layer in &mut self.video_layers {
+            let candidate_layer = candidate
+                .layers
+                .iter()
+                .find(|candidate_layer| candidate_layer.id == layer.id)
+                .ok_or_else(|| {
+                    format!(
+                        "Video layer {} disappeared during effect catalog validation",
+                        layer.id
+                    )
+                })?;
+            install_validated_layer_effect_projection(layer, candidate_layer);
+        }
+        self.video_effect_chains = candidate.effect_chains;
+        self.video_effect_presets = candidate.effect_presets;
+        self.video_layer_groups = candidate.layer_groups;
+        // Preserve a pulse only when its exact stable entity/control remains
+        // in the accepted catalog. Reordering therefore retains the reset,
+        // while a removed or replaced target is dropped. Complete-A rollback
+        // restores the former queue if publication fails.
+        self.retain_valid_pending_video_isf_event_resets();
         Ok(())
     }
 
@@ -30672,21 +32191,19 @@ impl EngineRuntime {
             .iter()
             .position(|layer| layer.id == layer_id)
             .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
-        let stage_source = {
-            let effect = self.video_layers[layer_index]
-                .isf_effect
-                .as_ref()
-                .ok_or_else(|| format!("Video layer {layer_id} has no ISF stack"))?;
-            let (source, controls) = if stage_index == 0 {
-                (&effect.source, effect.controls.as_slice())
-            } else {
-                let stage = effect
-                    .stack
-                    .get(stage_index - 1)
-                    .ok_or_else(|| format!("ISF stage {} was not found", stage_index + 1))?;
-                (&stage.source, stage.controls.as_slice())
-            };
-            let control = controls
+        let (stage_id, effect_id) = {
+            let chain = self
+                .video_effect_chains
+                .iter()
+                .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+                .ok_or_else(|| format!("Video layer {layer_id} has no canonical ISF chain"))?;
+            let stage = chain
+                .stages
+                .get(stage_index)
+                .ok_or_else(|| format!("ISF stage {} was not found", stage_index + 1))?;
+            let VideoEffectKind::Isf { effect } = &stage.effect.kind;
+            let control = effect
+                .controls
                 .iter()
                 .find(|control| control.name == control_name)
                 .ok_or_else(|| {
@@ -30703,7 +32220,7 @@ impl EngineRuntime {
                     control_name
                 ));
             }
-            Arc::clone(source)
+            (stage.id, stage.effect.id)
         };
         let current = self.video_layers[layer_index].isf_effect.clone();
         let replacement = mutate_video_isf_effect_stack(
@@ -30714,12 +32231,14 @@ impl EngineRuntime {
                 value: [1.0, 0.0, 0.0, 0.0],
             },
         )?;
-        validate_video_isf_project_source_budget_after_replacement(
-            &self.video_layers,
-            layer_index,
-            replacement.as_ref(),
+        // A pulse changes an Event value only.  It deliberately reuses the
+        // Layer chain/stage/effect identities, but commits through the same
+        // canonical-plus-legacy projection transaction as every old adapter.
+        let ids = self.next_runtime_video_effect_legacy_adapter_ids(
+            layer_id,
+            legacy_video_isf_stage_count(replacement.as_ref()),
         )?;
-        self.video_layers[layer_index].isf_effect = replacement;
+        self.set_video_layer_isf_effect(layer_id, replacement, &ids)?;
 
         let pulse_id = self.next_video_isf_event_pulse_id;
         self.next_video_isf_event_pulse_id =
@@ -30728,7 +32247,8 @@ impl EngineRuntime {
         self.pending_video_isf_event_resets.retain(|pending| {
             let same_target = pending.layer_id == layer_id
                 && pending.control_name == control_name
-                && Arc::ptr_eq(&pending.stage_source, &stage_source);
+                && pending.stage_id == stage_id
+                && pending.effect_id == effect_id;
             if same_target {
                 replaced_resets.push(pending.clone());
             }
@@ -30738,7 +32258,8 @@ impl EngineRuntime {
             .push(PendingVideoIsfEventReset {
                 pulse_id,
                 layer_id,
-                stage_source,
+                stage_id,
+                effect_id,
                 control_name,
                 due_at,
             });
@@ -30759,19 +32280,42 @@ impl EngineRuntime {
             }
         });
         for pending in due {
-            let Some(effect) = self
-                .video_layers
+            let Some(chain) = self.video_effect_chains.iter_mut().find(|chain| {
+                chain.scope
+                    == VideoEffectScope::Layer {
+                        layer_id: pending.layer_id,
+                    }
+            }) else {
+                continue;
+            };
+            let Some(stage) = chain
+                .stages
                 .iter_mut()
-                .find(|layer| layer.id == pending.layer_id)
-                .and_then(|layer| layer.isf_effect.as_mut())
+                .find(|stage| stage.id == pending.stage_id && stage.effect.id == pending.effect_id)
             else {
                 continue;
             };
-            reset_video_isf_event_by_source_identity(
-                effect,
-                &pending.stage_source,
-                &pending.control_name,
-            );
+            let VideoEffectKind::Isf { effect } = &mut stage.effect.kind;
+            let Some(control) = effect.controls.iter_mut().find(|control| {
+                control.name == pending.control_name && control.kind == VideoIsfControlKind::Event
+            }) else {
+                continue;
+            };
+            control.value = [0.0; 4];
+            let projection = match project_legacy_isf_from_canonical_chain(chain) {
+                Ok(projection) => projection,
+                Err(error) => {
+                    self.last_error = Some(error);
+                    continue;
+                }
+            };
+            if let Some(layer) = self
+                .video_layers
+                .iter_mut()
+                .find(|layer| layer.id == pending.layer_id)
+            {
+                layer.isf_effect = projection;
+            }
         }
     }
 
@@ -31207,6 +32751,16 @@ impl EngineRuntime {
         for layer in &mut authored_video.layers {
             if let Some(effect) = &mut layer.isf_effect {
                 clear_transient_video_isf_event_controls(effect);
+            }
+        }
+        for chain in &mut authored_video.effect_chains {
+            for stage in &mut chain.stages {
+                clear_transient_video_effect_kind(&mut stage.effect.kind);
+            }
+        }
+        for preset in &mut authored_video.effect_presets {
+            for stage in &mut preset.payload.stages {
+                clear_transient_video_effect_kind(&mut stage.effect);
             }
         }
         snapshot.authored_video = Some(authored_video);
@@ -32882,6 +34436,35 @@ fn create_video_clip_slot_in_layers(
     layer.clip_slots.insert(insert_at, slot.clone());
     if make_default || layer.default_clip_slot_id.is_none() {
         layer.default_clip_slot_id = Some(slot.id);
+    }
+    Ok(())
+}
+
+/// Media import and first-run bootstrap do not carry a C1 effect-ID
+/// reservation contract.  Accept only clean layers there; the explicit
+/// canonical catalog/legacy-adapter APIs are the sole ways to author effects
+/// or stable override identities.
+fn reject_media_asset_candidate_c1_effects(
+    candidate: &MediaAssetImportCandidate,
+    operation: &str,
+) -> Result<(), String> {
+    for layer in &candidate.layers {
+        if layer.isf_effect.is_some() {
+            return Err(format!(
+                "{operation} layer {} carries legacy ISF; import effects through the canonical video effect catalog",
+                layer.id
+            ));
+        }
+        if layer
+            .clip_slots
+            .iter()
+            .any(|slot| !slot.effect_overrides.is_empty())
+        {
+            return Err(format!(
+                "{operation} layer {} carries clip effect overrides; import effects through the canonical video effect catalog",
+                layer.id
+            ));
+        }
     }
     Ok(())
 }
@@ -44119,33 +45702,6 @@ fn video_isf_effect_from_stages(
     })
 }
 
-fn reset_video_isf_event_by_source_identity(
-    effect: &mut VideoIsfEffectSummary,
-    stage_source: &Arc<str>,
-    control_name: &str,
-) -> bool {
-    if Arc::ptr_eq(&effect.source, stage_source) {
-        if let Some(control) = effect.controls.iter_mut().find(|control| {
-            control.name == control_name && control.kind == VideoIsfControlKind::Event
-        }) {
-            control.value = [0.0; 4];
-            return true;
-        }
-    }
-    for stage in &mut effect.stack {
-        if !Arc::ptr_eq(&stage.source, stage_source) {
-            continue;
-        }
-        if let Some(control) = stage.controls.iter_mut().find(|control| {
-            control.name == control_name && control.kind == VideoIsfControlKind::Event
-        }) {
-            control.value = [0.0; 4];
-            return true;
-        }
-    }
-    false
-}
-
 fn clear_transient_video_isf_event_controls(effect: &mut VideoIsfEffectSummary) {
     for control in &mut effect.controls {
         if control.kind == VideoIsfControlKind::Event {
@@ -44158,6 +45714,12 @@ fn clear_transient_video_isf_event_controls(effect: &mut VideoIsfEffectSummary) 
                 control.value = [0.0; 4];
             }
         }
+    }
+}
+
+fn clear_transient_video_effect_kind(kind: &mut VideoEffectKind) {
+    match kind {
+        VideoEffectKind::Isf { effect } => clear_transient_video_isf_event_controls(effect),
     }
 }
 
@@ -44209,7 +45771,11 @@ fn mutate_video_isf_effect_stack(
                 .get_mut(stage_index)
                 .ok_or_else(|| format!("ISF stage {} was not found", stage_index + 1))?;
             for control in &mut stage.controls {
-                control.value = control.default;
+                control.value = if control.kind == VideoIsfControlKind::Event {
+                    [0.0; 4]
+                } else {
+                    control.default
+                };
             }
         }
         VideoIsfStackMutation::SetControl {
@@ -44295,18 +45861,396 @@ fn video_isf_project_source_bytes(layers: &[RuntimeVideoLayer]) -> Result<usize,
     })
 }
 
-fn video_isf_project_summary_source_bytes(layers: &[VideoLayerSummary]) -> Result<usize, String> {
-    layers.iter().try_fold(0_usize, |total, layer| {
-        let layer_source_bytes = layer
-            .isf_effect
-            .as_ref()
-            .map(video_isf_effect_source_bytes)
-            .transpose()?
-            .unwrap_or(0);
-        total.checked_add(layer_source_bytes).ok_or_else(|| {
-            "Video ISF project source size overflowed the platform limit".to_string()
+fn video_effect_kind_source_bytes(kind: &VideoEffectKind) -> Result<usize, String> {
+    match kind {
+        VideoEffectKind::Isf { effect } => video_isf_effect_source_bytes(effect),
+    }
+}
+
+/// Engine-local mirror of the protocol's projection validator.  Keeping this
+/// conversion next to the only runtime writer makes it impossible for the
+/// renderer-facing legacy object to acquire a different ordering or bypass
+/// rule from the canonical Layer chain.
+fn project_legacy_isf_from_canonical_chain(
+    chain: &VideoEffectChainSummary,
+) -> Result<Option<VideoIsfEffectSummary>, String> {
+    if chain.stages.is_empty() {
+        return Ok(None);
+    }
+    let mut projected = Vec::with_capacity(chain.stages.len());
+    for stage in &chain.stages {
+        let VideoEffectKind::Isf { effect } = &stage.effect.kind;
+        let mut effect = effect.clone();
+        effect.enabled = !chain.bypassed && stage.enabled;
+        effect.stack.clear();
+        projected.push(effect);
+    }
+    let mut root = projected.remove(0);
+    root.stack = projected
+        .into_iter()
+        .map(|effect| VideoIsfEffectStageSummary {
+            enabled: effect.enabled,
+            label: effect.label,
+            source: effect.source,
+            source_path: effect.source_path,
+            description: effect.description,
+            categories: effect.categories,
+            controls: effect.controls,
         })
-    })
+        .collect();
+    Ok(Some(root))
+}
+
+fn canonical_stages_from_legacy_isf(
+    legacy: &VideoIsfEffectSummary,
+    existing: &[VideoEffectStageSummary],
+    ids: &VideoEffectLegacyAdapterIds,
+) -> Result<Vec<VideoEffectStageSummary>, String> {
+    let mut legacy_stages = Vec::with_capacity(1 + legacy.stack.len());
+    let mut root = legacy.clone();
+    root.stack.clear();
+    legacy_stages.push((root.enabled, root));
+    legacy_stages.extend(legacy.stack.iter().cloned().map(|stage| {
+        let enabled = stage.enabled;
+        (
+            enabled,
+            VideoIsfEffectSummary {
+                enabled,
+                label: stage.label,
+                source: stage.source,
+                source_path: stage.source_path,
+                description: stage.description,
+                categories: stage.categories,
+                controls: stage.controls,
+                stack: Vec::new(),
+            },
+        )
+    }));
+    if ids.stage_ids.len() < legacy_stages.len().saturating_sub(existing.len())
+        || ids.effect_ids.len() < legacy_stages.len().saturating_sub(existing.len())
+    {
+        return Err("Legacy ISF adapter was not allocated enough stable IDs".to_string());
+    }
+    let mut allocated_index = 0;
+    legacy_stages
+        .into_iter()
+        .enumerate()
+        .map(|(index, (enabled, mut effect))| {
+            effect.enabled = true;
+            let (stage_id, effect_id) = if let Some(previous) = existing.get(index) {
+                (previous.id, previous.effect.id)
+            } else {
+                let ids_at_index = allocated_index;
+                allocated_index += 1;
+                (
+                    *ids.stage_ids
+                        .get(ids_at_index)
+                        .ok_or_else(|| "Legacy ISF adapter is missing a stage ID".to_string())?,
+                    *ids.effect_ids
+                        .get(ids_at_index)
+                        .ok_or_else(|| "Legacy ISF adapter is missing an effect ID".to_string())?,
+                )
+            };
+            Ok(VideoEffectStageSummary {
+                id: stage_id,
+                enabled,
+                label: effect.label.clone(),
+                effect: protocol::VideoEffectSummary {
+                    id: effect_id,
+                    kind: VideoEffectKind::Isf { effect },
+                },
+            })
+        })
+        .collect()
+}
+
+/// Reconcile every legacy clip override on a Layer against the candidate's
+/// canonical Layer chain.  A whole-catalog replacement uses this same seam as
+/// a legacy stack mutation: stable identities dictate the durable positional
+/// projection, while a missing Layer chain leaves no valid override target.
+fn reconcile_legacy_clip_overrides_against_layer_chain(
+    layer: &mut VideoLayerSummary,
+    chain: Option<&VideoEffectChainSummary>,
+) {
+    let Some(chain) = chain else {
+        // Removing the final Layer chain removes every canonical effect entity
+        // a clip override can target, so no override may survive.
+        for slot in &mut layer.clip_slots {
+            slot.effect_overrides.clear();
+        }
+        return;
+    };
+    for slot in &mut layer.clip_slots {
+        slot.effect_overrides.retain_mut(|effect_override| {
+            if let Some(effect_id) = effect_override.effect_id {
+                let Some(stage_index) = chain
+                    .stages
+                    .iter()
+                    .position(|stage| stage.effect.id == effect_id)
+                else {
+                    // The exact stable entity was removed from the stack.
+                    return false;
+                };
+                effect_override.stage_index = stage_index;
+                return true;
+            }
+            let Some(stage) = chain.stages.get(effect_override.stage_index) else {
+                // This is an invalid legacy positional reference, not an
+                // identity-based removed target; let the protocol validator
+                // reject it instead of silently changing its meaning.
+                return true;
+            };
+            effect_override.effect_id = Some(stage.effect.id);
+            true
+        });
+    }
+}
+
+/// Install exactly the validated authored-to-renderer Layer projection.  The
+/// caller has already built and validated the complete candidate image; only
+/// the renderer compatibility mirror and per-slot override positions are
+/// copied into runtime state here.
+fn install_validated_layer_effect_projection(
+    runtime_layer: &mut RuntimeVideoLayer,
+    candidate_layer: &VideoLayerSummary,
+) {
+    debug_assert_eq!(
+        runtime_layer
+            .clip_slots
+            .iter()
+            .map(|slot| slot.id)
+            .collect::<Vec<_>>(),
+        candidate_layer
+            .clip_slots
+            .iter()
+            .map(|slot| slot.id)
+            .collect::<Vec<_>>(),
+        "effect catalog validation must not change a Layer's clip-slot topology"
+    );
+    runtime_layer.isf_effect = candidate_layer.isf_effect.clone();
+    for (runtime_slot, candidate_slot) in runtime_layer
+        .clip_slots
+        .iter_mut()
+        .zip(&candidate_layer.clip_slots)
+    {
+        runtime_slot.effect_overrides = candidate_slot.effect_overrides.clone();
+    }
+}
+
+/// Returns whether a canonical chain belongs to a duplicated Layer's authored
+/// topology. The filter preserves the serialized catalog order, which is the
+/// exact allocator/fingerprint order for a queued duplicate request.
+fn video_effect_chain_is_owned_by_layer(
+    chain: &VideoEffectChainSummary,
+    source_layer_id: VideoLayerId,
+    source_slot_ids: &[VideoClipSlotId],
+) -> bool {
+    match &chain.scope {
+        VideoEffectScope::Layer { layer_id } => *layer_id == source_layer_id,
+        VideoEffectScope::Clip { layer_id, slot_id } => {
+            *layer_id == source_layer_id && source_slot_ids.contains(slot_id)
+        }
+        VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::ClipTake { layer_id },
+        } => *layer_id == source_layer_id,
+        VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::LayerBus { .. },
+        }
+        | VideoEffectScope::Composition { .. }
+        | VideoEffectScope::Group { .. }
+        | VideoEffectScope::Output { .. } => false,
+    }
+}
+
+/// Clone one owned C1 chain for a duplicated Layer. Every chain/stage/effect
+/// receives a fresh identity; Layer, Clip and ClipTake scopes are remapped,
+/// while unrelated Group/Composition/Output chains never reach this helper.
+fn duplicate_video_effect_chain_for_layer(
+    source: &VideoEffectChainSummary,
+    new_layer_id: VideoLayerId,
+    source_slot_ids: &[VideoClipSlotId],
+    new_slot_ids: &[VideoClipSlotId],
+    ids: &VideoEffectLegacyAdapterIds,
+) -> Result<VideoEffectChainSummary, String> {
+    if ids.chain_id.0 == 0
+        || ids.stage_ids.len() != source.stages.len()
+        || ids.effect_ids.len() != source.stages.len()
+    {
+        return Err("Video layer duplicate is missing fresh C1 effect identities".to_string());
+    }
+    let mut chain = source.clone();
+    chain.id = ids.chain_id;
+    chain.scope = match &source.scope {
+        VideoEffectScope::Layer { .. } => VideoEffectScope::Layer {
+            layer_id: new_layer_id,
+        },
+        VideoEffectScope::Clip { slot_id, .. } => {
+            let slot_index = source_slot_ids
+                .iter()
+                .position(|source_slot_id| *source_slot_id == *slot_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Video layer duplicate Clip effect references missing source slot {}",
+                        slot_id.0
+                    )
+                })?;
+            let duplicate_slot_id = *new_slot_ids.get(slot_index).ok_or_else(|| {
+                "Video layer duplicate is missing a mapped Clip slot identity".to_string()
+            })?;
+            VideoEffectScope::Clip {
+                layer_id: new_layer_id,
+                slot_id: duplicate_slot_id,
+            }
+        }
+        VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::ClipTake { .. },
+        } => VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::ClipTake {
+                layer_id: new_layer_id,
+            },
+        },
+        _ => {
+            return Err(
+                "Video layer duplicate received a non-owned effect catalog chain".to_string(),
+            )
+        }
+    };
+    for (index, stage) in chain.stages.iter_mut().enumerate() {
+        stage.id = ids.stage_ids[index];
+        stage.effect.id = ids.effect_ids[index];
+        clear_transient_video_effect_kind(&mut stage.effect.kind);
+    }
+    Ok(chain)
+}
+
+/// A duplicated slot starts with the source Layer override values. Rebind its
+/// stable source IDs to the corresponding fresh Layer effect entities; this
+/// is deliberately independent of Clip chain cloning because overrides target
+/// the Layer stack's compatibility projection.
+fn rebind_duplicate_layer_clip_overrides(
+    duplicate_slots: &mut [VideoClipSlotSummary],
+    source_layer_chain: &VideoEffectChainSummary,
+    duplicate_layer_chain: &VideoEffectChainSummary,
+) -> Result<(), String> {
+    for slot in duplicate_slots {
+        for effect_override in &mut slot.effect_overrides {
+            let source_stage_index = match effect_override.effect_id {
+                Some(source_effect_id) => source_layer_chain
+                    .stages
+                    .iter()
+                    .position(|stage| stage.effect.id == source_effect_id)
+                    .ok_or_else(|| {
+                        "Video layer duplicate override references a missing source Layer effect"
+                            .to_string()
+                    })?,
+                None => effect_override.stage_index,
+            };
+            let duplicate_stage = duplicate_layer_chain
+                .stages
+                .get(source_stage_index)
+                .ok_or_else(|| {
+                    format!(
+                        "Video layer duplicate override references missing stage {source_stage_index}"
+                    )
+                })?;
+            effect_override.stage_index = source_stage_index;
+            effect_override.effect_id = Some(duplicate_stage.effect.id);
+        }
+    }
+    Ok(())
+}
+
+/// Materialize the exact future graph used to validate a Layer duplicate. The
+/// Main composition is rendered rather than stored in `video_compositions`,
+/// so it must be updated in this candidate alongside every custom
+/// composition. A group that contains the source follows the same immediate
+/// insertion rule; that preserves its ordered contiguous membership rather
+/// than leaving a new ungrouped Layer inside an existing group run.
+fn insert_duplicate_layer_into_candidate_topology(
+    candidate: &mut VideoSnapshot,
+    source_layer_id: VideoLayerId,
+    new_layer_id: VideoLayerId,
+) -> Result<(), String> {
+    for composition in &mut candidate.compositions {
+        let Some(source_index) = composition
+            .layer_ids
+            .iter()
+            .position(|layer_id| *layer_id == source_layer_id)
+        else {
+            continue;
+        };
+        if composition.layer_ids.contains(&new_layer_id) {
+            return Err(format!(
+                "Video duplicate layer {new_layer_id} already appears in composition {}",
+                composition.id
+            ));
+        }
+        composition.layer_ids.insert(source_index + 1, new_layer_id);
+    }
+    for group in &mut candidate.layer_groups {
+        let Some(source_index) = group
+            .layer_ids
+            .iter()
+            .position(|layer_id| *layer_id == source_layer_id)
+        else {
+            continue;
+        };
+        if group.layer_ids.contains(&new_layer_id) {
+            return Err(format!(
+                "Video duplicate layer {new_layer_id} already appears in group {}",
+                group.id.0
+            ));
+        }
+        group.layer_ids.insert(source_index + 1, new_layer_id);
+    }
+    Ok(())
+}
+
+/// Counts canonical C1 sources exactly once.  The legacy layer field is only
+/// a compatibility/render projection after C1 migration, so it contributes
+/// solely when a layer has no canonical Layer chain (the pre-migration form).
+fn video_effect_project_source_bytes(video: &VideoSnapshot) -> Result<usize, String> {
+    let mut layer_scopes = HashSet::new();
+    let mut total = 0_usize;
+    for chain in &video.effect_chains {
+        if let VideoEffectScope::Layer { layer_id } = chain.scope {
+            layer_scopes.insert(layer_id);
+        }
+        for stage in &chain.stages {
+            total = total
+                .checked_add(video_effect_kind_source_bytes(&stage.effect.kind)?)
+                .ok_or_else(|| {
+                    "Video ISF project source size overflowed the platform limit".to_string()
+                })?;
+        }
+    }
+    for preset in &video.effect_presets {
+        for stage in &preset.payload.stages {
+            total = total
+                .checked_add(video_effect_kind_source_bytes(&stage.effect)?)
+                .ok_or_else(|| {
+                    "Video ISF project source size overflowed the platform limit".to_string()
+                })?;
+        }
+    }
+    for layer in &video.layers {
+        if layer_scopes.contains(&layer.id) {
+            continue;
+        }
+        total = total
+            .checked_add(
+                layer
+                    .isf_effect
+                    .as_ref()
+                    .map(video_isf_effect_source_bytes)
+                    .transpose()?
+                    .unwrap_or(0),
+            )
+            .ok_or_else(|| {
+                "Video ISF project source size overflowed the platform limit".to_string()
+            })?;
+    }
+    Ok(total)
 }
 
 fn validate_video_isf_project_source_budget(total_source_bytes: usize) -> Result<(), String> {
@@ -48644,6 +50588,9 @@ mod tests {
                     default_clip_slot_id: None,
                 }],
                 media_assets: Vec::new(),
+                effect_chains: Vec::new(),
+                effect_presets: Vec::new(),
+                layer_groups: Vec::new(),
                 compositions: vec![CompositionSummary {
                     id: 45,
                     label: "Loaded Comp".to_string(),
@@ -51424,6 +53371,55 @@ mod tests {
             blackout: false,
             mapping: Default::default(),
         }];
+        let mut reserved_c1_chain = allocator_c1_chain(
+            VideoEffectChainId(id),
+            VideoEffectStageId(id),
+            VideoEffectId(id),
+        );
+        reserved_c1_chain.scope = VideoEffectScope::Layer { layer_id: id };
+        snapshot.video.effect_chains = vec![reserved_c1_chain];
+        snapshot.video.layers[0].isf_effect =
+            project_legacy_isf_from_canonical_chain(&snapshot.video.effect_chains[0]).unwrap();
+        snapshot.video.media_assets = vec![MediaAssetSummary {
+            id,
+            label: "Reserved C1 asset".to_string(),
+            source: snapshot.video.layers[0].source.clone(),
+            content_hash: None,
+            byte_size: None,
+        }];
+        snapshot.video.layers[0].media_asset_id = Some(id);
+        snapshot.video.layers[0].clip_slots = vec![VideoClipSlotSummary {
+            id: VideoClipSlotId(id),
+            media_asset_id: id,
+            in_point_ms: 0,
+            out_point_ms: None,
+            loop_mode: VideoClipLoopMode::Once,
+            speed: 1.0,
+            cue_points: Vec::new(),
+            launch_quantization: VideoClipLaunchQuantization::Immediate,
+            effect_overrides: Vec::new(),
+        }];
+        snapshot.video.layers[0].default_clip_slot_id = Some(VideoClipSlotId(id));
+        snapshot.video.effect_presets = vec![VideoEffectPresetSummary {
+            id: VideoEffectPresetId(id),
+            label: "Reserved C1 preset".to_string(),
+            payload: protocol::VideoEffectPresetPayload {
+                bypassed: false,
+                stages: vec![protocol::VideoEffectPresetStagePayload {
+                    enabled: true,
+                    label: "Reserved C1 preset stage".to_string(),
+                    effect: VideoEffectKind::Isf {
+                        effect: allocator_c1_effect(),
+                    },
+                }],
+            },
+        }];
+        snapshot.video.layer_groups = vec![VideoLayerGroupSummary {
+            id: VideoLayerGroupId(id),
+            label: "Reserved C1 group".to_string(),
+            composition_id: id,
+            layer_ids: vec![id],
+        }];
         snapshot.authored_video = Some(snapshot.video.clone());
         snapshot.video = VideoSnapshot::default();
         snapshot.effects = vec![EffectSummary {
@@ -51662,6 +53658,71 @@ mod tests {
                     mapping: Default::default(),
                 }];
             }
+            AllocatorDomain::VideoEffectChains => {
+                let mut video = allocator_c1_video();
+                video.effect_chains = vec![allocator_c1_chain(
+                    VideoEffectChainId(candidate),
+                    VideoEffectStageId(1),
+                    VideoEffectId(1),
+                )];
+                video.layers[0].isf_effect =
+                    project_legacy_isf_from_canonical_chain(&video.effect_chains[0]).unwrap();
+                snapshot.video = video;
+            }
+            AllocatorDomain::VideoEffectStages => {
+                let mut video = allocator_c1_video();
+                video.effect_chains = vec![allocator_c1_chain(
+                    VideoEffectChainId(1),
+                    VideoEffectStageId(candidate),
+                    VideoEffectId(1),
+                )];
+                video.layers[0].isf_effect =
+                    project_legacy_isf_from_canonical_chain(&video.effect_chains[0]).unwrap();
+                snapshot.video = video;
+            }
+            AllocatorDomain::VideoEffects => {
+                let mut video = allocator_c1_video();
+                video.effect_chains = vec![allocator_c1_chain(
+                    VideoEffectChainId(1),
+                    VideoEffectStageId(1),
+                    VideoEffectId(candidate),
+                )];
+                video.layers[0].isf_effect =
+                    project_legacy_isf_from_canonical_chain(&video.effect_chains[0]).unwrap();
+                snapshot.video = video;
+            }
+            AllocatorDomain::VideoEffectPresets => {
+                let mut video = allocator_c1_video();
+                video.effect_presets = vec![VideoEffectPresetSummary {
+                    id: VideoEffectPresetId(candidate),
+                    label: "Allocator C1 preset".to_string(),
+                    payload: protocol::VideoEffectPresetPayload {
+                        bypassed: false,
+                        stages: vec![protocol::VideoEffectPresetStagePayload {
+                            enabled: true,
+                            label: "Allocator C1 preset stage".to_string(),
+                            effect: VideoEffectKind::Isf {
+                                effect: allocator_c1_effect(),
+                            },
+                        }],
+                    },
+                }];
+                snapshot.video = video;
+            }
+            AllocatorDomain::VideoLayerGroups => {
+                let mut video = allocator_c1_video();
+                video.layer_groups = vec![VideoLayerGroupSummary {
+                    id: VideoLayerGroupId(candidate),
+                    label: "Allocator C1 group".to_string(),
+                    composition_id: 1,
+                    layer_ids: vec![1],
+                }];
+                snapshot.video = video;
+            }
+            // C1 intentionally has no persisted transition-bus catalog.
+            // Observation remains empty until C3; direct allocator tests
+            // below still cover its independent counter and exhaustion.
+            AllocatorDomain::VideoTransitionBuses => {}
             AllocatorDomain::NodeGraphs => {
                 snapshot.node_graphs = vec![sample_node_graph(candidate, 1)];
             }
@@ -51699,6 +53760,12 @@ mod tests {
             AllocatorDomain::VideoClipSlots => engine.allocate_video_clip_slot_id().0,
             AllocatorDomain::Compositions => engine.allocate_composition_id(),
             AllocatorDomain::VideoOutputs => engine.allocate_video_output_id(),
+            AllocatorDomain::VideoEffectChains => engine.allocate_video_effect_chain_id().0,
+            AllocatorDomain::VideoEffectStages => engine.allocate_video_effect_stage_id().0,
+            AllocatorDomain::VideoEffects => engine.allocate_video_effect_id().0,
+            AllocatorDomain::VideoEffectPresets => engine.allocate_video_effect_preset_id().0,
+            AllocatorDomain::VideoLayerGroups => engine.allocate_video_layer_group_id().0,
+            AllocatorDomain::VideoTransitionBuses => engine.allocate_video_transition_bus_id().0,
             AllocatorDomain::NodeGraphs => engine.allocate_node_graph_id(),
             AllocatorDomain::StageObjects => engine.allocate_stage_object_id(),
         }
@@ -51729,6 +53796,22 @@ mod tests {
             }
             AllocatorDomain::Compositions => engine.next_composition_id.load(Ordering::Relaxed),
             AllocatorDomain::VideoOutputs => engine.next_video_output_id.load(Ordering::Relaxed),
+            AllocatorDomain::VideoEffectChains => {
+                engine.next_video_effect_chain_id.load(Ordering::Relaxed)
+            }
+            AllocatorDomain::VideoEffectStages => {
+                engine.next_video_effect_stage_id.load(Ordering::Relaxed)
+            }
+            AllocatorDomain::VideoEffects => engine.next_video_effect_id.load(Ordering::Relaxed),
+            AllocatorDomain::VideoEffectPresets => {
+                engine.next_video_effect_preset_id.load(Ordering::Relaxed)
+            }
+            AllocatorDomain::VideoLayerGroups => {
+                engine.next_video_layer_group_id.load(Ordering::Relaxed)
+            }
+            AllocatorDomain::VideoTransitionBuses => {
+                engine.next_video_transition_bus_id.load(Ordering::Relaxed)
+            }
             AllocatorDomain::NodeGraphs => engine.next_node_graph_id.load(Ordering::Relaxed),
             AllocatorDomain::StageObjects => engine.next_stage_object_id.load(Ordering::Relaxed),
         }
@@ -51761,6 +53844,12 @@ mod tests {
             next_video_clip_slot_id: Arc::new(AtomicU64::new(1)),
             next_composition_id: Arc::new(AtomicU64::new(2)),
             next_video_output_id: Arc::new(AtomicU64::new(1)),
+            next_video_effect_chain_id: Arc::new(AtomicU64::new(1)),
+            next_video_effect_stage_id: Arc::new(AtomicU64::new(1)),
+            next_video_effect_id: Arc::new(AtomicU64::new(1)),
+            next_video_effect_preset_id: Arc::new(AtomicU64::new(1)),
+            next_video_layer_group_id: Arc::new(AtomicU64::new(1)),
+            next_video_transition_bus_id: Arc::new(AtomicU64::new(1)),
             next_node_graph_id: Arc::new(AtomicU64::new(1)),
             next_stage_object_id: Arc::new(AtomicU64::new(1)),
             test_fail_next_pending_publication: Arc::new(AtomicBool::new(false)),
@@ -51792,7 +53881,7 @@ mod tests {
     }
 
     fn concurrent_allocator_results(engine: &EngineHandle) -> Vec<(&'static str, u64)> {
-        let start = Arc::new(Barrier::new(18));
+        let start = Arc::new(Barrier::new(24));
         macro_rules! worker {
             ($label:literal, $method:ident) => {{
                 let start = Arc::clone(&start);
@@ -51813,6 +53902,16 @@ mod tests {
                 })
             }};
         }
+        macro_rules! video_effect_worker {
+            ($label:literal, $method:ident) => {{
+                let start = Arc::clone(&start);
+                let engine = engine.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    ($label, engine.$method().0)
+                })
+            }};
+        }
 
         let workers = vec![
             worker!("fixture", allocate_fixture_id),
@@ -51830,6 +53929,12 @@ mod tests {
             clip_slot_worker!("video clip slot"),
             worker!("composition", allocate_composition_id),
             worker!("video output", allocate_video_output_id),
+            video_effect_worker!("video effect chain", allocate_video_effect_chain_id),
+            video_effect_worker!("video effect stage", allocate_video_effect_stage_id),
+            video_effect_worker!("video effect", allocate_video_effect_id),
+            video_effect_worker!("video effect preset", allocate_video_effect_preset_id),
+            video_effect_worker!("video layer group", allocate_video_layer_group_id),
+            video_effect_worker!("video transition bus", allocate_video_transition_bus_id),
             worker!("node graph", allocate_node_graph_id),
             worker!("stage object", allocate_stage_object_id),
         ];
@@ -51845,8 +53950,14 @@ mod tests {
         minimum: u64,
         timeline_layer_minimum: u32,
     ) {
-        assert_eq!(results.len(), 17);
+        assert_eq!(results.len(), 23);
         for (domain, id) in results {
+            if *domain == "video transition bus" {
+                // C1 intentionally has no bus catalog to reserve during
+                // project load.  Its independent API/concurrency/exhaustion
+                // guarantee is covered by the dedicated test below.
+                continue;
+            }
             let minimum = if *domain == "timeline layer" {
                 u64::from(timeline_layer_minimum)
             } else {
@@ -51906,6 +54017,86 @@ mod tests {
             name: None,
             codec: None,
             metadata: None,
+        }
+    }
+
+    fn allocator_c1_effect() -> VideoIsfEffectSummary {
+        VideoIsfEffectSummary {
+            enabled: true,
+            label: "Allocator C1 ISF".to_string(),
+            source: Arc::<str>::from("void main() {}"),
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: Vec::new(),
+            stack: Vec::new(),
+        }
+    }
+
+    fn allocator_c1_video() -> VideoSnapshot {
+        let source = allocator_video_source(1);
+        VideoSnapshot {
+            layers: vec![VideoLayerSummary {
+                id: 1,
+                label: "Allocator C1 layer".to_string(),
+                source: source.clone(),
+                media_asset_id: Some(1),
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState::default(),
+                isf_effect: None,
+                clip_slots: vec![VideoClipSlotSummary {
+                    id: VideoClipSlotId(1),
+                    media_asset_id: 1,
+                    in_point_ms: 0,
+                    out_point_ms: None,
+                    loop_mode: VideoClipLoopMode::Once,
+                    speed: 1.0,
+                    cue_points: Vec::new(),
+                    launch_quantization: VideoClipLaunchQuantization::Immediate,
+                    effect_overrides: Vec::new(),
+                }],
+                default_clip_slot_id: Some(VideoClipSlotId(1)),
+            }],
+            media_assets: vec![MediaAssetSummary {
+                id: 1,
+                label: "Allocator C1 asset".to_string(),
+                source,
+                content_hash: None,
+                byte_size: None,
+            }],
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            compositions: vec![CompositionSummary {
+                id: 1,
+                label: "Allocator C1 composition".to_string(),
+                layer_ids: vec![1],
+                output_ids: Vec::new(),
+            }],
+            ..VideoSnapshot::default()
+        }
+    }
+
+    fn allocator_c1_chain(
+        chain_id: VideoEffectChainId,
+        stage_id: VideoEffectStageId,
+        effect_id: VideoEffectId,
+    ) -> VideoEffectChainSummary {
+        VideoEffectChainSummary {
+            id: chain_id,
+            scope: VideoEffectScope::Layer { layer_id: 1 },
+            bypassed: false,
+            stages: vec![VideoEffectStageSummary {
+                id: stage_id,
+                enabled: true,
+                label: "Allocator C1 stage".to_string(),
+                effect: protocol::VideoEffectSummary {
+                    id: effect_id,
+                    kind: VideoEffectKind::Isf {
+                        effect: allocator_c1_effect(),
+                    },
+                },
+            }],
         }
     }
 
@@ -53004,6 +55195,96 @@ mod tests {
             }),
             setup: Some(Box::new(allocator_stage_preset_setup)),
         });
+        for (name, domain) in [
+            (
+                "ApplyVideoEffectCatalogChain",
+                AllocatorDomain::VideoEffectChains,
+            ),
+            (
+                "ApplyVideoEffectCatalogStage",
+                AllocatorDomain::VideoEffectStages,
+            ),
+            (
+                "ApplyVideoEffectCatalogEffect",
+                AllocatorDomain::VideoEffects,
+            ),
+            (
+                "ApplyVideoEffectCatalogPreset",
+                AllocatorDomain::VideoEffectPresets,
+            ),
+            (
+                "ApplyVideoEffectCatalogGroup",
+                AllocatorDomain::VideoLayerGroups,
+            ),
+        ] {
+            cases.push(AllocatorCommandCase {
+                name,
+                domain,
+                make: Box::new(move |id| {
+                    let (effect_chains, effect_presets, layer_groups) = match domain {
+                        AllocatorDomain::VideoEffectChains => (
+                            vec![allocator_c1_chain(
+                                VideoEffectChainId(id),
+                                VideoEffectStageId(1),
+                                VideoEffectId(1),
+                            )],
+                            Vec::new(),
+                            Vec::new(),
+                        ),
+                        AllocatorDomain::VideoEffectStages => (
+                            vec![allocator_c1_chain(
+                                VideoEffectChainId(1),
+                                VideoEffectStageId(id),
+                                VideoEffectId(1),
+                            )],
+                            Vec::new(),
+                            Vec::new(),
+                        ),
+                        AllocatorDomain::VideoEffects => (
+                            vec![allocator_c1_chain(
+                                VideoEffectChainId(1),
+                                VideoEffectStageId(1),
+                                VideoEffectId(id),
+                            )],
+                            Vec::new(),
+                            Vec::new(),
+                        ),
+                        AllocatorDomain::VideoEffectPresets => (
+                            Vec::new(),
+                            vec![VideoEffectPresetSummary {
+                                id: VideoEffectPresetId(id),
+                                label: "Allocator C1 preset".to_string(),
+                                payload: protocol::VideoEffectPresetPayload {
+                                    bypassed: false,
+                                    stages: Vec::new(),
+                                },
+                            }],
+                            Vec::new(),
+                        ),
+                        AllocatorDomain::VideoLayerGroups => (
+                            Vec::new(),
+                            Vec::new(),
+                            vec![VideoLayerGroupSummary {
+                                id: VideoLayerGroupId(id),
+                                label: "Allocator C1 group".to_string(),
+                                composition_id: 1,
+                                layer_ids: vec![1],
+                            }],
+                        ),
+                        _ => unreachable!("C1 allocator inventory domain"),
+                    };
+                    EngineCommand::ApplyVideoEffectCatalogPublished {
+                        effect_chains,
+                        effect_presets,
+                        layer_groups,
+                        expires_at: allocator_expiry(),
+                        admission: ProjectSnapshotLoadAdmission::new(),
+                        ack: allocator_ack(),
+                    }
+                }),
+                setup: None,
+            });
+        }
         cases
     }
 
@@ -53067,7 +55348,7 @@ mod tests {
         }
     }
 
-    fn allocator_domains() -> [AllocatorDomain; 17] {
+    fn allocator_domains() -> [AllocatorDomain; 23] {
         [
             AllocatorDomain::Fixtures,
             AllocatorDomain::Effects,
@@ -53084,6 +55365,12 @@ mod tests {
             AllocatorDomain::VideoClipSlots,
             AllocatorDomain::Compositions,
             AllocatorDomain::VideoOutputs,
+            AllocatorDomain::VideoEffectChains,
+            AllocatorDomain::VideoEffectStages,
+            AllocatorDomain::VideoEffects,
+            AllocatorDomain::VideoEffectPresets,
+            AllocatorDomain::VideoLayerGroups,
+            AllocatorDomain::VideoTransitionBuses,
             AllocatorDomain::NodeGraphs,
             AllocatorDomain::StageObjects,
         ]
@@ -53112,13 +55399,35 @@ mod tests {
     #[test]
     fn allocator_command_inventory_covers_all_domains_and_is_exhaustively_routed() {
         let cases = allocator_command_cases();
-        assert_eq!(cases.len(), 86);
-        for domain in allocator_domains() {
+        assert_eq!(cases.len(), 91);
+        for domain in allocator_domains()
+            .into_iter()
+            .filter(|domain| *domain != AllocatorDomain::VideoTransitionBuses)
+        {
             assert!(
                 cases.iter().any(|case| case.domain == domain),
                 "allocator inventory omitted {domain:?}"
             );
         }
+    }
+
+    #[test]
+    fn video_effect_chain_c1_transition_bus_allocator_is_independent_and_fails_closed() {
+        let engine = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+        assert_eq!(engine.allocate_video_transition_bus_id().0, 1);
+        assert_eq!(engine.allocate_video_effect_chain_id().0, 1);
+        engine
+            .next_video_transition_bus_id
+            .store(u64::MAX - 1, Ordering::Relaxed);
+        assert_eq!(engine.allocate_video_transition_bus_id().0, u64::MAX - 1);
+        let exhausted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.allocate_video_transition_bus_id()
+        }));
+        assert!(exhausted.is_err());
+        assert_eq!(
+            engine.next_video_transition_bus_id.load(Ordering::Relaxed),
+            u64::MAX
+        );
     }
 
     #[test]
@@ -53505,6 +55814,25 @@ mod tests {
             .iter()
             .any(|output| output.id == candidate_id));
         assert!(published_snapshot
+            .video
+            .effect_chains
+            .iter()
+            .any(|chain| chain.id == VideoEffectChainId(candidate_id)
+                && chain.stages.iter().any(|stage| {
+                    stage.id == VideoEffectStageId(candidate_id)
+                        && stage.effect.id == VideoEffectId(candidate_id)
+                })));
+        assert!(published_snapshot
+            .video
+            .effect_presets
+            .iter()
+            .any(|preset| preset.id == VideoEffectPresetId(candidate_id)));
+        assert!(published_snapshot
+            .video
+            .layer_groups
+            .iter()
+            .any(|group| group.id == VideoLayerGroupId(candidate_id)));
+        assert!(published_snapshot
             .node_graphs
             .iter()
             .any(|graph| graph.id == candidate_id));
@@ -53586,6 +55914,9 @@ mod tests {
     #[test]
     fn project_snapshot_allocator_capacity_rejects_max_and_immediate_exhaustion_before_enqueue() {
         for domain in allocator_domains() {
+            if domain == AllocatorDomain::VideoTransitionBuses {
+                continue;
+            }
             for immediate_maximum in [false, true] {
                 let candidate = if domain == AllocatorDomain::TimelineLayers {
                     if immediate_maximum {
@@ -53661,6 +55992,9 @@ mod tests {
     #[test]
     fn allocator_nearest_accepted_boundary_issues_only_last_id_then_fails_closed() {
         for domain in allocator_domains() {
+            if domain == AllocatorDomain::VideoTransitionBuses {
+                continue;
+            }
             let maximum = if domain == AllocatorDomain::TimelineLayers {
                 u64::from(u32::MAX)
             } else {
@@ -60263,6 +62597,12 @@ mod tests {
             next_video_clip_slot_id: Arc::new(AtomicU64::new(1)),
             next_composition_id: Arc::new(AtomicU64::new(1)),
             next_video_output_id: Arc::new(AtomicU64::new(1)),
+            next_video_effect_chain_id: Arc::new(AtomicU64::new(1)),
+            next_video_effect_stage_id: Arc::new(AtomicU64::new(1)),
+            next_video_effect_id: Arc::new(AtomicU64::new(1)),
+            next_video_effect_preset_id: Arc::new(AtomicU64::new(1)),
+            next_video_layer_group_id: Arc::new(AtomicU64::new(1)),
+            next_video_transition_bus_id: Arc::new(AtomicU64::new(1)),
             next_node_graph_id: Arc::new(AtomicU64::new(1)),
             next_stage_object_id: Arc::new(AtomicU64::new(1)),
             test_fail_next_pending_publication: Arc::new(AtomicBool::new(false)),
@@ -61891,6 +64231,2030 @@ mod tests {
         }
     }
 
+    fn video_effect_chain_c1_handle_with_layer() -> (EngineHandle, VideoLayerId) {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let layer_id = engine.allocate_video_layer_id();
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "C1 Layer".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://video-effect-chain-c1.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        // Fence the background runtime before a legacy adapter asks for the
+        // exact authored catalog in its allocator-gated queue order.
+        engine.persistence_snapshot().unwrap();
+        (engine, layer_id)
+    }
+
+    fn video_effect_chain_c1_event_effect() -> VideoIsfEffectSummary {
+        VideoIsfEffectSummary {
+            enabled: true,
+            label: "C1 Event".to_string(),
+            source: Arc::<str>::from("void main() {}"),
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: vec![test_isf_event_control(0.0)],
+            stack: Vec::new(),
+        }
+    }
+
+    fn video_effect_chain_c1_event_default_one_with_bool() -> VideoIsfEffectSummary {
+        let mut effect = video_effect_chain_c1_event_effect();
+        effect.controls[0].default = [1.0, 0.0, 0.0, 0.0];
+        effect.controls.push(protocol::VideoIsfControlSummary {
+            name: "enabled".to_string(),
+            kind: VideoIsfControlKind::Bool,
+            value: [0.0; 4],
+            default: [1.0, 0.0, 0.0, 0.0],
+            minimum: [0.0; 4],
+            maximum: [1.0; 4],
+            labels: Vec::new(),
+            values: Vec::new(),
+        });
+        effect
+    }
+
+    /// A persisted C1 Layer effect has two representations: the central
+    /// stable chain and the renderer-compatible legacy projection. This test
+    /// helper deliberately dirties both, never only the legacy mirror.
+    fn set_video_snapshot_layer_event_value(
+        video: &mut VideoSnapshot,
+        layer_id: VideoLayerId,
+        value: f32,
+    ) {
+        let legacy = video
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == layer_id)
+            .and_then(|layer| layer.isf_effect.as_mut())
+            .expect("test snapshot must have a legacy Layer projection");
+        legacy.controls[0].value = [value, 0.0, 0.0, 0.0];
+
+        let chain = video
+            .effect_chains
+            .iter_mut()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+            .expect("test snapshot must have a canonical Layer chain");
+        let VideoEffectKind::Isf { effect } = &mut chain.stages[0].effect.kind;
+        effect.controls[0].value = [value, 0.0, 0.0, 0.0];
+    }
+
+    fn assert_video_snapshot_layer_event_value(
+        video: &VideoSnapshot,
+        layer_id: VideoLayerId,
+        expected: f32,
+    ) {
+        assert_eq!(
+            video
+                .layers
+                .iter()
+                .find(|layer| layer.id == layer_id)
+                .and_then(|layer| layer.isf_effect.as_ref())
+                .expect("test snapshot must have a legacy Layer projection")
+                .controls[0]
+                .value[0],
+            expected
+        );
+        let chain = video
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+            .expect("test snapshot must have a canonical Layer chain");
+        let VideoEffectKind::Isf { effect } = &chain.stages[0].effect.kind;
+        assert_eq!(effect.controls[0].value[0], expected);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_handle_legacy_adapter_publishes_canonical_projection() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        let effect = video_effect_chain_c1_event_effect();
+
+        engine
+            .set_video_layer_isf_effect_published(layer_id, Some(effect.clone()))
+            .unwrap();
+        let persisted = engine.persistence_snapshot().unwrap();
+        let authored = persisted.authored_video.as_ref().unwrap();
+        let layer = authored
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        let chain = authored
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+            .unwrap();
+
+        assert_eq!(layer.isf_effect, Some(effect));
+        assert_eq!(
+            project_legacy_isf_from_canonical_chain(chain).unwrap(),
+            layer.isf_effect
+        );
+        assert_eq!(chain.stages.len(), 1);
+        assert_ne!(chain.id.0, 0);
+        assert_ne!(chain.stages[0].id.0, 0);
+        assert_ne!(chain.stages[0].effect.id.0, 0);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_handle_published_catalog_rolls_back_complete_a() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(
+                layer_id,
+                Some(video_effect_chain_c1_event_effect()),
+            )
+            .unwrap();
+        let baseline = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+
+        let mut updated_chains = baseline.effect_chains.clone();
+        updated_chains[0].bypassed = true;
+        engine
+            .apply_video_effect_catalog(
+                updated_chains.clone(),
+                baseline.effect_presets.clone(),
+                baseline.layer_groups.clone(),
+            )
+            .unwrap();
+        let published = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        assert!(published.effect_chains[0].bypassed);
+        assert!(!published.layers[0].isf_effect.as_ref().unwrap().enabled);
+
+        engine.force_next_pending_publication_failure_for_tests();
+        let mut rejected_chains = published.effect_chains.clone();
+        rejected_chains[0].bypassed = false;
+        let error = engine
+            .apply_video_effect_catalog(
+                rejected_chains,
+                published.effect_presets.clone(),
+                published.layer_groups.clone(),
+            )
+            .unwrap_err();
+        assert!(error.contains("rolled back"), "unexpected error: {error}");
+        let after_rollback = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        assert_eq!(after_rollback, published);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_handle_load_is_idempotent_and_rejects_divergence() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(
+                layer_id,
+                Some(video_effect_chain_c1_event_effect()),
+            )
+            .unwrap();
+        let saved = engine.persistence_snapshot().unwrap();
+        let saved_authored = saved.authored_video.as_ref().unwrap();
+
+        engine
+            .load_project_snapshot_and_wait(saved.clone())
+            .unwrap();
+        engine
+            .load_project_snapshot_and_wait(saved.clone())
+            .unwrap();
+        let reloaded = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        assert_eq!(reloaded.layers, saved_authored.layers);
+        assert_eq!(reloaded.effect_chains, saved_authored.effect_chains);
+        assert_eq!(reloaded.effect_presets, saved_authored.effect_presets);
+        assert_eq!(reloaded.layer_groups, saved_authored.layer_groups);
+
+        let mut divergent = saved.clone();
+        let authored = divergent.authored_video.as_mut().unwrap();
+        authored.layers[0].isf_effect.as_mut().unwrap().label =
+            "Divergent legacy projection".to_string();
+        let error = engine
+            .load_project_snapshot_and_wait(divergent)
+            .unwrap_err();
+        assert!(
+            error.contains("projection diverges"),
+            "unexpected error: {error}"
+        );
+        let after_rejection = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        assert_eq!(after_rejection.layers, saved_authored.layers);
+        assert_eq!(after_rejection.effect_chains, saved_authored.effect_chains);
+        assert_eq!(
+            after_rejection.effect_presets,
+            saved_authored.effect_presets
+        );
+        assert_eq!(after_rejection.layer_groups, saved_authored.layer_groups);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_direct_load_zeroes_exact_high_event_projection_atomically() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
+            layer_id: 1,
+            effect: Some(video_effect_chain_c1_event_effect()),
+        });
+        assert!(runtime.last_error.is_none());
+
+        let mut candidate = runtime.build_persistence_snapshot();
+        set_video_snapshot_layer_event_value(candidate.authored_video.as_mut().unwrap(), 1, 1.0);
+        runtime.load_project_snapshot_checked(candidate).unwrap();
+        assert_video_snapshot_layer_event_value(&runtime.video_snapshot(), 1, 0.0);
+        let persisted = runtime.build_persistence_snapshot();
+        assert_video_snapshot_layer_event_value(persisted.authored_video.as_ref().unwrap(), 1, 0.0);
+        assert!(runtime.pending_video_isf_event_resets.is_empty());
+
+        // The normalized persistence image is a stable load roundtrip.
+        runtime
+            .load_project_snapshot_checked(persisted.clone())
+            .unwrap();
+        assert_eq!(runtime.build_persistence_snapshot(), persisted);
+
+        // A non-Event divergence remains fail-closed and leaves the prior A
+        // image untouched; Event normalization must not mask malformed input.
+        let before_malformed = runtime.build_persistence_snapshot();
+        let mut malformed = before_malformed.clone();
+        let VideoEffectKind::Isf { effect } =
+            &mut malformed.authored_video.as_mut().unwrap().effect_chains[0].stages[0]
+                .effect
+                .kind;
+        effect.label = "Malformed canonical projection".to_string();
+        assert!(runtime.load_project_snapshot_checked(malformed).is_err());
+        assert_eq!(runtime.build_persistence_snapshot(), before_malformed);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_handle_load_zeroes_exact_high_event_projection_and_rolls_back_malformed(
+    ) {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(
+                layer_id,
+                Some(video_effect_chain_c1_event_effect()),
+            )
+            .unwrap();
+
+        let mut candidate = engine.persistence_snapshot().unwrap();
+        set_video_snapshot_layer_event_value(
+            candidate.authored_video.as_mut().unwrap(),
+            layer_id,
+            1.0,
+        );
+        engine.load_project_snapshot_and_wait(candidate).unwrap();
+        let installed = engine.persistence_snapshot().unwrap();
+        assert_video_snapshot_layer_event_value(
+            installed.authored_video.as_ref().unwrap(),
+            layer_id,
+            0.0,
+        );
+        assert_video_snapshot_layer_event_value(&engine.snapshot().video, layer_id, 0.0);
+
+        engine
+            .load_project_snapshot_and_wait(installed.clone())
+            .unwrap();
+        let reloaded = engine.persistence_snapshot().unwrap();
+        assert_eq!(reloaded.video, installed.video);
+        assert_eq!(reloaded.authored_video, installed.authored_video);
+
+        let mut malformed = installed.clone();
+        let VideoEffectKind::Isf { effect } =
+            &mut malformed.authored_video.as_mut().unwrap().effect_chains[0].stages[0]
+                .effect
+                .kind;
+        effect.label = "Malformed canonical projection".to_string();
+        assert!(engine.load_project_snapshot_and_wait(malformed).is_err());
+        let after_rejection = engine.persistence_snapshot().unwrap();
+        assert_eq!(after_rejection.video, installed.video);
+        assert_eq!(after_rejection.authored_video, installed.authored_video);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_load_reconciles_legacy_hosts_before_scope_validation() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(
+                layer_id,
+                Some(video_effect_chain_c1_event_effect()),
+            )
+            .unwrap();
+        let mut snapshot = engine.persistence_snapshot().unwrap();
+        let authored = snapshot.authored_video.as_mut().unwrap();
+        let mut discarded_host_chain = authored.effect_chains[0].clone();
+        discarded_host_chain.id = VideoEffectChainId(90);
+        discarded_host_chain.scope = VideoEffectScope::Composition { composition_id: 0 };
+        discarded_host_chain.stages[0].id = VideoEffectStageId(90);
+        discarded_host_chain.stages[0].effect.id = VideoEffectId(90);
+        authored.effect_chains.push(discarded_host_chain);
+        authored.compositions.extend([
+            CompositionSummary {
+                id: 0,
+                label: "Legacy zero host".to_string(),
+                layer_ids: vec![layer_id],
+                output_ids: Vec::new(),
+            },
+            CompositionSummary {
+                id: 2,
+                label: "Recovered host".to_string(),
+                layer_ids: vec![layer_id],
+                output_ids: Vec::new(),
+            },
+            CompositionSummary {
+                id: 2,
+                label: "Discarded duplicate host".to_string(),
+                layer_ids: vec![layer_id],
+                output_ids: Vec::new(),
+            },
+        ]);
+
+        engine.load_project_snapshot_and_wait(snapshot).unwrap();
+        let loaded = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        assert_eq!(
+            loaded
+                .compositions
+                .iter()
+                .map(|composition| composition.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(loaded.effect_chains.len(), 1);
+        assert!(matches!(
+            loaded.effect_chains[0].scope,
+            VideoEffectScope::Layer { layer_id: scope_layer_id } if scope_layer_id == layer_id
+        ));
+    }
+
+    #[test]
+    fn video_effect_chain_c1_event_pulse_and_persistence_strip_both_representations() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(
+                layer_id,
+                Some(video_effect_chain_c1_event_effect()),
+            )
+            .unwrap();
+        engine
+            .pulse_video_layer_isf_event(
+                layer_id,
+                0,
+                "trigger".to_string(),
+                Duration::from_millis(100),
+            )
+            .unwrap();
+
+        let rendered = engine.snapshot();
+        assert_eq!(
+            rendered.video.layers[0]
+                .isf_effect
+                .as_ref()
+                .unwrap()
+                .controls[0]
+                .value[0],
+            1.0
+        );
+        let persisted = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        assert_eq!(
+            persisted.layers[0].isf_effect.as_ref().unwrap().controls[0].value[0],
+            0.0
+        );
+        let VideoEffectKind::Isf { effect } = &persisted.effect_chains[0].stages[0].effect.kind;
+        assert_eq!(effect.controls[0].value[0], 0.0);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_direct_legacy_event_ingress_normalizes_and_rejects_set_control() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        let mut incoming = video_effect_chain_c1_event_effect();
+        incoming.controls[0].value = [1.0, 0.0, 0.0, 0.0];
+        incoming.controls.push(protocol::VideoIsfControlSummary {
+            name: "enabled".to_string(),
+            kind: VideoIsfControlKind::Bool,
+            value: [0.0; 4],
+            default: [0.0; 4],
+            minimum: [0.0; 4],
+            maximum: [1.0; 4],
+            labels: Vec::new(),
+            values: Vec::new(),
+        });
+        incoming.stack.push(VideoIsfEffectStageSummary {
+            enabled: true,
+            label: "Ingress stack Event".to_string(),
+            source: Arc::<str>::from("void main() { /* stack */ }"),
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: vec![test_isf_event_control(1.0)],
+        });
+        runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
+            layer_id: 1,
+            effect: Some(incoming),
+        });
+        assert!(runtime.last_error.is_none());
+        assert!(runtime.pending_video_isf_event_resets.is_empty());
+        let legacy = runtime.video_layers[0].isf_effect.as_ref().unwrap();
+        assert_eq!(legacy.controls[0].value[0], 0.0);
+        assert_eq!(legacy.stack[0].controls[0].value[0], 0.0);
+        let VideoEffectKind::Isf {
+            effect: canonical_root,
+        } = &runtime.video_effect_chains[0].stages[0].effect.kind;
+        let VideoEffectKind::Isf {
+            effect: canonical_stack,
+        } = &runtime.video_effect_chains[0].stages[1].effect.kind;
+        assert_eq!(canonical_root.controls[0].value[0], 0.0);
+        assert_eq!(canonical_stack.controls[0].value[0], 0.0);
+
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::MutateVideoLayerIsfStack {
+            layer_id: 1,
+            mutation: VideoIsfStackMutation::Add(VideoIsfEffectStageSummary {
+                enabled: true,
+                label: "Added Event".to_string(),
+                source: Arc::<str>::from("void main() { /* added */ }"),
+                source_path: None,
+                description: None,
+                categories: Vec::new(),
+                controls: vec![test_isf_event_control(1.0)],
+            }),
+            ack: add_ack,
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            runtime.video_layers[0].isf_effect.as_ref().unwrap().stack[1].controls[0].value[0],
+            0.0
+        );
+        let VideoEffectKind::Isf { effect: added } =
+            &runtime.video_effect_chains[0].stages[2].effect.kind;
+        assert_eq!(added.controls[0].value[0], 0.0);
+
+        let before_snapshot = runtime.build_persistence_snapshot();
+        let before_authored = before_snapshot.authored_video.clone();
+        let before_persistence_bytes =
+            serde_json::to_vec(&(before_snapshot.video, before_authored.clone())).unwrap();
+        let before_chains = runtime.video_effect_chains.clone();
+        let before_pending = runtime.pending_video_isf_event_resets.clone();
+        let before_pulse_id = runtime.next_video_isf_event_pulse_id;
+        let (event_ack, event_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::MutateVideoLayerIsfStack {
+            layer_id: 1,
+            mutation: VideoIsfStackMutation::SetControl {
+                stage_index: 0,
+                control_name: "trigger".to_string(),
+                value: [1.0, 0.0, 0.0, 0.0],
+            },
+            ack: event_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        let error = event_receiver.recv().unwrap().unwrap_err();
+        assert!(error.contains("PulseVideoLayerIsfEvent"));
+        let after_rejection = runtime.build_persistence_snapshot();
+        assert_eq!(
+            serde_json::to_vec(&(
+                after_rejection.video,
+                after_rejection.authored_video.clone()
+            ))
+            .unwrap(),
+            before_persistence_bytes
+        );
+        assert_eq!(after_rejection.authored_video.clone(), before_authored);
+        assert_eq!(runtime.video_effect_chains, before_chains);
+        assert!(before_pending.is_empty());
+        assert!(runtime.pending_video_isf_event_resets.is_empty());
+        assert_eq!(runtime.next_video_isf_event_pulse_id, before_pulse_id);
+
+        let (bool_ack, bool_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::MutateVideoLayerIsfStack {
+            layer_id: 1,
+            mutation: VideoIsfStackMutation::SetControl {
+                stage_index: 0,
+                control_name: "enabled".to_string(),
+                value: [1.0, 0.0, 0.0, 0.0],
+            },
+            ack: bool_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(bool_receiver.recv().unwrap(), Ok(()));
+        let legacy = runtime.video_layers[0].isf_effect.as_ref().unwrap();
+        assert_eq!(legacy.controls[1].value[0], 1.0);
+        let VideoEffectKind::Isf {
+            effect: canonical_root,
+        } = &runtime.video_effect_chains[0].stages[0].effect.kind;
+        assert_eq!(canonical_root.controls[1].value[0], 1.0);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_handle_legacy_event_ingress_normalizes_and_rejects_set_control() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        let mut incoming = video_effect_chain_c1_event_effect();
+        incoming.controls[0].value = [1.0, 0.0, 0.0, 0.0];
+        incoming.controls.push(protocol::VideoIsfControlSummary {
+            name: "enabled".to_string(),
+            kind: VideoIsfControlKind::Bool,
+            value: [0.0; 4],
+            default: [0.0; 4],
+            minimum: [0.0; 4],
+            maximum: [1.0; 4],
+            labels: Vec::new(),
+            values: Vec::new(),
+        });
+        incoming.stack.push(VideoIsfEffectStageSummary {
+            enabled: true,
+            label: "Handle stack Event".to_string(),
+            source: Arc::<str>::from("void main() { /* handle stack */ }"),
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: vec![test_isf_event_control(1.0)],
+        });
+        engine
+            .set_video_layer_isf_effect_published(layer_id, Some(incoming))
+            .unwrap();
+        let live = engine.snapshot().video;
+        assert_eq!(
+            live.layers[0].isf_effect.as_ref().unwrap().controls[0].value[0],
+            0.0
+        );
+        assert_eq!(
+            live.layers[0].isf_effect.as_ref().unwrap().stack[0].controls[0].value[0],
+            0.0
+        );
+        let VideoEffectKind::Isf {
+            effect: canonical_root,
+        } = &live.effect_chains[0].stages[0].effect.kind;
+        let VideoEffectKind::Isf {
+            effect: canonical_stack,
+        } = &live.effect_chains[0].stages[1].effect.kind;
+        assert_eq!(canonical_root.controls[0].value[0], 0.0);
+        assert_eq!(canonical_stack.controls[0].value[0], 0.0);
+
+        engine
+            .mutate_video_layer_isf_stack(
+                layer_id,
+                VideoIsfStackMutation::Add(VideoIsfEffectStageSummary {
+                    enabled: true,
+                    label: "Handle added Event".to_string(),
+                    source: Arc::<str>::from("void main() { /* handle add */ }"),
+                    source_path: None,
+                    description: None,
+                    categories: Vec::new(),
+                    controls: vec![test_isf_event_control(1.0)],
+                }),
+            )
+            .unwrap();
+        let live = engine.snapshot().video;
+        assert_eq!(
+            live.layers[0].isf_effect.as_ref().unwrap().stack[1].controls[0].value[0],
+            0.0
+        );
+        let VideoEffectKind::Isf {
+            effect: canonical_added,
+        } = &live.effect_chains[0].stages[2].effect.kind;
+        assert_eq!(canonical_added.controls[0].value[0], 0.0);
+
+        let before = engine.persistence_snapshot().unwrap();
+        let before_video = before.video.clone();
+        let before_authored_video = before.authored_video.clone();
+        let before_persistence_bytes =
+            serde_json::to_vec(&(before_video.clone(), before_authored_video.clone())).unwrap();
+        let error = engine
+            .mutate_video_layer_isf_stack(
+                layer_id,
+                VideoIsfStackMutation::SetControl {
+                    stage_index: 0,
+                    control_name: "trigger".to_string(),
+                    value: [1.0, 0.0, 0.0, 0.0],
+                },
+            )
+            .unwrap_err();
+        assert!(error.contains("PulseVideoLayerIsfEvent"));
+        let after_rejection = engine.persistence_snapshot().unwrap();
+        assert_eq!(after_rejection.video.clone(), before_video);
+        assert_eq!(
+            after_rejection.authored_video.clone(),
+            before_authored_video
+        );
+        assert_eq!(
+            serde_json::to_vec(&(
+                after_rejection.video,
+                after_rejection.authored_video.clone(),
+            ))
+            .unwrap(),
+            before_persistence_bytes
+        );
+
+        engine
+            .mutate_video_layer_isf_stack(
+                layer_id,
+                VideoIsfStackMutation::SetControl {
+                    stage_index: 0,
+                    control_name: "enabled".to_string(),
+                    value: [1.0, 0.0, 0.0, 0.0],
+                },
+            )
+            .unwrap();
+        let live = engine.snapshot().video;
+        assert_eq!(
+            live.layers[0].isf_effect.as_ref().unwrap().controls[1].value[0],
+            1.0
+        );
+        let VideoEffectKind::Isf {
+            effect: canonical_root,
+        } = &live.effect_chains[0].stages[0].effect.kind;
+        assert_eq!(canonical_root.controls[1].value[0], 1.0);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_canonical_source_budget_does_not_double_count_projection() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        let stage_source: Arc<str> = "x".repeat(video::ISF_MAX_SOURCE_BYTES).into();
+        let effect = VideoIsfEffectSummary {
+            enabled: true,
+            label: "C1 source root".to_string(),
+            source: Arc::clone(&stage_source),
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: Vec::new(),
+            stack: vec![VideoIsfEffectStageSummary {
+                enabled: true,
+                label: "C1 source tail".to_string(),
+                source: stage_source,
+                source_path: None,
+                description: None,
+                categories: Vec::new(),
+                controls: Vec::new(),
+            }],
+        };
+        // Two 8 MiB canonical stage entities exactly meet the 16 MiB project
+        // budget.  The renderer's legacy projection is present too, so this
+        // would fail if the C1 budget charged both representations.
+        engine
+            .set_video_layer_isf_effect_published(layer_id, Some(effect))
+            .unwrap();
+    }
+
+    #[test]
+    fn video_effect_chain_c1_duplicate_layer_rebinds_fresh_chain_and_clip_overrides() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        let mut effect = video_effect_chain_c1_event_effect();
+        effect.stack.push(VideoIsfEffectStageSummary {
+            enabled: true,
+            label: "C1 duplicate tail".to_string(),
+            source: Arc::<str>::from("void main() { }"),
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: Vec::new(),
+        });
+        engine
+            .set_video_layer_isf_effect_published(layer_id, Some(effect))
+            .unwrap();
+        let authored = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        let source_chain = authored.effect_chains[0].clone();
+        let active_slot_id = authored.layers[0].clip_slots[0].id;
+        let inactive_slot_id = engine.allocate_video_clip_slot_id();
+        engine
+            .duplicate_video_clip_slot_published(layer_id, active_slot_id, inactive_slot_id, None)
+            .unwrap();
+        let mut source_slot = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap()
+            .layers[0]
+            .clip_slots
+            .iter()
+            .find(|slot| slot.id == inactive_slot_id)
+            .cloned()
+            .unwrap();
+        source_slot.effect_overrides = vec![protocol::VideoClipEffectOverrideSummary {
+            effect_id: Some(source_chain.stages[0].effect.id),
+            stage_index: 0,
+            control_name: "trigger".to_string(),
+            value: [0.5, 0.0, 0.0, 0.0],
+        }];
+        engine
+            .update_video_clip_slot_published(layer_id, source_slot)
+            .unwrap();
+
+        let duplicate_layer_id = engine.allocate_video_layer_id();
+        engine
+            .duplicate_video_layer_published(
+                layer_id,
+                duplicate_layer_id,
+                "C1 duplicate".to_string(),
+            )
+            .unwrap();
+        let duplicated = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        let duplicate_chain = duplicated
+            .effect_chains
+            .iter()
+            .find(|chain| {
+                chain.scope
+                    == VideoEffectScope::Layer {
+                        layer_id: duplicate_layer_id,
+                    }
+            })
+            .unwrap();
+        let duplicate_layer = duplicated
+            .layers
+            .iter()
+            .find(|layer| layer.id == duplicate_layer_id)
+            .unwrap();
+
+        assert_ne!(duplicate_chain.id, source_chain.id);
+        assert_eq!(duplicate_chain.stages.len(), source_chain.stages.len());
+        for (source_stage, duplicate_stage) in
+            source_chain.stages.iter().zip(&duplicate_chain.stages)
+        {
+            assert_ne!(duplicate_stage.id, source_stage.id);
+            assert_ne!(duplicate_stage.effect.id, source_stage.effect.id);
+        }
+        assert_eq!(
+            duplicate_layer
+                .clip_slots
+                .iter()
+                .find(|slot| !slot.effect_overrides.is_empty())
+                .unwrap()
+                .effect_overrides[0]
+                .effect_id,
+            Some(duplicate_chain.stages[0].effect.id)
+        );
+        assert_eq!(
+            project_legacy_isf_from_canonical_chain(duplicate_chain).unwrap(),
+            duplicate_layer.isf_effect
+        );
+    }
+
+    #[test]
+    fn video_effect_chain_c1_duplicate_layer_clones_all_owned_catalog_with_rollback() {
+        let (engine, source_layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(
+                source_layer_id,
+                Some(video_effect_chain_c1_event_effect()),
+            )
+            .unwrap();
+        let initial = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        let first_slot_id = initial.layers[0].clip_slots[0].id;
+        let second_slot_id = engine.allocate_video_clip_slot_id();
+        engine
+            .duplicate_video_clip_slot_published(
+                source_layer_id,
+                first_slot_id,
+                second_slot_id,
+                None,
+            )
+            .unwrap();
+
+        let source_layer_chain = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap()
+            .effect_chains
+            .into_iter()
+            .find(|chain| {
+                chain.scope
+                    == VideoEffectScope::Layer {
+                        layer_id: source_layer_id,
+                    }
+            })
+            .unwrap();
+        let mut second_slot = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap()
+            .layers[0]
+            .clip_slots
+            .iter()
+            .find(|slot| slot.id == second_slot_id)
+            .cloned()
+            .unwrap();
+        second_slot.effect_overrides = vec![protocol::VideoClipEffectOverrideSummary {
+            effect_id: Some(source_layer_chain.stages[0].effect.id),
+            stage_index: 0,
+            control_name: "trigger".to_string(),
+            value: [0.5, 0.0, 0.0, 0.0],
+        }];
+        engine
+            .update_video_clip_slot_published(source_layer_id, second_slot)
+            .unwrap();
+
+        let owned_chain = |scope| VideoEffectChainSummary {
+            id: engine.allocate_video_effect_chain_id(),
+            scope,
+            bypassed: false,
+            stages: vec![VideoEffectStageSummary {
+                id: engine.allocate_video_effect_stage_id(),
+                enabled: true,
+                label: "Owned duplicate stage".to_string(),
+                effect: protocol::VideoEffectSummary {
+                    id: engine.allocate_video_effect_id(),
+                    kind: VideoEffectKind::Isf {
+                        effect: video_effect_chain_c1_event_effect(),
+                    },
+                },
+            }],
+        };
+        let mut catalog = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap()
+            .effect_chains;
+        catalog.extend([
+            owned_chain(VideoEffectScope::Clip {
+                layer_id: source_layer_id,
+                slot_id: first_slot_id,
+            }),
+            owned_chain(VideoEffectScope::Clip {
+                layer_id: source_layer_id,
+                slot_id: second_slot_id,
+            }),
+            owned_chain(VideoEffectScope::Transition {
+                owner: VideoTransitionEffectOwner::ClipTake {
+                    layer_id: source_layer_id,
+                },
+            }),
+        ]);
+        engine
+            .apply_video_effect_catalog(catalog, Vec::new(), Vec::new())
+            .unwrap();
+
+        let before_duplicate = engine.persistence_snapshot().unwrap();
+        let before_video = before_duplicate.authored_video.as_ref().unwrap();
+        let source_before = before_video
+            .layers
+            .iter()
+            .find(|layer| layer.id == source_layer_id)
+            .cloned()
+            .unwrap();
+        let source_owned_before = before_video
+            .effect_chains
+            .iter()
+            .filter(|chain| {
+                video_effect_chain_is_owned_by_layer(
+                    chain,
+                    source_layer_id,
+                    &source_before
+                        .clip_slots
+                        .iter()
+                        .map(|slot| slot.id)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(source_owned_before.len(), 4);
+
+        let duplicate_layer_id = engine.allocate_video_layer_id();
+        engine
+            .duplicate_video_layer_published(
+                source_layer_id,
+                duplicate_layer_id,
+                "Owned C1 duplicate".to_string(),
+            )
+            .unwrap();
+        let after_success = engine.persistence_snapshot().unwrap();
+        let after_video = after_success.authored_video.as_ref().unwrap();
+        let duplicate = after_video
+            .layers
+            .iter()
+            .find(|layer| layer.id == duplicate_layer_id)
+            .unwrap();
+        let source_after = after_video
+            .layers
+            .iter()
+            .find(|layer| layer.id == source_layer_id)
+            .unwrap();
+        assert_eq!(source_after, &source_before);
+
+        let source_slot_ids = source_before
+            .clip_slots
+            .iter()
+            .map(|slot| slot.id)
+            .collect::<Vec<_>>();
+        let duplicate_slot_ids = duplicate
+            .clip_slots
+            .iter()
+            .map(|slot| slot.id)
+            .collect::<Vec<_>>();
+        let source_owned_after = after_video
+            .effect_chains
+            .iter()
+            .filter(|chain| {
+                video_effect_chain_is_owned_by_layer(chain, source_layer_id, &source_slot_ids)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let duplicate_owned = after_video
+            .effect_chains
+            .iter()
+            .filter(|chain| {
+                video_effect_chain_is_owned_by_layer(chain, duplicate_layer_id, &duplicate_slot_ids)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(source_owned_after, source_owned_before);
+        assert_eq!(duplicate_owned.len(), source_owned_before.len());
+        for (source, cloned) in source_owned_before.iter().zip(&duplicate_owned) {
+            assert_ne!(source.id, cloned.id);
+            assert_eq!(source.stages.len(), cloned.stages.len());
+            for (source_stage, cloned_stage) in source.stages.iter().zip(&cloned.stages) {
+                assert_ne!(source_stage.id, cloned_stage.id);
+                assert_ne!(source_stage.effect.id, cloned_stage.effect.id);
+            }
+            match (&source.scope, &cloned.scope) {
+                (
+                    VideoEffectScope::Layer {
+                        layer_id: source_id,
+                    },
+                    VideoEffectScope::Layer {
+                        layer_id: cloned_id,
+                    },
+                ) => {
+                    assert_eq!(*source_id, source_layer_id);
+                    assert_eq!(*cloned_id, duplicate_layer_id);
+                }
+                (
+                    VideoEffectScope::Clip {
+                        layer_id: source_id,
+                        slot_id: source_slot_id,
+                    },
+                    VideoEffectScope::Clip {
+                        layer_id: cloned_id,
+                        slot_id: cloned_slot_id,
+                    },
+                ) => {
+                    assert_eq!(*source_id, source_layer_id);
+                    assert_eq!(*cloned_id, duplicate_layer_id);
+                    assert_eq!(
+                        duplicate_slot_ids[source_slot_ids
+                            .iter()
+                            .position(|slot_id| slot_id == source_slot_id)
+                            .unwrap()],
+                        *cloned_slot_id
+                    );
+                }
+                (
+                    VideoEffectScope::Transition {
+                        owner:
+                            VideoTransitionEffectOwner::ClipTake {
+                                layer_id: source_id,
+                            },
+                    },
+                    VideoEffectScope::Transition {
+                        owner:
+                            VideoTransitionEffectOwner::ClipTake {
+                                layer_id: cloned_id,
+                            },
+                    },
+                ) => {
+                    assert_eq!(*source_id, source_layer_id);
+                    assert_eq!(*cloned_id, duplicate_layer_id);
+                }
+                scopes => panic!("unexpected duplicate owned scopes: {scopes:?}"),
+            }
+        }
+        let duplicate_layer_chain = duplicate_owned
+            .iter()
+            .find(|chain| {
+                chain.scope
+                    == VideoEffectScope::Layer {
+                        layer_id: duplicate_layer_id,
+                    }
+            })
+            .unwrap();
+        let duplicated_override = duplicate
+            .clip_slots
+            .iter()
+            .find(|slot| !slot.effect_overrides.is_empty())
+            .unwrap()
+            .effect_overrides
+            .first()
+            .unwrap();
+        assert_eq!(
+            duplicated_override.effect_id,
+            Some(duplicate_layer_chain.stages[0].effect.id)
+        );
+        assert_eq!(duplicated_override.stage_index, 0);
+
+        let max_chain_id = after_video
+            .effect_chains
+            .iter()
+            .map(|chain| chain.id.0)
+            .max()
+            .unwrap();
+        let max_stage_id = after_video
+            .effect_chains
+            .iter()
+            .flat_map(|chain| chain.stages.iter().map(|stage| stage.id.0))
+            .max()
+            .unwrap();
+        let max_effect_id = after_video
+            .effect_chains
+            .iter()
+            .flat_map(|chain| chain.stages.iter().map(|stage| stage.effect.id.0))
+            .max()
+            .unwrap();
+        engine.force_next_pending_publication_failure_for_tests();
+        let failed_duplicate_layer_id = engine.allocate_video_layer_id();
+        assert!(engine
+            .duplicate_video_layer_published(
+                source_layer_id,
+                failed_duplicate_layer_id,
+                "Rollback C1 duplicate".to_string(),
+            )
+            .is_err());
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().authored_video,
+            after_success.authored_video
+        );
+        assert!(engine.allocate_video_effect_chain_id().0 >= max_chain_id + 5);
+        assert!(engine.allocate_video_effect_stage_id().0 >= max_stage_id + 5);
+        assert!(engine.allocate_video_effect_id().0 >= max_effect_id + 5);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_duplicate_rejects_owned_catalog_fingerprint_drift() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        runtime
+            .set_video_layer_isf_effect(
+                1,
+                Some(video_effect_chain_c1_event_effect()),
+                &runtime
+                    .next_runtime_video_effect_legacy_adapter_ids(1, 1)
+                    .unwrap(),
+            )
+            .unwrap();
+        let source_slot_ids = runtime.video_layers[0]
+            .clip_slots
+            .iter()
+            .map(|slot| slot.id)
+            .collect::<Vec<_>>();
+        let source_owned = runtime
+            .video_effect_chains
+            .iter()
+            .filter(|chain| video_effect_chain_is_owned_by_layer(chain, 1, &source_slot_ids))
+            .cloned()
+            .collect::<Vec<_>>();
+        let plan = runtime
+            .next_runtime_video_effect_duplicate_ids(&source_owned)
+            .unwrap();
+
+        // This simulated intervening authored edit changes the filtered
+        // serialized owned-chain sequence after allocation but before B.
+        runtime.video_effect_chains.push(VideoEffectChainSummary {
+            id: VideoEffectChainId(2),
+            scope: VideoEffectScope::Clip {
+                layer_id: 1,
+                slot_id: source_slot_ids[0],
+            },
+            bypassed: false,
+            stages: vec![VideoEffectStageSummary {
+                id: VideoEffectStageId(2),
+                enabled: true,
+                label: "Drift clip stage".to_string(),
+                effect: protocol::VideoEffectSummary {
+                    id: VideoEffectId(2),
+                    kind: VideoEffectKind::Isf {
+                        effect: video_effect_chain_c1_event_effect(),
+                    },
+                },
+            }],
+        });
+        let before = runtime.build_persistence_snapshot();
+        let error = runtime
+            .duplicate_video_layer_with_effect_catalog(
+                1,
+                2,
+                "Stale duplicate".to_string(),
+                &source_slot_ids,
+                &[VideoClipSlotId(2)],
+                &plan,
+            )
+            .unwrap_err();
+        assert!(error.contains("owned effect catalog changed"));
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_duplicate_layer_inserts_groups_in_future_composition_order() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let layer_ids = (0..7)
+            .map(|_| engine.allocate_video_layer_id())
+            .collect::<Vec<_>>();
+        for &layer_id in &layer_ids {
+            engine
+                .send(EngineCommand::AddVideoLayer {
+                    layer_id,
+                    label: format!("Group duplicate layer {layer_id}"),
+                    source: VideoSourceSummary {
+                        kind: VideoSourceKind::StillImage,
+                        path: Some(format!("memory://group-duplicate-{layer_id}.png")),
+                        name: None,
+                        codec: None,
+                        metadata: None,
+                    },
+                })
+                .unwrap();
+        }
+        let custom_composition_id = engine.allocate_composition_id();
+        engine
+            .send(EngineCommand::AddVideoComposition(CompositionSummary {
+                id: custom_composition_id,
+                label: "Group duplicate custom".to_string(),
+                layer_ids: vec![
+                    layer_ids[1],
+                    layer_ids[0],
+                    layer_ids[4],
+                    layer_ids[3],
+                    layer_ids[2],
+                    layer_ids[5],
+                    layer_ids[6],
+                ],
+                output_ids: Vec::new(),
+            }))
+            .unwrap();
+        engine.persistence_snapshot().unwrap();
+
+        let base = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        let start_group = VideoLayerGroupSummary {
+            id: engine.allocate_video_layer_group_id(),
+            label: "Duplicate start group".to_string(),
+            composition_id: 1,
+            layer_ids: vec![layer_ids[0], layer_ids[1]],
+        };
+        let middle_group = VideoLayerGroupSummary {
+            id: engine.allocate_video_layer_group_id(),
+            label: "Duplicate middle group".to_string(),
+            composition_id: custom_composition_id,
+            layer_ids: vec![layer_ids[4], layer_ids[3], layer_ids[2]],
+        };
+        let end_group = VideoLayerGroupSummary {
+            id: engine.allocate_video_layer_group_id(),
+            label: "Duplicate end group".to_string(),
+            composition_id: 1,
+            layer_ids: vec![layer_ids[5], layer_ids[6]],
+        };
+        engine
+            .apply_video_effect_catalog(
+                base.effect_chains,
+                base.effect_presets,
+                vec![start_group.clone(), middle_group.clone(), end_group.clone()],
+            )
+            .unwrap();
+
+        // Protocol makes group memberships globally disjoint. Duplicate three
+        // distinct sources so each legal group position (start/middle/end) is
+        // exercised across Main and a differently ordered composition.
+        let start_duplicate_id = engine.allocate_video_layer_id();
+        engine
+            .duplicate_video_layer_published(
+                layer_ids[0],
+                start_duplicate_id,
+                "Grouped start duplicate".to_string(),
+            )
+            .unwrap();
+        let middle_duplicate_id = engine.allocate_video_layer_id();
+        engine
+            .duplicate_video_layer_published(
+                layer_ids[3],
+                middle_duplicate_id,
+                "Grouped middle duplicate".to_string(),
+            )
+            .unwrap();
+        let end_duplicate_id = engine.allocate_video_layer_id();
+        engine
+            .duplicate_video_layer_published(
+                layer_ids[6],
+                end_duplicate_id,
+                "Grouped end duplicate".to_string(),
+            )
+            .unwrap();
+        let successful = engine.persistence_snapshot().unwrap();
+        let successful_video = successful.authored_video.as_ref().unwrap();
+        let composition = |composition_id| {
+            successful_video
+                .compositions
+                .iter()
+                .find(|composition| composition.id == composition_id)
+                .unwrap()
+                .layer_ids
+                .clone()
+        };
+        assert_eq!(
+            composition(1),
+            vec![
+                layer_ids[0],
+                start_duplicate_id,
+                layer_ids[1],
+                layer_ids[2],
+                layer_ids[3],
+                middle_duplicate_id,
+                layer_ids[4],
+                layer_ids[5],
+                layer_ids[6],
+                end_duplicate_id,
+            ]
+        );
+        assert_eq!(
+            composition(custom_composition_id),
+            vec![
+                layer_ids[1],
+                layer_ids[0],
+                start_duplicate_id,
+                layer_ids[4],
+                layer_ids[3],
+                middle_duplicate_id,
+                layer_ids[2],
+                layer_ids[5],
+                layer_ids[6],
+                end_duplicate_id,
+            ]
+        );
+        let group_members = |group_id| {
+            successful_video
+                .layer_groups
+                .iter()
+                .find(|group| group.id == group_id)
+                .unwrap()
+                .layer_ids
+                .clone()
+        };
+        assert_eq!(
+            group_members(start_group.id),
+            vec![layer_ids[0], start_duplicate_id, layer_ids[1]]
+        );
+        assert_eq!(
+            group_members(middle_group.id),
+            vec![
+                layer_ids[4],
+                layer_ids[3],
+                middle_duplicate_id,
+                layer_ids[2],
+            ]
+        );
+        assert_eq!(
+            group_members(end_group.id),
+            vec![layer_ids[5], layer_ids[6], end_duplicate_id]
+        );
+        validate_engine_ready_video_effect_chains(successful_video).unwrap();
+
+        engine.force_next_pending_publication_failure_for_tests();
+        let failed_duplicate_layer_id = engine.allocate_video_layer_id();
+        assert!(engine
+            .duplicate_video_layer_published(
+                layer_ids[0],
+                failed_duplicate_layer_id,
+                "Grouped rollback duplicate".to_string(),
+            )
+            .is_err());
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().authored_video,
+            successful.authored_video
+        );
+    }
+
+    #[test]
+    fn video_effect_chain_c1_lifecycle_removals_prune_all_dangling_scopes() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        runtime
+            .set_video_layer_isf_effect(
+                1,
+                Some(video_effect_chain_c1_event_effect()),
+                &runtime
+                    .next_runtime_video_effect_legacy_adapter_ids(1, 1)
+                    .unwrap(),
+            )
+            .unwrap();
+        runtime.video_compositions.push(RuntimeVideoComposition {
+            summary: CompositionSummary {
+                id: 2,
+                label: "C1 lifecycle composition".to_string(),
+                layer_ids: vec![1],
+                output_ids: vec![3],
+            },
+        });
+        runtime.video_outputs.push(RuntimeVideoOutput {
+            summary: VideoOutputSummary {
+                id: 3,
+                label: "C1 lifecycle output".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: false,
+                composition_id: 2,
+                fullscreen: false,
+                monitor_id: None,
+                width: 640,
+                height: 480,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: Default::default(),
+            },
+        });
+        let base = runtime.video_effect_chains[0].clone();
+        let scoped = |id, stage_id, effect_id, scope| VideoEffectChainSummary {
+            id: VideoEffectChainId(id),
+            scope,
+            bypassed: false,
+            stages: vec![VideoEffectStageSummary {
+                id: VideoEffectStageId(stage_id),
+                enabled: true,
+                label: "C1 lifecycle stage".to_string(),
+                effect: protocol::VideoEffectSummary {
+                    id: VideoEffectId(effect_id),
+                    kind: VideoEffectKind::Isf {
+                        effect: video_effect_chain_c1_event_effect(),
+                    },
+                },
+            }],
+        };
+        runtime
+            .apply_video_effect_catalog_state(
+                vec![
+                    base,
+                    scoped(
+                        2,
+                        2,
+                        2,
+                        VideoEffectScope::Clip {
+                            layer_id: 1,
+                            slot_id: runtime.video_layers[0].clip_slots[0].id,
+                        },
+                    ),
+                    scoped(
+                        3,
+                        3,
+                        3,
+                        VideoEffectScope::Transition {
+                            owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id: 1 },
+                        },
+                    ),
+                    scoped(4, 4, 4, VideoEffectScope::Composition { composition_id: 2 }),
+                    scoped(
+                        5,
+                        5,
+                        5,
+                        VideoEffectScope::Group {
+                            group_id: VideoLayerGroupId(1),
+                        },
+                    ),
+                    scoped(6, 6, 6, VideoEffectScope::Output { output_id: 3 }),
+                ],
+                Vec::new(),
+                vec![VideoLayerGroupSummary {
+                    id: VideoLayerGroupId(1),
+                    label: "C1 lifecycle group".to_string(),
+                    composition_id: 2,
+                    layer_ids: vec![1],
+                }],
+            )
+            .unwrap();
+
+        runtime.apply_command(EngineCommand::RemoveVideoOutput(3));
+        assert!(!runtime
+            .video_effect_chains
+            .iter()
+            .any(|chain| { chain.scope == VideoEffectScope::Output { output_id: 3 } }));
+        runtime.apply_command(EngineCommand::RemoveVideoComposition(2));
+        assert!(runtime.video_layer_groups.is_empty());
+        assert!(!runtime.video_effect_chains.iter().any(|chain| {
+            matches!(
+                chain.scope,
+                VideoEffectScope::Composition { composition_id: 2 }
+                    | VideoEffectScope::Group {
+                        group_id: VideoLayerGroupId(1)
+                    }
+            )
+        }));
+        runtime.apply_command(EngineCommand::RemoveVideoLayer(1));
+        assert!(runtime.video_effect_chains.is_empty());
+        let persisted = runtime.build_persistence_snapshot();
+        validate_engine_ready_video_effect_chains(persisted.authored_video.as_ref().unwrap())
+            .unwrap();
+    }
+
+    #[test]
+    fn video_effect_chain_c1_reused_layer_id_prunes_retired_topology_direct() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        let adapter_ids = runtime
+            .next_runtime_video_effect_legacy_adapter_ids(1, 1)
+            .unwrap();
+        runtime
+            .set_video_layer_isf_effect(1, Some(video_effect_chain_c1_event_effect()), &adapter_ids)
+            .unwrap();
+        let layer_chain = runtime.video_effect_chains[0].clone();
+        let scoped = |id, scope| VideoEffectChainSummary {
+            id: VideoEffectChainId(id),
+            scope,
+            bypassed: false,
+            stages: vec![VideoEffectStageSummary {
+                id: VideoEffectStageId(id),
+                enabled: true,
+                label: "Reused layer lifecycle stage".to_string(),
+                effect: protocol::VideoEffectSummary {
+                    id: VideoEffectId(id),
+                    kind: VideoEffectKind::Isf {
+                        effect: video_effect_chain_c1_event_effect(),
+                    },
+                },
+            }],
+        };
+        let retired_slot_id = runtime.video_layers[0].clip_slots[0].id;
+        runtime
+            .apply_video_effect_catalog_state(
+                vec![
+                    layer_chain,
+                    scoped(
+                        2,
+                        VideoEffectScope::Clip {
+                            layer_id: 1,
+                            slot_id: retired_slot_id,
+                        },
+                    ),
+                    scoped(
+                        3,
+                        VideoEffectScope::Transition {
+                            owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id: 1 },
+                        },
+                    ),
+                    scoped(
+                        4,
+                        VideoEffectScope::Group {
+                            group_id: VideoLayerGroupId(1),
+                        },
+                    ),
+                ],
+                Vec::new(),
+                vec![VideoLayerGroupSummary {
+                    id: VideoLayerGroupId(1),
+                    label: "Reused layer lifecycle group".to_string(),
+                    composition_id: 1,
+                    layer_ids: vec![1],
+                }],
+            )
+            .unwrap();
+        runtime
+            .pulse_video_layer_isf_event(
+                1,
+                0,
+                "trigger".to_string(),
+                Duration::from_millis(100),
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(runtime.pending_video_isf_event_resets.len(), 1);
+
+        runtime
+            .add_video_layer_with_asset(
+                1,
+                2,
+                VideoClipSlotId(2),
+                "Replacement layer".to_string(),
+                VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://replacement-layer.mp4".to_string()),
+                    name: None,
+                    codec: Some("h264".to_string()),
+                    metadata: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(runtime.video_layers.len(), 1);
+        assert_eq!(runtime.video_layers[0].clip_slots[0].id, VideoClipSlotId(2));
+        assert!(runtime.video_layers[0].isf_effect.is_none());
+        assert!(runtime.video_effect_chains.is_empty());
+        assert!(runtime.video_layer_groups.is_empty());
+        assert!(runtime.pending_video_isf_event_resets.is_empty());
+        let persisted = runtime.build_persistence_snapshot();
+        let authored = persisted.authored_video.as_ref().unwrap();
+        assert!(authored.effect_chains.is_empty());
+        assert!(authored.layer_groups.is_empty());
+        validate_engine_ready_video_effect_chains(authored).unwrap();
+    }
+
+    #[test]
+    fn video_effect_chain_c1_handle_reused_layer_id_prunes_retired_projection() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(
+                layer_id,
+                Some(video_effect_chain_c1_event_effect()),
+            )
+            .unwrap();
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "Handle replacement".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://handle-replacement.mp4".to_string()),
+                    name: None,
+                    codec: Some("h264".to_string()),
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        // `persistence_snapshot` is the queue-order fence for legacy `send`
+        // commands; AddVideoLayer itself intentionally has no published ACK.
+        let authored = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        assert_eq!(authored.layers.len(), 1);
+        assert_eq!(authored.layers[0].id, layer_id);
+        assert_eq!(authored.layers[0].label, "Handle replacement");
+        assert!(authored.layers[0].isf_effect.is_none());
+        assert!(authored.effect_chains.is_empty());
+        assert!(authored.layer_groups.is_empty());
+        validate_engine_ready_video_effect_chains(&authored).unwrap();
+    }
+
+    #[test]
+    fn video_effect_chain_c1_direct_slot_authoring_normalizes_missing_effect_id_and_rejects_wrong()
+    {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        let adapter_ids = runtime
+            .next_runtime_video_effect_legacy_adapter_ids(1, 1)
+            .unwrap();
+        runtime
+            .set_video_layer_isf_effect(1, Some(video_effect_chain_c1_event_effect()), &adapter_ids)
+            .unwrap();
+        let expected_effect_id = runtime.video_effect_chains[0].stages[0].effect.id;
+        let asset_id = runtime.video_layers[0].clip_slots[0].media_asset_id;
+        let mut missing = VideoClipSlotSummary {
+            id: VideoClipSlotId(2),
+            media_asset_id: asset_id,
+            in_point_ms: 0,
+            out_point_ms: None,
+            loop_mode: VideoClipLoopMode::Once,
+            speed: 1.0,
+            cue_points: Vec::new(),
+            launch_quantization: VideoClipLaunchQuantization::Immediate,
+            effect_overrides: vec![protocol::VideoClipEffectOverrideSummary {
+                effect_id: None,
+                stage_index: 0,
+                control_name: "trigger".to_string(),
+                value: [0.25, 0.0, 0.0, 0.0],
+            }],
+        };
+        runtime
+            .create_video_clip_slot(1, missing.clone(), None, false)
+            .unwrap();
+        let normalized = runtime.video_layers[0]
+            .clip_slots
+            .iter()
+            .find(|slot| slot.id == missing.id)
+            .unwrap();
+        assert_eq!(
+            normalized.effect_overrides[0].effect_id,
+            Some(expected_effect_id)
+        );
+
+        let before = runtime.build_persistence_snapshot();
+        missing.effect_overrides[0].effect_id = Some(VideoEffectId(999_999));
+        let error = runtime.update_video_clip_slot(1, missing).unwrap_err();
+        assert!(
+            error.contains("stable effect and stage index diverge"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+        validate_engine_ready_video_effect_chains(before.authored_video.as_ref().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn video_effect_chain_c1_handle_slot_import_normalizes_missing_effect_id_and_rolls_back_wrong()
+    {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(
+                layer_id,
+                Some(video_effect_chain_c1_event_effect()),
+            )
+            .unwrap();
+        let initial = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        let expected_effect_id = initial.effect_chains[0].stages[0].effect.id;
+        let asset_id = initial.layers[0].clip_slots[0].media_asset_id;
+        let slot_id = engine.allocate_video_clip_slot_id();
+        let missing = VideoClipSlotSummary {
+            id: slot_id,
+            media_asset_id: asset_id,
+            in_point_ms: 0,
+            out_point_ms: None,
+            loop_mode: VideoClipLoopMode::Once,
+            speed: 1.0,
+            cue_points: Vec::new(),
+            launch_quantization: VideoClipLaunchQuantization::Immediate,
+            effect_overrides: vec![protocol::VideoClipEffectOverrideSummary {
+                effect_id: None,
+                stage_index: 0,
+                control_name: "trigger".to_string(),
+                value: [0.5, 0.0, 0.0, 0.0],
+            }],
+        };
+        engine
+            .import_and_assign_video_clip_slots_published(VideoClipSlotImportAndAssignCandidate {
+                assets: Vec::new(),
+                assignments: vec![VideoClipSlotImportAssignment {
+                    layer_id,
+                    slot: missing,
+                    before_slot_id: None,
+                    make_default: false,
+                }],
+            })
+            .unwrap();
+        let normalized = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        let normalized_slot = normalized.layers[0]
+            .clip_slots
+            .iter()
+            .find(|slot| slot.id == slot_id)
+            .unwrap();
+        assert_eq!(
+            normalized_slot.effect_overrides[0].effect_id,
+            Some(expected_effect_id)
+        );
+
+        let mut wrong = normalized_slot.clone();
+        wrong.effect_overrides[0].effect_id = Some(VideoEffectId(999_999));
+        let error = engine
+            .update_video_clip_slot_published(layer_id, wrong)
+            .unwrap_err();
+        assert!(
+            error.contains("stable effect and stage index diverge"),
+            "unexpected error: {error}"
+        );
+        let after_rejection = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        assert_eq!(after_rejection, normalized);
+        validate_engine_ready_video_effect_chains(&after_rejection).unwrap();
+    }
+
+    #[test]
+    fn video_effect_chain_c1_legacy_stack_move_remove_reindexes_overrides_and_rolls_back() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
+            layer_id: 1,
+            effect: Some(VideoIsfEffectSummary {
+                enabled: true,
+                label: "Override root".to_string(),
+                source: Arc::<str>::from("root"),
+                source_path: None,
+                description: None,
+                categories: Vec::new(),
+                controls: vec![test_isf_event_control(0.0)],
+                stack: vec![
+                    VideoIsfEffectStageSummary {
+                        enabled: true,
+                        label: "Override middle".to_string(),
+                        source: Arc::<str>::from("middle"),
+                        source_path: None,
+                        description: None,
+                        categories: Vec::new(),
+                        controls: vec![test_isf_event_control(0.0)],
+                    },
+                    VideoIsfEffectStageSummary {
+                        enabled: true,
+                        label: "Override tail".to_string(),
+                        source: Arc::<str>::from("tail"),
+                        source_path: None,
+                        description: None,
+                        categories: Vec::new(),
+                        controls: vec![test_isf_event_control(0.0)],
+                    },
+                ],
+            }),
+        });
+        assert!(runtime.last_error.is_none());
+        let chain = runtime.video_effect_chains[0].clone();
+        let root_id = chain.stages[0].effect.id;
+        let middle_id = chain.stages[1].effect.id;
+        let tail_id = chain.stages[2].effect.id;
+        let override_value = |effect_id, stage_index| protocol::VideoClipEffectOverrideSummary {
+            effect_id: Some(effect_id),
+            stage_index,
+            control_name: "trigger".to_string(),
+            value: [0.25, 0.0, 0.0, 0.0],
+        };
+        let first_slot = &mut runtime.video_layers[0].clip_slots[0];
+        first_slot.effect_overrides = vec![
+            override_value(root_id, 0),
+            override_value(middle_id, 1),
+            override_value(tail_id, 2),
+        ];
+        let mut second_slot = first_slot.clone();
+        second_slot.id = VideoClipSlotId(2);
+        second_slot.effect_overrides =
+            vec![override_value(middle_id, 1), override_value(tail_id, 2)];
+        runtime
+            .create_video_clip_slot(1, second_slot, None, false)
+            .unwrap();
+        let before = runtime.build_persistence_snapshot();
+
+        // A post-B publication failure must restore both canonical order and
+        // every reindexed slot override in the complete A image.
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.fail_next_pending_publication = true;
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::MutateVideoLayerIsfStack {
+            layer_id: 1,
+            mutation: VideoIsfStackMutation::Move {
+                stage_index: 2,
+                delta: -2,
+            },
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+
+        runtime
+            .mutate_video_layer_isf_stack_canonical(
+                1,
+                VideoIsfStackMutation::Move {
+                    stage_index: 2,
+                    delta: -2,
+                },
+                &VideoEffectLegacyAdapterIds::default(),
+            )
+            .unwrap();
+        // Legacy Move is defined as an in-place swap, so moving stage 2 by
+        // -2 produces tail, middle, root while retaining each stable ID.
+        let expected_after_move = [(tail_id, 0), (middle_id, 1), (root_id, 2)]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        for slot in &runtime.video_layers[0].clip_slots {
+            for effect_override in &slot.effect_overrides {
+                assert_eq!(
+                    expected_after_move.get(&effect_override.effect_id.unwrap()),
+                    Some(&effect_override.stage_index)
+                );
+                assert_eq!(effect_override.control_name, "trigger");
+            }
+        }
+
+        runtime
+            .mutate_video_layer_isf_stack_canonical(
+                1,
+                VideoIsfStackMutation::Remove { stage_index: 2 },
+                &VideoEffectLegacyAdapterIds::default(),
+            )
+            .unwrap();
+        let expected_after_remove = [(tail_id, 0), (middle_id, 1)]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        for slot in &runtime.video_layers[0].clip_slots {
+            assert!(slot
+                .effect_overrides
+                .iter()
+                .all(|effect_override| effect_override.effect_id != Some(root_id)));
+            for effect_override in &slot.effect_overrides {
+                assert_eq!(
+                    expected_after_remove.get(&effect_override.effect_id.unwrap()),
+                    Some(&effect_override.stage_index)
+                );
+                assert_eq!(effect_override.control_name, "trigger");
+            }
+        }
+        let persisted = runtime.build_persistence_snapshot();
+        validate_engine_ready_video_effect_chains(persisted.authored_video.as_ref().unwrap())
+            .unwrap();
+    }
+
+    #[test]
+    fn video_effect_chain_c1_catalog_replace_reprojects_layer_overrides_and_rolls_back() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
+            layer_id: 1,
+            effect: Some(VideoIsfEffectSummary {
+                enabled: true,
+                label: "Catalog root".to_string(),
+                source: Arc::<str>::from("catalog-root"),
+                source_path: None,
+                description: None,
+                categories: Vec::new(),
+                controls: vec![test_isf_event_control(0.0)],
+                stack: vec![
+                    VideoIsfEffectStageSummary {
+                        enabled: true,
+                        label: "Catalog middle".to_string(),
+                        source: Arc::<str>::from("catalog-middle"),
+                        source_path: None,
+                        description: None,
+                        categories: Vec::new(),
+                        controls: vec![test_isf_event_control(0.0)],
+                    },
+                    VideoIsfEffectStageSummary {
+                        enabled: true,
+                        label: "Catalog tail".to_string(),
+                        source: Arc::<str>::from("catalog-tail"),
+                        source_path: None,
+                        description: None,
+                        categories: Vec::new(),
+                        controls: vec![test_isf_event_control(0.0)],
+                    },
+                ],
+            }),
+        });
+        assert!(runtime.last_error.is_none());
+        let chain = runtime.video_effect_chains[0].clone();
+        let root_id = chain.stages[0].effect.id;
+        let middle_id = chain.stages[1].effect.id;
+        let tail_id = chain.stages[2].effect.id;
+        let override_value = |effect_id, stage_index| protocol::VideoClipEffectOverrideSummary {
+            effect_id: Some(effect_id),
+            stage_index,
+            control_name: "trigger".to_string(),
+            value: [0.5, 0.0, 0.0, 0.0],
+        };
+        let first_slot = &mut runtime.video_layers[0].clip_slots[0];
+        first_slot.effect_overrides = vec![
+            override_value(root_id, 0),
+            override_value(middle_id, 1),
+            override_value(tail_id, 2),
+        ];
+        let mut second_slot = first_slot.clone();
+        second_slot.id = VideoClipSlotId(2);
+        second_slot.effect_overrides =
+            vec![override_value(middle_id, 1), override_value(tail_id, 2)];
+        runtime
+            .create_video_clip_slot(1, second_slot, None, false)
+            .unwrap();
+
+        let mut reordered = chain.clone();
+        reordered.stages.swap(0, 2);
+        let before = runtime.build_persistence_snapshot();
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.fail_next_pending_publication = true;
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ApplyVideoEffectCatalogPublished {
+            effect_chains: vec![reordered.clone()],
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+
+        runtime
+            .apply_video_effect_catalog_state(vec![reordered.clone()], Vec::new(), Vec::new())
+            .unwrap();
+        let expected_after_reorder = [(tail_id, 0), (middle_id, 1), (root_id, 2)]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        for slot in &runtime.video_layers[0].clip_slots {
+            for effect_override in &slot.effect_overrides {
+                assert_eq!(
+                    expected_after_reorder.get(&effect_override.effect_id.unwrap()),
+                    Some(&effect_override.stage_index)
+                );
+                assert_eq!(effect_override.control_name, "trigger");
+            }
+        }
+        assert_eq!(
+            runtime.video_layers[0]
+                .isf_effect
+                .as_ref()
+                .map(|effect| effect.label.as_str()),
+            Some("Catalog tail")
+        );
+
+        let mut removed = reordered;
+        removed.stages.retain(|stage| stage.effect.id != middle_id);
+        runtime
+            .apply_video_effect_catalog_state(vec![removed], Vec::new(), Vec::new())
+            .unwrap();
+        let expected_after_remove = [(tail_id, 0), (root_id, 1)]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        for slot in &runtime.video_layers[0].clip_slots {
+            assert!(slot
+                .effect_overrides
+                .iter()
+                .all(|effect_override| effect_override.effect_id != Some(middle_id)));
+            for effect_override in &slot.effect_overrides {
+                assert_eq!(
+                    expected_after_remove.get(&effect_override.effect_id.unwrap()),
+                    Some(&effect_override.stage_index)
+                );
+                assert_eq!(effect_override.control_name, "trigger");
+            }
+        }
+
+        runtime
+            .apply_video_effect_catalog_state(Vec::new(), Vec::new(), Vec::new())
+            .unwrap();
+        assert!(runtime.video_layers[0].isf_effect.is_none());
+        assert!(runtime.video_layers[0]
+            .clip_slots
+            .iter()
+            .all(|slot| slot.effect_overrides.is_empty()));
+        let persisted = runtime.build_persistence_snapshot();
+        validate_engine_ready_video_effect_chains(persisted.authored_video.as_ref().unwrap())
+            .unwrap();
+    }
+
     fn near_limit_isf_source_budget_engine() -> (EngineHandle, VideoLayerId, [VideoLayerId; 2]) {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
@@ -62226,6 +66590,75 @@ mod tests {
         }
     }
 
+    #[test]
+    fn video_effect_chain_c1_reset_never_latches_event_default_and_preserves_bool_default() {
+        let effect = video_effect_chain_c1_event_default_one_with_bool();
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
+            layer_id: 1,
+            effect: Some(effect.clone()),
+        });
+        assert!(runtime.last_error.is_none());
+        runtime
+            .mutate_video_layer_isf_stack_canonical(
+                1,
+                VideoIsfStackMutation::Reset { stage_index: 0 },
+                &VideoEffectLegacyAdapterIds::default(),
+            )
+            .unwrap();
+        assert_video_snapshot_layer_event_value(&runtime.video_snapshot(), 1, 0.0);
+        assert_eq!(
+            runtime.video_layers[0]
+                .isf_effect
+                .as_ref()
+                .unwrap()
+                .controls[1]
+                .value[0],
+            1.0
+        );
+        assert!(runtime.pending_video_isf_event_resets.is_empty());
+
+        // The public legacy-adapter command must use the same canonical
+        // mutation transaction and publish the same non-latched image.
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(layer_id, Some(effect))
+            .unwrap();
+        engine
+            .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Reset { stage_index: 0 })
+            .unwrap();
+        let rendered = engine.snapshot();
+        assert_video_snapshot_layer_event_value(&rendered.video, layer_id, 0.0);
+        assert_eq!(
+            rendered.video.layers[0]
+                .isf_effect
+                .as_ref()
+                .unwrap()
+                .controls[1]
+                .value[0],
+            1.0
+        );
+        let persisted = engine.persistence_snapshot().unwrap();
+        assert_video_snapshot_layer_event_value(
+            persisted.authored_video.as_ref().unwrap(),
+            layer_id,
+            0.0,
+        );
+        assert_eq!(
+            persisted.authored_video.as_ref().unwrap().layers[0]
+                .isf_effect
+                .as_ref()
+                .unwrap()
+                .controls[1]
+                .value[0],
+            1.0
+        );
+    }
+
     fn runtime_with_two_identity_distinct_isf_event_stages() -> EngineRuntime {
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
@@ -62263,7 +66696,209 @@ mod tests {
             .unwrap()
             .controls[0]
             .value = [1.0, 0.0, 0.0, 0.0];
+        let VideoEffectKind::Isf { effect } =
+            &mut runtime.video_effect_chains[0].stages[0].effect.kind;
+        effect.controls[0].value = [1.0, 0.0, 0.0, 0.0];
         runtime
+    }
+
+    fn runtime_with_duplicate_arc_isf_event_stages() -> EngineRuntime {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        let shared_source: Arc<str> = Arc::<str>::from("duplicate shader source");
+        runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
+            layer_id: 1,
+            effect: Some(VideoIsfEffectSummary {
+                enabled: true,
+                label: "Duplicate root".to_string(),
+                source: Arc::clone(&shared_source),
+                source_path: None,
+                description: None,
+                categories: Vec::new(),
+                controls: vec![test_isf_event_control(1.0)],
+                stack: vec![VideoIsfEffectStageSummary {
+                    enabled: true,
+                    label: "Duplicate target".to_string(),
+                    source: shared_source,
+                    source_path: None,
+                    description: None,
+                    categories: Vec::new(),
+                    controls: vec![test_isf_event_control(0.0)],
+                }],
+            }),
+        });
+        assert!(runtime.last_error.is_none());
+        runtime
+    }
+
+    fn assert_video_effect_c1_published_command_is_barrier_and_rollback_isolated(
+        mut runtime: EngineRuntime,
+        command: EngineCommand,
+        receiver: mpsc::Receiver<Result<(), String>>,
+    ) {
+        let layer_id = runtime.video_layers[0].id;
+        let before_authored_video = runtime.build_persistence_snapshot().authored_video;
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.fail_next_pending_publication = true;
+        let queue = ArrayQueue::new(2);
+        let trailing_state = VideoLayerState {
+            opacity: 0.25,
+            ..VideoLayerState::default()
+        };
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command,
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+        assert!(queue
+            .push(QueuedEngineCommand {
+                // This is deliberately an authored, non-ACK command. It
+                // must stay queued until the preceding B has either been
+                // published or completely restored to A.
+                command: EngineCommand::SetVideoLayerState {
+                    layer_id,
+                    state: trailing_state.clone(),
+                },
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+
+        runtime.consume_commands(&queue);
+        assert_eq!(queue.len(), 1, "published C1 command must be a barrier");
+        assert_ne!(
+            runtime.video_layers[0].state.opacity,
+            trailing_state.opacity
+        );
+
+        let read_guard = published.read().unwrap();
+        runtime.publish_pending_command_acks(queue.len(), &published);
+        let error = receiver.recv().unwrap().unwrap_err();
+        assert!(error.contains("rolled back"), "unexpected error: {error}");
+        assert_eq!(
+            queue.len(),
+            1,
+            "rollback must not consume the trailing command"
+        );
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video,
+            before_authored_video,
+            "rollback must restore the complete authored video A image"
+        );
+        assert_ne!(
+            runtime.video_layers[0].state.opacity,
+            trailing_state.opacity
+        );
+        drop(read_guard);
+
+        runtime.consume_commands(&queue);
+        assert!(queue.is_empty());
+        assert_eq!(
+            runtime.video_layers[0].state.opacity,
+            trailing_state.opacity
+        );
+    }
+
+    #[test]
+    fn video_effect_chain_c1_catalog_publication_is_barrier_before_trailing_authored_command() {
+        let runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        let mut chains = runtime.video_effect_chains.clone();
+        chains[0].stages.swap(0, 1);
+        let (ack, receiver) = mpsc::sync_channel(1);
+        assert_video_effect_c1_published_command_is_barrier_and_rollback_isolated(
+            runtime,
+            EngineCommand::ApplyVideoEffectCatalogPublished {
+                effect_chains: chains,
+                effect_presets: Vec::new(),
+                layer_groups: Vec::new(),
+                expires_at: Instant::now() + Duration::from_secs(1),
+                admission: ProjectSnapshotLoadAdmission::new(),
+                ack,
+            },
+            receiver,
+        );
+    }
+
+    #[test]
+    fn video_effect_chain_c1_set_effect_publication_is_barrier_before_trailing_authored_command() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        let (ack, receiver) = mpsc::sync_channel(1);
+        assert_video_effect_c1_published_command_is_barrier_and_rollback_isolated(
+            runtime,
+            EngineCommand::SetVideoLayerIsfEffectPublishedWithAllocatedIds {
+                layer_id: 1,
+                effect: Some(video_effect_chain_c1_event_effect()),
+                ids: VideoEffectLegacyAdapterIds {
+                    chain_id: VideoEffectChainId(701),
+                    stage_ids: vec![VideoEffectStageId(702)],
+                    effect_ids: vec![VideoEffectId(703)],
+                },
+                ack,
+            },
+            receiver,
+        );
+    }
+
+    #[test]
+    fn video_effect_chain_c1_stack_mutation_publication_is_barrier_before_trailing_authored_command(
+    ) {
+        let runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        assert_video_effect_c1_published_command_is_barrier_and_rollback_isolated(
+            runtime,
+            EngineCommand::MutateVideoLayerIsfStackWithAllocatedIds {
+                layer_id: 1,
+                mutation: VideoIsfStackMutation::Move {
+                    stage_index: 1,
+                    delta: -1,
+                },
+                ids: VideoEffectLegacyAdapterIds::default(),
+                ack,
+            },
+            receiver,
+        );
+    }
+
+    #[test]
+    fn video_isf_event_reset_uses_stable_stage_and_effect_ids_for_duplicate_arc_stages() {
+        let mut runtime = runtime_with_duplicate_arc_isf_event_stages();
+        let started_at = Instant::now();
+        let target_hold = Duration::from_millis(50);
+        let root_hold = Duration::from_millis(100);
+        // Both stages deliberately share the same Arc source. Establish a
+        // real longer root pulse first, then pulse the second stage. This
+        // proves the reset selects the stable stage/effect IDs rather than
+        // source/Arc identity, without bypassing the canonical projection.
+        runtime
+            .pulse_video_layer_isf_event(1, 0, "trigger".to_string(), root_hold, started_at)
+            .unwrap();
+        runtime
+            .pulse_video_layer_isf_event(1, 1, "trigger".to_string(), target_hold, started_at)
+            .unwrap();
+        let chain = &runtime.video_effect_chains[0];
+        let pending = runtime
+            .pending_video_isf_event_resets
+            .iter()
+            .find(|pending| pending.stage_id == chain.stages[1].id)
+            .unwrap()
+            .clone();
+        assert_eq!(runtime.pending_video_isf_event_resets.len(), 2);
+        assert_eq!(pending.stage_id, chain.stages[1].id);
+        assert_eq!(pending.effect_id, chain.stages[1].effect.id);
+        assert_ne!(pending.effect_id, chain.stages[0].effect.id);
+
+        runtime.advance_video_isf_event_resets(started_at + target_hold);
+        let effect = runtime.video_layers[0].isf_effect.as_ref().unwrap();
+        assert_eq!(effect.controls[0].value[0], 1.0);
+        assert_eq!(effect.stack[0].controls[0].value[0], 0.0);
+        assert_eq!(runtime.pending_video_isf_event_resets.len(), 1);
     }
 
     #[test]
@@ -62284,6 +66919,7 @@ mod tests {
             ack,
         });
         assert!(runtime.last_error.is_none());
+        assert_eq!(runtime.pending_video_isf_event_resets.len(), 1);
 
         runtime.advance_video_isf_event_resets(started_at + hold);
 
@@ -62309,6 +66945,7 @@ mod tests {
             ack,
         });
         assert!(runtime.last_error.is_none());
+        assert!(runtime.pending_video_isf_event_resets.is_empty());
 
         runtime.advance_video_isf_event_resets(started_at + hold);
 
@@ -62419,6 +67056,115 @@ mod tests {
             .unwrap();
         assert_eq!(authored_effect.controls[0].value[0], 0.0);
         assert_eq!(authored_effect.stack[0].controls[0].value[0], 0.0);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_catalog_apply_normalizes_event_pulse_and_rebinds_exact_reset() {
+        let mut runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        let started_at = Instant::now();
+        let hold = Duration::from_millis(50);
+        runtime
+            .pulse_video_layer_isf_event(1, 1, "trigger".to_string(), hold, started_at)
+            .unwrap();
+        let pending = runtime.pending_video_isf_event_resets[0].clone();
+        let mut reordered = runtime.video_effect_chains.clone();
+        reordered[0].stages.swap(0, 1);
+        let presets = runtime.video_effect_presets.clone();
+        let groups = runtime.video_layer_groups.clone();
+
+        // The replacement was intentionally captured from live state while
+        // the pulse was high. Its stable target survives the reorder.
+        runtime
+            .apply_video_effect_catalog_state(reordered, presets, groups)
+            .unwrap();
+        assert_eq!(runtime.pending_video_isf_event_resets.len(), 1);
+        assert_eq!(
+            runtime.pending_video_isf_event_resets[0].stage_id,
+            pending.stage_id
+        );
+        assert_eq!(
+            runtime.pending_video_isf_event_resets[0].effect_id,
+            pending.effect_id
+        );
+        let stage = runtime.video_effect_chains[0]
+            .stages
+            .iter()
+            .find(|stage| stage.id == pending.stage_id && stage.effect.id == pending.effect_id)
+            .unwrap();
+        let VideoEffectKind::Isf { effect } = &stage.effect.kind;
+        assert_eq!(effect.controls[0].value[0], 0.0);
+
+        runtime.advance_video_isf_event_resets(started_at + hold);
+        assert!(runtime.pending_video_isf_event_resets.is_empty());
+        let stage = runtime.video_effect_chains[0]
+            .stages
+            .iter()
+            .find(|stage| stage.id == pending.stage_id && stage.effect.id == pending.effect_id)
+            .unwrap();
+        let VideoEffectKind::Isf { effect } = &stage.effect.kind;
+        assert_eq!(effect.controls[0].value[0], 0.0);
+
+        // A removal is the opposite case: the exact reset target no longer
+        // exists, so the pending pulse must be dropped rather than retargeted.
+        let mut removed_runtime = runtime_with_two_identity_distinct_isf_event_stages();
+        removed_runtime
+            .pulse_video_layer_isf_event(1, 1, "trigger".to_string(), hold, started_at)
+            .unwrap();
+        let removed_pending = removed_runtime.pending_video_isf_event_resets[0].clone();
+        let mut removed = removed_runtime.video_effect_chains.clone();
+        removed[0]
+            .stages
+            .retain(|stage| stage.id != removed_pending.stage_id);
+        let presets = removed_runtime.video_effect_presets.clone();
+        let groups = removed_runtime.video_layer_groups.clone();
+        removed_runtime
+            .apply_video_effect_catalog_state(removed, presets, groups)
+            .unwrap();
+        assert!(removed_runtime.pending_video_isf_event_resets.is_empty());
+        removed_runtime.advance_video_isf_event_resets(started_at + hold);
+        assert!(removed_runtime.video_effect_chains[0]
+            .stages
+            .iter()
+            .all(|stage| stage.id != removed_pending.stage_id));
+    }
+
+    #[test]
+    fn video_effect_chain_c1_catalog_publication_rollback_restores_event_pulse_reset() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(
+                layer_id,
+                Some(video_effect_chain_c1_event_effect()),
+            )
+            .unwrap();
+        let hold = Duration::from_millis(250);
+        engine
+            .pulse_video_layer_isf_event(layer_id, 0, "trigger".to_string(), hold)
+            .unwrap();
+        let active = engine.snapshot().video;
+        let VideoEffectKind::Isf { effect } = &active.effect_chains[0].stages[0].effect.kind;
+        assert_eq!(effect.controls[0].value[0], 1.0);
+
+        // Force publication failure after B has normalized Event to zero. The
+        // complete-A rollback must restore both the live high value and its
+        // exact pending reset, which clears it on the original deadline.
+        engine.force_next_pending_publication_failure_for_tests();
+        let error = engine
+            .apply_video_effect_catalog(
+                active.effect_chains,
+                active.effect_presets,
+                active.layer_groups,
+            )
+            .unwrap_err();
+        assert!(error.contains("rolled back"), "unexpected error: {error}");
+        let rolled_back = engine.snapshot().video;
+        let VideoEffectKind::Isf { effect } = &rolled_back.effect_chains[0].stages[0].effect.kind;
+        assert_eq!(effect.controls[0].value[0], 1.0);
+
+        std::thread::sleep(hold + Duration::from_millis(150));
+        let reset = engine.snapshot().video;
+        let VideoEffectKind::Isf { effect } = &reset.effect_chains[0].stages[0].effect.kind;
+        assert_eq!(effect.controls[0].value[0], 0.0);
     }
 
     #[test]
@@ -64298,6 +69044,7 @@ mod tests {
         updated_active.out_point_ms = Some(750);
         updated_active.speed = 2.0;
         updated_active.effect_overrides = vec![protocol::VideoClipEffectOverrideSummary {
+            effect_id: None,
             stage_index: 0,
             control_name: "mix".to_string(),
             value: [0.5, 0.0, 0.0, 0.0],
@@ -65010,6 +69757,7 @@ mod tests {
             .find(|slot| slot.id == default_slot_id)
             .unwrap();
         default_slot.effect_overrides = vec![protocol::VideoClipEffectOverrideSummary {
+            effect_id: None,
             stage_index: 1,
             control_name: "trigger".to_string(),
             value: [0.75, 0.0, 0.0, 0.0],
@@ -65112,6 +69860,115 @@ mod tests {
             snapshot.video.compositions[0].layer_ids,
             Vec::<VideoLayerId>::new()
         );
+    }
+
+    #[test]
+    fn video_effect_chain_c1_media_import_rejects_effectful_layers_without_mutation() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 1, VideoLayerState::default());
+        let adapter_ids = runtime
+            .next_runtime_video_effect_legacy_adapter_ids(1, 1)
+            .unwrap();
+        runtime
+            .set_video_layer_isf_effect(1, Some(video_effect_chain_c1_event_effect()), &adapter_ids)
+            .unwrap();
+        let before = runtime.build_persistence_snapshot();
+        let source = media_asset_test_source("effectful-import");
+        let mut effectful = media_asset_test_layer(2, 2, "Effectful import", source.clone());
+        effectful.isf_effect = Some(video_effect_chain_c1_event_effect());
+        let error = runtime
+            .apply_media_asset_transaction(MediaAssetTransaction::Import(
+                MediaAssetImportCandidate {
+                    assets: vec![media_asset_test_summary(2, "Effectful import", source)],
+                    layers: vec![effectful],
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            error.contains("carries legacy ISF"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+        validate_engine_ready_video_effect_chains(before.authored_video.as_ref().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn video_effect_chain_c1_handle_media_import_rejects_overrides_and_clean_import_persists() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let source = media_asset_test_source("handle-import");
+        let mut effectful = media_asset_test_layer(1, 1, "Override import", source.clone());
+        effectful.clip_slots = vec![VideoClipSlotSummary {
+            id: VideoClipSlotId(1),
+            media_asset_id: 1,
+            in_point_ms: 0,
+            out_point_ms: None,
+            loop_mode: VideoClipLoopMode::Once,
+            speed: 1.0,
+            cue_points: Vec::new(),
+            launch_quantization: VideoClipLaunchQuantization::Immediate,
+            effect_overrides: vec![protocol::VideoClipEffectOverrideSummary {
+                effect_id: None,
+                stage_index: 0,
+                control_name: "trigger".to_string(),
+                value: [1.0, 0.0, 0.0, 0.0],
+            }],
+        }];
+        effectful.default_clip_slot_id = Some(VideoClipSlotId(1));
+        let rejected = MediaAssetTransaction::Import(MediaAssetImportCandidate {
+            assets: vec![media_asset_test_summary(
+                1,
+                "Override import",
+                source.clone(),
+            )],
+            layers: vec![effectful],
+        });
+        let error = engine
+            .media_asset_transaction_published(rejected)
+            .unwrap_err();
+        assert!(
+            error.contains("carries clip effect overrides"),
+            "unexpected error: {error}"
+        );
+        let before_clean = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        assert!(before_clean.layers.is_empty());
+
+        let mut clean_layer = media_asset_test_layer(2, 2, "Clean layer", source.clone());
+        clean_layer.clip_slots = vec![VideoClipSlotSummary {
+            id: VideoClipSlotId(2),
+            media_asset_id: 2,
+            in_point_ms: 0,
+            out_point_ms: None,
+            loop_mode: VideoClipLoopMode::Once,
+            speed: 1.0,
+            cue_points: Vec::new(),
+            launch_quantization: VideoClipLaunchQuantization::Immediate,
+            effect_overrides: Vec::new(),
+        }];
+        clean_layer.default_clip_slot_id = Some(VideoClipSlotId(2));
+        let clean = MediaAssetTransaction::Import(MediaAssetImportCandidate {
+            assets: vec![media_asset_test_summary(2, "Clean import", source.clone())],
+            layers: vec![clean_layer],
+        });
+        engine.media_asset_transaction_published(clean).unwrap();
+        let persisted = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        assert_eq!(persisted.layers.len(), 1);
+        assert!(persisted.layers[0].isf_effect.is_none());
+        assert!(persisted.effect_chains.is_empty());
+        validate_engine_ready_video_effect_chains(&persisted).unwrap();
     }
 
     #[test]
