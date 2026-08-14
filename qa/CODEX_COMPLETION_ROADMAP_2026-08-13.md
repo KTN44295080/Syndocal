@@ -1354,14 +1354,17 @@ physical multi-device routing acceptance remain part of the final L-TL7 boundary
 ### L-TL4. Linked groups and selection/edit semantics
 
 Status (2026-08-15): in progress. Stable cross-domain group membership, automatic linked A/V
-placement, linked selection, group/ungroup, relative group move, and grid nudge are implemented. Delete now
+placement, linked selection, group/ungroup, relative group move, grid nudge, and grid quantize are implemented. Delete now
 expands the captured authored group closure on the backend and removes Lighting events, Video clips,
 Audio clips, and both Automation domains in one authoritative publication/Undo; stale references
 fail before mutation and exact request retry returns the stored terminal result. Nudge earlier/later is
 available from the item context menu and shifts the complete captured group by one current grid step;
 the backend preflights every Lighting, Video, Audio, and Automation member, updates both millisecond and
 musical beat positions, preserves the selected logical group, and provides one history entry with exact
-terminal recovery. Remaining grouped edit work is ripple move, trim, split, quantize, copy/paste, lane-valid reorder,
+terminal recovery. Quantize uses the earliest temporal point in the captured selection/group as its
+anchor, rounds it to the nearest current grid boundary, and moves every member by the same delta so
+cross-domain relative timing and musical beat positions remain intact; zero/invalid grids reject before
+mutation. Remaining grouped edit work is ripple move, trim, split, copy/paste, lane-valid reorder,
 the temporary single-member modifier, and selection/focus restoration across Undo/Redo and reload.
 Duplicate is now authoritative across all five item domains: it allocates fresh item/group IDs,
 preserves group-relative offsets and musical beat placement, rewires duplicated internal jump targets,

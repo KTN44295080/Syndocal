@@ -798,6 +798,10 @@ enum TimelineAdvancedMutationRequest {
         items: Vec<TimelineItemRef>,
         delta_ms: i64,
     },
+    QuantizeItems {
+        items: Vec<TimelineItemRef>,
+        grid_ms: u64,
+    },
     DeleteItems {
         items: Vec<TimelineItemRef>,
     },
@@ -6168,6 +6172,77 @@ fn nudge_timeline_items(
     Ok(expanded.into_iter().collect())
 }
 
+fn quantize_timeline_items(
+    timeline: &mut TimelineSnapshot,
+    requested_items: &[TimelineItemRef],
+    grid_ms: u64,
+    bpm: f32,
+) -> Result<Vec<TimelineItemRef>, String> {
+    if grid_ms == 0 {
+        return Err("Timeline quantize grid must be greater than zero".to_string());
+    }
+    let expanded = expanded_timeline_items(timeline, requested_items)?;
+    let anchor_ms = expanded
+        .iter()
+        .filter_map(|item| match item {
+            TimelineItemRef::LightingEvent { event_id } => timeline
+                .events
+                .iter()
+                .find(|event| event.id == *event_id)
+                .map(|event| event.time_ms),
+            TimelineItemRef::VideoClip { clip_id } => timeline
+                .video_clips
+                .iter()
+                .find(|clip| clip.id == *clip_id)
+                .map(|clip| clip.start_ms),
+            TimelineItemRef::AudioClip { clip_id } => timeline
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == *clip_id)
+                .map(|clip| clip.start_ms),
+            TimelineItemRef::LightingAutomation { automation_id } => timeline
+                .automations
+                .iter()
+                .find(|automation| automation.id == *automation_id)
+                .and_then(|automation| {
+                    automation
+                        .keyframes
+                        .iter()
+                        .map(|keyframe| keyframe.time_ms)
+                        .min()
+                }),
+            TimelineItemRef::VideoAutomation { automation_id } => timeline
+                .video_automations
+                .iter()
+                .find(|automation| automation.id == *automation_id)
+                .and_then(|automation| {
+                    automation
+                        .keyframes
+                        .iter()
+                        .map(|keyframe| keyframe.time_ms)
+                        .min()
+                }),
+        })
+        .min()
+        .ok_or_else(|| "Selected Timeline items have no temporal anchor to quantize".to_string())?;
+    let lower_ms = (anchor_ms / grid_ms) * grid_ms;
+    let remainder_ms = anchor_ms % grid_ms;
+    let target_ms = if remainder_ms >= grid_ms - remainder_ms {
+        lower_ms.checked_add(grid_ms).ok_or_else(|| {
+            "Timeline quantize target exceeds the supported time range".to_string()
+        })?
+    } else {
+        lower_ms
+    };
+    if target_ms == anchor_ms {
+        return Ok(expanded.into_iter().collect());
+    }
+    let delta_ms = i128::from(target_ms) - i128::from(anchor_ms);
+    let delta_ms = i64::try_from(delta_ms)
+        .map_err(|_| "Timeline quantize shift exceeds the supported time range".to_string())?;
+    nudge_timeline_items(timeline, requested_items, delta_ms, bpm)
+}
+
 fn delete_timeline_items(
     timeline: &mut TimelineSnapshot,
     requested_items: &[TimelineItemRef],
@@ -6473,6 +6548,7 @@ fn timeline_advanced_candidate_for_request(
         | TimelineAdvancedMutationRequest::SelectTimeline { .. }
         | TimelineAdvancedMutationRequest::DuplicateItems { .. }
         | TimelineAdvancedMutationRequest::NudgeItems { .. }
+        | TimelineAdvancedMutationRequest::QuantizeItems { .. }
         | TimelineAdvancedMutationRequest::DeleteItems { .. } => {
             return Err("Timeline bank commands require the bank mutation path".to_string());
         }
@@ -6722,6 +6798,13 @@ fn timeline_bank_candidate_for_request(
                 .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
             selected_items = nudge_timeline_items(active, items, *delta_ms, before.clock.bpm)?;
         }
+        TimelineAdvancedMutationRequest::QuantizeItems { items, grid_ms } => {
+            let active = bank
+                .iter_mut()
+                .find(|timeline| timeline.id == active_timeline_id)
+                .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
+            selected_items = quantize_timeline_items(active, items, *grid_ms, before.clock.bpm)?;
+        }
         TimelineAdvancedMutationRequest::DeleteItems { items } => {
             let active = bank
                 .iter_mut()
@@ -6832,6 +6915,7 @@ fn timeline_advanced_history_label(request: &TimelineAdvancedMutationRequest) ->
         TimelineAdvancedMutationRequest::MoveGroup { .. } => "Move Timeline group",
         TimelineAdvancedMutationRequest::DuplicateItems { .. } => "Duplicate Timeline items",
         TimelineAdvancedMutationRequest::NudgeItems { .. } => "Nudge Timeline items",
+        TimelineAdvancedMutationRequest::QuantizeItems { .. } => "Quantize Timeline items",
         TimelineAdvancedMutationRequest::DeleteItems { .. } => "Delete Timeline items",
         TimelineAdvancedMutationRequest::SetPhases { .. } => "Set Timeline Phases",
         TimelineAdvancedMutationRequest::SetLoop { .. } => "Set Timeline loop",
@@ -6876,6 +6960,7 @@ fn commit_authoritative_timeline_advanced(
             | TimelineAdvancedMutationRequest::SelectTimeline { .. }
             | TimelineAdvancedMutationRequest::DuplicateItems { .. }
             | TimelineAdvancedMutationRequest::NudgeItems { .. }
+            | TimelineAdvancedMutationRequest::QuantizeItems { .. }
             | TimelineAdvancedMutationRequest::DeleteItems { .. }
     );
     let (candidate_snapshot, bank_publication, selected_items) = if bank_request {
@@ -75441,6 +75526,41 @@ mod live_audio_input_tests {
         assert_eq!(nudged.automations[0].keyframes[0].time_ms, 0);
         assert_eq!(nudged.video_automations[0].keyframes[0].time_ms, 0);
 
+        let mut quantized = timeline.clone();
+        quantized.events[0].time_ms = 750;
+        quantized.events[0].time_beats = Some(1.5);
+        quantized.events[0].conform_to_tempo = true;
+        quantized.video_clips[0].start_ms = 1_000;
+        quantized.audio_clips[0].start_ms = 1_500;
+        quantized.automations[0].keyframes[0].time_ms = 2_000;
+        quantized.video_automations[0].keyframes[0].time_ms = 2_500;
+        let quantized_refs = quantize_timeline_items(
+            &mut quantized,
+            &[TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(32),
+            }],
+            1_000,
+            120.0,
+        )
+        .expect("quantize one member as the complete cross-domain group");
+        assert_eq!(quantized_refs.len(), 5);
+        assert_eq!(quantized.events[0].time_ms, 1_000);
+        assert_eq!(quantized.events[0].time_beats, Some(2.0));
+        assert_eq!(quantized.video_clips[0].start_ms, 1_250);
+        assert_eq!(quantized.audio_clips[0].start_ms, 1_750);
+        assert_eq!(quantized.automations[0].keyframes[0].time_ms, 2_250);
+        assert_eq!(quantized.video_automations[0].keyframes[0].time_ms, 2_750);
+        let before_invalid_quantize = quantized.clone();
+        assert!(quantize_timeline_items(
+            &mut quantized,
+            &[TimelineItemRef::AudioClip { clip_id: 31 }],
+            0,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("greater than zero"));
+        assert_eq!(quantized, before_invalid_quantize);
+
         delete_timeline_items(&mut timeline, &[TimelineItemRef::AudioClip { clip_id: 31 }])
             .expect("deleting one member must close over the complete group");
         assert!(timeline
@@ -75468,7 +75588,8 @@ mod live_audio_input_tests {
     }
 
     #[test]
-    fn timeline_duplicate_nudge_and_delete_items_are_one_history_and_exactly_recoverable() {
+    fn timeline_duplicate_nudge_quantize_and_delete_items_are_one_history_and_exactly_recoverable()
+    {
         let harness = MediaAssetA6CommandHarness::new();
         let (_video_layer_id, media_asset_id, _alternate_asset_id, _slot_id) =
             seed_video_clip_slot_layer(&harness);
@@ -75690,6 +75811,65 @@ mod live_audio_input_tests {
         b3_assert_authority_matches_persistence(&harness);
         c1_stabilize_fixture_authority(&harness);
 
+        let quantize_baseline = harness.mutation_baseline();
+        let quantize_request = TimelineAdvancedMutationRequest::QuantizeItems {
+            items: vec![TimelineItemRef::AudioClip {
+                clip_id: duplicate_audio_clip_id,
+            }],
+            grid_ms: 1_000,
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let quantized = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            quantize_request.clone(),
+            84_683,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("quantize one duplicated member through the authoritative lane");
+        assert_eq!(quantized.selected_items, duplicated.selected_items);
+        assert_eq!(
+            quantized
+                .authoring
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == duplicate_audio_clip_id)
+                .unwrap()
+                .start_ms,
+            2_000
+        );
+        assert_eq!(
+            quantized
+                .authoring
+                .video_clips
+                .iter()
+                .find(|clip| clip.id == duplicate_video_clip_id)
+                .unwrap()
+                .start_ms,
+            2_000
+        );
+        let quantize_retried = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            quantize_request,
+            84_683,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("recover the exact linked quantize terminal receipt");
+        assert_eq!(
+            serde_json::to_value(&quantized).unwrap(),
+            serde_json::to_value(&quantize_retried).unwrap()
+        );
+        assert_one_authoritative_history_mutation(&harness, quantize_baseline);
+        b3_assert_authority_matches_persistence(&harness);
+        c1_stabilize_fixture_authority(&harness);
+
         let delete_baseline = harness.mutation_baseline();
         let delete_request = TimelineAdvancedMutationRequest::DeleteItems {
             items: vec![TimelineItemRef::AudioClip {
@@ -75700,7 +75880,7 @@ mod live_audio_input_tests {
         let deleted = apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
             delete_request.clone(),
-            84_683,
+            84_684,
             epoch,
             revision,
             hash.clone(),
@@ -75716,7 +75896,7 @@ mod live_audio_input_tests {
         let delete_retried = apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
             delete_request,
-            84_683,
+            84_684,
             epoch,
             revision,
             hash,

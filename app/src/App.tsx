@@ -13111,6 +13111,20 @@ export default function App() {
       return [];
     }
   };
+  const quantizeTimelineItems = async (items: TimelineItemRef[], gridMs: number) => {
+    try {
+      const result = await commitTimelineAdvanced({
+        kind: "quantize_items",
+        items,
+        grid_ms: gridMs,
+      });
+      if (result) setMessage("Timeline selection quantized to the grid.");
+      return result?.selected_items ?? [];
+    } catch (error) {
+      setMessage(`Timeline selection quantize failed: ${String(error)}`);
+      return [];
+    }
+  };
   const removeTimelineItems = async (items: TimelineItemRef[]) => {
     try {
       const result = await commitTimelineAdvanced({ kind: "delete_items", items });
@@ -23872,6 +23886,7 @@ export default function App() {
               onUngroupItem={ungroupTimelineItem}
               onDuplicateItems={duplicateTimelineItems}
               onNudgeItems={nudgeTimelineItems}
+              onQuantizeItems={quantizeTimelineItems}
               onRemoveItems={removeTimelineItems}
               onRemoveAudioClip={removeTimelineAudioClip}
               onSetAudioMaster={setTimelineAudioMaster}

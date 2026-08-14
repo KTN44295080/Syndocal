@@ -200,6 +200,7 @@ interface TimelineCueEventsPanelProps {
   onUngroupItem: (item: TimelineItemRef) => void | Promise<void>;
   onDuplicateItems: (items: TimelineItemRef[], offsetMs: number) => Promise<TimelineItemRef[]>;
   onNudgeItems: (items: TimelineItemRef[], deltaMs: number) => Promise<TimelineItemRef[]>;
+  onQuantizeItems: (items: TimelineItemRef[], gridMs: number) => Promise<TimelineItemRef[]>;
   onRemoveItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onRemoveAudioClip: (clipId: number) => void | Promise<void>;
   onSetAudioMaster: (offsetMs: number, muted: boolean) => void | Promise<void>;
@@ -358,7 +359,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   const openItemContextMenu = (point: { x: number; y: number }) => {
     setItemContextMenu({
       x: Math.max(8, Math.min(point.x, window.innerWidth - 226)),
-      y: Math.max(8, Math.min(point.y, window.innerHeight - 360)),
+      y: Math.max(8, Math.min(point.y, window.innerHeight - 412)),
     });
   };
   const pendingRemoveAudioClip = () =>
@@ -1164,6 +1165,19 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               }}
             >
               Nudge later
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length === 0}
+              onClick={async () => {
+                const items = [...selectedTimelineItemRefs()];
+                setItemContextMenu(null);
+                const selected = await props.onQuantizeItems(items, Math.max(1, props.gridMs));
+                if (selected.length > 0) setSelectedTimelineItems(selected);
+              }}
+            >
+              Quantize to grid
             </button>
             <button
               type="button"
