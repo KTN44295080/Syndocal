@@ -157,6 +157,7 @@ const measure = (client) => evaluate(client, `(() => {
     copyEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Copy selected' && !button.disabled)),
     pasteEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Paste at playhead' && !button.disabled)),
     duplicateEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Duplicate selected' && !button.disabled)),
+    splitEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Split at playhead' && !button.disabled)),
     nudgeEarlierEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Nudge earlier' && !button.disabled)),
     nudgeLaterEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Nudge later' && !button.disabled)),
     rippleEarlierEnabled: Boolean([...root.querySelectorAll('.timelineItemContextMenu button')].find((button) => button.textContent?.trim() === 'Ripple earlier' && !button.disabled)),
@@ -248,6 +249,51 @@ try {
       [0, 1],
       "Alt selection temporarily isolates one linked A/V member",
     );
+    await evaluate(client, `(() => {
+      window.__syndocalTimelineSplitFixtureCalls = [];
+      window.__syndocalTimelineSplitFixture = async (request, timelineBank, activeTimelineId) => {
+        window.__syndocalTimelineSplitFixtureCalls.push(structuredClone(request));
+        const bank = structuredClone(timelineBank);
+        const active = bank.find((timeline) => timeline.id === activeTimelineId);
+        const source = active.audio_clips.find((clip) => clip.id === 700);
+        active.audio_clips.push({ ...source, id: 1700, start_ms: request.boundary_ms, duration_ms: 600, fade_in_ms: 0 });
+        return {
+          authoring: {},
+          timeline_bank: bank,
+          active_timeline_id: activeTimelineId,
+          selected_items: [{ kind: 'audio_clip', clip_id: 1700 }],
+          mutation: {},
+        };
+      };
+      const clip = document.querySelector('[data-timeline-audio-clip-id="700"]');
+      clip?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 240, clientY: 180 }));
+    })()`);
+    await sleep(50);
+    assert.equal(await evaluate(client, `(() => {
+      const button = document.querySelector('[data-timeline-split-action]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`), true);
+    await waitFor(
+      () => evaluate(client, "window.__syndocalTimelineSplitFixtureCalls?.length === 1"),
+      "isolated Timeline Split fixture dispatch",
+    );
+    await sleep(80);
+    const isolatedSplitProof = await evaluate(client, `(() => ({
+      call: structuredClone(window.__syndocalTimelineSplitFixtureCalls[0]),
+      focusedAudioId: document.activeElement?.getAttribute('data-timeline-audio-clip-id') ?? '',
+    }))()`);
+    assert.deepEqual(isolatedSplitProof, {
+      call: {
+        kind: "split_items",
+        items: [{ kind: "audio_clip", clip_id: 700 }],
+        primary: { kind: "audio_clip", clip_id: 700 },
+        boundary_ms: 1_000,
+        isolate: true,
+      },
+      focusedAudioId: "1700",
+    }, "Alt-isolated Split mounts a fresh right item, sends only the chosen member, and restores fresh focus");
     const videoSelected = await evaluate(client, `(() => {
       const clip = document.querySelector('[data-timeline-video-clip-id="800"]');
       if (!(clip instanceof Element)) return false;
@@ -265,17 +311,129 @@ try {
     assert.deepEqual([state.guideAudioOpen, state.guideAudioControls, state.guideAudioState], [true, 3, 'Ready']);
     assert.deepEqual(state.phaseLabels, ["Intro", "Verse", "Chorus"]);
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
-    assert.deepEqual([state.videoClips, state.audioClips], [1, 2]);
+    assert.deepEqual([state.videoClips, state.audioClips], [1, 3], "isolated Split mounts one fresh Audio right-side block");
     assert.deepEqual([state.selectedVideo, state.selectedAudio], [1, 1], "selecting either member selects the linked A/V group");
     assert.deepEqual(
       [state.videoResizeHandles, state.audioResizeHandles],
       [2, 2],
       "selected linked A/V members expose both direct trim edges",
     );
-    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.copyEnabled, state.pasteEnabled, state.duplicateEnabled, state.nudgeEarlierEnabled, state.nudgeLaterEnabled, state.rippleEarlierEnabled, state.rippleLaterEnabled, state.quantizeEnabled, state.trimStartEnabled, state.trimEndEnabled, state.deleteEnabled], [false, true, true, false, true, true, true, true, true, true, true, true, true], "the context menu exposes linked-group copy/duplicate/nudge/ripple/quantize/trim/release/delete and disables an empty clipboard");
+    assert.deepEqual([state.groupEnabled, state.ungroupEnabled, state.copyEnabled, state.pasteEnabled, state.duplicateEnabled, state.splitEnabled, state.nudgeEarlierEnabled, state.nudgeLaterEnabled, state.rippleEarlierEnabled, state.rippleLaterEnabled, state.quantizeEnabled, state.trimStartEnabled, state.trimEndEnabled, state.deleteEnabled], [false, true, true, false, true, true, true, true, true, true, true, true, true, true], "the context menu exposes linked-group copy/duplicate/split/nudge/ripple/quantize/trim/release/delete and disables an empty clipboard");
     assert.ok(state.itemMenuRect && state.itemMenuRect[0] >= 0 && state.itemMenuRect[1] >= 0 && state.itemMenuRect[2] <= viewport.width && state.itemMenuRect[3] <= viewport.height, `Timeline group menu stays inside ${viewport.width}x${viewport.height}`);
     assert.equal(state.itemMenuBottomReachable, true, "the internally scrolling Timeline item menu reaches its final action");
     assert.equal(state.menuShortTargets, 0, "Timeline group context actions preserve 44px targets");
+    await evaluate(client, `(() => {
+      window.__syndocalTimelineSplitFixtureCalls = [];
+      window.__syndocalTimelineSplitFixture = async (request, timelineBank, activeTimelineId) => {
+        window.__syndocalTimelineSplitFixtureCalls.push(structuredClone(request));
+        const bank = structuredClone(timelineBank);
+        const active = bank.find((timeline) => timeline.id === activeTimelineId);
+        const sourceVideo = active.video_clips.find((clip) => clip.id === 800);
+        const sourceAudio = active.audio_clips.find((clip) => clip.id === 700);
+        active.video_clips.push({ ...sourceVideo, id: 1800, start_ms: request.boundary_ms, duration_ms: 600, fade_in_ms: 0 });
+        active.audio_clips.push({ ...sourceAudio, id: 1801, start_ms: request.boundary_ms, duration_ms: 600, fade_in_ms: 0 });
+        active.item_groups.push({ id: 1820, members: [{ kind: 'video_clip', clip_id: 1800 }, { kind: 'audio_clip', clip_id: 1801 }] });
+        return {
+          authoring: {},
+          timeline_bank: bank,
+          active_timeline_id: activeTimelineId,
+          selected_items: [{ kind: 'video_clip', clip_id: 1800 }, { kind: 'audio_clip', clip_id: 1801 }],
+          mutation: {},
+        };
+      };
+    })()`);
+    assert.equal(await evaluate(client, `(() => {
+      const button = document.querySelector('[data-timeline-split-action]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`), true);
+    await waitFor(
+      () => evaluate(client, "window.__syndocalTimelineSplitFixtureCalls?.length === 1"),
+      "Timeline Split fixture dispatch",
+    );
+    await sleep(80);
+    const splitProof = await evaluate(client, `(() => ({
+      call: structuredClone(window.__syndocalTimelineSplitFixtureCalls[0]),
+      menuClosed: document.querySelector('.timelineItemContextMenu') === null,
+      focusedVideoId: document.activeElement?.getAttribute('data-timeline-video-clip-id') ?? '',
+      freshVideoMounted: document.querySelectorAll('[data-timeline-video-clip-id="1800"]').length,
+      freshAudioMounted: document.querySelectorAll('[data-timeline-audio-clip-id="1801"]').length,
+      selectedVideo: document.querySelectorAll('.timelineVideoClip.selected').length,
+      selectedAudio: document.querySelectorAll('.timelineAudioClip.selected').length,
+    }))()`);
+    assert.deepEqual(splitProof.call, {
+      kind: "split_items",
+      items: [{ kind: "video_clip", clip_id: 800 }, { kind: "audio_clip", clip_id: 700 }],
+      primary: { kind: "video_clip", clip_id: 800 },
+      boundary_ms: 1_000,
+      isolate: false,
+    }, "real Split menu action dispatches the exact linked selection, primary, playhead, and isolate flag");
+    assert.deepEqual(
+      [splitProof.menuClosed, splitProof.focusedVideoId, splitProof.freshVideoMounted, splitProof.freshAudioMounted, splitProof.selectedVideo, splitProof.selectedAudio],
+      [true, "1800", 1, 1, 1, 1],
+      "Split mounts fresh right IDs, closes the menu, restores their linked selection, and focuses the fresh primary item",
+    );
+    const additionalSplitCases = [
+      { selector: '.timelineMarker[data-timeline-event-id]', kind: 'lighting_event', field: 'event_id', attribute: 'data-timeline-event-id' },
+      { selector: '[data-timeline-automation-kind="lighting"][data-timeline-automation-id]', kind: 'lighting_automation', field: 'automation_id', attribute: 'data-timeline-automation-id' },
+      { selector: '[data-timeline-automation-kind="video"][data-timeline-automation-id]', kind: 'video_automation', field: 'automation_id', attribute: 'data-timeline-automation-id' },
+    ];
+    for (const splitCase of additionalSplitCases) {
+      const opened = await evaluate(client, `(() => {
+        const target = document.querySelector(${JSON.stringify(splitCase.selector)});
+        if (!(target instanceof Element)) return null;
+        const id = Number(target.getAttribute(${JSON.stringify(splitCase.attribute)}));
+        const item = { kind: ${JSON.stringify(splitCase.kind)}, [${JSON.stringify(splitCase.field)}]: id };
+        window.__syndocalTimelineSplitFixtureCalls = [];
+        window.__syndocalTimelineSplitFixture = async (request, timelineBank, activeTimelineId) => {
+          window.__syndocalTimelineSplitFixtureCalls.push(structuredClone(request));
+          return {
+            authoring: {},
+            timeline_bank: structuredClone(timelineBank),
+            active_timeline_id: activeTimelineId,
+            selected_items: [structuredClone(item)],
+            mutation: {},
+          };
+        };
+        target.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          altKey: true,
+          clientX: 260,
+          clientY: 190,
+        }));
+        return item;
+      })()`);
+      assert.ok(opened, `${splitCase.kind} opens the production Timeline item menu`);
+      await sleep(40);
+      assert.equal(await evaluate(client, `(() => {
+        const button = document.querySelector('[data-timeline-split-action]');
+        if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+        button.click();
+        return true;
+      })()`), true);
+      await waitFor(
+        () => evaluate(client, "window.__syndocalTimelineSplitFixtureCalls?.length === 1"),
+        `${splitCase.kind} Timeline Split fixture dispatch`,
+      );
+      await sleep(80);
+      const proof = await evaluate(client, `(() => ({
+        call: structuredClone(window.__syndocalTimelineSplitFixtureCalls[0]),
+        focused: document.activeElement?.getAttribute(${JSON.stringify(splitCase.attribute)}) ?? '',
+      }))()`);
+      assert.deepEqual(proof.call.items, [opened], `${splitCase.kind} Split dispatches its standalone item`);
+      assert.deepEqual(proof.call.primary, opened, `${splitCase.kind} Split preserves its primary item`);
+      assert.equal(proof.call.isolate, true, `${splitCase.kind} Split preserves Alt isolation`);
+      assert.equal(proof.focused, String(opened[splitCase.field]), `${splitCase.kind} Split restores item focus`);
+    }
+    assert.equal(await evaluate(client, `(() => {
+      const clip = document.querySelector('[data-timeline-video-clip-id="800"]');
+      if (!(clip instanceof Element)) return false;
+      clip.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 240, clientY: 180 }));
+      return true;
+    })()`), true);
+    await sleep(50);
     assert.equal(await evaluate(client, `(() => {
       const button = [...document.querySelectorAll('.timelineItemContextMenu button')]
         .find((candidate) => candidate.textContent?.trim() === 'Copy selected');

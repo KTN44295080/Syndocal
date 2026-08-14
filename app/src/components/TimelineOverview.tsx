@@ -140,6 +140,7 @@ interface TimelineOverviewProps {
   onSelectAudioClip: (clipId: number, additive?: boolean, singleMember?: boolean) => void;
   onSelectVideoClip: (clipId: number, additive?: boolean, singleMember?: boolean) => void;
   onOpenItemContextMenu: (point: { x: number; y: number }, item: TimelineItemRef) => void;
+  onSelectItemForContextMenu: (item: TimelineItemRef, additive: boolean, singleMember: boolean) => void;
   onInspectOverlapCluster: (cluster: TimelineOverviewOverlapCluster) => void;
   onUpdateLayer: (layer: TimelineLayerSummary) => void | Promise<void>;
   onOpenLayerMenu: (layer: TimelineLayerSummary, point: { x: number; y: number }) => void;
@@ -2438,6 +2439,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             ].filter(Boolean).join(" ")}
             data-timeline-automation-id={range.automation_id}
             data-timeline-automation-kind={range.kind}
+            role="button"
+            tabindex={props.selectedRangeId === range.id ? 0 : -1}
+            aria-label={`${range.track} automation ${range.label}, ${range.start_ms}-${range.end_ms} milliseconds`}
             onPointerDown={(pointerEvent) => beginRangeDrag(pointerEvent, range)}
             onPointerMove={moveRangeDrag}
             onPointerUp={endRangeDrag}
@@ -2450,6 +2454,20 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               }
               props.onSelectAutomationRange(range);
               props.onSeekTime(range.start_ms);
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const item: TimelineItemRef = range.kind === "lighting"
+                ? { kind: "lighting_automation", automation_id: range.automation_id }
+                : { kind: "video_automation", automation_id: range.automation_id };
+              props.onSelectItemForContextMenu(
+                item,
+                event.shiftKey || event.ctrlKey || event.metaKey,
+                event.altKey,
+              );
+              event.currentTarget.focus();
+              props.onOpenItemContextMenu({ x: event.clientX, y: event.clientY }, item);
             }}
           >
             <rect
@@ -2910,6 +2928,21 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               }
               props.onSelectEvent(event.id, true);
               props.onSeekTime(event.time_ms);
+            }}
+            onContextMenu={(pointerEvent) => {
+              pointerEvent.preventDefault();
+              pointerEvent.stopPropagation();
+              const item: TimelineItemRef = { kind: "lighting_event", event_id: event.id };
+              props.onSelectItemForContextMenu(
+                item,
+                pointerEvent.shiftKey || pointerEvent.ctrlKey || pointerEvent.metaKey,
+                pointerEvent.altKey,
+              );
+              pointerEvent.currentTarget.focus();
+              props.onOpenItemContextMenu(
+                { x: pointerEvent.clientX, y: pointerEvent.clientY },
+                item,
+              );
             }}
             onDblClick={(pointerEvent) => {
               if (!event.is_super_scene) return;

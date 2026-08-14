@@ -23,6 +23,7 @@ import type { CueIdentitySource } from "../identityColor";
 import type { TimelineCueDragState } from "../timelineCueDrag";
 import { expandTimelineItemGroupSelection, timelineItemKey } from "../timelineAdvancedAuthoring";
 import { applyTimelineDirectTrim } from "../timelineDirectResize";
+import { applyTimelineSplitAtPlayhead } from "../timelineSplitAction";
 import type { TimelineContextDrawer } from "../uiModes";
 import { timelineLayerIdForEvent } from "../timelineLayers";
 import {
@@ -212,6 +213,13 @@ interface TimelineCueEventsPanelProps {
     boundaryMs: number,
     isolate: boolean,
   ) => Promise<TimelineItemRef[]>;
+  onSplitItems: (
+    items: TimelineItemRef[],
+    primary: TimelineItemRef,
+    boundaryMs: number,
+    isolate: boolean,
+  ) => Promise<TimelineItemRef[]>;
+  onRestoreReturnedItemSelection: (items: TimelineItemRef[]) => void;
   onRemoveItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onRemoveAudioClip: (clipId: number) => void | Promise<void>;
   onSetAudioMaster: (offsetMs: number, muted: boolean) => void | Promise<void>;
@@ -392,13 +400,47 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     expandLinkedSelection({ kind: "audio_clip", clip_id: clipId }, additive, singleMember);
   const selectVideoClip = (clipId: number, additive = false, singleMember = false) =>
     expandLinkedSelection({ kind: "video_clip", clip_id: clipId }, additive, singleMember);
+  const selectTimelineItemForContextMenu = (
+    item: TimelineItemRef,
+    additive: boolean,
+    singleMember: boolean,
+  ) => {
+    expandLinkedSelection(item, additive, singleMember);
+    if (item.kind === "lighting_event") props.onSelectEvent(item.event_id, false);
+    if (item.kind === "lighting_automation" || item.kind === "video_automation") {
+      const kind = item.kind === "lighting_automation" ? "lighting" : "video";
+      const range = props.overviewAutomationRanges.find((candidate) =>
+        candidate.kind === kind && candidate.automation_id === item.automation_id);
+      if (range) props.onSelectAutomationRange(range);
+    }
+  };
   const selectReturnedTimelineItems = (items: TimelineItemRef[]) => {
     setSelectedTimelineItems(items);
+    props.onRestoreReturnedItemSelection(items);
     const audio = items.find((item) => item.kind === "audio_clip");
     const video = items.find((item) => item.kind === "video_clip");
     setSelectedAudioClipId(audio?.kind === "audio_clip" ? audio.clip_id : null);
     setSelectedVideoClipId(video?.kind === "video_clip" ? video.clip_id : null);
     setSingleMemberEditKey(null);
+  };
+  const timelineItemFocusSelector = (item: TimelineItemRef) => {
+    switch (item.kind) {
+      case "lighting_event":
+        return `.timelineMarker[data-timeline-event-id="${item.event_id}"]`;
+      case "video_clip":
+        return `[data-timeline-video-clip-id="${item.clip_id}"]`;
+      case "audio_clip":
+        return `[data-timeline-audio-clip-id="${item.clip_id}"]`;
+      case "lighting_automation":
+        return `[data-timeline-automation-kind="lighting"][data-timeline-automation-id="${item.automation_id}"]`;
+      case "video_automation":
+        return `[data-timeline-automation-kind="video"][data-timeline-automation-id="${item.automation_id}"]`;
+    }
+  };
+  const focusReturnedTimelineItem = (item: TimelineItemRef) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.querySelector<SVGElement>(timelineItemFocusSelector(item))?.focus();
+    }));
   };
   const isTimelineItemLinked = (item: TimelineItemRef) => props.itemGroups.some((group) =>
     group.members.some((member) => timelineItemKey(member) === timelineItemKey(item)));
@@ -1190,6 +1232,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onSelectAudioClip={selectAudioClip}
         onSelectVideoClip={selectVideoClip}
         onOpenItemContextMenu={openItemContextMenu}
+        onSelectItemForContextMenu={selectTimelineItemForContextMenu}
         onInspectOverlapCluster={inspectOverlapCluster}
         onUpdateLayer={(layer) => void props.onUpdateTimelineLayer(layer)}
         onAddAudioClip={(layerId) => void props.onAddAudioClip(layerId)}
@@ -1285,6 +1328,27 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
               }}
             >
               Paste at playhead
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              data-timeline-split-action
+              disabled={selectedTimelineItemRefs().length === 0}
+              onClick={async () => {
+                const items = [...selectedTimelineItemRefs()];
+                const primary = menu().anchor;
+                if (!items.some((item) => timelineItemKey(item) === timelineItemKey(primary))) return;
+                const isolate = singleMemberEditKey() === timelineItemKey(primary);
+                setItemContextMenu(null);
+                await applyTimelineSplitAtPlayhead(
+                  props.onSplitItems,
+                  selectReturnedTimelineItems,
+                  focusReturnedTimelineItem,
+                  { items, primary, boundary_ms: props.positionMs, isolate },
+                );
+              }}
+            >
+              Split at playhead
             </button>
             <button
               type="button"

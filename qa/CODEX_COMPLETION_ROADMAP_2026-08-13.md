@@ -89,12 +89,12 @@ There is no longer one ambiguous “overall” percentage. Report these dimensio
 
 | Area | Frozen estimate | Basis |
 | --- | ---: | --- |
-| Software implementation toward the planned product target | 90% | Media T1, authored/runtime Clip Slots, scoped Video FX C1, Timeline Guide/loop/link/group editing through direct trim, and their authority paths are implemented; Split/Follow/transition buses, derived data, recording closure, distributed ShowClock, AI Control Plane, and final cross-domain boundaries remain |
-| Product-surface coverage | 88% | Media Library, shared Edit/Control Clip Bank, scoped FX, Timeline phases/Guide/loop and linked editing surfaces exist; Split/Follow/transition-duration, AI administration, distributed operation, and several recording/recovery surfaces remain incomplete |
-| Automated proof coverage | 88% | Media, Clip Slot, scoped FX, Timeline link/edit, browser pointer, backend authority, and full-crate gates have substantial coverage; unified AI registry, migration/security/performance, and external/hardware seams remain |
+| Software implementation toward the planned product target | 91% | Media T1, authored/runtime Clip Slots, scoped Video FX C1, Timeline Guide/loop/link/group editing through authoritative Split, and their authority paths are implemented; lane-valid reorder, Follow/transition buses, derived data, recording closure, distributed ShowClock, AI Control Plane, and final cross-domain boundaries remain |
+| Product-surface coverage | 89% | Media Library, shared Edit/Control Clip Bank, scoped FX, Timeline phases/Guide/loop and linked editing through Split exist; lane-valid reorder, Follow/transition-duration, AI administration, distributed operation, and several recording/recovery surfaces remain incomplete |
+| Automated proof coverage | 89% | Media, Clip Slot, scoped FX, Timeline linked Split/editing, real-browser pointer/fresh-ID mounting, backend authority, and full-crate gates have substantial coverage; unified AI registry, migration/security/performance, and external/hardware seams remain |
 | Current-source native and hardware proof | 40% | Media/Clip/FX/Timeline Windows release builds and focused native workflows are accepted; most physical DMX/control/audio/video/venue, two-machine, clean-machine, non-Windows, and AI external-client gates remain open |
 | Distribution/legal/clean-machine readiness | 35% | Packaging/CI foundations exist; signing, notarization, license disposition, release artifact publication, and clean-machine acceptance remain |
-| Planning roll-up to public release candidate | 74.1% | `90*0.5 + 88*0.2 + 40*0.2 + 35*0.1`; unresolved P0-Release/P1 gates override the number |
+| Planning roll-up to public release candidate | 74.8% | `91*0.5 + 89*0.2 + 40*0.2 + 35*0.1`; unresolved P0-Release/P1 gates override the number |
 | Media Asset T1 overall | 100% for the declared Windows tranche | A1-A8 are implemented/reviewed; A7 and the native A8 matrix plus targeted rebuilt thumbnail/hover supplement are green |
 | Protocol Media Asset schema/migration/validation | 100% for T1 scope | Focused Protocol tests passed before commit |
 | Engine Media Asset runtime/allocator/Published rollback | 100% for A6 scope | Complete Bootstrap A restoration and allocator proof pass in A7 |
@@ -104,7 +104,7 @@ There is no longer one ambiguous “overall” percentage. Report these dimensio
 | Native release/UI/hardware acceptance for this tranche | Accepted for current Windows tranche | Fifteen workflow rows plus rebuilt 3-column grid, explicit thumbnail authorization, moving single preview, Still fail-safe, and no-touch evidence are recorded |
 | Clip Slot T2 | 100% for the declared Windows B1-B4 tranche | Protocol, authored/runtime Engine split, backend authority, shared Edit/Control UI, focused/browser/native proof, and independent review are accepted; C2 transition-duration execution remains separate |
 | Scoped Video FX C1 | 100% for the declared CPU/authority/UI tranche | Stable scope schema, Engine lifecycle/rollback, CPU renderer, backend authority, UI, transport/preview integration, and focused/native proof are accepted; Clip Take and transition buses remain C2/C3 |
-| Timeline L-TL | 72% for the requested editing/runtime surface | Phase/Guide and musical loop foundation, linked A/V import/grouping, selection, delete/duplicate/nudge/quantize/copy-paste/ripple/trim/direct resize are implemented; Split, lane-valid reorder, Follow/crossfade, and reload/focus closure remain |
+| Timeline L-TL | 78% for the requested editing/runtime surface | Phase/Guide and musical loop foundation, linked A/V import/grouping, selection, delete/duplicate/nudge/quantize/copy-paste/ripple/trim/direct resize/Split are implemented; lane-valid reorder, Follow/crossfade, and full Undo/Redo/save/reload focus closure remain |
 | AI Control Plane | 10% requirements/foundation | Full registry/MCP/API contract is accepted and authoritative/Remote building blocks exist; AI0-AI8 implementation and external-client acceptance have not begun |
 | Distributed ShowClock/2PC | architecture requirements drafted, implementation 0% | Local clock and machine-local output fence exist; authenticated distributed authority does not |
 
@@ -1384,8 +1384,16 @@ fades remain coherent, Scene source time/tempo/whole-loop constraints fail close
   Audio, Video, Lighting Automation, and Video Automation items now enter that same authoritative Trim path;
   unlinked items retain their existing resize behavior, `Alt` isolates one member for the captured gesture, and
   the returned logical selection is restored. A real Chromium fixture performs pointer resize on both linked and
-  unlinked representatives across all five domains and verifies both edges plus `Alt` isolation. Remaining grouped
-  edit work is split, lane-valid reorder, and full selection/focus restoration across Undo/Redo and reload. Normal horizontal Audio/Video clip
+  unlinked representatives across all five domains and verifies both edges plus `Alt` isolation. Split is now one
+  authoritative mutation across Scene, Audio, Video, Lighting Automation, and Video Automation. The primary
+  playhead cut becomes one relative offset for every grouped member; left items retain their IDs, right items get
+  fresh IDs, non-isolated groups are recreated on the right, `Alt` leaves only the new right member ungrouped, and
+  internal Scene jump references are rewired. Scene/Audio/Video fade envelopes do not invent a fade at the cut;
+  cuts through an existing fade ramp fail closed. ACK results mount the returned bank before best-effort refresh,
+  so fresh right-side selection and focus survive refresh failure. Rust authority/persistence/retry tests, a real
+  Chromium fresh-ID mount/focus gate, independent adversarial review, and an Opus read-only audit are green.
+  Remaining grouped edit work is lane-valid reorder and full selection/focus restoration across Undo/Redo and
+  save/reload. Normal horizontal Audio/Video clip
 drag now routes a linked member through the authoritative group nudge path, while holding `Alt` selects
 and edits only that member for the current gesture. Closing the item action menu restores focus to its
 invoking clip; the real-browser gate proves both the modifier selection and focus return.
@@ -1704,7 +1712,7 @@ This is the minimum domain-level inventory. Each row must be decomposed into Q1 
 | `REMOTE-TOUCH` | Web Remote, Touch, TouchOSC | N/K | Security foundation exists | current-source audit, physical clients, latency and stale-session proof |
 | `RDM` | RDM/TOD device operation | N/K | Partial | physical, timeout/cancellation, ownership proof |
 | `SHOWCLOCK` | shared time, actions, two-PC failover | G | Architecture draft | decisions, implementation, witness/fence, two-machine soak |
-| `TIMELINE-MUSICAL` | phases, Guide, loop, linked media, group editing, Follow | L-TL | Foundation and linked editing through direct trim implemented/reviewed | Split, lane-valid reorder, Follow/crossfade, persistence focus/selection, final native proof |
+| `TIMELINE-MUSICAL` | phases, Guide, loop, linked media, group editing, Follow | L-TL | Foundation and linked editing through authoritative Split implemented/reviewed | lane-valid reorder, Follow/crossfade, persistence focus/selection, representative A/V native Split proof |
 | `UI-SHELL` | Setup/Edit/Control and shared shell | H | Product vision/roadmap exists | staged implementation and native/accessibility acceptance |
 | `ACCESSIBILITY` | keyboard, AT, contrast, DPI, IME | H | Basic static coverage | native screen-reader/contrast/scaling matrix |
 | `MIGRATION` | `.sdc`, recovery, backup, template compatibility | O | Per-feature tests exist | unified version/corruption/golden/fuzz matrix |

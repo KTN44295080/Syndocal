@@ -825,6 +825,13 @@ enum TimelineAdvancedMutationRequest {
         #[serde(default)]
         isolate: bool,
     },
+    SplitItems {
+        items: Vec<TimelineItemRef>,
+        primary: TimelineItemRef,
+        boundary_ms: u64,
+        #[serde(default)]
+        isolate: bool,
+    },
     DeleteItems {
         items: Vec<TimelineItemRef>,
     },
@@ -6967,6 +6974,586 @@ fn trim_timeline_items(
     Ok(expanded.into_iter().collect())
 }
 
+fn split_timeline_scene_event(
+    event: &protocol::TimelineCueEventSummary,
+    right_event_id: TimelineEventId,
+    boundary_ms: u64,
+    split_offset_ms: u64,
+    bpm: f32,
+) -> Result<
+    (
+        protocol::TimelineCueEventSummary,
+        protocol::TimelineCueEventSummary,
+    ),
+    String,
+> {
+    // Multi-loop and loop-fill Scene Blocks do not have a source-continuation
+    // contract at an arbitrary split boundary. Keep this operation fail-closed
+    // instead of guessing which loop/seek state the right half should inherit.
+    if event.loop_count != 1 || event.loop_fill {
+        return Err(
+            "Timeline Split supports only single-span Scene Blocks; loop playback is ambiguous"
+                .to_string(),
+        );
+    }
+    let event_end_ms = timeline_event_presented_end_ms(event)?;
+    if boundary_ms <= event.time_ms || boundary_ms >= event_end_ms {
+        return Err(
+            "Timeline Split boundary must be strictly inside every edited item".to_string(),
+        );
+    }
+    let rate = f64::from(event.rate.unwrap_or(1.0));
+    if !rate.is_finite() || rate <= 0.0 {
+        return Err("Timeline Split requires a finite positive Scene Block rate".to_string());
+    }
+    let source_delta = split_offset_ms as f64 * rate;
+    if !source_delta.is_finite() || source_delta < i64::MIN as f64 || source_delta > i64::MAX as f64
+    {
+        return Err(
+            "Timeline Split Scene Block source offset exceeds the supported range".to_string(),
+        );
+    }
+    let source_delta = source_delta.round() as i64;
+    let right_source_offset_ms = event
+        .source_offset_ms
+        .checked_add(source_delta)
+        .ok_or_else(|| {
+            "Timeline Split Scene Block source offset exceeds the supported range".to_string()
+        })?;
+    let right_time_beats = timeline_shift_beats(
+        event.time_beats,
+        i64::try_from(split_offset_ms)
+            .map_err(|_| "Timeline Split exceeds the supported time range".to_string())?,
+        bpm,
+    )?;
+    let right_duration_ms = event_end_ms
+        .checked_sub(boundary_ms)
+        .filter(|duration_ms| *duration_ms > 0)
+        .ok_or_else(|| "Timeline Split would remove the Scene Block right span".to_string())?;
+    let ((left_fade_in_ms, left_fade_out_ms), (right_fade_in_ms, right_fade_out_ms)) =
+        split_timeline_fade_envelope(
+            event.duration_ms,
+            event.fade_in_ms,
+            event.fade_out_ms,
+            split_offset_ms,
+        )?;
+
+    let mut left = event.clone();
+    left.duration_ms = split_offset_ms;
+    if left.conform_to_tempo {
+        left.duration_beats = Some(split_offset_ms as f64 * f64::from(bpm) / 60_000.0);
+    }
+    (left.fade_in_ms, left.fade_out_ms) = (left_fade_in_ms, left_fade_out_ms);
+
+    let mut right = event.clone();
+    right.id = right_event_id;
+    right.time_ms = boundary_ms;
+    right.time_beats = right_time_beats;
+    right.source_offset_ms = right_source_offset_ms;
+    right.duration_ms = right_duration_ms;
+    if right.conform_to_tempo {
+        right.duration_beats = Some(right_duration_ms as f64 * f64::from(bpm) / 60_000.0);
+    }
+    (right.fade_in_ms, right.fade_out_ms) = (right_fade_in_ms, right_fade_out_ms);
+    Ok((left, right))
+}
+
+fn split_timeline_fade_envelope(
+    duration_ms: u64,
+    fade_in_ms: u64,
+    fade_out_ms: u64,
+    split_offset_ms: u64,
+) -> Result<((u64, u64), (u64, u64)), String> {
+    let right_duration_ms = duration_ms
+        .checked_sub(split_offset_ms)
+        .filter(|duration_ms| *duration_ms > 0)
+        .ok_or_else(|| "Timeline Split would remove the item right span".to_string())?;
+    if fade_in_ms.saturating_add(fade_out_ms) > duration_ms {
+        return Err("Timeline Split item fades exceed its duration".to_string());
+    }
+    let fade_out_start_ms = duration_ms - fade_out_ms;
+    if split_offset_ms < fade_in_ms || split_offset_ms > fade_out_start_ms {
+        return Err("Timeline Split cannot cut through an existing fade envelope".to_string());
+    }
+    Ok((
+        (fade_in_ms.min(split_offset_ms), 0),
+        (0, fade_out_ms.min(right_duration_ms)),
+    ))
+}
+
+fn split_timeline_video_clip(
+    clip: &TimelineVideoClipSummary,
+    right_clip_id: protocol::TimelineVideoClipId,
+    boundary_ms: u64,
+    split_offset_ms: u64,
+) -> Result<(TimelineVideoClipSummary, TimelineVideoClipSummary), String> {
+    let end_ms = clip
+        .start_ms
+        .checked_add(clip.duration_ms)
+        .ok_or_else(|| "Timeline Video clip end exceeds the supported time range".to_string())?;
+    if boundary_ms <= clip.start_ms || boundary_ms >= end_ms {
+        return Err(
+            "Timeline Split boundary must be strictly inside every edited item".to_string(),
+        );
+    }
+    let right_duration_ms = end_ms
+        .checked_sub(boundary_ms)
+        .filter(|duration_ms| *duration_ms > 0)
+        .ok_or_else(|| "Timeline Split would remove the Video clip right span".to_string())?;
+    let right_offset_ms = clip.offset_ms.checked_add(split_offset_ms).ok_or_else(|| {
+        "Timeline Split Video source offset exceeds the supported range".to_string()
+    })?;
+    let ((left_fade_in_ms, left_fade_out_ms), (right_fade_in_ms, right_fade_out_ms)) =
+        split_timeline_fade_envelope(
+            clip.duration_ms,
+            clip.fade_in_ms,
+            clip.fade_out_ms,
+            split_offset_ms,
+        )?;
+    let mut left = clip.clone();
+    left.duration_ms = split_offset_ms;
+    (left.fade_in_ms, left.fade_out_ms) = (left_fade_in_ms, left_fade_out_ms);
+    let mut right = clip.clone();
+    right.id = right_clip_id;
+    right.start_ms = boundary_ms;
+    right.offset_ms = right_offset_ms;
+    right.duration_ms = right_duration_ms;
+    (right.fade_in_ms, right.fade_out_ms) = (right_fade_in_ms, right_fade_out_ms);
+    Ok((left, right))
+}
+
+fn split_timeline_audio_clip(
+    clip: &TimelineAudioClipSummary,
+    right_clip_id: TimelineAudioClipId,
+    boundary_ms: u64,
+    split_offset_ms: u64,
+) -> Result<(TimelineAudioClipSummary, TimelineAudioClipSummary), String> {
+    let end_ms = clip
+        .start_ms
+        .checked_add(clip.duration_ms)
+        .ok_or_else(|| "Timeline Audio clip end exceeds the supported time range".to_string())?;
+    if boundary_ms <= clip.start_ms || boundary_ms >= end_ms {
+        return Err(
+            "Timeline Split boundary must be strictly inside every edited item".to_string(),
+        );
+    }
+    let right_duration_ms = end_ms
+        .checked_sub(boundary_ms)
+        .filter(|duration_ms| *duration_ms > 0)
+        .ok_or_else(|| "Timeline Split would remove the Audio clip right span".to_string())?;
+    let right_offset_ms = clip.offset_ms.checked_add(split_offset_ms).ok_or_else(|| {
+        "Timeline Split Audio source offset exceeds the supported range".to_string()
+    })?;
+    let ((left_fade_in_ms, left_fade_out_ms), (right_fade_in_ms, right_fade_out_ms)) =
+        split_timeline_fade_envelope(
+            clip.duration_ms,
+            clip.fade_in_ms,
+            clip.fade_out_ms,
+            split_offset_ms,
+        )?;
+    let mut left = clip.clone();
+    left.duration_ms = split_offset_ms;
+    (left.fade_in_ms, left.fade_out_ms) = (left_fade_in_ms, left_fade_out_ms);
+    let mut right = clip.clone();
+    right.id = right_clip_id;
+    right.start_ms = boundary_ms;
+    right.offset_ms = right_offset_ms;
+    right.duration_ms = right_duration_ms;
+    (right.fade_in_ms, right.fade_out_ms) = (right_fade_in_ms, right_fade_out_ms);
+    Ok((left, right))
+}
+
+fn split_timeline_items(
+    state: &AppState,
+    timeline: &mut TimelineSnapshot,
+    media_assets: &[protocol::MediaAssetSummary],
+    requested_items: &[TimelineItemRef],
+    primary: TimelineItemRef,
+    boundary_ms: u64,
+    isolate: bool,
+    bpm: f32,
+) -> Result<Vec<TimelineItemRef>, String> {
+    if !bpm.is_finite() || bpm <= 0.0 {
+        return Err("Timeline Split requires a finite positive BPM".to_string());
+    }
+    let expanded = expanded_timeline_items(timeline, requested_items)?;
+    if !expanded.contains(&primary) {
+        return Err("Timeline Split primary item is outside the selected group".to_string());
+    }
+    let primary_start_ms = timeline_item_edge_ms(timeline, primary, TimelineTrimEdge::Start)?;
+    let primary_end_ms = timeline_item_edge_ms(timeline, primary, TimelineTrimEdge::End)?;
+    let split_offset_ms = boundary_ms
+        .checked_sub(primary_start_ms)
+        .filter(|offset_ms| *offset_ms > 0 && boundary_ms < primary_end_ms)
+        .ok_or_else(|| {
+            "Timeline Split boundary must be strictly inside the primary item".to_string()
+        })?;
+    let edited = if isolate {
+        BTreeSet::from([primary])
+    } else {
+        expanded
+    };
+    let mut item_boundaries = BTreeMap::new();
+    for item in &edited {
+        if timeline_item_is_on_locked_layer(timeline, *item) {
+            return Err("Timeline Split cannot edit an item on a locked lane".to_string());
+        }
+        let start_ms = timeline_item_edge_ms(timeline, *item, TimelineTrimEdge::Start)?;
+        let end_ms = timeline_item_edge_ms(timeline, *item, TimelineTrimEdge::End)?;
+        let item_boundary_ms = start_ms
+            .checked_add(split_offset_ms)
+            .filter(|boundary_ms| *boundary_ms > start_ms && *boundary_ms < end_ms)
+            .ok_or_else(|| {
+                "Timeline Split boundary must be strictly inside every edited item".to_string()
+            })?;
+        item_boundaries.insert(*item, item_boundary_ms);
+        match *item {
+            TimelineItemRef::LightingEvent { event_id } => {
+                let event = timeline
+                    .events
+                    .iter()
+                    .find(|event| event.id == event_id)
+                    .expect("expanded Timeline event exists");
+                split_timeline_scene_event(
+                    event,
+                    event_id,
+                    item_boundary_ms,
+                    split_offset_ms,
+                    bpm,
+                )?;
+            }
+            TimelineItemRef::VideoClip { clip_id } => {
+                let clip = timeline
+                    .video_clips
+                    .iter()
+                    .find(|clip| clip.id == clip_id)
+                    .expect("expanded Timeline Video clip exists");
+                split_timeline_video_clip(clip, clip_id, item_boundary_ms, split_offset_ms)?;
+                if let Some(source_duration_ms) = timeline_media_duration_ms(
+                    timeline,
+                    media_assets,
+                    Some(clip.media_asset_id),
+                    None,
+                ) {
+                    if clip
+                        .offset_ms
+                        .checked_add(clip.duration_ms)
+                        .is_none_or(|end_ms| end_ms > source_duration_ms)
+                    {
+                        return Err(
+                            "Timeline Split Video clip exceeds the source duration".to_string()
+                        );
+                    }
+                }
+            }
+            TimelineItemRef::AudioClip { clip_id } => {
+                let clip = timeline
+                    .audio_clips
+                    .iter()
+                    .find(|clip| clip.id == clip_id)
+                    .expect("expanded Timeline Audio clip exists");
+                split_timeline_audio_clip(clip, clip_id, item_boundary_ms, split_offset_ms)?;
+                if let Some(source_duration_ms) = timeline_media_duration_ms(
+                    timeline,
+                    media_assets,
+                    clip.media_asset_id,
+                    Some(&clip.path),
+                ) {
+                    if clip
+                        .offset_ms
+                        .checked_add(clip.duration_ms)
+                        .is_none_or(|end_ms| end_ms > source_duration_ms)
+                    {
+                        return Err(
+                            "Timeline Split Audio clip exceeds the source duration".to_string()
+                        );
+                    }
+                }
+            }
+            TimelineItemRef::LightingAutomation { automation_id } => {
+                let automation = timeline
+                    .automations
+                    .iter()
+                    .find(|automation| automation.id == automation_id)
+                    .expect("expanded Timeline automation exists");
+                trim_lighting_automation_keyframes(
+                    &automation.keyframes,
+                    TimelineTrimEdge::End,
+                    item_boundary_ms,
+                )?;
+                trim_lighting_automation_keyframes(
+                    &automation.keyframes,
+                    TimelineTrimEdge::Start,
+                    item_boundary_ms,
+                )?;
+            }
+            TimelineItemRef::VideoAutomation { automation_id } => {
+                let automation = timeline
+                    .video_automations
+                    .iter()
+                    .find(|automation| automation.id == automation_id)
+                    .expect("expanded Timeline Video automation exists");
+                trim_video_automation_keyframes(
+                    &automation.keyframes,
+                    TimelineTrimEdge::End,
+                    item_boundary_ms,
+                )?;
+                trim_video_automation_keyframes(
+                    &automation.keyframes,
+                    TimelineTrimEdge::Start,
+                    item_boundary_ms,
+                )?;
+            }
+        }
+    }
+
+    let source_groups = if isolate {
+        Vec::new()
+    } else {
+        timeline
+            .item_groups
+            .iter()
+            .filter(|group| group.members.iter().any(|member| edited.contains(member)))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    if timeline
+        .item_groups
+        .len()
+        .checked_add(source_groups.len())
+        .is_none_or(|count| count > protocol::TIMELINE_MAX_ITEM_GROUPS)
+    {
+        return Err("Timeline Split would exceed the Timeline item-group limit".to_string());
+    }
+    if source_groups.iter().any(|group| group.members.len() < 2) {
+        return Err("Timeline Split cannot duplicate an invalid Timeline item group".to_string());
+    }
+
+    let right_refs = edited
+        .iter()
+        .map(|item| {
+            let right = match item {
+                TimelineItemRef::LightingEvent { .. } => TimelineItemRef::LightingEvent {
+                    event_id: state.engine.allocate_timeline_event_id(),
+                },
+                TimelineItemRef::VideoClip { .. } => TimelineItemRef::VideoClip {
+                    clip_id: state.engine.allocate_timeline_video_clip_id(),
+                },
+                TimelineItemRef::AudioClip { .. } => TimelineItemRef::AudioClip {
+                    clip_id: state.engine.allocate_timeline_audio_clip_id(),
+                },
+                TimelineItemRef::LightingAutomation { .. } => TimelineItemRef::LightingAutomation {
+                    automation_id: state.engine.allocate_automation_id(),
+                },
+                TimelineItemRef::VideoAutomation { .. } => TimelineItemRef::VideoAutomation {
+                    automation_id: state.engine.allocate_automation_id(),
+                },
+            };
+            (*item, right)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut candidate = timeline.clone();
+    for item in &edited {
+        let item_boundary_ms = item_boundaries[item];
+        let right = right_refs[item];
+        match (*item, right) {
+            (
+                TimelineItemRef::LightingEvent { event_id },
+                TimelineItemRef::LightingEvent {
+                    event_id: right_event_id,
+                },
+            ) => {
+                let event = candidate
+                    .events
+                    .iter()
+                    .find(|event| event.id == event_id)
+                    .cloned()
+                    .expect("preflighted Timeline event exists");
+                let (left, right) = split_timeline_scene_event(
+                    &event,
+                    right_event_id,
+                    item_boundary_ms,
+                    split_offset_ms,
+                    bpm,
+                )?;
+                *candidate
+                    .events
+                    .iter_mut()
+                    .find(|event| event.id == event_id)
+                    .expect("preflighted Timeline event exists") = left;
+                candidate.events.push(right);
+            }
+            (
+                TimelineItemRef::VideoClip { clip_id },
+                TimelineItemRef::VideoClip {
+                    clip_id: right_clip_id,
+                },
+            ) => {
+                let clip = candidate
+                    .video_clips
+                    .iter()
+                    .find(|clip| clip.id == clip_id)
+                    .cloned()
+                    .expect("preflighted Timeline Video clip exists");
+                let (left, right) = split_timeline_video_clip(
+                    &clip,
+                    right_clip_id,
+                    item_boundary_ms,
+                    split_offset_ms,
+                )?;
+                *candidate
+                    .video_clips
+                    .iter_mut()
+                    .find(|clip| clip.id == clip_id)
+                    .expect("preflighted Timeline Video clip exists") = left;
+                candidate.video_clips.push(right);
+            }
+            (
+                TimelineItemRef::AudioClip { clip_id },
+                TimelineItemRef::AudioClip {
+                    clip_id: right_clip_id,
+                },
+            ) => {
+                let clip = candidate
+                    .audio_clips
+                    .iter()
+                    .find(|clip| clip.id == clip_id)
+                    .cloned()
+                    .expect("preflighted Timeline Audio clip exists");
+                let (left, right) = split_timeline_audio_clip(
+                    &clip,
+                    right_clip_id,
+                    item_boundary_ms,
+                    split_offset_ms,
+                )?;
+                *candidate
+                    .audio_clips
+                    .iter_mut()
+                    .find(|clip| clip.id == clip_id)
+                    .expect("preflighted Timeline Audio clip exists") = left;
+                candidate.audio_clips.push(right);
+            }
+            (
+                TimelineItemRef::LightingAutomation { automation_id },
+                TimelineItemRef::LightingAutomation {
+                    automation_id: right_automation_id,
+                },
+            ) => {
+                let automation = candidate
+                    .automations
+                    .iter()
+                    .find(|automation| automation.id == automation_id)
+                    .cloned()
+                    .expect("preflighted Timeline automation exists");
+                let left_keyframes = trim_lighting_automation_keyframes(
+                    &automation.keyframes,
+                    TimelineTrimEdge::End,
+                    item_boundary_ms,
+                )?;
+                let right_keyframes = trim_lighting_automation_keyframes(
+                    &automation.keyframes,
+                    TimelineTrimEdge::Start,
+                    item_boundary_ms,
+                )?;
+                candidate
+                    .automations
+                    .iter_mut()
+                    .find(|automation| automation.id == automation_id)
+                    .expect("preflighted Timeline automation exists")
+                    .keyframes = left_keyframes;
+                let mut right = automation;
+                right.id = right_automation_id;
+                right.keyframes = right_keyframes;
+                candidate.automations.push(right);
+            }
+            (
+                TimelineItemRef::VideoAutomation { automation_id },
+                TimelineItemRef::VideoAutomation {
+                    automation_id: right_automation_id,
+                },
+            ) => {
+                let automation = candidate
+                    .video_automations
+                    .iter()
+                    .find(|automation| automation.id == automation_id)
+                    .cloned()
+                    .expect("preflighted Timeline Video automation exists");
+                let left_keyframes = trim_video_automation_keyframes(
+                    &automation.keyframes,
+                    TimelineTrimEdge::End,
+                    item_boundary_ms,
+                )?;
+                let right_keyframes = trim_video_automation_keyframes(
+                    &automation.keyframes,
+                    TimelineTrimEdge::Start,
+                    item_boundary_ms,
+                )?;
+                candidate
+                    .video_automations
+                    .iter_mut()
+                    .find(|automation| automation.id == automation_id)
+                    .expect("preflighted Timeline Video automation exists")
+                    .keyframes = left_keyframes;
+                let mut right = automation;
+                right.id = right_automation_id;
+                right.keyframes = right_keyframes;
+                candidate.video_automations.push(right);
+            }
+            _ => return Err("Timeline Split identity domains diverged".to_string()),
+        }
+    }
+    let jump_rewires = candidate
+        .events
+        .iter()
+        .filter_map(|event| {
+            let TimelineItemRef::LightingEvent {
+                event_id: right_event_id,
+            } = right_refs.get(&TimelineItemRef::LightingEvent { event_id: event.id })?
+            else {
+                return None;
+            };
+            let target_id = event.jump_to_event_id?;
+            let TimelineItemRef::LightingEvent {
+                event_id: right_target_id,
+            } = right_refs.get(&TimelineItemRef::LightingEvent {
+                event_id: target_id,
+            })?
+            else {
+                return None;
+            };
+            Some((*right_event_id, *right_target_id))
+        })
+        .collect::<Vec<_>>();
+    for (right_event_id, right_target_id) in jump_rewires {
+        candidate
+            .events
+            .iter_mut()
+            .find(|event| event.id == right_event_id)
+            .expect("preflighted Timeline Split right event exists")
+            .jump_to_event_id = Some(right_target_id);
+    }
+    for source_group in source_groups {
+        let right_members = source_group
+            .members
+            .iter()
+            .map(|member| {
+                right_refs
+                    .get(member)
+                    .copied()
+                    .expect("expanded Timeline item group member must be split")
+            })
+            .collect::<Vec<_>>();
+        if right_members.len() >= 2 {
+            candidate.item_groups.push(TimelineItemGroupSummary {
+                id: state.engine.allocate_timeline_item_group_id(),
+                members: right_members,
+            });
+        }
+    }
+    *timeline = candidate;
+    Ok(edited.into_iter().map(|item| right_refs[&item]).collect())
+}
+
 fn delete_timeline_items(
     timeline: &mut TimelineSnapshot,
     requested_items: &[TimelineItemRef],
@@ -7276,6 +7863,7 @@ fn timeline_advanced_candidate_for_request(
         | TimelineAdvancedMutationRequest::QuantizeItems { .. }
         | TimelineAdvancedMutationRequest::PasteItems { .. }
         | TimelineAdvancedMutationRequest::TrimItems { .. }
+        | TimelineAdvancedMutationRequest::SplitItems { .. }
         | TimelineAdvancedMutationRequest::DeleteItems { .. } => {
             return Err("Timeline bank commands require the bank mutation path".to_string());
         }
@@ -7575,6 +8163,27 @@ fn timeline_bank_candidate_for_request(
                 before.clock.bpm,
             )?;
         }
+        TimelineAdvancedMutationRequest::SplitItems {
+            items,
+            primary,
+            boundary_ms,
+            isolate,
+        } => {
+            let active = bank
+                .iter_mut()
+                .find(|timeline| timeline.id == active_timeline_id)
+                .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
+            selected_items = split_timeline_items(
+                state,
+                active,
+                &before.video.media_assets,
+                items,
+                *primary,
+                *boundary_ms,
+                *isolate,
+                before.clock.bpm,
+            )?;
+        }
         TimelineAdvancedMutationRequest::DeleteItems { items } => {
             let active = bank
                 .iter_mut()
@@ -7689,6 +8298,7 @@ fn timeline_advanced_history_label(request: &TimelineAdvancedMutationRequest) ->
         TimelineAdvancedMutationRequest::QuantizeItems { .. } => "Quantize Timeline items",
         TimelineAdvancedMutationRequest::PasteItems { .. } => "Paste Timeline items",
         TimelineAdvancedMutationRequest::TrimItems { .. } => "Trim Timeline items",
+        TimelineAdvancedMutationRequest::SplitItems { .. } => "Split Timeline items",
         TimelineAdvancedMutationRequest::DeleteItems { .. } => "Delete Timeline items",
         TimelineAdvancedMutationRequest::SetPhases { .. } => "Set Timeline Phases",
         TimelineAdvancedMutationRequest::SetLoop { .. } => "Set Timeline loop",
@@ -7737,6 +8347,7 @@ fn commit_authoritative_timeline_advanced(
             | TimelineAdvancedMutationRequest::QuantizeItems { .. }
             | TimelineAdvancedMutationRequest::PasteItems { .. }
             | TimelineAdvancedMutationRequest::TrimItems { .. }
+            | TimelineAdvancedMutationRequest::SplitItems { .. }
             | TimelineAdvancedMutationRequest::DeleteItems { .. }
     );
     let (candidate_snapshot, bank_publication, selected_items) = if bank_request {
@@ -76751,6 +77362,675 @@ mod live_audio_input_tests {
         .expect("Loop-fill trim keeps millisecond and beat-domain spans coherent");
         assert_eq!(loop_fill.events[0].duration_ms, 500);
         assert_eq!(loop_fill.events[0].duration_beats, Some(1.0));
+    }
+
+    fn timeline_split_test_snapshot() -> TimelineSnapshot {
+        let mut timeline = TimelineSnapshot {
+            id: TimelineId(1),
+            label: "Split".to_string(),
+            layers: vec![
+                protocol::TimelineLayerSummary {
+                    id: 1,
+                    label: "Lighting".to_string(),
+                    order: 0,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind: TimelineLayerKind::Lighting,
+                },
+                protocol::TimelineLayerSummary {
+                    id: 2,
+                    label: "Video".to_string(),
+                    order: 1,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind: TimelineLayerKind::Video,
+                },
+                protocol::TimelineLayerSummary {
+                    id: 3,
+                    label: "Audio".to_string(),
+                    order: 2,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind: TimelineLayerKind::Audio,
+                },
+            ],
+            ..TimelineSnapshot::default()
+        };
+        timeline.events = vec![
+            protocol::TimelineCueEventSummary {
+                id: 20,
+                cue_id: 7,
+                time_ms: 1_000,
+                time_beats: Some(2.0),
+                track: TimelineTrackKind::Lighting,
+                layer_id: Some(1),
+                duration_ms: 1_000,
+                duration_beats: Some(2.0),
+                conform_to_tempo: true,
+                loop_fill: false,
+                source_offset_ms: 100,
+                rate: Some(1.5),
+                fade_in_ms: 120,
+                fade_out_ms: 180,
+                loop_count: 1,
+                jump_to_event_id: Some(21),
+            },
+            protocol::TimelineCueEventSummary {
+                id: 21,
+                cue_id: 7,
+                time_ms: 1_050,
+                time_beats: Some(2.1),
+                track: TimelineTrackKind::Lighting,
+                layer_id: Some(1),
+                duration_ms: 1_000,
+                duration_beats: Some(2.0),
+                conform_to_tempo: true,
+                loop_fill: false,
+                source_offset_ms: 200,
+                rate: Some(1.5),
+                fade_in_ms: 100,
+                fade_out_ms: 100,
+                loop_count: 1,
+                jump_to_event_id: None,
+            },
+        ];
+        timeline.video_clips.push(TimelineVideoClipSummary {
+            id: protocol::TimelineVideoClipId(22),
+            layer_id: 2,
+            media_asset_id: 9,
+            start_ms: 1_100,
+            offset_ms: 200,
+            duration_ms: 1_100,
+            fade_in_ms: 120,
+            fade_out_ms: 180,
+        });
+        timeline.audio_clips.push(TimelineAudioClipSummary {
+            id: 23,
+            layer_id: 3,
+            media_asset_id: None,
+            path: "split.wav".to_string(),
+            start_ms: 1_200,
+            offset_ms: 300,
+            duration_ms: 1_000,
+            gain: 1.0,
+            fade_in_ms: 120,
+            fade_out_ms: 180,
+        });
+        timeline
+            .automations
+            .push(protocol::TimelineAutomationSummary {
+                id: 24,
+                fixture_id: 1,
+                attribute: "Dimmer".to_string(),
+                track: TimelineTrackKind::Lighting,
+                keyframes: vec![
+                    AutomationKeyframeSummary {
+                        time_ms: 1_200,
+                        value: 10_000,
+                        interpolation: protocol::AutomationInterpolation::Linear,
+                    },
+                    AutomationKeyframeSummary {
+                        time_ms: 1_700,
+                        value: 20_000,
+                        interpolation: protocol::AutomationInterpolation::Step,
+                    },
+                    AutomationKeyframeSummary {
+                        time_ms: 2_200,
+                        value: 30_000,
+                        interpolation: protocol::AutomationInterpolation::Linear,
+                    },
+                ],
+                enabled: true,
+            });
+        timeline
+            .video_automations
+            .push(protocol::TimelineVideoAutomationSummary {
+                id: 25,
+                layer_id: 99,
+                param: protocol::VideoParam::Opacity,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![
+                    VideoAutomationKeyframeSummary {
+                        time_ms: 1_300,
+                        value: 0.2,
+                        interpolation: protocol::AutomationInterpolation::Linear,
+                    },
+                    VideoAutomationKeyframeSummary {
+                        time_ms: 1_800,
+                        value: 0.8,
+                        interpolation: protocol::AutomationInterpolation::Step,
+                    },
+                    VideoAutomationKeyframeSummary {
+                        time_ms: 2_300,
+                        value: 1.0,
+                        interpolation: protocol::AutomationInterpolation::Linear,
+                    },
+                ],
+                enabled: true,
+            });
+        timeline.item_groups.push(TimelineItemGroupSummary {
+            id: TimelineItemGroupId(26),
+            members: vec![
+                TimelineItemRef::LightingEvent { event_id: 20 },
+                TimelineItemRef::LightingEvent { event_id: 21 },
+                TimelineItemRef::VideoClip {
+                    clip_id: protocol::TimelineVideoClipId(22),
+                },
+                TimelineItemRef::AudioClip { clip_id: 23 },
+                TimelineItemRef::LightingAutomation { automation_id: 24 },
+                TimelineItemRef::VideoAutomation { automation_id: 25 },
+            ],
+        });
+        timeline
+    }
+
+    #[test]
+    fn timeline_split_items_is_atomic_across_all_domains_groups_and_isolate() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let original = timeline_split_test_snapshot();
+        let mut timeline = original.clone();
+        let selected = split_timeline_items(
+            &harness.state,
+            &mut timeline,
+            &[],
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            1_500,
+            false,
+            120.0,
+        )
+        .expect("split one grouped member as the complete mixed group");
+        assert_eq!(selected.len(), 6);
+        assert_eq!(timeline.events.len(), 4);
+        assert_eq!(timeline.video_clips.len(), 2);
+        assert_eq!(timeline.audio_clips.len(), 2);
+        assert_eq!(timeline.automations.len(), 2);
+        assert_eq!(timeline.video_automations.len(), 2);
+        assert_eq!(timeline.item_groups.len(), 2);
+        assert_eq!(
+            timeline.item_groups[0], original.item_groups[0],
+            "the original group remains the left-side group"
+        );
+        let right_group = timeline
+            .item_groups
+            .iter()
+            .find(|group| group.id != TimelineItemGroupId(26))
+            .expect("full-group split creates a fresh right-side group");
+        assert_eq!(
+            right_group.members.iter().copied().collect::<BTreeSet<_>>(),
+            selected.iter().copied().collect::<BTreeSet<_>>()
+        );
+
+        let right_event_id = selected
+            .iter()
+            .find_map(|item| match item {
+                TimelineItemRef::LightingEvent { event_id } => Some(*event_id),
+                _ => None,
+            })
+            .expect("right Scene Block selection");
+        let right_events = selected
+            .iter()
+            .filter_map(|item| match item {
+                TimelineItemRef::LightingEvent { event_id } => Some(*event_id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let right_event = timeline
+            .events
+            .iter()
+            .find(|event| event.id == right_event_id)
+            .expect("right Scene Block exists");
+        assert_eq!((right_event.time_ms, right_event.duration_ms), (1_400, 600));
+        assert_eq!(right_event.source_offset_ms, 700);
+        assert_eq!(
+            (
+                timeline.events[0].fade_in_ms,
+                timeline.events[0].fade_out_ms,
+                right_event.fade_in_ms,
+                right_event.fade_out_ms,
+            ),
+            (120, 0, 0, 180),
+            "a Scene Block split preserves the envelope without manufacturing a cut fade"
+        );
+        assert!(
+            right_events.contains(&right_event.jump_to_event_id.expect("rewired right jump")),
+            "internal Scene Block jumps follow the right-side stable IDs"
+        );
+        assert_eq!(
+            (
+                timeline.events[0].duration_ms,
+                timeline.video_clips[0].duration_ms
+            ),
+            (400, 400)
+        );
+        let right_video_id = selected
+            .iter()
+            .find_map(|item| match item {
+                TimelineItemRef::VideoClip { clip_id } => Some(*clip_id),
+                _ => None,
+            })
+            .expect("right Video clip selection");
+        let right_audio_id = selected
+            .iter()
+            .find_map(|item| match item {
+                TimelineItemRef::AudioClip { clip_id } => Some(*clip_id),
+                _ => None,
+            })
+            .expect("right Audio clip selection");
+        let right_video = timeline
+            .video_clips
+            .iter()
+            .find(|clip| clip.id == right_video_id)
+            .unwrap();
+        let right_audio = timeline
+            .audio_clips
+            .iter()
+            .find(|clip| clip.id == right_audio_id)
+            .unwrap();
+        assert_eq!(
+            (
+                right_video.start_ms,
+                right_video.offset_ms,
+                right_video.duration_ms
+            ),
+            (1_500, 600, 700)
+        );
+        assert_eq!(
+            (
+                right_audio.start_ms,
+                right_audio.offset_ms,
+                right_audio.duration_ms
+            ),
+            (1_600, 700, 600)
+        );
+        assert_eq!(
+            (
+                timeline.video_clips[0].fade_in_ms,
+                timeline.video_clips[0].fade_out_ms,
+                right_video.fade_in_ms,
+                right_video.fade_out_ms,
+            ),
+            (120, 0, 0, 180),
+            "a split preserves the Video envelope without manufacturing a cut fade"
+        );
+        assert_eq!(
+            (
+                timeline.audio_clips[0].fade_in_ms,
+                timeline.audio_clips[0].fade_out_ms,
+                right_audio.fade_in_ms,
+                right_audio.fade_out_ms,
+            ),
+            (120, 0, 0, 180),
+            "a split preserves the Audio envelope without manufacturing a cut fade"
+        );
+        assert_eq!(
+            right_audio.start_ms - right_video.start_ms,
+            original.audio_clips[0].start_ms - original.video_clips[0].start_ms,
+            "the primary-relative offset is applied to every group member"
+        );
+        let left_lighting_keys = &timeline.automations[0].keyframes;
+        let right_lighting = timeline
+            .automations
+            .iter()
+            .find(|automation| automation.id != 24)
+            .unwrap();
+        assert_eq!(left_lighting_keys.last().unwrap().time_ms, 1_600);
+        assert_eq!(right_lighting.keyframes[0].time_ms, 1_600);
+        assert_eq!(left_lighting_keys.last().unwrap().value, 18_000);
+        let left_video_keys = &timeline.video_automations[0].keyframes;
+        let right_video_automation = timeline
+            .video_automations
+            .iter()
+            .find(|automation| automation.id != 25)
+            .unwrap();
+        assert_eq!(left_video_keys.last().unwrap().time_ms, 1_700);
+        assert_eq!(right_video_automation.keyframes[0].time_ms, 1_700);
+        assert!((left_video_keys.last().unwrap().value - 0.68).abs() < 1.0e-6);
+
+        let mut isolated = original.clone();
+        let isolated_selected = split_timeline_items(
+            &harness.state,
+            &mut isolated,
+            &[],
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::AudioClip { clip_id: 23 },
+            1_600,
+            true,
+            120.0,
+        )
+        .expect("isolate splits only the primary without dissolving its group");
+        assert_eq!(isolated_selected.len(), 1);
+        assert_eq!(isolated.item_groups, original.item_groups);
+        assert_eq!(isolated.audio_clips.len(), 2);
+        assert_eq!(isolated.events, original.events);
+        assert_eq!(isolated.video_clips, original.video_clips);
+        assert!(
+            isolated
+                .item_groups
+                .iter()
+                .all(|group| !group.members.contains(&isolated_selected[0])),
+            "the fresh isolate right half intentionally remains ungrouped"
+        );
+
+        let mut locked = original.clone();
+        locked.layers[2].locked = true;
+        let locked_before = locked.clone();
+        assert!(split_timeline_items(
+            &harness.state,
+            &mut locked,
+            &[],
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            1_500,
+            false,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("locked lane"));
+        assert_eq!(locked, locked_before);
+
+        let mut bezier = original.clone();
+        bezier.automations[0].keyframes[0].interpolation =
+            protocol::AutomationInterpolation::Bezier;
+        let bezier_before = bezier.clone();
+        assert!(split_timeline_items(
+            &harness.state,
+            &mut bezier,
+            &[],
+            &[TimelineItemRef::LightingAutomation { automation_id: 24 }],
+            TimelineItemRef::LightingAutomation { automation_id: 24 },
+            1_600,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("existing keyframe"));
+        assert_eq!(bezier, bezier_before);
+
+        let mut invalid_boundary = original.clone();
+        let invalid_boundary_before = invalid_boundary.clone();
+        assert!(split_timeline_items(
+            &harness.state,
+            &mut invalid_boundary,
+            &[],
+            &[TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            1_100,
+            false,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("strictly inside"));
+        assert_eq!(invalid_boundary, invalid_boundary_before);
+
+        let mut video_fade_ramp = original.clone();
+        let video_fade_ramp_before = video_fade_ramp.clone();
+        assert!(split_timeline_items(
+            &harness.state,
+            &mut video_fade_ramp,
+            &[],
+            &[TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            }],
+            TimelineItemRef::VideoClip {
+                clip_id: protocol::TimelineVideoClipId(22),
+            },
+            1_150,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("fade envelope"));
+        assert_eq!(video_fade_ramp, video_fade_ramp_before);
+
+        let mut audio_fade_ramp = original.clone();
+        let audio_fade_ramp_before = audio_fade_ramp.clone();
+        assert!(split_timeline_items(
+            &harness.state,
+            &mut audio_fade_ramp,
+            &[],
+            &[TimelineItemRef::AudioClip { clip_id: 23 }],
+            TimelineItemRef::AudioClip { clip_id: 23 },
+            2_100,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("fade envelope"));
+        assert_eq!(audio_fade_ramp, audio_fade_ramp_before);
+
+        let mut scene_fade_ramp = original.clone();
+        let scene_fade_ramp_before = scene_fade_ramp.clone();
+        assert!(split_timeline_items(
+            &harness.state,
+            &mut scene_fade_ramp,
+            &[],
+            &[TimelineItemRef::LightingEvent { event_id: 20 }],
+            TimelineItemRef::LightingEvent { event_id: 20 },
+            1_050,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("fade envelope"));
+        assert_eq!(scene_fade_ramp, scene_fade_ramp_before);
+
+        let mut looped = original.clone();
+        looped.events[0].conform_to_tempo = false;
+        looped.events[0].duration_ms = 500;
+        looped.events[0].loop_count = 2;
+        let looped_before = looped.clone();
+        assert!(split_timeline_items(
+            &harness.state,
+            &mut looped,
+            &[],
+            &[TimelineItemRef::LightingEvent { event_id: 20 }],
+            TimelineItemRef::LightingEvent { event_id: 20 },
+            1_400,
+            true,
+            120.0,
+        )
+        .unwrap_err()
+        .contains("loop playback is ambiguous"));
+        assert_eq!(looped, looped_before);
+    }
+
+    #[test]
+    fn timeline_split_items_authoritative_is_persistent_receipted_and_does_not_reallocate() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (_video_layer_id, media_asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let video_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        let audio_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        for (id, label, order, kind) in [
+            (video_lane_id, "Video", 1, TimelineLayerKind::Video),
+            (audio_lane_id, "Audio", 2, TimelineLayerKind::Audio),
+        ] {
+            harness
+                .state
+                .engine
+                .add_timeline_layer(protocol::TimelineLayerSummary {
+                    id,
+                    label: label.to_string(),
+                    order,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind,
+                })
+                .expect("seed Split Timeline lane");
+        }
+        c1_stabilize_fixture_authority(&harness);
+        let snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read Split authoritative seed");
+        let mut authoring = timeline_advanced_authoring_from_snapshot(&snapshot.timeline);
+        let video_clip_id = harness.state.engine.allocate_timeline_video_clip_id();
+        let audio_clip_id = harness.state.engine.allocate_timeline_audio_clip_id();
+        authoring.video_clips.push(TimelineVideoClipSummary {
+            id: video_clip_id,
+            layer_id: video_lane_id,
+            media_asset_id,
+            start_ms: 2_000,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            fade_in_ms: 100,
+            fade_out_ms: 100,
+        });
+        authoring.audio_clips.push(TimelineAudioClipSummary {
+            id: audio_clip_id,
+            layer_id: audio_lane_id,
+            media_asset_id: None,
+            path: "authoritative-split.wav".to_string(),
+            start_ms: 2_100,
+            offset_ms: 200,
+            duration_ms: 1_000,
+            gain: 1.0,
+            fade_in_ms: 100,
+            fade_out_ms: 100,
+        });
+        authoring.item_groups.push(TimelineItemGroupSummary {
+            id: harness.state.engine.allocate_timeline_item_group_id(),
+            members: vec![
+                TimelineItemRef::VideoClip {
+                    clip_id: video_clip_id,
+                },
+                TimelineItemRef::AudioClip {
+                    clip_id: audio_clip_id,
+                },
+            ],
+        });
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            TimelineAdvancedMutationRequest::Apply { authoring },
+            85_001,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("seed authored Split items through the authoritative lane");
+        c1_stabilize_fixture_authority(&harness);
+
+        let baseline = harness.mutation_baseline();
+        let request = TimelineAdvancedMutationRequest::SplitItems {
+            items: vec![TimelineItemRef::AudioClip {
+                clip_id: audio_clip_id,
+            }],
+            primary: TimelineItemRef::VideoClip {
+                clip_id: video_clip_id,
+            },
+            boundary_ms: 2_400,
+            isolate: false,
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let applied = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            85_002,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("split linked clips through the terminal authoritative lane");
+        let retried = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request,
+            85_002,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("reply-loss retry recovers the original Split terminal result");
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::to_value(&retried).unwrap(),
+            "exact retry must reuse the recorded right-side IDs"
+        );
+        assert_eq!(applied.selected_items.len(), 2);
+        assert_eq!(applied.authoring.item_groups.len(), 2);
+        let right_video_id = applied
+            .selected_items
+            .iter()
+            .find_map(|item| match item {
+                TimelineItemRef::VideoClip { clip_id } => Some(*clip_id),
+                _ => None,
+            })
+            .expect("right Video clip selection");
+        let right_audio_id = applied
+            .selected_items
+            .iter()
+            .find_map(|item| match item {
+                TimelineItemRef::AudioClip { clip_id } => Some(*clip_id),
+                _ => None,
+            })
+            .expect("right Audio clip selection");
+        assert_ne!(right_video_id, video_clip_id);
+        assert_ne!(right_audio_id, audio_clip_id);
+        let right_video = applied
+            .authoring
+            .video_clips
+            .iter()
+            .find(|clip| clip.id == right_video_id)
+            .unwrap();
+        let right_audio = applied
+            .authoring
+            .audio_clips
+            .iter()
+            .find(|clip| clip.id == right_audio_id)
+            .unwrap();
+        assert_eq!(
+            (
+                right_video.start_ms,
+                right_video.offset_ms,
+                right_video.duration_ms
+            ),
+            (2_400, 400, 600)
+        );
+        assert_eq!(
+            (
+                right_audio.start_ms,
+                right_audio.offset_ms,
+                right_audio.duration_ms
+            ),
+            (2_500, 600, 600),
+            "the non-primary clip uses the same primary-relative 400ms split offset"
+        );
+        assert_one_authoritative_history_mutation(&harness, baseline);
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read Split persistence");
+        assert_eq!(
+            timeline_advanced_authoring_from_snapshot(&persisted.timeline),
+            applied.authoring,
+            "engine persistence must equal the exact terminal candidate B"
+        );
+        b3_assert_authority_matches_persistence(&harness);
     }
 
     #[test]

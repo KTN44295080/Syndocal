@@ -2673,6 +2673,7 @@ export type TimelineAdvancedMutationRequest =
   | { kind: "quantize_items"; items: TimelineItemRef[]; grid_ms: number }
   | { kind: "paste_items"; items: TimelineItemRef[]; target_ms: number }
   | { kind: "trim_items"; items: TimelineItemRef[]; primary: TimelineItemRef; edge: "start" | "end"; boundary_ms: number; isolate: boolean }
+  | { kind: "split_items"; items: TimelineItemRef[]; primary: TimelineItemRef; boundary_ms: number; isolate: boolean }
   | { kind: "delete_items"; items: TimelineItemRef[] }
   | { kind: "set_phases"; phases: TimelinePhaseSummary[] }
   | { kind: "set_loop"; loop_region?: TimelineLoopRegionSummary | null }

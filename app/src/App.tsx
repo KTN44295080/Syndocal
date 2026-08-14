@@ -740,6 +740,10 @@ import {
   upsertTimelineKeyframe,
   videoAutomationValueFromState,
 } from "./timelineAutomationHelpers";
+import {
+  engineSnapshotWithTimelineAdvancedResult,
+  specializedTimelineSelectionFromItems,
+} from "./timelineAdvancedResult";
 
 const tauriBackendUnavailableMessage = "Syndocal desktop backend is not connected in this browser preview.";
 
@@ -13050,6 +13054,10 @@ export default function App() {
       result = terminal.terminal.result;
     }
     if (!applicationCurrent) return null;
+    // The ACK includes the complete committed Timeline bank. Apply it before
+    // the best-effort full refresh so fresh split/duplicate IDs remain mounted
+    // and selectable if that follow-up read is temporarily unavailable.
+    applyEngineSnapshot(engineSnapshotWithTimelineAdvancedResult(latestEngineSnapshot, result), false);
     await refreshSnapshot();
     if (!projectAuthorityTokenIsCurrent(
       result.mutation.authority,
@@ -13182,6 +13190,47 @@ export default function App() {
       return result?.selected_items ?? [];
     } catch (error) {
       setMessage(`Timeline selection trim failed: ${String(error)}`);
+      return [];
+    }
+  };
+  const splitTimelineItems = async (
+    items: TimelineItemRef[],
+    primary: TimelineItemRef,
+    boundaryMs: number,
+    isolate = false,
+  ) => {
+    try {
+      const request: Extract<TimelineAdvancedMutationRequest, { kind: "split_items" }> = {
+        kind: "split_items",
+        items,
+        primary,
+        boundary_ms: Math.max(0, Math.round(boundaryMs)),
+        isolate,
+      };
+      const fixtureSplit = viewportFixture === "timeline-layered"
+        ? (window as Window & {
+            __syndocalTimelineSplitFixture?: (
+              request: Extract<TimelineAdvancedMutationRequest, { kind: "split_items" }>,
+              timelineBank: TimelineSnapshot[],
+              activeTimelineId: number,
+            ) => Promise<TimelineAdvancedAuthoritativeResult>;
+          }).__syndocalTimelineSplitFixture
+        : undefined;
+      if (fixtureSplit) {
+        const result = await fixtureSplit(
+          request,
+          structuredClone(timelineBank()),
+          activeTimeline().id ?? timelineBank()[0]?.id ?? 0,
+        );
+        applyEngineSnapshot(engineSnapshotWithTimelineAdvancedResult(latestEngineSnapshot, result), false);
+        setMessage("Timeline selection split at the playhead.");
+        return result.selected_items;
+      }
+      const result = await commitTimelineAdvanced(request);
+      if (result) setMessage("Timeline selection split at the playhead.");
+      return result?.selected_items ?? [];
+    } catch (error) {
+      setMessage(`Timeline selection split failed: ${String(error)}`);
       return [];
     }
   };
@@ -23951,6 +24000,13 @@ export default function App() {
               onQuantizeItems={quantizeTimelineItems}
               onPasteItems={pasteTimelineItems}
               onTrimItems={trimTimelineItems}
+              onSplitItems={splitTimelineItems}
+              onRestoreReturnedItemSelection={(items) => {
+                const specialized = specializedTimelineSelectionFromItems(items);
+                setSelectedTimelineSceneBlockEventId(specialized.event_id);
+                setSelectedTimelineAutomation(specialized.automation);
+                setTimelineSceneBlockSelectionRevision((revision) => revision + 1);
+              }}
               onRemoveItems={removeTimelineItems}
               onRemoveAudioClip={removeTimelineAudioClip}
               onSetAudioMaster={setTimelineAudioMaster}
