@@ -27386,10 +27386,12 @@ async function runBlindViewport(client, viewport) {
       editModeColor: editModeStyle?.color ?? '',
       editModeBoxShadow: editModeStyle?.boxShadow ?? '',
       editModeFontWeight: Number(editModeStyle?.fontWeight ?? 0),
+      editModePressed: editModeButton?.getAttribute('aria-pressed') ?? '',
       liveModeBackground: liveModeStyle?.backgroundColor ?? '',
       liveModeColor: liveModeStyle?.color ?? '',
       liveModeBoxShadow: liveModeStyle?.boxShadow ?? '',
       liveModeFontWeight: Number(liveModeStyle?.fontWeight ?? 0),
+      liveModePressed: liveModeButton?.getAttribute('aria-pressed') ?? '',
       toggleBackground: toggleStyle?.backgroundColor ?? '',
       toggleColor: toggleStyle?.color ?? '',
       toggleBoxShadow: toggleStyle?.boxShadow ?? '',
@@ -27426,6 +27428,14 @@ async function runBlindViewport(client, viewport) {
   const samePaneRects = (left, right) => JSON.stringify(left.paneRects) === JSON.stringify(right.paneRects);
 
   const initial = await readState();
+  await clickVisibleSelector(client, '[data-control-fader-write-mode-option="live"]');
+  await sleep(60);
+  const liveBeforeOneClickBlind = await readState();
+  await clickVisibleSelector(client, '[data-control-blind-toggle]');
+  await sleep(80);
+  const oneClickBlind = await readState();
+  await clickVisibleSelector(client, '[data-control-blind-toggle]');
+  await sleep(100);
   await clickVisibleSelector(client, '[data-scene-matrix-edit-strip="302"]');
   await sleep(80);
   const nonActiveSelected = await readState();
@@ -27501,6 +27511,14 @@ async function runBlindViewport(client, viewport) {
     ["blindStartsOffWithLiveRedStage", () =>
       !initial.blind && initial.togglePressed === "false" && initial.stageColor === "rgb(255, 0, 0)" &&
       initial.activeCueId === 301 && initial.selectedCueId === 301],
+    ["blindOneClickFromLiveAutoSelectsEditAndUsesUnifiedWarningSurface", () =>
+      liveBeforeOneClickBlind.liveModePressed === "true" && !liveBeforeOneClickBlind.toggleDisabled &&
+      oneClickBlind.blind && oneClickBlind.editModePressed === "true" && oneClickBlind.liveModePressed === "false" &&
+      oneClickBlind.togglePressed === "true" && oneClickBlind.selectedCueId === 301 &&
+      oneClickBlind.editModeBackground === "rgb(240, 75, 50)" &&
+      oneClickBlind.toggleBackground === oneClickBlind.editModeBackground &&
+      oneClickBlind.editModeColor === "rgb(255, 255, 255)" &&
+      oneClickBlind.toggleColor === "rgb(255, 255, 255)"],
     ["blindStripSelectsNonActiveSceneWithoutTriggering", () =>
       nonActiveSelected.selectedCueId === 302 && nonActiveSelected.activeCueId === 301 &&
       nonActiveSelected.liveDmxSignature === initial.liveDmxSignature &&

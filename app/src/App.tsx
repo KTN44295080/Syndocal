@@ -11945,10 +11945,19 @@ export default function App() {
 
   const toggleBlindEditing = async (enabled: boolean) => {
     if (enabled) {
-      if (controlFaderWriteMode() !== "edit" || !selectedSceneCue()) {
-        setMessage("Select a scene and use EDIT before enabling Blind editing.");
+      const activeGroupCueIds = Object.values(snapshot().active_group_cue_ids ?? {});
+      const editingCue = selectedSceneCue()
+        ?? activeCue()
+        ?? snapshot().cues.find((cue) => activeGroupCueIds.includes(cue.id))
+        ?? null;
+      if (!editingCue) {
+        setMessage(snapshot().cues.length === 0
+          ? "Create a scene before enabling Blind editing."
+          : "Select or run a scene before enabling Blind editing.");
         return;
       }
+      if (selectedSceneCueId() !== editingCue.id) selectSceneCue(editingCue.id);
+      if (controlFaderWriteMode() !== "edit") changeControlFaderWriteMode("edit");
       await setProgrammerMode(true, true);
       return;
     }

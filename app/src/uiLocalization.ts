@@ -1586,8 +1586,10 @@ const japaneseText: Record<string, string> = {
     "ブラインド編集を実行中のシーンとLive DMX出力へ確定しました。元に戻す操作が利用できます。",
   "Committed Blind edits to the scene. Live DMX output was not changed. Undo is available.":
     "ブラインド編集をシーンへ確定しました。Live DMX出力は変更されていません。元に戻す操作が利用できます。",
-  "Select a scene and use EDIT before enabling Blind editing.":
-    "シーンを選択し、EDITにしてからブラインド編集を有効にしてください。",
+  "Create a scene before enabling Blind editing.":
+    "ブラインド編集を有効にする前にシーンを作成してください。",
+  "Select or run a scene before enabling Blind editing.":
+    "ブラインド編集を有効にする前にシーンを選択または実行してください。",
   Bottom: "下",
   "Blend Gamma": "ブレンドガンマ",
   Bright: "明",

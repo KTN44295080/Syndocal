@@ -53,7 +53,6 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
           title={blindToggleLabel()}
           aria-label={blindToggleLabel()}
           aria-pressed={props.blindActive}
-          disabled={!props.blindActive && (props.writeMode !== "edit" || !props.editingSceneLabel)}
           onClick={() => void props.onBlindToggle(!props.blindActive)}
         >
           <svg viewBox="0 0 18 18" aria-hidden="true">
