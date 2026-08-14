@@ -70,7 +70,8 @@ assert.match(bank, /props\.onSelect\(slotId\)[\s\S]*props\.onQueue\(slotId\)/, "
 assert.match(bank, /getComputedStyle\(bankGrid\)\.gridTemplateColumns/, "roving vertical movement follows the actual container column count");
 assert.match(bank, /onSelectLayer/, "both mounts expose explicit layer selection");
 assert.match(bank, /onCancelQueue/, "Control exposes queue cancellation");
-assert.match(bank, /Transition duration[\s\S]*disabled/, "unavailable atomic transition duration is explicit and truthfully disabled");
+assert.match(bank, /value="Crossfade"[\s\S]*value="Dip"[\s\S]*value="Wipe"[\s\S]*value="Luma"[\s\S]*value="Displacement"[\s\S]*value="Blur"[\s\S]*value="Glitch"[\s\S]*value="Custom"[\s\S]*value="Milliseconds"[\s\S]*value="Beats"[\s\S]*value="Bars"/, "Control exposes every typed Clip Take mode and deterministic duration unit");
+assert.match(bank, /progress_millis \/ 10/, "Control reports authoritative Clip Take progress rather than inferring it from layer state");
 assert.match(bank, /Preview thumbnail for slot/, "Preview labels the supported asset-thumbnail behavior honestly");
 assert.match(inspector, /onReorder/, "inspector preserves authored reorder through full IDs");
 assert.match(inspector, /window\.requestAnimationFrame\(\(\) => props\.returnFocus\?\.focus\(\)\)/, "inspector restores focus on close");
@@ -93,12 +94,14 @@ assert.match(app, /videoClipSlotDropTarget[\s\S]*importAndAssignVideoClipSlots/,
 assert.match(app, /closest\("\[data-media-library-rail\]"\)[\s\S]*importMediaFilesFromPaths\(visualPaths\)/, "Media Library visual drops remain catalog-only");
 assert.match(app, /Drop visual media on Media Library, a Video layer, or an exact Clip Slot/, "unscoped visual drops fail closed");
 assert.match(app, /editVideoVisible[\s\S]*controlVideoVisible/, "runtime polling covers user Edit Video and Control surfaces");
+assert.match(app, /activeTransition\?\.outgoing_slot_id[\s\S]*activeTransition\?\.duration/, "dominant Take reverses an active transition through explicit outgoing runtime identity and frozen duration intent");
 assert.match(app, /resetVideoClipSlotRuntimeFence\(\)[\s\S]*setSelectedVideoClipSlotLayerId\(null\)[\s\S]*setVideoClipSlotInspectorOpen\(false\)/, "replacement resets runtime generation, selection, and inspector UI");
 for (const command of ["create", "assign", "update", "remove", "reorder", "duplicate", "set_default", "import_and_assign"]) {
   assert.match(app, new RegExp(`${command === "set_default" ? "set_default" : command}.*video_clip_slot|video_clip_slot.*${command}`), `App facade classifies authored ${command}`);
 }
 assert.match(controller, /get_video_clip_slot_operation_terminal_result/, "authoritative slot commands recover a lost reply from terminal receipts");
 assert.match(controller, /queue_video_clip_slot_authoritative[\s\S]*launch_video_clip_slot_authoritative[\s\S]*seek_video_clip_slot_authoritative/, "runtime four is routed through explicit runtime commands");
+assert.match(controller, /transition_kind: transitionKind[\s\S]*transition_duration_ms:[\s\S]*transition_duration:/, "Take sends the typed transition and duration bundle through the authoritative launch request");
 assert.match(controller, /setVideoClipRuntime/, "runtime truth has an ephemeral renderer destination");
 assert.match(controller, /get_video_clip_slot_runtime/, "bank fetches initial runtime truth through a read-only fenced command");
 assert.match(controller, /terminal\.runtime[\s\S]*applyVideoClipSlotRuntime\(terminal\.runtime\)/, "runtime terminal recovery applies the envelope's fresh runtime report");
@@ -113,6 +116,7 @@ assert.match(controller, /let operation: MediaAssetOperationLease \| null = null
 assert.match(types, /interface VideoClipSlotAuthoritativeRuntimeOutcome[\s\S]*command_kind/, "runtime terminal receipt mirrors immutable ABI outcome");
 assert.match(types, /interface VideoClipSlotAuthoritativeTerminalEnvelope[\s\S]*runtime\?: VideoClipSlotAuthoritativeRuntimeResult/, "terminal envelope mirrors the fresh optional runtime field");
 assert.match(types, /interface VideoClipRuntimeReport[\s\S]*runtime: VideoClipRuntimeSnapshot/, "history-free runtime read has a distinct DTO");
+assert.match(types, /interface VideoClipTakeTransitionSummary[\s\S]*progress_millis/, "runtime DTO exposes explicit dual-source transition progress");
 assert.match(touch, /VideoClipSlotBankPanel/, "Control mounts the shared bank component");
 assert.match(edit, /VideoClipSlotBankPanel/, "Edit Video mounts the shared bank component");
 assert.match(

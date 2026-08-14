@@ -14,6 +14,7 @@ type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 
 interface StageMapControllerOptions {
   invoke: Invoke;
+  projectEpoch: Accessor<number>;
   snapshot: Accessor<EngineSnapshot>;
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
   setMessage: (message: string) => unknown;
@@ -150,11 +151,16 @@ export function createStageMapController(options: StageMapControllerOptions) {
 
   const importStageMapPreset = async () => {
     try {
-      const label = await options.invoke<string | null>("load_stage_map_preset_file");
-      if (label === null) {
+      const expectedProjectEpoch = options.projectEpoch();
+      const preset = await options.invoke<StageMapPresetSummary | null>("load_stage_map_preset_file");
+      if (preset === null) {
         options.setMessage("Stage map preset import canceled.");
         return;
       }
+      const label = await options.invoke<string>("import_stage_map_preset", {
+        preset,
+        __expectedProjectEpoch: expectedProjectEpoch,
+      });
       options.setStageMapPresetLabel(label);
       options.setSelectedStageMapPresetLabel(label);
       options.setMessage(`Imported stage map preset ${label}.`);

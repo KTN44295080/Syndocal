@@ -580,6 +580,16 @@ const baseOptions = (invoke, overrides = {}) => ({
   assert.equal(calls.some(({ command }) => command === "cancel_media_asset_operation"), false, "a resolved terminal success is never cancelled");
 }
 
+// A Tauri reply can disappear without rejecting. The bounded transport wait
+// must settle so the exact retry/terminal-receipt path above remains reachable.
+{
+  await assert.rejects(
+    authority.settleMediaAssetAuthoritativeReply(new Promise(() => {}), 5),
+    /timed out; recovering the exact terminal receipt/,
+    "a never-settling authoritative reply cannot leave first-run setup stuck in Committing",
+  );
+}
+
 // A delayed B terminal after project C is still definitive, but App marks that
 // its paired authority/history was rejected by the monotonic guard. Callers can
 // then avoid presenting a current-project success message.
@@ -1085,6 +1095,11 @@ assert.match(
   "stale Preview replies are discarded before local transport state is applied",
 );
 assert.match(mediaAuthority, /get_media_asset_operation_terminal_result/, "helper resolves a lost reply from the exact terminal receipt");
+assert.equal(
+  (mediaAuthority.match(/settleMediaAssetAuthoritativeReply\(\s*invoke</g) ?? []).length,
+  2,
+  "both the initial authoritative commit and its exact retry have bounded reply waits",
+);
 assert.match(mediaAuthority, /shape_fingerprint !== expectedShapeFingerprint/, "terminal recovery validates semantic shape");
 assert.doesNotMatch(mediaAuthority, /projectTransactionId|begin_project_transaction|commit_project_transaction/, "media helper owns no renderer project ticket");
 

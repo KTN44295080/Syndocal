@@ -6,6 +6,12 @@ import type {
   MediaAssetImportReport,
   MediaAssetPreviewSessionTicket,
   MediaAssetSummary,
+  CompositionSummary,
+  VideoEffectCatalog,
+  VideoEffectPresetId,
+  VideoEffectScope,
+  VideoLayerTransitionRuntimeSnapshot,
+  VideoOutputSummary,
 } from "../types";
 import { VideoLayerListPanel } from "./VideoLayerListPanel";
 import { VideoMasterControlsPanel, VideoOutputControlListPanel } from "./VideoControlOutputsPanel";
@@ -24,6 +30,9 @@ import { LiveAudioInputRail } from "./LiveAudioInputRail";
 import { AutoVjStrip } from "./AutoVjStrip";
 import { AudioReactiveVjStrip } from "./AudioReactiveVjStrip";
 import { MixerDrawerBar, loadMixerDrawerOpen, saveMixerDrawerOpen, type MixerDrawerId } from "./MixerDrawerBar";
+import { VideoEffectScopePanel } from "./VideoEffectScopePanel";
+import { VideoEffectCatalogSetupPanel } from "./VideoEffectCatalogSetupPanel";
+import { VideoTransitionBusPanel } from "./VideoTransitionBusPanel";
 
 interface VideoControlPanelProps {
   mixer: boolean;
@@ -38,8 +47,21 @@ interface VideoControlPanelProps {
   sourceCreate: ComponentProps<typeof VideoSourceCreatePanel>;
   clipGrid: ComponentProps<typeof VideoClipGridPanel>;
   clipSlotBank: ComponentProps<typeof VideoClipSlotBankPanel>;
-  clipSlotTake: { enabled: boolean; onTake: () => void | Promise<void> };
+  clipSlotTake: { enabled: boolean; label: string; onTake: () => void | Promise<void> };
   layerList: ComponentProps<typeof VideoLayerListPanel>;
+  effectScopes: {
+    catalog: VideoEffectCatalog;
+    compositions: CompositionSummary[];
+    outputs: VideoOutputSummary[];
+    transitionRuntime: VideoLayerTransitionRuntimeSnapshot;
+    busy?: boolean;
+    onApplyCatalog: (catalog: VideoEffectCatalog) => void | Promise<unknown>;
+    onImportIsf: (scope: VideoEffectScope) => void | Promise<unknown>;
+    onApplyPreset: (scope: VideoEffectScope, presetId: VideoEffectPresetId) => void | Promise<unknown>;
+    onRemoveChain: (scope: VideoEffectScope) => void | Promise<unknown>;
+    onLaunchTransition: ComponentProps<typeof VideoTransitionBusPanel>["onLaunch"];
+    onReleaseTransition: ComponentProps<typeof VideoTransitionBusPanel>["onRelease"];
+  };
   timelineAutomation: ComponentProps<typeof VideoTimelineAutomationPanel>;
   autoVj: ComponentProps<typeof AutoVjStrip>;
   audioReactive: ComponentProps<typeof AudioReactiveVjStrip>;
@@ -52,6 +74,7 @@ interface VideoControlPanelProps {
     backendAvailable: boolean;
     onVerify: (assetIds: MediaAssetId[]) => void | Promise<void>;
     onRelink: (assetId: MediaAssetId) => void | Promise<void>;
+    onAddToTimeline: (assetId: MediaAssetId) => void | Promise<void>;
     onPreviewStart: (assetId: MediaAssetId) => Promise<MediaAssetPreviewSessionTicket>;
     onPreviewFrame: (ticket: MediaAssetPreviewSessionTicket, positionMs: number) => Promise<string>;
     onPreviewEnd: (ticket: MediaAssetPreviewSessionTicket) => Promise<void>;
@@ -253,7 +276,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
               data-video-clip-slot-take
               disabled={!props.clipSlotTake.enabled}
               onClick={() => void props.clipSlotTake.onTake()}
-            >Take</button>
+            >{props.clipSlotTake.label}</button>
           </div>
         </header>
         <Show when={props.mediaLibrary.activeOperations.length > 0}>
@@ -383,6 +406,13 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                           >
                             Relink…
                           </button>
+                          <button
+                            disabled={!props.mediaLibrary.backendAvailable || !relinkable()}
+                            title="Place at the current Timeline playhead; video audio is split and linked automatically"
+                            onClick={() => void props.mediaLibrary.onAddToTimeline(asset.id)}
+                          >
+                            Add to Timeline
+                          </button>
                         </div>
                       </article>
                     );
@@ -446,6 +476,89 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             <span>COMPOSITE</span>
           </header>
           <VideoLayerListPanel {...props.layerList} compact={props.mixer} />
+          <details class="videoEffectScopeCatalog">
+            <summary>
+              <strong>Scoped Video FX</strong>
+              <span>Composition, Group, and Output chains</span>
+            </summary>
+            <div class="videoEffectScopeCatalogBody">
+              <VideoEffectCatalogSetupPanel
+                catalog={props.effectScopes.catalog}
+                compositions={props.effectScopes.compositions}
+                busy={props.effectScopes.busy}
+                onApply={props.effectScopes.onApplyCatalog}
+              />
+              <VideoTransitionBusPanel
+                catalog={props.effectScopes.catalog}
+                compositions={props.effectScopes.compositions}
+                runtime={props.effectScopes.transitionRuntime}
+                busy={props.effectScopes.busy}
+                onApplyCatalog={props.effectScopes.onApplyCatalog}
+                onLaunch={props.effectScopes.onLaunchTransition}
+                onRelease={props.effectScopes.onReleaseTransition}
+              />
+              <For each={props.effectScopes.catalog.transition_buses}>
+                {(bus) => (
+                  <VideoEffectScopePanel
+                    scopeLabel="Transition Bus FX"
+                    title={bus.label}
+                    scope={{ scope: "transition", owner: { kind: "layer_bus", bus_id: bus.id } }}
+                    catalog={props.effectScopes.catalog}
+                    busy={props.effectScopes.busy}
+                    onApplyCatalog={props.effectScopes.onApplyCatalog}
+                    onImportIsf={props.effectScopes.onImportIsf}
+                    onApplyPreset={props.effectScopes.onApplyPreset}
+                    onRemoveChain={props.effectScopes.onRemoveChain}
+                  />
+                )}
+              </For>
+              <For each={props.effectScopes.compositions}>
+                {(composition) => (
+                  <VideoEffectScopePanel
+                    scopeLabel="Composition FX"
+                    title={composition.label}
+                    scope={{ scope: "composition", composition_id: composition.id }}
+                    catalog={props.effectScopes.catalog}
+                    busy={props.effectScopes.busy}
+                    onApplyCatalog={props.effectScopes.onApplyCatalog}
+                    onImportIsf={props.effectScopes.onImportIsf}
+                    onApplyPreset={props.effectScopes.onApplyPreset}
+                    onRemoveChain={props.effectScopes.onRemoveChain}
+                  />
+                )}
+              </For>
+              <For each={props.effectScopes.catalog.layer_groups}>
+                {(group) => (
+                  <VideoEffectScopePanel
+                    scopeLabel="Group FX"
+                    title={group.label}
+                    scope={{ scope: "group", group_id: group.id }}
+                    catalog={props.effectScopes.catalog}
+                    busy={props.effectScopes.busy}
+                    onApplyCatalog={props.effectScopes.onApplyCatalog}
+                    onImportIsf={props.effectScopes.onImportIsf}
+                    onApplyPreset={props.effectScopes.onApplyPreset}
+                    onRemoveChain={props.effectScopes.onRemoveChain}
+                  />
+                )}
+              </For>
+              <For each={props.effectScopes.outputs}>
+                {(output) => (
+                  <VideoEffectScopePanel
+                    scopeLabel="Output FX"
+                    title={output.label}
+                    scope={{ scope: "output", output_id: output.id }}
+                    catalog={props.effectScopes.catalog}
+                    busy={props.effectScopes.busy}
+                    onApplyCatalog={props.effectScopes.onApplyCatalog}
+                    onImportIsf={props.effectScopes.onImportIsf}
+                    onApplyPreset={props.effectScopes.onApplyPreset}
+                    onRemoveChain={props.effectScopes.onRemoveChain}
+                  />
+                )}
+              </For>
+            </div>
+          </details>
         </section>
       </section>
       <Show when={!props.mixer && sourceCreateVisible()}>

@@ -486,6 +486,40 @@ const waitForTerminalReceipt = async <C extends MediaAssetAuthoritativeCommitCom
   return null;
 };
 
+const MEDIA_ASSET_AUTHORITATIVE_REPLY_TIMEOUT_MS = 5_000;
+
+/**
+ * A published Tauri command can lose its reply without rejecting the invoke
+ * promise. Bound only the transport wait: the backend receipt/single-flight
+ * lane still decides whether the exact operation published, and the caller
+ * retries/queries that same identity below.
+ */
+export const settleMediaAssetAuthoritativeReply = <T>(
+  reply: Promise<T>,
+  timeoutMs = MEDIA_ASSET_AUTHORITATIVE_REPLY_TIMEOUT_MS,
+): Promise<T> => new Promise((resolve, reject) => {
+  let settled = false;
+  const timer = globalThis.setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    reject(new Error("Authoritative media commit reply timed out; recovering the exact terminal receipt."));
+  }, timeoutMs);
+  reply.then(
+    (value) => {
+      if (settled) return;
+      settled = true;
+      globalThis.clearTimeout(timer);
+      resolve(value);
+    },
+    (error) => {
+      if (settled) return;
+      settled = true;
+      globalThis.clearTimeout(timer);
+      reject(error);
+    },
+  );
+});
+
 const invokeAuthoritativeCommit = async <C extends MediaAssetAuthoritativeCommitCommand>(
   invoke: MediaAssetInvoke,
   command: C,
@@ -515,7 +549,9 @@ const invokeAuthoritativeCommit = async <C extends MediaAssetAuthoritativeCommit
   };
   let firstError: unknown;
   try {
-    return await invoke<MediaAssetAuthoritativeCommitResponseMap[C]>(command, args);
+    return await settleMediaAssetAuthoritativeReply(
+      invoke<MediaAssetAuthoritativeCommitResponseMap[C]>(command, args),
+    );
   } catch (error) {
     firstError = error;
   }
@@ -526,7 +562,9 @@ const invokeAuthoritativeCommit = async <C extends MediaAssetAuthoritativeCommit
   // An exact retry is safe: the backend single-flight/receipt key excludes the
   // old renderer ticket and returns the already-published terminal result.
   try {
-    return await invoke<MediaAssetAuthoritativeCommitResponseMap[C]>(command, args);
+    return await settleMediaAssetAuthoritativeReply(
+      invoke<MediaAssetAuthoritativeCommitResponseMap[C]>(command, args),
+    );
   } catch {
     const terminal = await waitForTerminalReceipt(
       invoke,

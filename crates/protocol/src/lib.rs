@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +14,30 @@ pub type ExecutorId = u64;
 pub type TimelineEventId = u64;
 pub type TimelineAudioClipId = u64;
 pub type AutomationId = u64;
+macro_rules! timeline_id_newtype {
+    ($name:ident) => {
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            Default,
+            Serialize,
+            Deserialize,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+        )]
+        #[serde(transparent)]
+        pub struct $name(pub u64);
+    };
+}
+
+timeline_id_newtype!(TimelineId);
+timeline_id_newtype!(TimelinePhaseId);
+timeline_id_newtype!(TimelineVideoClipId);
+timeline_id_newtype!(TimelineItemGroupId);
 pub type VideoLayerId = u64;
 /// Runtime-only identity for one renderer input. Unlike `VideoLayerId`, this
 /// identifies a concrete source instance in a render graph and is never part
@@ -78,6 +105,8 @@ pub const VIDEO_EFFECT_CHAIN_MAX_STAGES: usize = 32;
 pub const VIDEO_EFFECT_PROJECT_MAX_CHAINS: usize = 256;
 pub const VIDEO_EFFECT_PROJECT_MAX_PRESETS: usize = 128;
 pub const VIDEO_EFFECT_PROJECT_MAX_GROUPS: usize = 64;
+pub const VIDEO_TRANSITION_BUS_PROJECT_MAX_BUSES: usize = 64;
+pub const VIDEO_TRANSITION_BUS_MAX_MEMBERS: usize = 32;
 /// Stable project-local identity for a reusable media library entry.
 pub type MediaAssetId = u64;
 pub type CompositionId = u64;
@@ -940,6 +969,49 @@ pub struct VideoLayerGroupSummary {
     pub layer_ids: Vec<VideoLayerId>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VideoLayerTransitionTarget {
+    Layer { layer_id: VideoLayerId },
+    Group { group_id: VideoLayerGroupId },
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoLayerTransitionCurve {
+    #[default]
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+}
+
+/// One authored transition bus. Membership is opt-in; a running bus may only
+/// affect layers expanded from these targets in this composition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoLayerTransitionBusSummary {
+    pub id: VideoTransitionBusId,
+    pub label: String,
+    pub composition_id: CompositionId,
+    #[serde(default = "default_video_layer_transition_bus_enabled")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<VideoLayerTransitionTarget>,
+    pub default_from: VideoLayerTransitionTarget,
+    pub default_to: VideoLayerTransitionTarget,
+    #[serde(default)]
+    pub default_kind: VideoClipTakeKind,
+    #[serde(default)]
+    pub default_duration: VideoClipTakeDuration,
+    #[serde(default)]
+    pub default_curve: VideoLayerTransitionCurve,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matte_source: Option<VideoLayerTransitionTarget>,
+}
+
+fn default_video_layer_transition_bus_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VideoEffectControlTarget {
     pub effect_id: VideoEffectId,
@@ -1060,6 +1132,84 @@ pub struct VideoClipPendingLaunchSummary {
     pub clock_generation: u64,
     #[serde(default)]
     pub held_for_clock_discontinuity: bool,
+    #[serde(default)]
+    pub transition_kind: VideoClipTakeKind,
+    #[serde(default)]
+    pub duration: VideoClipTakeDuration,
+    #[serde(default)]
+    pub resolved_duration_ms: u64,
+}
+
+/// Runtime-only Clip Take style. `Cut` preserves the pre-C2 launch behavior;
+/// every other variant keeps outgoing and incoming decoder identities alive
+/// together until the resolved duration elapses. `Custom` uses the canonical
+/// ClipTake transition effect chain on top of a neutral crossfade base.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoClipTakeKind {
+    #[default]
+    Cut,
+    Crossfade,
+    Dip,
+    Wipe,
+    Luma,
+    Displacement,
+    Blur,
+    Glitch,
+    Custom,
+}
+
+/// Unit for a Clip Take duration. Musical values use fixed-point thousandths
+/// (`1000 == 1 beat/bar`) so request identity and terminal receipts never
+/// depend on non-finite or platform-rounded JSON floats.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoClipTakeDurationUnit {
+    #[default]
+    Milliseconds,
+    Beats,
+    Bars,
+}
+
+/// Authored operator intent for one runtime-only Clip Take. The engine resolves
+/// this against the ShowClock exactly once when Take is admitted and freezes the
+/// resulting millisecond duration for pending launch, playback, and Reverse.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoClipTakeDuration {
+    #[serde(default)]
+    pub unit: VideoClipTakeDurationUnit,
+    #[serde(default)]
+    pub value_milliunits: u64,
+}
+
+impl VideoClipTakeDuration {
+    pub const fn milliseconds(value: u64) -> Self {
+        Self {
+            unit: VideoClipTakeDurationUnit::Milliseconds,
+            value_milliunits: value,
+        }
+    }
+}
+
+/// Ephemeral truth for one in-flight Clip Take. The authored layer projection
+/// remains the outgoing slot until completion, so persistence can never capture
+/// a half-transitioned source.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoClipTakeTransitionSummary {
+    /// Stable source-role anchor retained across Reverse so directional wipes
+    /// can complement progress without a one-frame discontinuity.
+    pub origin_slot_id: VideoClipSlotId,
+    pub outgoing_slot_id: VideoClipSlotId,
+    pub incoming_slot_id: VideoClipSlotId,
+    pub kind: VideoClipTakeKind,
+    pub elapsed_ms: u64,
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub duration: VideoClipTakeDuration,
+    /// Integer 0..=1000 progress avoids non-finite float state at the IPC edge.
+    pub progress_millis: u16,
+    #[serde(default)]
+    pub incoming_playhead_ms: u64,
+    #[serde(default)]
+    pub incoming_playing: bool,
 }
 
 /// Decoder and transport truth for one authored video layer. `playhead_ms` is
@@ -1076,6 +1226,8 @@ pub struct VideoClipLayerRuntimeSummary {
     pub queued_slot_id: Option<VideoClipSlotId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_launch: Option<VideoClipPendingLaunchSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<VideoClipTakeTransitionSummary>,
     #[serde(default)]
     pub playhead_ms: u64,
     #[serde(default)]
@@ -1090,6 +1242,29 @@ pub struct VideoClipLayerRuntimeSummary {
 pub struct VideoClipRuntimeSnapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<VideoClipLayerRuntimeSummary>,
+}
+
+/// Ephemeral truth for one running Layer Transition Bus. `origin_from` is
+/// stable across Reverse and gives directional mattes the same complement
+/// continuity guarantee as Clip Take.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoLayerTransitionBusRuntimeSummary {
+    pub bus_id: VideoTransitionBusId,
+    pub origin_from: VideoLayerTransitionTarget,
+    pub from: VideoLayerTransitionTarget,
+    pub to: VideoLayerTransitionTarget,
+    pub kind: VideoClipTakeKind,
+    pub curve: VideoLayerTransitionCurve,
+    pub elapsed_ms: u64,
+    pub duration_ms: u64,
+    pub duration: VideoClipTakeDuration,
+    pub progress_millis: u16,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoLayerTransitionRuntimeSnapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buses: Vec<VideoLayerTransitionBusRuntimeSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1620,6 +1795,8 @@ pub struct VideoSnapshot {
     pub effect_presets: Vec<VideoEffectPresetSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_groups: Vec<VideoLayerGroupSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transition_buses: Vec<VideoLayerTransitionBusSummary>,
     pub compositions: Vec<CompositionSummary>,
     pub outputs: Vec<VideoOutputSummary>,
     #[serde(default)]
@@ -1638,6 +1815,7 @@ impl Default for VideoSnapshot {
             effect_chains: Vec::new(),
             effect_presets: Vec::new(),
             layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -1776,6 +1954,31 @@ pub fn validate_video_clip_runtime_against_authored_slots(
                 &slot_ids,
             )?;
         }
+        if let Some(transition) = &runtime_layer.transition {
+            validate_runtime_slot_reference(
+                runtime_layer.layer_id,
+                "transition outgoing",
+                Some(transition.outgoing_slot_id),
+                &slot_ids,
+            )?;
+            let incoming_slot = validate_runtime_slot_reference(
+                runtime_layer.layer_id,
+                "transition incoming",
+                Some(transition.incoming_slot_id),
+                &slot_ids,
+            )?
+            .expect("transition incoming slot reference was provided");
+            if transition.incoming_playhead_ms < incoming_slot.in_point_ms
+                || incoming_slot
+                    .out_point_ms
+                    .is_some_and(|out_point_ms| transition.incoming_playhead_ms >= out_point_ms)
+            {
+                return Err(format!(
+                    "Video clip runtime layer {} incoming playhead is outside transition slot {} range",
+                    runtime_layer.layer_id, incoming_slot.id.0
+                ));
+            }
+        }
         if let Some(active_slot) = active_slot {
             if runtime_layer.ping_pong_reverse
                 && !matches!(active_slot.loop_mode, VideoClipLoopMode::PingPong)
@@ -1794,6 +1997,119 @@ pub fn validate_video_clip_runtime_against_authored_slots(
                     "Video clip runtime layer {} playhead is outside active slot {} range",
                     runtime_layer.layer_id, active_slot.id.0
                 ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_video_layer_transition_runtime(
+    runtime: &VideoLayerTransitionRuntimeSnapshot,
+    video: &VideoSnapshot,
+) -> Result<(), String> {
+    validate_authored_video_effect_chains(video)?;
+    let layers: BTreeMap<VideoLayerId, &VideoLayerSummary> =
+        video.layers.iter().map(|layer| (layer.id, layer)).collect();
+    let compositions: BTreeMap<CompositionId, &CompositionSummary> = video
+        .compositions
+        .iter()
+        .map(|composition| (composition.id, composition))
+        .collect();
+    let groups: BTreeMap<VideoLayerGroupId, &VideoLayerGroupSummary> = video
+        .layer_groups
+        .iter()
+        .map(|group| (group.id, group))
+        .collect();
+    let buses: BTreeMap<VideoTransitionBusId, &VideoLayerTransitionBusSummary> = video
+        .transition_buses
+        .iter()
+        .map(|bus| (bus.id, bus))
+        .collect();
+    let mut active_bus_ids = BTreeMap::new();
+    let mut active_layers = BTreeMap::new();
+    for active in &runtime.buses {
+        if active.bus_id.0 == 0 || active_bus_ids.insert(active.bus_id, ()).is_some() {
+            return Err("Active video transition bus IDs must be non-zero and unique".to_string());
+        }
+        let bus = buses.get(&active.bus_id).ok_or_else(|| {
+            format!(
+                "Active video transition references missing bus {}",
+                active.bus_id.0
+            )
+        })?;
+        if !bus.enabled {
+            return Err(format!(
+                "Disabled video transition bus {} cannot be active",
+                bus.id.0
+            ));
+        }
+        if active.from == active.to
+            || (active.origin_from != active.from && active.origin_from != active.to)
+            || !bus.members.contains(&active.from)
+            || !bus.members.contains(&active.to)
+            || active.progress_millis > 1000
+        {
+            return Err(format!(
+                "Active video transition bus {} has invalid from/to/timing truth",
+                bus.id.0
+            ));
+        }
+        let expected_progress = if matches!(active.kind, VideoClipTakeKind::Cut) {
+            if active.duration.value_milliunits != 0
+                || active.duration_ms != 0
+                || active.elapsed_ms != 0
+            {
+                return Err(format!(
+                    "Active Cut video transition bus {} must have zero timing",
+                    bus.id.0
+                ));
+            }
+            1000
+        } else {
+            if active.duration.value_milliunits == 0
+                || active.duration_ms == 0
+                || active.elapsed_ms > active.duration_ms
+            {
+                return Err(format!(
+                    "Active video transition bus {} has invalid timing truth",
+                    bus.id.0
+                ));
+            }
+            if matches!(
+                active.duration.unit,
+                VideoClipTakeDurationUnit::Milliseconds
+            ) && active.duration.value_milliunits != active.duration_ms
+            {
+                return Err(format!(
+                    "Active video transition bus {} millisecond intent disagrees with resolved duration",
+                    bus.id.0
+                ));
+            }
+            active
+                .elapsed_ms
+                .saturating_mul(1000)
+                .saturating_div(active.duration_ms)
+                .min(1000) as u16
+        };
+        if active.progress_millis != expected_progress {
+            return Err(format!(
+                "Active video transition bus {} progress does not match elapsed duration",
+                bus.id.0
+            ));
+        }
+        let composition = compositions
+            .get(&bus.composition_id)
+            .expect("authored transition bus composition was validated");
+        for target in [&active.from, &active.to] {
+            for layer_id in
+                video_transition_target_layer_ids(target, composition, &layers, &groups)?
+            {
+                if let Some(conflicting_bus) = active_layers.insert(layer_id, active.bus_id) {
+                    return Err(format!(
+                        "Active video transition buses {} and {} conflict at layer {layer_id}",
+                        conflicting_bus.0, active.bus_id.0
+                    ));
+                }
             }
         }
     }
@@ -2060,6 +2376,11 @@ fn validate_video_effect_chains(
             "Video project exceeds {VIDEO_EFFECT_PROJECT_MAX_GROUPS} layer groups"
         ));
     }
+    if video.transition_buses.len() > VIDEO_TRANSITION_BUS_PROJECT_MAX_BUSES {
+        return Err(format!(
+            "Video project exceeds {VIDEO_TRANSITION_BUS_PROJECT_MAX_BUSES} transition buses"
+        ));
+    }
 
     let layers: BTreeMap<VideoLayerId, &VideoLayerSummary> =
         video.layers.iter().map(|layer| (layer.id, layer)).collect();
@@ -2141,6 +2462,18 @@ fn validate_video_effect_chains(
         }
     }
 
+    let buses: BTreeMap<VideoTransitionBusId, &VideoLayerTransitionBusSummary> = video
+        .transition_buses
+        .iter()
+        .map(|bus| (bus.id, bus))
+        .collect();
+    if buses.len() != video.transition_buses.len() || buses.contains_key(&VideoTransitionBusId(0)) {
+        return Err("Video transition bus IDs must be non-zero and unique".to_string());
+    }
+    for bus in &video.transition_buses {
+        validate_video_transition_bus(bus, &layers, &compositions, &groups)?;
+    }
+
     let mut chain_ids = BTreeMap::new();
     let mut stage_ids = BTreeMap::new();
     let mut effect_ids = BTreeMap::new();
@@ -2152,7 +2485,14 @@ fn validate_video_effect_chains(
         if scopes.insert(chain.scope.clone(), chain.id).is_some() {
             return Err("Each video effect scope may own at most one chain".to_string());
         }
-        validate_video_effect_scope(&chain.scope, &layers, &compositions, &outputs, &groups)?;
+        validate_video_effect_scope(
+            &chain.scope,
+            &layers,
+            &compositions,
+            &outputs,
+            &groups,
+            &buses,
+        )?;
         if chain.stages.len() > VIDEO_EFFECT_CHAIN_MAX_STAGES {
             return Err(format!(
                 "Video effect chain {} exceeds {VIDEO_EFFECT_CHAIN_MAX_STAGES} stages",
@@ -2223,12 +2563,138 @@ fn validate_video_effect_chains(
     Ok(())
 }
 
+fn video_transition_target_layer_ids(
+    target: &VideoLayerTransitionTarget,
+    composition: &CompositionSummary,
+    layers: &BTreeMap<VideoLayerId, &VideoLayerSummary>,
+    groups: &BTreeMap<VideoLayerGroupId, &VideoLayerGroupSummary>,
+) -> Result<Vec<VideoLayerId>, String> {
+    match target {
+        VideoLayerTransitionTarget::Layer { layer_id } => {
+            if !layers.contains_key(layer_id) || !composition.layer_ids.contains(layer_id) {
+                return Err(format!(
+                    "Video transition target references layer {layer_id} outside composition {}",
+                    composition.id
+                ));
+            }
+            Ok(vec![*layer_id])
+        }
+        VideoLayerTransitionTarget::Group { group_id } => {
+            let group = groups.get(group_id).ok_or_else(|| {
+                format!(
+                    "Video transition target references missing group {}",
+                    group_id.0
+                )
+            })?;
+            if group.composition_id != composition.id {
+                return Err(format!(
+                    "Video transition group {} is outside composition {}",
+                    group_id.0, composition.id
+                ));
+            }
+            Ok(group.layer_ids.clone())
+        }
+    }
+}
+
+fn validate_video_transition_bus(
+    bus: &VideoLayerTransitionBusSummary,
+    layers: &BTreeMap<VideoLayerId, &VideoLayerSummary>,
+    compositions: &BTreeMap<CompositionId, &CompositionSummary>,
+    groups: &BTreeMap<VideoLayerGroupId, &VideoLayerGroupSummary>,
+) -> Result<(), String> {
+    validate_canonical_label("transition bus", bus.id.0, &bus.label)?;
+    let composition = compositions.get(&bus.composition_id).ok_or_else(|| {
+        format!(
+            "Video transition bus {} references missing composition {}",
+            bus.id.0, bus.composition_id
+        )
+    })?;
+    if !(2..=VIDEO_TRANSITION_BUS_MAX_MEMBERS).contains(&bus.members.len()) {
+        return Err(format!(
+            "Video transition bus {} must contain 2..={VIDEO_TRANSITION_BUS_MAX_MEMBERS} members",
+            bus.id.0
+        ));
+    }
+    let mut targets = BTreeMap::new();
+    let mut expanded_layers = BTreeMap::new();
+    let mut expanded_positions = Vec::new();
+    for target in &bus.members {
+        if targets.insert(target.clone(), ()).is_some() {
+            return Err(format!(
+                "Video transition bus {} contains duplicate members",
+                bus.id.0
+            ));
+        }
+        if let VideoLayerTransitionTarget::Layer { layer_id } = target {
+            if groups
+                .values()
+                .any(|group| group.layer_ids.contains(layer_id))
+            {
+                return Err(format!(
+                    "Video transition bus {} must target group-owned layer {layer_id} through its group",
+                    bus.id.0
+                ));
+            }
+        }
+        for layer_id in video_transition_target_layer_ids(target, composition, layers, groups)? {
+            if expanded_layers.insert(layer_id, target).is_some() {
+                return Err(format!(
+                    "Video transition bus {} members overlap at layer {layer_id}",
+                    bus.id.0
+                ));
+            }
+            expanded_positions.push(
+                composition
+                    .layer_ids
+                    .iter()
+                    .position(|candidate| *candidate == layer_id)
+                    .expect("transition target membership was validated"),
+            );
+        }
+    }
+    if expanded_positions
+        .windows(2)
+        .any(|pair| pair[1] != pair[0].saturating_add(1))
+    {
+        return Err(format!(
+            "Video transition bus {} members must follow contiguous composition order",
+            bus.id.0
+        ));
+    }
+    if bus.default_from == bus.default_to
+        || !targets.contains_key(&bus.default_from)
+        || !targets.contains_key(&bus.default_to)
+    {
+        return Err(format!(
+            "Video transition bus {} defaults must be distinct members",
+            bus.id.0
+        ));
+    }
+    if let Some(matte) = &bus.matte_source {
+        video_transition_target_layer_ids(matte, composition, layers, groups)?;
+    }
+    let invalid_duration = if matches!(bus.default_kind, VideoClipTakeKind::Cut) {
+        bus.default_duration.value_milliunits != 0
+    } else {
+        bus.default_duration.value_milliunits == 0
+    };
+    if invalid_duration {
+        return Err(format!(
+            "Video transition bus {} has invalid default duration",
+            bus.id.0
+        ));
+    }
+    Ok(())
+}
+
 fn validate_video_effect_scope(
     scope: &VideoEffectScope,
     layers: &BTreeMap<VideoLayerId, &VideoLayerSummary>,
     compositions: &BTreeMap<CompositionId, &CompositionSummary>,
     outputs: &BTreeMap<VideoOutputId, &VideoOutputSummary>,
     groups: &BTreeMap<VideoLayerGroupId, &VideoLayerGroupSummary>,
+    buses: &BTreeMap<VideoTransitionBusId, &VideoLayerTransitionBusSummary>,
 ) -> Result<(), String> {
     match scope {
         VideoEffectScope::Clip { layer_id, slot_id } => {
@@ -2259,8 +2725,15 @@ fn validate_video_effect_scope(
             }
         }
         VideoEffectScope::Transition {
-            owner: VideoTransitionEffectOwner::LayerBus { .. },
-        } => return Err("Layer Bus effect scopes are unavailable until C3".to_string()),
+            owner: VideoTransitionEffectOwner::LayerBus { bus_id },
+        } => {
+            if !buses.contains_key(bus_id) {
+                return Err(format!(
+                    "Video Layer Bus effect references missing bus {}",
+                    bus_id.0
+                ));
+            }
+        }
         VideoEffectScope::Composition { composition_id } => {
             if !compositions.contains_key(composition_id) {
                 return Err(format!(
@@ -2583,6 +3056,25 @@ fn validate_video_clip_layer_runtime_summary(
                         layer.layer_id
                     ));
                 }
+                let invalid_transition =
+                    if matches!(pending_launch.transition_kind, VideoClipTakeKind::Cut) {
+                        pending_launch.duration.value_milliunits != 0
+                            || pending_launch.resolved_duration_ms != 0
+                    } else {
+                        pending_launch.duration.value_milliunits == 0
+                            || pending_launch.resolved_duration_ms == 0
+                            || (matches!(
+                                pending_launch.duration.unit,
+                                VideoClipTakeDurationUnit::Milliseconds
+                            ) && pending_launch.duration.value_milliunits
+                                != pending_launch.resolved_duration_ms)
+                    };
+                if invalid_transition {
+                    return Err(format!(
+                        "Video clip runtime layer {} has invalid pending transition timing",
+                        layer.layer_id
+                    ));
+                }
             }
             None => {
                 return Err(format!(
@@ -2590,6 +3082,78 @@ fn validate_video_clip_layer_runtime_summary(
                     layer.layer_id
                 ));
             }
+        }
+    }
+    if let Some(transition) = &layer.transition {
+        if transition.outgoing_slot_id.0 == 0 || transition.incoming_slot_id.0 == 0 {
+            return Err(format!(
+                "Video clip runtime layer {} has a zero transition slot ID",
+                layer.layer_id
+            ));
+        }
+        if transition.origin_slot_id != transition.outgoing_slot_id
+            && transition.origin_slot_id != transition.incoming_slot_id
+        {
+            return Err(format!(
+                "Video clip runtime layer {} transition origin is not one of its live slots",
+                layer.layer_id
+            ));
+        }
+        if transition.outgoing_slot_id == transition.incoming_slot_id {
+            return Err(format!(
+                "Video clip runtime layer {} transition uses the same outgoing and incoming slot",
+                layer.layer_id
+            ));
+        }
+        if layer.active_slot_id != Some(transition.outgoing_slot_id)
+            || layer.queued_slot_id != Some(transition.incoming_slot_id)
+        {
+            return Err(format!(
+                "Video clip runtime layer {} transition disagrees with active/queued slots",
+                layer.layer_id
+            ));
+        }
+        if layer.pending_launch.is_some() {
+            return Err(format!(
+                "Video clip runtime layer {} cannot pend and transition simultaneously",
+                layer.layer_id
+            ));
+        }
+        if matches!(transition.kind, VideoClipTakeKind::Cut)
+            || transition.duration_ms == 0
+            || transition.elapsed_ms > transition.duration_ms
+            || transition.progress_millis > 1000
+            || (transition.duration.value_milliunits == 0
+                && !matches!(
+                    transition.duration.unit,
+                    VideoClipTakeDurationUnit::Milliseconds
+                ))
+            || (transition.duration.value_milliunits > 0
+                && matches!(
+                    transition.duration.unit,
+                    VideoClipTakeDurationUnit::Milliseconds
+                )
+                && transition.duration.value_milliunits != transition.duration_ms)
+        {
+            return Err(format!(
+                "Video clip runtime layer {} has invalid transition timing",
+                layer.layer_id
+            ));
+        }
+        let expected_progress = transition
+            .elapsed_ms
+            .saturating_mul(1000)
+            .saturating_div(transition.duration_ms)
+            .min(1000) as u16;
+        if transition.progress_millis != expected_progress {
+            return Err(format!(
+                "Video clip runtime layer {} transition progress {} does not match elapsed {}/{} (expected {})",
+                layer.layer_id,
+                transition.progress_millis,
+                transition.elapsed_ms,
+                transition.duration_ms,
+                expected_progress
+            ));
         }
     }
     Ok(())
@@ -3337,12 +3901,139 @@ pub struct TimelineLayerSummary {
     pub kind: TimelineLayerKind,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelinePhaseRole {
+    Intro,
+    Verse,
+    PreChorus,
+    Chorus,
+    Bridge,
+    Breakdown,
+    Outro,
+    Custom,
+}
+
+impl Default for TimelinePhaseRole {
+    fn default() -> Self {
+        Self::Custom
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelinePhaseSummary {
+    pub id: TimelinePhaseId,
+    pub label: String,
+    #[serde(default)]
+    pub role: TimelinePhaseRole,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineVideoClipSummary {
+    pub id: TimelineVideoClipId,
+    pub layer_id: u32,
+    pub media_asset_id: MediaAssetId,
+    pub start_ms: u64,
+    #[serde(default)]
+    pub offset_ms: u64,
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub fade_in_ms: u64,
+    #[serde(default)]
+    pub fade_out_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TimelineItemRef {
+    LightingEvent { event_id: TimelineEventId },
+    VideoClip { clip_id: TimelineVideoClipId },
+    AudioClip { clip_id: TimelineAudioClipId },
+    LightingAutomation { automation_id: AutomationId },
+    VideoAutomation { automation_id: AutomationId },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineItemGroupSummary {
+    pub id: TimelineItemGroupId,
+    #[serde(default)]
+    pub members: Vec<TimelineItemRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TimelineLoopRegionSummary {
+    pub a_ms: u64,
+    pub b_ms: u64,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub musical_length_beats: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineFollowLightingPolicy {
+    HoldThenCut,
+    LinearMerge,
+}
+
+impl Default for TimelineFollowLightingPolicy {
+    fn default() -> Self {
+        Self::HoldThenCut
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineFollowFaultPolicy {
+    Hold,
+    Cut,
+    Fault,
+}
+
+impl Default for TimelineFollowFaultPolicy {
+    fn default() -> Self {
+        Self::Hold
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TimelineFollowSummary {
+    #[serde(default)]
+    pub enabled: bool,
+    pub next_timeline_id: TimelineId,
+    #[serde(default)]
+    pub duration: VideoClipTakeDuration,
+    #[serde(default)]
+    pub curve: VideoLayerTransitionCurve,
+    #[serde(default)]
+    pub video_kind: VideoClipTakeKind,
+    #[serde(default)]
+    pub lighting_policy: TimelineFollowLightingPolicy,
+    #[serde(default)]
+    pub destination_bpm: Option<f64>,
+    #[serde(default)]
+    pub preroll_ms: u64,
+    #[serde(default = "default_timeline_follow_trans_cadence_bars")]
+    pub trans_cadence_bars: u16,
+    #[serde(default)]
+    pub fault_policy: TimelineFollowFaultPolicy,
+}
+
+const fn default_timeline_follow_trans_cadence_bars() -> u16 {
+    4
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelineAudioClipSummary {
     #[serde(default)]
     pub id: TimelineAudioClipId,
     #[serde(default)]
     pub layer_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_asset_id: Option<MediaAssetId>,
     #[serde(default)]
     pub path: String,
     #[serde(default)]
@@ -3364,6 +4055,7 @@ impl Default for TimelineAudioClipSummary {
         Self {
             id: 0,
             layer_id: 0,
+            media_asset_id: None,
             path: String::new(),
             start_ms: 0,
             offset_ms: 0,
@@ -3563,8 +4255,115 @@ pub struct TimelineSnapRequest {
     pub video_automations: Vec<TimelineVideoAutomationKeyframesUpdate>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineLoopRuntimeStatus {
+    #[default]
+    Disabled,
+    Armed,
+    Looping,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineLoopScale {
+    Half,
+    Double,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineLoopRuntimeSummary {
+    pub generation: u64,
+    pub status: TimelineLoopRuntimeStatus,
+    #[serde(default)]
+    pub a_ms: Option<u64>,
+    #[serde(default)]
+    pub b_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub musical_length_millibeats: Option<u64>,
+    #[serde(default)]
+    pub wrap_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TimelineGuideCueKind {
+    Phase { phase_id: TimelinePhaseId },
+    Looping,
+    Break,
+    Trans,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineGuideCueSummary {
+    pub generation: u64,
+    pub sequence: u64,
+    pub at_ms: u64,
+    pub label: String,
+    pub cue: TimelineGuideCueKind,
+}
+
+/// One authoritative authored image for the advanced Timeline surfaces. The
+/// established Scene Block, automation and lane editors keep their existing
+/// commands; media placement, Phase, grouping, A-B and Follow commit together
+/// through this image so linked A/V items can never tear across publication.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TimelineAdvancedAuthoringSummary {
+    /// Optional atomic movement of established Scene Blocks and automation
+    /// keyframes. Group moves use this same publication as media clips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snap_request: Option<TimelineSnapRequest>,
+    #[serde(default)]
+    pub video_clips: Vec<TimelineVideoClipSummary>,
+    #[serde(default)]
+    pub audio_clips: Vec<TimelineAudioClipSummary>,
+    #[serde(default)]
+    pub phases: Vec<TimelinePhaseSummary>,
+    #[serde(default)]
+    pub item_groups: Vec<TimelineItemGroupSummary>,
+    #[serde(default)]
+    pub loop_region: Option<TimelineLoopRegionSummary>,
+    #[serde(default)]
+    pub follow: Option<TimelineFollowSummary>,
+    #[serde(default)]
+    pub guide_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineFollowRuntimeStatus {
+    #[default]
+    Idle,
+    Pending,
+    Transitioning,
+    Held,
+    Fault,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineFollowRuntimeSummary {
+    pub generation: u64,
+    pub status: TimelineFollowRuntimeStatus,
+    #[serde(default)]
+    pub source_timeline_id: Option<TimelineId>,
+    #[serde(default)]
+    pub target_timeline_id: Option<TimelineId>,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub progress_millis: u16,
+    #[serde(default)]
+    pub fault: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelineSnapshot {
+    #[serde(default = "default_timeline_id")]
+    pub id: TimelineId,
+    #[serde(default = "default_timeline_label")]
+    pub label: String,
     #[serde(default)]
     pub layers: Vec<TimelineLayerSummary>,
     pub events: Vec<TimelineCueEventSummary>,
@@ -3574,6 +4373,18 @@ pub struct TimelineSnapshot {
     pub audio: Option<AudioAnalysisSummary>,
     #[serde(default)]
     pub audio_clips: Vec<TimelineAudioClipSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub video_clips: Vec<TimelineVideoClipSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phases: Vec<TimelinePhaseSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub item_groups: Vec<TimelineItemGroupSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_region: Option<TimelineLoopRegionSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow: Option<TimelineFollowSummary>,
+    #[serde(default)]
+    pub guide_enabled: bool,
     #[serde(default)]
     pub audio_offset_ms: i64,
     #[serde(default)]
@@ -3591,6 +4402,12 @@ pub struct TimelineSnapshot {
     /// native audio worker and is never written to `.sdc` or sent to the UI.
     #[serde(default, skip_serializing)]
     pub active_child_transports: Vec<ChildTimelineTransportRuntimeSummary>,
+    #[serde(default, skip_serializing)]
+    pub loop_runtime: TimelineLoopRuntimeSummary,
+    #[serde(default, skip_serializing)]
+    pub follow_runtime: TimelineFollowRuntimeSummary,
+    #[serde(default, skip_serializing)]
+    pub guide_cues: Vec<TimelineGuideCueSummary>,
     pub playing: bool,
     pub position_ms: u64,
     pub duration_ms: u64,
@@ -3599,12 +4416,20 @@ pub struct TimelineSnapshot {
 impl Default for TimelineSnapshot {
     fn default() -> Self {
         Self {
+            id: default_timeline_id(),
+            label: default_timeline_label(),
             layers: Vec::new(),
             events: Vec::new(),
             automations: Vec::new(),
             video_automations: Vec::new(),
             audio: None,
             audio_clips: Vec::new(),
+            video_clips: Vec::new(),
+            phases: Vec::new(),
+            item_groups: Vec::new(),
+            loop_region: None,
+            follow: None,
+            guide_enabled: false,
             audio_offset_ms: 0,
             audio_muted: false,
             metronome_enabled: false,
@@ -3612,11 +4437,329 @@ impl Default for TimelineSnapshot {
             count_in_remaining_ms: 0,
             audio_transport_revision: 0,
             active_child_transports: Vec::new(),
+            loop_runtime: TimelineLoopRuntimeSummary::default(),
+            follow_runtime: TimelineFollowRuntimeSummary::default(),
+            guide_cues: Vec::new(),
             playing: false,
             position_ms: 0,
             duration_ms: 0,
         }
     }
+}
+
+const fn default_timeline_id() -> TimelineId {
+    TimelineId(1)
+}
+
+fn default_timeline_label() -> String {
+    "Timeline 1".to_string()
+}
+
+pub const TIMELINE_MAX_PHASES: usize = 256;
+pub const TIMELINE_MAX_ITEM_GROUPS: usize = 256;
+pub const TIMELINE_MAX_GROUP_MEMBERS: usize = 128;
+
+/// Validate the authored Timeline additions without observing machine-local
+/// media availability. Media identity is checked only against the project
+/// catalog; path presence, proxies and decoder readiness remain runtime truth.
+pub fn validate_timeline_authoring(
+    timeline: &TimelineSnapshot,
+    media_assets: &[MediaAssetSummary],
+) -> Result<(), String> {
+    if timeline.id.0 == 0 {
+        return Err("Timeline ID must be non-zero".to_string());
+    }
+    if timeline.label.trim().is_empty() {
+        return Err("Timeline label must not be empty".to_string());
+    }
+    let layer_by_id = timeline
+        .layers
+        .iter()
+        .map(|layer| (layer.id, layer))
+        .collect::<BTreeMap<_, _>>();
+    let asset_by_id = media_assets
+        .iter()
+        .map(|asset| (asset.id, asset))
+        .collect::<BTreeMap<_, _>>();
+
+    if timeline.phases.len() > TIMELINE_MAX_PHASES {
+        return Err(format!(
+            "Timeline contains {} Phases; the limit is {TIMELINE_MAX_PHASES}",
+            timeline.phases.len()
+        ));
+    }
+    let mut phase_ids = BTreeSet::new();
+    let mut previous_phase_end = 0;
+    for (index, phase) in timeline.phases.iter().enumerate() {
+        if phase.id.0 == 0 || !phase_ids.insert(phase.id) {
+            return Err("Timeline Phase IDs must be non-zero and unique".to_string());
+        }
+        if phase.label.trim().is_empty() || phase.start_ms >= phase.end_ms {
+            return Err(format!(
+                "Timeline Phase {} requires a label and a non-empty range",
+                phase.id.0
+            ));
+        }
+        if index > 0 && phase.start_ms < previous_phase_end {
+            return Err("Timeline Phases must be ordered and non-overlapping".to_string());
+        }
+        if timeline.duration_ms > 0 && phase.end_ms > timeline.duration_ms {
+            return Err(format!(
+                "Timeline Phase {} exceeds the Timeline duration",
+                phase.id.0
+            ));
+        }
+        previous_phase_end = phase.end_ms;
+    }
+
+    let mut video_clip_ids = BTreeSet::new();
+    for clip in &timeline.video_clips {
+        if clip.id.0 == 0 || !video_clip_ids.insert(clip.id) {
+            return Err("Timeline Video clip IDs must be non-zero and unique".to_string());
+        }
+        let layer = layer_by_id.get(&clip.layer_id).ok_or_else(|| {
+            format!(
+                "Timeline Video clip {} references missing layer {}",
+                clip.id.0, clip.layer_id
+            )
+        })?;
+        if !matches!(layer.kind, TimelineLayerKind::Video) {
+            return Err(format!(
+                "Timeline Video clip {} references non-Video layer {}",
+                clip.id.0, clip.layer_id
+            ));
+        }
+        let asset = asset_by_id.get(&clip.media_asset_id).ok_or_else(|| {
+            format!(
+                "Timeline Video clip {} references missing MediaAsset {}",
+                clip.id.0, clip.media_asset_id
+            )
+        })?;
+        if !matches!(
+            asset.source.kind,
+            VideoSourceKind::File | VideoSourceKind::StillImage
+        ) {
+            return Err(format!(
+                "Timeline Video clip {} requires a file or still MediaAsset",
+                clip.id.0
+            ));
+        }
+        if clip.duration_ms == 0
+            || clip.start_ms.checked_add(clip.duration_ms).is_none()
+            || clip.fade_in_ms.saturating_add(clip.fade_out_ms) > clip.duration_ms
+        {
+            return Err(format!(
+                "Timeline Video clip {} has invalid duration or fades",
+                clip.id.0
+            ));
+        }
+    }
+
+    let mut audio_clip_ids = BTreeSet::new();
+    for clip in &timeline.audio_clips {
+        // ID 0 remains load-compatible only for the historical path-backed
+        // singleton. New MediaAsset-backed clips and grouped clips require a
+        // stable non-zero identity.
+        if (clip.id == 0 && clip.media_asset_id.is_some()) || !audio_clip_ids.insert(clip.id) {
+            return Err("Timeline Audio clip IDs must be non-zero and unique".to_string());
+        }
+        if let Some(asset_id) = clip.media_asset_id {
+            let asset = asset_by_id.get(&asset_id).ok_or_else(|| {
+                format!(
+                    "Timeline Audio clip {} references missing MediaAsset {asset_id}",
+                    clip.id
+                )
+            })?;
+            if !asset
+                .source
+                .metadata
+                .is_some_and(|metadata| metadata.has_audio)
+            {
+                return Err(format!(
+                    "Timeline Audio clip {} references a MediaAsset without audio",
+                    clip.id
+                ));
+            }
+        } else if clip.path.trim().is_empty() {
+            return Err(format!(
+                "Legacy Timeline Audio clip {} requires a path",
+                clip.id
+            ));
+        }
+        if clip.duration_ms == 0
+            || clip.start_ms.checked_add(clip.duration_ms).is_none()
+            || !clip.gain.is_finite()
+            || !(0.0..=2.0).contains(&clip.gain)
+            || clip.fade_in_ms.saturating_add(clip.fade_out_ms) > clip.duration_ms
+        {
+            return Err(format!(
+                "Timeline Audio clip {} has invalid duration, gain, or fades",
+                clip.id
+            ));
+        }
+    }
+
+    if timeline.item_groups.len() > TIMELINE_MAX_ITEM_GROUPS {
+        return Err(format!(
+            "Timeline contains {} item groups; the limit is {TIMELINE_MAX_ITEM_GROUPS}",
+            timeline.item_groups.len()
+        ));
+    }
+    let event_ids = timeline
+        .events
+        .iter()
+        .map(|event| event.id)
+        .collect::<BTreeSet<_>>();
+    let lighting_automation_ids = timeline
+        .automations
+        .iter()
+        .map(|automation| automation.id)
+        .collect::<BTreeSet<_>>();
+    let video_automation_ids = timeline
+        .video_automations
+        .iter()
+        .map(|automation| automation.id)
+        .collect::<BTreeSet<_>>();
+    let mut group_ids = BTreeSet::new();
+    let mut grouped_items = BTreeSet::new();
+    for group in &timeline.item_groups {
+        if group.id.0 == 0 || !group_ids.insert(group.id) {
+            return Err("Timeline item group IDs must be non-zero and unique".to_string());
+        }
+        if group.members.len() < 2 || group.members.len() > TIMELINE_MAX_GROUP_MEMBERS {
+            return Err(format!(
+                "Timeline item group {} must contain 2..={TIMELINE_MAX_GROUP_MEMBERS} items",
+                group.id.0
+            ));
+        }
+        let mut own_members = BTreeSet::new();
+        for member in &group.members {
+            if !own_members.insert(*member) || !grouped_items.insert(*member) {
+                return Err("Timeline items may belong to at most one group".to_string());
+            }
+            let exists = match *member {
+                TimelineItemRef::LightingEvent { event_id } => event_ids.contains(&event_id),
+                TimelineItemRef::VideoClip { clip_id } => video_clip_ids.contains(&clip_id),
+                TimelineItemRef::AudioClip { clip_id } => {
+                    clip_id != 0 && audio_clip_ids.contains(&clip_id)
+                }
+                TimelineItemRef::LightingAutomation { automation_id } => {
+                    lighting_automation_ids.contains(&automation_id)
+                }
+                TimelineItemRef::VideoAutomation { automation_id } => {
+                    video_automation_ids.contains(&automation_id)
+                }
+            };
+            if !exists {
+                return Err(format!(
+                    "Timeline item group {} contains a missing item",
+                    group.id.0
+                ));
+            }
+        }
+    }
+
+    if let Some(loop_region) = &timeline.loop_region {
+        if loop_region.a_ms >= loop_region.b_ms
+            || (timeline.duration_ms > 0 && loop_region.b_ms > timeline.duration_ms)
+            || loop_region
+                .musical_length_beats
+                .is_some_and(|beats| !beats.is_finite() || beats <= 0.0)
+        {
+            return Err("Timeline loop requires a finite non-empty A-B range".to_string());
+        }
+    }
+
+    if let Some(follow) = &timeline.follow {
+        if follow.next_timeline_id.0 == 0 || follow.next_timeline_id == timeline.id {
+            return Err(
+                "Timeline Follow requires a different non-zero next Timeline ID".to_string(),
+            );
+        }
+        if follow.trans_cadence_bars == 0
+            || follow
+                .destination_bpm
+                .is_some_and(|bpm| !bpm.is_finite() || !(20.0..=300.0).contains(&bpm))
+            || (matches!(follow.video_kind, VideoClipTakeKind::Cut)
+                && follow.duration.value_milliunits != 0)
+            || (!matches!(follow.video_kind, VideoClipTakeKind::Cut)
+                && follow.duration.value_milliunits == 0)
+        {
+            return Err("Timeline Follow has invalid timing, BPM, or Guide cadence".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Normalize the legacy single-Timeline representation into the ordered bank
+/// without changing which Timeline is active. Runtime-only fields inside bank
+/// entries are cleared so project files cannot inject a second transport.
+pub fn normalize_timeline_bank(snapshot: &mut EngineSnapshot) {
+    if snapshot.timeline_bank.is_empty() {
+        snapshot.timeline_bank.push(snapshot.timeline.clone());
+    }
+    if let Some(active) = snapshot
+        .timeline_bank
+        .iter_mut()
+        .find(|timeline| timeline.id == snapshot.timeline.id)
+    {
+        *active = snapshot.timeline.clone();
+    } else {
+        snapshot.timeline_bank.push(snapshot.timeline.clone());
+    }
+    for timeline in &mut snapshot.timeline_bank {
+        timeline.playing = false;
+        timeline.position_ms = 0;
+        timeline.count_in_remaining_ms = 0;
+        timeline.audio_transport_revision = 0;
+        timeline.active_child_transports.clear();
+        timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
+        timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
+        timeline.guide_cues.clear();
+    }
+}
+
+pub fn validate_timeline_bank(
+    snapshot: &EngineSnapshot,
+    media_assets: &[MediaAssetSummary],
+) -> Result<(), String> {
+    if snapshot.timeline_bank.is_empty() {
+        return validate_timeline_authoring(&snapshot.timeline, media_assets);
+    }
+    let mut ids = BTreeSet::new();
+    for timeline in &snapshot.timeline_bank {
+        if !ids.insert(timeline.id) {
+            return Err("Timeline bank IDs must be unique".to_string());
+        }
+        validate_timeline_authoring(timeline, media_assets)?;
+    }
+    let active_index = snapshot
+        .timeline_bank
+        .iter()
+        .position(|timeline| timeline.id == snapshot.timeline.id)
+        .ok_or_else(|| "Active Timeline must exist in the Timeline bank".to_string())?;
+    for (index, timeline) in snapshot.timeline_bank.iter().enumerate() {
+        let Some(follow) = timeline.follow.as_ref().filter(|follow| follow.enabled) else {
+            continue;
+        };
+        let expected = snapshot.timeline_bank.get(index + 1).ok_or_else(|| {
+            format!(
+                "Timeline {} enables Follow but has no Timeline below it",
+                timeline.id.0
+            )
+        })?;
+        if follow.next_timeline_id != expected.id {
+            return Err(format!(
+                "Timeline {} Follow target must be the next Timeline {} in bank order",
+                timeline.id.0, expected.id.0
+            ));
+        }
+    }
+    let bank_active = &snapshot.timeline_bank[active_index];
+    if bank_active.id != snapshot.timeline.id {
+        return Err("Active Timeline bank projection is inconsistent".to_string());
+    }
+    Ok(())
 }
 
 /// Collision-free identity for the root activation that owns a child
@@ -5353,6 +6496,9 @@ pub enum OscControlAction {
     TimelineSeek,
     TimelineBeatPrevious,
     TimelineBeatNext,
+    TimelineLoopToggle,
+    TimelineLoopHalf,
+    TimelineLoopDouble,
     SetBpm,
     TapBpm,
     LightingMaster,
@@ -5637,6 +6783,9 @@ pub enum MidiControlAction {
     TimelineSeek,
     TimelineBeatPrevious,
     TimelineBeatNext,
+    TimelineLoopToggle,
+    TimelineLoopHalf,
+    TimelineLoopDouble,
     SetBpm,
     TapBpm,
     LightingMaster,
@@ -6041,6 +7190,10 @@ pub struct EngineSnapshot {
     #[serde(default)]
     pub programmer: ProgrammerSnapshot,
     pub timeline: TimelineSnapshot,
+    /// Ordered authored Timeline bank. Empty is the legacy single-Timeline
+    /// representation; loaders normalize it to contain `timeline` once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timeline_bank: Vec<TimelineSnapshot>,
     pub video: VideoSnapshot,
     /// Runtime-only Clip Slot transport truth published atomically with the
     /// rendered engine image. This field is deliberately excluded in both
@@ -6048,6 +7201,10 @@ pub struct EngineSnapshot {
     /// active, queued, pending, or playhead state.
     #[serde(skip, default)]
     pub video_clip_runtime: VideoClipRuntimeSnapshot,
+    /// Runtime-only Layer Transition Bus truth. Project files cannot persist
+    /// or inject active from/to/progress state.
+    #[serde(skip, default)]
+    pub video_transition_runtime: VideoLayerTransitionRuntimeSnapshot,
     /// Raw authored layer state before ephemeral Effect/Node Graph modulation.
     /// Project and cue writers consume this value, then strip it from persisted data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -6094,8 +7251,10 @@ impl Default for EngineSnapshot {
             active_fade: None,
             programmer: ProgrammerSnapshot::default(),
             timeline: TimelineSnapshot::default(),
+            timeline_bank: Vec::new(),
             video: VideoSnapshot::default(),
             video_clip_runtime: VideoClipRuntimeSnapshot::default(),
+            video_transition_runtime: VideoLayerTransitionRuntimeSnapshot::default(),
             authored_video: None,
             effects: Vec::new(),
             node_graphs: Vec::new(),
@@ -6429,6 +7588,14 @@ mod tests {
 
         assert!(snapshot.layers.is_empty());
         assert!(snapshot.audio_clips.is_empty());
+        assert_eq!(snapshot.id, super::TimelineId(1));
+        assert_eq!(snapshot.label, "Timeline 1");
+        assert!(snapshot.video_clips.is_empty());
+        assert!(snapshot.phases.is_empty());
+        assert!(snapshot.item_groups.is_empty());
+        assert!(snapshot.loop_region.is_none());
+        assert!(snapshot.follow.is_none());
+        assert!(!snapshot.guide_enabled);
         assert_eq!(snapshot.audio_offset_ms, 0);
         assert!(!snapshot.audio_muted);
         assert!(!snapshot.metronome_enabled);
@@ -6436,6 +7603,213 @@ mod tests {
         assert_eq!(snapshot.count_in_remaining_ms, 0);
         assert_eq!(snapshot.audio_transport_revision, 0);
         assert!(snapshot.active_child_transports.is_empty());
+    }
+
+    #[test]
+    fn timeline_phase_media_group_loop_and_follow_contract_is_strict_and_roundtrips() {
+        let media_assets = vec![super::MediaAssetSummary {
+            id: 51,
+            label: "Song visual".to_string(),
+            source: super::VideoSourceSummary {
+                kind: super::VideoSourceKind::File,
+                path: Some("C:/show/song.mp4".to_string()),
+                name: None,
+                codec: Some("H264".to_string()),
+                metadata: Some(super::VideoMediaMetadata {
+                    duration_ms: Some(16_000),
+                    width: Some(1920),
+                    height: Some(1080),
+                    frame_rate: Some(30.0),
+                    has_audio: true,
+                }),
+            },
+            content_hash: None,
+            byte_size: None,
+        }];
+        let mut timeline = super::TimelineSnapshot {
+            id: super::TimelineId(7),
+            label: "Opening song".to_string(),
+            layers: vec![
+                super::TimelineLayerSummary {
+                    id: 1,
+                    label: "Video".to_string(),
+                    order: 0,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: true,
+                    kind: super::TimelineLayerKind::Video,
+                },
+                super::TimelineLayerSummary {
+                    id: 2,
+                    label: "Audio".to_string(),
+                    order: 1,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: true,
+                    kind: super::TimelineLayerKind::Audio,
+                },
+            ],
+            video_clips: vec![super::TimelineVideoClipSummary {
+                id: super::TimelineVideoClipId(61),
+                layer_id: 1,
+                media_asset_id: 51,
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 16_000,
+                fade_in_ms: 250,
+                fade_out_ms: 250,
+            }],
+            audio_clips: vec![super::TimelineAudioClipSummary {
+                id: 62,
+                layer_id: 2,
+                media_asset_id: Some(51),
+                path: String::new(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 16_000,
+                gain: 1.0,
+                fade_in_ms: 250,
+                fade_out_ms: 250,
+            }],
+            phases: vec![
+                super::TimelinePhaseSummary {
+                    id: super::TimelinePhaseId(71),
+                    label: "Intro".to_string(),
+                    role: super::TimelinePhaseRole::Intro,
+                    start_ms: 0,
+                    end_ms: 8_000,
+                },
+                super::TimelinePhaseSummary {
+                    id: super::TimelinePhaseId(72),
+                    label: "Verse".to_string(),
+                    role: super::TimelinePhaseRole::Verse,
+                    start_ms: 8_000,
+                    end_ms: 16_000,
+                },
+            ],
+            item_groups: vec![super::TimelineItemGroupSummary {
+                id: super::TimelineItemGroupId(81),
+                members: vec![
+                    super::TimelineItemRef::VideoClip {
+                        clip_id: super::TimelineVideoClipId(61),
+                    },
+                    super::TimelineItemRef::AudioClip { clip_id: 62 },
+                ],
+            }],
+            loop_region: Some(super::TimelineLoopRegionSummary {
+                a_ms: 4_000,
+                b_ms: 8_000,
+                enabled: true,
+                musical_length_beats: Some(8.0),
+            }),
+            follow: Some(super::TimelineFollowSummary {
+                enabled: true,
+                next_timeline_id: super::TimelineId(8),
+                duration: super::VideoClipTakeDuration {
+                    unit: super::VideoClipTakeDurationUnit::Bars,
+                    value_milliunits: 1_000,
+                },
+                curve: super::VideoLayerTransitionCurve::EaseInOut,
+                video_kind: super::VideoClipTakeKind::Crossfade,
+                lighting_policy: super::TimelineFollowLightingPolicy::LinearMerge,
+                destination_bpm: Some(128.0),
+                preroll_ms: 500,
+                trans_cadence_bars: 4,
+                fault_policy: super::TimelineFollowFaultPolicy::Hold,
+            }),
+            guide_enabled: true,
+            duration_ms: 16_000,
+            ..super::TimelineSnapshot::default()
+        };
+        super::validate_timeline_authoring(&timeline, &media_assets).unwrap();
+        let roundtrip: super::TimelineSnapshot =
+            serde_json::from_str(&serde_json::to_string(&timeline).unwrap()).unwrap();
+        assert_eq!(roundtrip, timeline);
+
+        timeline.phases[1].start_ms = 7_999;
+        assert!(super::validate_timeline_authoring(&timeline, &media_assets)
+            .unwrap_err()
+            .contains("non-overlapping"));
+        timeline.phases[1].start_ms = 8_000;
+        timeline.item_groups[0]
+            .members
+            .push(super::TimelineItemRef::VideoClip {
+                clip_id: super::TimelineVideoClipId(61),
+            });
+        assert!(super::validate_timeline_authoring(&timeline, &media_assets)
+            .unwrap_err()
+            .contains("at most one group"));
+    }
+
+    #[test]
+    fn timeline_bank_normalizes_legacy_runtime_free_and_requires_exact_next_follow_target() {
+        let mut snapshot = super::EngineSnapshot::default();
+        snapshot.timeline.id = super::TimelineId(41);
+        snapshot.timeline.label = "Intro".to_string();
+        snapshot.timeline.playing = true;
+        snapshot.timeline.position_ms = 750;
+        snapshot.timeline.loop_runtime.status = super::TimelineLoopRuntimeStatus::Looping;
+        snapshot
+            .timeline
+            .guide_cues
+            .push(super::TimelineGuideCueSummary {
+                generation: 1,
+                sequence: 1,
+                at_ms: 750,
+                label: "Looping".to_string(),
+                cue: super::TimelineGuideCueKind::Looping,
+            });
+
+        super::normalize_timeline_bank(&mut snapshot);
+        assert_eq!(snapshot.timeline_bank.len(), 1);
+        assert_eq!(snapshot.timeline_bank[0].id, super::TimelineId(41));
+        assert!(!snapshot.timeline_bank[0].playing);
+        assert_eq!(snapshot.timeline_bank[0].position_ms, 0);
+        assert!(snapshot.timeline_bank[0].guide_cues.is_empty());
+
+        let mut second = super::TimelineSnapshot::default();
+        second.id = super::TimelineId(42);
+        second.label = "Verse".to_string();
+        snapshot.timeline_bank.push(second);
+        snapshot.timeline_bank[0].follow = Some(super::TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: super::TimelineId(42),
+            duration: super::VideoClipTakeDuration {
+                unit: super::VideoClipTakeDurationUnit::Bars,
+                value_milliunits: 1_000,
+            },
+            curve: super::VideoLayerTransitionCurve::Linear,
+            video_kind: super::VideoClipTakeKind::Crossfade,
+            lighting_policy: super::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: Some(128.0),
+            preroll_ms: 0,
+            trans_cadence_bars: 4,
+            fault_policy: super::TimelineFollowFaultPolicy::Hold,
+        });
+        super::validate_timeline_bank(&snapshot, &[]).unwrap();
+
+        snapshot.timeline_bank[0]
+            .follow
+            .as_mut()
+            .unwrap()
+            .next_timeline_id = super::TimelineId(99);
+        assert!(super::validate_timeline_bank(&snapshot, &[])
+            .unwrap_err()
+            .contains("next Timeline"));
+
+        snapshot.timeline_bank[0]
+            .follow
+            .as_mut()
+            .unwrap()
+            .next_timeline_id = super::TimelineId(42);
+        snapshot
+            .timeline_bank
+            .push(snapshot.timeline_bank[1].clone());
+        assert!(super::validate_timeline_bank(&snapshot, &[])
+            .unwrap_err()
+            .contains("unique"));
     }
 
     #[test]
@@ -6482,6 +7856,7 @@ mod tests {
             audio_clips: vec![super::TimelineAudioClipSummary {
                 id: 4,
                 layer_id: 12,
+                media_asset_id: None,
                 path: "music/show.wav".to_string(),
                 start_ms: 1_000,
                 offset_ms: 250,
@@ -7095,7 +8470,11 @@ mod tests {
                     target_boundary_ordinal: 16,
                     clock_generation: 3,
                     held_for_clock_discontinuity: true,
+                    transition_kind: super::VideoClipTakeKind::Cut,
+                    duration: super::VideoClipTakeDuration::milliseconds(0),
+                    resolved_duration_ms: 0,
                 }),
+                transition: None,
                 playhead_ms: 400,
                 playing: true,
                 ping_pong_reverse: true,
@@ -7122,6 +8501,7 @@ mod tests {
         assert_eq!(legacy_layer.active_slot_id, None);
         assert_eq!(legacy_layer.queued_slot_id, None);
         assert_eq!(legacy_layer.pending_launch, None);
+        assert_eq!(legacy_layer.transition, None);
 
         let zero_boundary: super::VideoClipPendingLaunchSummary =
             serde_json::from_value(serde_json::json!({
@@ -7201,6 +8581,57 @@ mod tests {
         let runtime = clip_slot_runtime_test_snapshot();
         super::validate_video_clip_runtime_snapshot(&runtime).unwrap();
         super::validate_video_clip_runtime_against_authored_slots(&runtime, &video).unwrap();
+        let mut invalid_pending_timing = runtime.clone();
+        invalid_pending_timing.layers[0]
+            .pending_launch
+            .as_mut()
+            .unwrap()
+            .transition_kind = super::VideoClipTakeKind::Crossfade;
+        assert!(
+            super::validate_video_clip_runtime_snapshot(&invalid_pending_timing)
+                .unwrap_err()
+                .contains("pending transition timing")
+        );
+
+        let transition_runtime = super::VideoClipRuntimeSnapshot {
+            layers: vec![super::VideoClipLayerRuntimeSummary {
+                layer_id: 1,
+                active_slot_id: Some(super::VideoClipSlotId(20)),
+                queued_slot_id: Some(super::VideoClipSlotId(21)),
+                transition: Some(super::VideoClipTakeTransitionSummary {
+                    origin_slot_id: super::VideoClipSlotId(20),
+                    outgoing_slot_id: super::VideoClipSlotId(20),
+                    incoming_slot_id: super::VideoClipSlotId(21),
+                    kind: super::VideoClipTakeKind::Crossfade,
+                    elapsed_ms: 250,
+                    duration_ms: 1_000,
+                    duration: super::VideoClipTakeDuration::milliseconds(1_000),
+                    progress_millis: 250,
+                    incoming_playhead_ms: 0,
+                    incoming_playing: true,
+                }),
+                playhead_ms: 400,
+                playing: true,
+                ..super::VideoClipLayerRuntimeSummary::default()
+            }],
+        };
+        super::validate_video_clip_runtime_snapshot(&transition_runtime).unwrap();
+        super::validate_video_clip_runtime_against_authored_slots(&transition_runtime, &video)
+            .unwrap();
+        let mut invalid_transition = transition_runtime.clone();
+        invalid_transition.layers[0]
+            .transition
+            .as_mut()
+            .unwrap()
+            .progress_millis = 1001;
+        assert!(super::validate_video_clip_runtime_snapshot(&invalid_transition).is_err());
+        let mut inconsistent_transition = transition_runtime.clone();
+        inconsistent_transition.layers[0]
+            .transition
+            .as_mut()
+            .unwrap()
+            .progress_millis = 251;
+        assert!(super::validate_video_clip_runtime_snapshot(&inconsistent_transition).is_err());
 
         let invalid_nan: Result<super::VideoClipRuntimeSnapshot, _> =
             serde_json::from_value(serde_json::json!({
@@ -9467,6 +10898,7 @@ mod tests {
             audio_clips: vec![super::TimelineAudioClipSummary {
                 id: 7,
                 layer_id: 4,
+                media_asset_id: None,
                 path: "child.wav".to_string(),
                 start_ms: 100,
                 offset_ms: 20,
@@ -9749,6 +11181,104 @@ mod tests {
         too_many_stages.effect_chains[0].stages =
             vec![stage; super::VIDEO_EFFECT_CHAIN_MAX_STAGES + 1];
         assert!(super::validate_authored_video_effect_chains(&too_many_stages).is_err());
+    }
+
+    #[test]
+    fn video_transition_bus_authored_runtime_and_conflicts_are_exact() {
+        let layers = (1..=3)
+            .map(|id| {
+                media_asset_test_layer(id, &format!("Layer {id}"), &format!("C:/show/{id}.mp4"))
+            })
+            .collect::<Vec<_>>();
+        let group = super::VideoLayerGroupSummary {
+            id: super::VideoLayerGroupId(11),
+            label: "Backgrounds".to_string(),
+            composition_id: 9,
+            layer_ids: vec![1, 2],
+        };
+        let from = super::VideoLayerTransitionTarget::Group { group_id: group.id };
+        let to = super::VideoLayerTransitionTarget::Layer { layer_id: 3 };
+        let duration = super::VideoClipTakeDuration::milliseconds(1_000);
+        let bus = super::VideoLayerTransitionBusSummary {
+            id: super::VideoTransitionBusId(5),
+            label: "Program Background".to_string(),
+            composition_id: 9,
+            enabled: true,
+            members: vec![from.clone(), to.clone()],
+            default_from: from.clone(),
+            default_to: to.clone(),
+            default_kind: super::VideoClipTakeKind::Wipe,
+            default_duration: duration,
+            default_curve: super::VideoLayerTransitionCurve::EaseInOut,
+            matte_source: Some(super::VideoLayerTransitionTarget::Layer { layer_id: 2 }),
+        };
+        let mut video = super::VideoSnapshot {
+            layers,
+            layer_groups: vec![group],
+            transition_buses: vec![bus.clone()],
+            compositions: vec![super::CompositionSummary {
+                id: 9,
+                label: "Main".to_string(),
+                layer_ids: vec![1, 2, 3],
+                output_ids: Vec::new(),
+            }],
+            effect_chains: vec![super::VideoEffectChainSummary {
+                id: super::VideoEffectChainId(21),
+                scope: super::VideoEffectScope::Transition {
+                    owner: super::VideoTransitionEffectOwner::LayerBus { bus_id: bus.id },
+                },
+                bypassed: false,
+                stages: Vec::new(),
+            }],
+            ..super::VideoSnapshot::default()
+        };
+        super::validate_authored_video_effect_chains(&video).unwrap();
+        let active = super::VideoLayerTransitionBusRuntimeSummary {
+            bus_id: bus.id,
+            origin_from: from.clone(),
+            from: from.clone(),
+            to: to.clone(),
+            kind: super::VideoClipTakeKind::Wipe,
+            curve: super::VideoLayerTransitionCurve::EaseInOut,
+            elapsed_ms: 250,
+            duration_ms: 1_000,
+            duration,
+            progress_millis: 250,
+        };
+        let runtime = super::VideoLayerTransitionRuntimeSnapshot {
+            buses: vec![active.clone()],
+        };
+        super::validate_video_layer_transition_runtime(&runtime, &video).unwrap();
+
+        let second_bus = super::VideoLayerTransitionBusSummary {
+            id: super::VideoTransitionBusId(6),
+            label: "Conflicting".to_string(),
+            members: vec![from.clone(), to.clone()],
+            default_from: from.clone(),
+            default_to: to.clone(),
+            matte_source: None,
+            ..bus.clone()
+        };
+        video.transition_buses.push(second_bus.clone());
+        let mut conflicting = active;
+        conflicting.bus_id = second_bus.id;
+        conflicting.origin_from = second_bus.default_from.clone();
+        conflicting.from = second_bus.default_from;
+        assert!(super::validate_video_layer_transition_runtime(
+            &super::VideoLayerTransitionRuntimeSnapshot {
+                buses: vec![runtime.buses[0].clone(), conflicting],
+            },
+            &video,
+        )
+        .unwrap_err()
+        .contains("conflict"));
+
+        let mut engine = super::EngineSnapshot::default();
+        engine.video_transition_runtime = runtime.clone();
+        assert!(serde_json::to_value(engine)
+            .unwrap()
+            .get("video_transition_runtime")
+            .is_none());
     }
 
     #[test]

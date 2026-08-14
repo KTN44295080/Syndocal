@@ -147,6 +147,30 @@ impl IsfGpuRuntime {
         time_seconds: f32,
         time_delta_seconds: f32,
     ) -> Result<VideoFrame, IsfRuntimeError> {
+        let frame_index = self.frame_index;
+        let rendered = self.apply_stack_at_frame_index(
+            frame,
+            stages,
+            time_seconds,
+            time_delta_seconds,
+            frame_index,
+        );
+        // Preserve the legacy API contract: only a successful, non-empty
+        // stack advances the host frame counter.
+        if rendered.is_ok() && !stages.is_empty() {
+            self.frame_index = self.frame_index.wrapping_add(1);
+        }
+        rendered
+    }
+
+    fn apply_stack_at_frame_index(
+        &mut self,
+        frame: &VideoFrame,
+        stages: &[(&PreparedIsfShader, &[[f32; 4]])],
+        time_seconds: f32,
+        time_delta_seconds: f32,
+        frame_index: u32,
+    ) -> Result<VideoFrame, IsfRuntimeError> {
         self.last_stack_stage_count = stages.len();
         self.last_stack_render_us = 0;
         if stages.is_empty() {
@@ -253,7 +277,7 @@ impl IsfGpuRuntime {
                 frame.height,
                 time_seconds,
                 time_delta_seconds,
-                self.frame_index,
+                frame_index,
                 controls,
             );
             uniform_buffers.push(self.device.create_buffer_init(
@@ -395,7 +419,6 @@ impl IsfGpuRuntime {
         }
         drop(mapped);
         readback.unmap();
-        self.frame_index = self.frame_index.wrapping_add(1);
         Ok(VideoFrame {
             layer_id: frame.layer_id,
             width: frame.width,
@@ -405,6 +428,52 @@ impl IsfGpuRuntime {
             format: VideoPixelFormat::Rgba8,
             data,
         })
+    }
+
+    /// Applies every stage independently so a runtime failure bypasses only
+    /// that stage and later stages still receive the last valid frame.
+    pub fn apply_stack_stage_local(
+        &mut self,
+        frame: &VideoFrame,
+        stages: &[(&PreparedIsfShader, &[[f32; 4]])],
+        time_seconds: f32,
+        time_delta_seconds: f32,
+    ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
+        let started = std::time::Instant::now();
+        let frame_index = self.frame_index;
+        let mut current = frame.clone();
+        let mut failures = Vec::new();
+        for (index, stage) in stages.iter().enumerate() {
+            match self.apply_stack_at_frame_index(
+                &current,
+                std::slice::from_ref(stage),
+                time_seconds,
+                time_delta_seconds,
+                frame_index,
+            ) {
+                Ok(frame) => current = frame,
+                Err(error) => failures.push((index, error)),
+            }
+        }
+        // One stage-local chain invocation is one host frame. Advance once for
+        // every non-empty chain, including all-fail calls, so failure topology
+        // cannot change FRAMEINDEX. Empty chains are pure no-ops.
+        if !stages.is_empty() {
+            self.frame_index = self.frame_index.wrapping_add(1);
+        }
+        self.last_stack_stage_count = stages.len();
+        self.last_stack_render_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+        (current, failures)
+    }
+
+    /// Consumes one host frame for a non-empty stage-local chain whose stages
+    /// all failed before GPU preparation. This keeps FRAMEINDEX independent of
+    /// prepare-failure topology without changing the legacy `apply_stack`
+    /// success-only advancement contract.
+    pub(crate) fn advance_stage_local_chain_without_prepared_stages(&mut self) {
+        self.frame_index = self.frame_index.wrapping_add(1);
+        self.last_stack_stage_count = 0;
+        self.last_stack_render_us = 0;
     }
 
     pub fn pipeline_count(&self) -> usize {
@@ -1111,5 +1180,94 @@ mod tests {
         assert_eq!(output.layer_id, 9);
         assert_eq!(output.pts_ms, 1_000);
         assert_eq!(output.data, vec![0, 0, 0, 255, 200, 200, 200, 255]);
+    }
+
+    #[test]
+    fn stage_local_chain_uses_one_frame_index_and_advances_once_even_when_all_fail() {
+        let mut runtime =
+            IsfGpuRuntime::new().expect("FRAMEINDEX regression requires a GPU adapter");
+        const WRITE_RED_INDEX: &str = r#"/*{
+          "INPUTS": [{"NAME":"inputImage","TYPE":"image"}]
+        }*/
+        void main() {
+          vec4 pixel = IMG_THIS_PIXEL(inputImage);
+          pixel.r = float(FRAMEINDEX) / 255.0;
+          gl_FragColor = pixel;
+        }"#;
+        const WRITE_GREEN_INDEX: &str = r#"/*{
+          "INPUTS": [{"NAME":"inputImage","TYPE":"image"}]
+        }*/
+        void main() {
+          vec4 pixel = IMG_THIS_PIXEL(inputImage);
+          pixel.g = float(FRAMEINDEX) / 255.0;
+          gl_FragColor = pixel;
+        }"#;
+        let write_red = prepare_isf_shader(WRITE_RED_INDEX).unwrap();
+        let write_green = prepare_isf_shader(WRITE_GREEN_INDEX).unwrap();
+        let mut invalid = write_red.clone();
+        invalid.wgsl = "this is not valid WGSL".to_string();
+        let controls: &[[f32; 4]] = &[];
+        let frame = VideoFrame {
+            layer_id: 5,
+            width: 1,
+            height: 1,
+            pts_ms: 0,
+            duration_ms: 16,
+            format: VideoPixelFormat::Rgba8,
+            data: vec![9, 19, 29, 255],
+        };
+
+        let (first, first_failures) = runtime.apply_stack_stage_local(
+            &frame,
+            &[
+                (&write_red, controls),
+                (&invalid, controls),
+                (&write_green, controls),
+            ],
+            0.0,
+            0.016,
+        );
+        assert_eq!(first_failures.len(), 1);
+        assert_eq!(first_failures[0].0, 1);
+        assert_eq!(first.data, vec![0, 0, 29, 255]);
+
+        let (second, second_failures) = runtime.apply_stack_stage_local(
+            &frame,
+            &[(&write_red, controls), (&write_green, controls)],
+            0.016,
+            0.016,
+        );
+        assert!(second_failures.is_empty());
+        assert_eq!(second.data, vec![1, 1, 29, 255]);
+
+        let (all_failed, all_failures) = runtime.apply_stack_stage_local(
+            &frame,
+            &[(&invalid, controls), (&invalid, controls)],
+            0.032,
+            0.016,
+        );
+        assert_eq!(all_failures.len(), 2);
+        assert_eq!(all_failed, frame);
+
+        let (after_all_fail, failures) = runtime.apply_stack_stage_local(
+            &frame,
+            &[(&write_red, controls), (&write_green, controls)],
+            0.048,
+            0.016,
+        );
+        assert!(failures.is_empty());
+        assert_eq!(after_all_fail.data, vec![3, 3, 29, 255]);
+
+        let legacy = runtime
+            .apply_stack(&frame, &[(&write_red, controls)], 0.064, 0.016)
+            .unwrap();
+        assert_eq!(legacy.data, vec![4, 19, 29, 255]);
+        assert!(runtime
+            .apply_stack(&frame, &[(&invalid, controls)], 0.080, 0.016)
+            .is_err());
+        let legacy_after_failure = runtime
+            .apply_stack(&frame, &[(&write_red, controls)], 0.096, 0.016)
+            .unwrap();
+        assert_eq!(legacy_after_failure.data, vec![5, 19, 29, 255]);
     }
 }

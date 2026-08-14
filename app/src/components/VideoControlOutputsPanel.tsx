@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
-import type { CompositionSummary, VideoOutputSummary, VideoOutputWindowStatus } from "../types";
+import type { CompositionSummary, OutputOwnershipReason, VideoOutputSummary, VideoOutputWindowStatus } from "../types";
 
 export interface VideoOutputRenderPlanStateView {
   layerCount: number;
@@ -13,6 +13,22 @@ export interface VideoOutputWindowStateView {
   stateClass: string;
   detail: string;
 }
+
+const videoOwnershipMessage = (status: VideoOutputWindowStatus): string => {
+  if (status.ownership_error) return status.ownership_error;
+  switch (status.ownership_reason as OutputOwnershipReason) {
+    case "Transitioning":
+      return "Transitioning — outputs fenced";
+    case "ProjectSwapDisarmed":
+      return "Project changed — outputs disarmed";
+    case "TransitionFailed":
+      return "Transition failed; outputs remain fenced";
+    case "StartupDenied":
+      return "Startup denied output ownership";
+    default:
+      return "External video output blocked by machine output role";
+  }
+};
 
 interface VideoMasterControlsPanelProps {
   masterOpacity: number;
@@ -228,6 +244,11 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
                   <Show when={output.kind === "Display"}>
                     <span class={`outputWindowStatus state-${windowState().stateClass}`}>{windowState().stateLabel}</span>
                     <small class="outputWindowDetail" title={windowState().detail}>{windowState().detail}</small>
+                    <Show when={outputWindowStatus()?.ownership_allowed === false}>
+                      <small class="outputWindowDetail outputOwnershipBlocked" role="status" aria-live="polite">
+                        {videoOwnershipMessage(outputWindowStatus()!)}
+                      </small>
+                    </Show>
                   </Show>
                   <div class="outputOpacityMeter">
                     <span style={{ width: `${Math.round(output.opacity * 100)}%` }} />

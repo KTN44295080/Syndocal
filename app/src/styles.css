@@ -279,13 +279,29 @@
 }
 
 .timelineOperatorBar > .timelineTransport,
-.timelineOperatorBar > .timelineMetronomeControls {
+.timelineOperatorBar > .timelineMetronomeControls,
+.timelineOperatorBar > .timelineLoopControls {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
   padding-right: 3px;
   border-right: 1px solid #34383b;
+}
+
+.timelineOperatorBar > .timelineLoopControls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.timelineOperatorBar > .timelineLoopControls button {
+  width: auto;
+  min-width: 38px;
+  padding-inline: 7px;
+  font-size: 10px;
+  font-weight: 750;
 }
 
 .timelineOperatorBar button,
@@ -390,6 +406,11 @@
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.42);
 }
 
+.timelineToolsDisclosure:not([open]) > .timelineToolsDisclosurePanel,
+.groupLiveMixerDisclosure:not([open]) > .groupLiveMixerDisclosurePanel {
+  display: none !important;
+}
+
 .timelineToolsDisclosurePanel {
   display: flex;
   align-items: center;
@@ -397,6 +418,99 @@
   width: max-content;
   max-width: min(760px, calc(100vw - 24px));
   padding: 4px;
+}
+
+.timelineToolsDisclosurePanel:has(> .timelinePerformanceEditor) {
+  display: block;
+  top: auto;
+  bottom: calc(100% + 3px);
+  width: min(760px, calc(100cqi - 90px));
+  max-width: min(760px, calc(100cqi - 90px));
+  max-height: min(72vh, 680px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.timelinePerformanceEditor {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.timelinePerformanceEditor .timelineBankPanel {
+  margin: 0;
+}
+
+.timelinePerformanceLoopBoundaries {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.timelinePerformanceLoopBoundaries > button {
+  min-width: 44px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show) {
+  grid-template-rows: 48px minmax(0, 1fr);
+  container-type: inline-size;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  > .controlContextHeader {
+  min-height: 48px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .timelineOperatorBar {
+  flex: 1 1 auto;
+  height: 44px;
+}
+
+.timelineOperatorBar > .timelineLoopControls button,
+.timelineOperatorBar > .timelineMetronomeControls [data-timeline-guide],
+.timelineOperatorBar .timelinePerformanceEditor button,
+.timelineOperatorBar .timelinePerformanceEditor input,
+.timelineOperatorBar .timelinePerformanceEditor select {
+  height: auto;
+  min-height: 44px;
+  max-height: none;
+}
+
+.timelineOperatorBar > .timelineTransport button,
+.timelineOperatorBar > .timelineMetronomeControls button,
+.timelineOperatorBar > .timelineToolsDisclosure > summary {
+  height: 44px;
+  min-height: 44px;
+  max-height: none;
+}
+
+.timelineOperatorBar > .timelineToolsDisclosure {
+  height: 44px;
+}
+
+@media (max-width: 1400px) {
+  .timelineOperatorBar > .timelineMetronomeControls [data-timeline-count-in] {
+    display: none;
+  }
+
+  .timelineOperatorBar > .timelineLoopControls [data-timeline-loop-boundary] {
+    display: none;
+  }
+}
+
+@container (max-width: 680px) {
+  .timelinePerformanceEditor .timelinePhaseRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .timelinePerformanceEditor .timelinePhaseRow > button {
+    grid-column: 1 / -1;
+  }
 }
 
 .timelineToolsDisclosurePanel .timelineViewportToolbar,
@@ -4220,6 +4334,7 @@ h3 {
 
 .timelineToolStrip .timelineTransport,
 .timelineToolStrip .timelineMetronomeControls,
+.timelineToolStrip .timelineLoopControls,
 .timelineToolStrip .timelineViewportToolbar,
 .timelineToolStrip .timelineDirectToolbar,
 .timelineToolStrip .timelineStretchModeToggle {
@@ -4232,6 +4347,7 @@ h3 {
 
 .timelineToolStrip .timelineTransport,
 .timelineToolStrip .timelineMetronomeControls,
+.timelineToolStrip .timelineLoopControls,
 .timelineToolStrip .timelineViewportToolbar {
   padding-right: 3px;
   border-right: 1px solid #34383b;
@@ -4243,12 +4359,136 @@ h3 {
   padding: 0 7px;
   font-size: 10px;
   font-weight: 750;
+  min-height: 44px;
 }
 
 .timelineToolStrip .timelineMetronomeControls button.active {
   border-color: #f59b45;
   background: #6c3a18;
   color: #fff4e8;
+}
+
+.timelineToolStrip .timelineLoopControls button {
+  width: auto;
+  min-width: 38px;
+  padding-inline: 7px;
+  font-size: 10px;
+  font-weight: 750;
+  min-height: 44px;
+}
+
+.timelineToolStrip .timelineLoopControls button.active {
+  border-color: #63d7ba;
+  background: #174b42;
+  color: #e8fff9;
+}
+
+.timelineLoopState {
+  min-width: 50px;
+  color: #7f8b96;
+  font-size: 9px;
+  font-weight: 850;
+  text-align: center;
+}
+
+.timelineLoopState.armed {
+  color: #f7bd61;
+}
+
+.timelineLoopState.looping {
+  color: #63d7ba;
+}
+
+.timelinePhaseEditor {
+  min-width: 0;
+  border: 1px solid #24282b;
+  background: #151719;
+}
+
+.timelinePhaseEditor > summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.timelinePhaseEditor > summary strong {
+  color: #7fc9ba;
+}
+
+.timelinePhaseEditorBody {
+  display: grid;
+  gap: 6px;
+  max-height: min(300px, 40vh);
+  overflow: auto;
+  border-top: 1px solid #24282b;
+  padding: 8px;
+}
+
+.timelinePhaseRail {
+  position: relative;
+  min-height: 44px;
+  overflow: hidden;
+  border: 1px solid #2d3339;
+  background: #0f1113;
+}
+
+.timelinePhaseBand {
+  position: absolute;
+  inset-block: 0;
+  min-width: 1px;
+  min-height: 44px;
+  overflow: hidden;
+  border: 0;
+  border-inline-end: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 0;
+  background: #28465f;
+  color: #f2f8ff;
+  padding: 0 8px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelinePhaseBand.chorus,
+.timelinePhaseBand.pre_chorus {
+  background: #604328;
+}
+
+.timelinePhaseBand.bridge {
+  background: #4c3568;
+}
+
+.timelinePhaseBand.outro {
+  background: #3e444c;
+}
+
+.timelinePhaseRows {
+  display: grid;
+  gap: 6px;
+}
+
+.timelinePhaseRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(110px, 0.7fr) minmax(104px, 0.5fr) minmax(104px, 0.5fr) auto;
+  align-items: end;
+  gap: 6px;
+}
+
+.timelinePhaseRow > label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.timelinePhaseRow input,
+.timelinePhaseRow select,
+.timelinePhaseRow button,
+.timelinePhaseEditorBody > button {
+  min-height: 44px;
 }
 
 .timelineCountInReadout {
@@ -29723,6 +29963,68 @@ h3 {
   pointer-events: none;
 }
 
+.timelineVideoClip {
+  cursor: grab;
+  outline: none;
+  touch-action: none;
+}
+
+.timelineVideoClip.dragging {
+  cursor: grabbing;
+}
+
+.timelineVideoClip.layerMuted {
+  opacity: 0.38;
+}
+
+.timelineVideoClipBody {
+  fill: #234b5c;
+  stroke: rgba(7, 10, 12, 0.72);
+  stroke-width: 1;
+}
+
+.timelineVideoClipIdentityBand {
+  fill: #58b9d6;
+  pointer-events: none;
+}
+
+.timelineVideoClip.selected .timelineVideoClipBody,
+.timelineVideoClip:focus-visible .timelineVideoClipBody {
+  stroke: #e6fbff;
+  stroke-width: 1.7;
+}
+
+.timelineVideoClipLabel {
+  fill: #07171d;
+  font-size: 10px;
+  font-weight: 750;
+  pointer-events: none;
+}
+
+.timelineVideoClipDuration {
+  fill: #e8faff;
+  font-size: 9px;
+  font-weight: 650;
+  pointer-events: none;
+}
+
+.timelineItemContextMenu {
+  position: fixed;
+  z-index: 1900;
+  display: grid;
+  width: 210px;
+  gap: 4px;
+  border: 1px solid #050607;
+  background: #202428;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.58);
+  padding: 6px;
+}
+
+.timelineItemContextMenu button {
+  min-height: 44px;
+  text-align: left;
+}
+
 .timelineAudioClipResizeHandle,
 .timelineAudioClipFadeHandle {
   fill: transparent;
@@ -32525,7 +32827,7 @@ h3 {
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurface {
   --timeline-block-inspector-width: clamp(260px, 32%, 340px);
-  grid-template-rows: auto auto minmax(148px, 1fr);
+  grid-template-rows: auto auto auto minmax(148px, 1fr);
   align-content: start;
   gap: 3px;
   overflow: hidden;
@@ -32545,13 +32847,14 @@ h3 {
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen:has(> .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer)) > .panelHeader,
-.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen:has(> .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer)) > .timelineToolStrip {
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen:has(> .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer)) > .timelineToolStrip,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen:has(> .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer)) > .timelinePhaseEditor {
   grid-column: 1 / -1;
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen:has(> .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer)) > .timelineOverviewFrame {
   grid-column: 1;
-  grid-row: 3;
+  grid-row: 4;
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane .timelineShowSurfaceBlockDrawerOpen > .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer) {
@@ -32560,7 +32863,7 @@ h3 {
   right: auto;
   bottom: auto;
   grid-column: 2;
-  grid-row: 3;
+  grid-row: 4;
   width: 100%;
   min-width: 0;
   height: 100%;
@@ -36936,4 +37239,357 @@ a[href]:focus-visible,
 .videoClipSlotInspectorError {
   margin: 0;
   color: #ffb4b4;
+}
+.videoEffectScopeCatalog {
+  margin: 0;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+}
+
+.videoEffectScopeCatalog > summary,
+.videoEffectScopePanel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.videoEffectScopeCatalogBody {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 10px;
+  max-height: min(52vh, 640px);
+  overflow: auto;
+  padding: 10px;
+}
+
+.videoEffectScopeCatalog button,
+.videoEffectScopeCatalog select,
+.videoEffectScopeCatalog input {
+  min-height: 44px;
+}
+
+.videoEffectScopePanel {
+  container-type: inline-size;
+  min-width: 0;
+  border: 1px solid var(--line, #384047);
+  border-radius: 10px;
+  background: var(--panel-raised, var(--panel));
+}
+
+.videoEffectScopeBody {
+  display: grid;
+  gap: 10px;
+  padding: 0 10px 10px;
+}
+
+.videoEffectStageList {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.videoEffectStageList > li {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.videoEffectStageList small {
+  display: block;
+  color: var(--muted);
+}
+
+.videoEffectScopeActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.videoEffectCatalogSetupPanel {
+  grid-column: 1 / -1;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.videoTransitionBusPanel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-raised, var(--panel));
+}
+
+.videoTransitionBusPanel > header > div,
+.videoTransitionBus {
+  display: grid;
+  gap: 6px;
+}
+
+.videoTransitionBusPanel header span,
+.videoTransitionBus small {
+  color: var(--muted);
+}
+
+.videoTransitionBusCreate {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.videoTransitionBusCreate label {
+  display: grid;
+  gap: 4px;
+}
+
+.videoTransitionBusPanel button,
+.videoTransitionBusPanel select,
+.videoTransitionBusPanel input {
+  min-height: 44px;
+}
+
+.videoTransitionBusList {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.videoTransitionBus {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.videoTransitionBus.active {
+  border-color: var(--accent);
+}
+
+.videoTransitionBus progress {
+  width: 100%;
+}
+
+.videoTransitionBusActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.videoTransitionBusPanel.compact {
+  max-height: min(36vh, 420px);
+  overflow: auto;
+}
+
+.videoEffectCatalogSetupPanel > summary {
+  min-height: 44px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.videoEffectCatalogSetupBody {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 10px;
+  padding: 0 10px 10px;
+}
+
+.videoEffectCatalogSetupBody fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.videoEffectPresetList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.videoEffectPresetList li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.videoEffectPresetList li span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoEffectPresetList li button {
+  margin-left: auto;
+}
+
+.videoEffectStageControls {
+  min-width: 0;
+}
+
+.videoEffectStageControls > summary {
+  min-height: 44px;
+  padding-block: 10px;
+  cursor: pointer;
+}
+
+.videoEffectStageControl {
+  display: grid;
+  grid-template-columns: minmax(96px, 1fr) repeat(4, minmax(76px, 0.7fr));
+  align-items: center;
+  gap: 8px;
+  padding-block: 6px;
+}
+
+.videoEffectStageControl input[type="checkbox"] {
+  justify-self: start;
+}
+
+@container (max-width: 520px) {
+  .videoEffectStageControl {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+/* Timeline bank / Follow editor: authored ordering is compact, while every
+   action retains the operator 44px hit target and scrolls inside the panel. */
+.timelineBankPanel {
+  margin: 0 12px 8px;
+  border: 1px solid var(--line, #384047);
+  border-radius: 8px;
+  background: var(--panel-2, #171c22);
+}
+
+.timelineBankPanel > summary {
+  min-height: 44px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.timelineBankPanel > summary strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineFollowState {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.timelineFollowState.transitioning,
+.timelineFollowState.pending {
+  color: var(--accent, #61c8ff);
+}
+
+.timelineFollowState.held,
+.timelineFollowState.fault {
+  color: var(--danger, #ff8c8c);
+}
+
+.timelineBankBody {
+  max-height: min(40vh, 440px);
+  padding: 0 10px 10px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.timelineBankList {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  list-style: none;
+}
+
+.timelineBankList > li {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) repeat(4, minmax(44px, auto));
+  gap: 4px;
+  align-items: stretch;
+}
+
+.timelineBankList button,
+.timelineBankCreate button {
+  min-height: 44px;
+}
+
+.timelineBankSelect {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+
+.timelineBankList > li.active .timelineBankSelect {
+  border-color: var(--accent, #61c8ff);
+}
+
+.timelineBankCreate,
+.timelineFollowEditor {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.timelineBankCreate label,
+.timelineFollowEditor label:not(.toggleRow) {
+  display: grid;
+  gap: 4px;
+}
+
+.timelineFollowEditor {
+  padding: 10px;
+}
+
+.timelineFollowEditor legend {
+  padding: 0 4px;
+}
+
+.timelineFollowEditor input,
+.timelineFollowEditor select,
+.timelineBankCreate input {
+  min-height: 44px;
+}
+
+.timelineFollowEditor .toggleRow {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .timelineBankList > li {
+    grid-template-columns: minmax(130px, 1fr) repeat(2, minmax(44px, auto));
+  }
+
+  .timelineBankList > li > button:nth-of-type(4),
+  .timelineBankList > li > button:nth-of-type(5) {
+    grid-row: 2;
+  }
 }

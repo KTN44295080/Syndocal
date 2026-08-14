@@ -4,6 +4,8 @@ import type {
   VideoClipLaunchQuantization,
   VideoClipLayerRuntimeSummary,
   VideoClipSlotId,
+  VideoClipTakeKind,
+  VideoClipTakeDurationUnit,
   VideoLayerSummary,
 } from "../types";
 import {
@@ -28,6 +30,12 @@ export interface VideoClipSlotBankPanelProps {
   onImport: () => void | Promise<unknown>;
   onCancelQueue: () => void | Promise<unknown>;
   onSetQuantization: (slotId: VideoClipSlotId, quantization: VideoClipLaunchQuantization) => void | Promise<unknown>;
+  transitionKind: VideoClipTakeKind;
+  transitionDurationUnit: VideoClipTakeDurationUnit;
+  transitionDurationMilliunits: number;
+  onSetTransitionKind: (kind: VideoClipTakeKind) => void;
+  onSetTransitionDurationUnit: (unit: VideoClipTakeDurationUnit) => void;
+  onSetTransitionDurationMilliunits: (value: number) => void;
 }
 
 const slotLabel = (index: number, slotId: VideoClipSlotId | undefined) =>
@@ -84,8 +92,19 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
           <span>{props.layer ? `${props.layer.label} · ${props.layer.clip_slots?.length ?? 0}/32` : "Select a layer"}</span>
         </div>
         <span class="videoClipSlotRuntimeReadout" role="status">
-          <Show when={props.runtime?.active_slot_id !== null && props.runtime?.active_slot_id !== undefined} fallback="No active slot">
-            Active #{props.runtime?.active_slot_id} · {props.runtime?.playhead_ms ?? 0} ms
+          <Show when={props.runtime?.transition} fallback={
+            <Show when={props.runtime?.active_slot_id !== null && props.runtime?.active_slot_id !== undefined} fallback="No active slot">
+              Active #{props.runtime?.active_slot_id} · {props.runtime?.playhead_ms ?? 0} ms
+            </Show>
+          }>
+            {(transition) => <>
+              {transition().kind} #{transition().outgoing_slot_id} → #{transition().incoming_slot_id} · {Math.round(transition().progress_millis / 10)}%
+              <progress
+                max="1000"
+                value={transition().progress_millis}
+                aria-label={`${transition().kind} progress`}
+              />
+            </>}
           </Show>
         </span>
       </header>
@@ -117,11 +136,55 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
               <option value="NextBar">Next Bar</option>
             </select>
           </label>
-          <label title="Planned: atomic transition bundles are not available in this runtime.">
-            Transition duration
-            <input type="number" value="1000" disabled aria-disabled="true" />
+          <label>
+            Transition
+            <select
+              value={props.transitionKind}
+              disabled={props.runtime?.transition != null}
+              onInput={(event) => props.onSetTransitionKind(event.currentTarget.value as VideoClipTakeKind)}
+            >
+              <option value="Cut">Cut</option>
+              <option value="Crossfade">Crossfade</option>
+              <option value="Dip">Dip</option>
+              <option value="Wipe">Wipe</option>
+              <option value="Luma">Luma</option>
+              <option value="Displacement">Displacement</option>
+              <option value="Blur">Blur</option>
+              <option value="Glitch">Glitch</option>
+              <option value="Custom">Custom FX</option>
+            </select>
           </label>
-          <button type="button" disabled={props.runtime?.queued_slot_id == null} onClick={() => void props.onCancelQueue()}>
+          <label>
+            Duration unit
+            <select
+              value={props.transitionDurationUnit}
+              disabled={props.transitionKind === "Cut" || props.runtime?.transition != null}
+              onInput={(event) => props.onSetTransitionDurationUnit(event.currentTarget.value as VideoClipTakeDurationUnit)}
+            >
+              <option value="Milliseconds">Milliseconds</option>
+              <option value="Beats">Beats</option>
+              <option value="Bars">Bars</option>
+            </select>
+          </label>
+          <label>
+            Transition duration
+            <input
+              type="number"
+              min={props.transitionDurationUnit === "Milliseconds" ? "1" : "0.001"}
+              max={props.transitionDurationUnit === "Milliseconds" ? "600000" : "600"}
+              step={props.transitionDurationUnit === "Milliseconds" ? "50" : "0.25"}
+              value={props.transitionDurationUnit === "Milliseconds"
+                ? props.transitionDurationMilliunits
+                : props.transitionDurationMilliunits / 1000}
+              disabled={props.transitionKind === "Cut" || props.runtime?.transition != null}
+              onInput={(event) => props.onSetTransitionDurationMilliunits(
+                props.transitionDurationUnit === "Milliseconds"
+                  ? Number(event.currentTarget.value)
+                  : Number(event.currentTarget.value) * 1000,
+              )}
+            />
+          </label>
+          <button type="button" disabled={props.runtime?.queued_slot_id == null || props.runtime?.transition != null} onClick={() => void props.onCancelQueue()}>
             Cancel Queue
           </button>
         </Show>

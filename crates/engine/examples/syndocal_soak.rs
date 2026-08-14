@@ -38,7 +38,10 @@ fn run() -> Result<(), String> {
     let (duration, report_path, mixed_lighting) = parse_args()?;
     let project: ProjectFile = serde_json::from_str(PROJECT_JSON).map_err(|e| e.to_string())?;
     let output = project.snapshot.output.clone();
-    let engine = EngineHandle::start(output);
+    // The native app uses EngineHandle::start, which is intentionally fail-closed
+    // until app-local ownership persistence is initialized. This standalone soak
+    // harness explicitly opts into the legacy Both capability for measurements.
+    let engine = EngineHandle::start_for_tests(output);
     engine
         .load_project_snapshot(project.snapshot)
         .map_err(|e| e.to_string())?;

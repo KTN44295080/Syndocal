@@ -124,6 +124,12 @@ const measureBank = (client, mode) => evaluate(client, `(() => {
     pending: pads.filter((pad) => pad.classList.contains('pending')).length,
     importVisible: [...root.querySelectorAll('button')].some((button) => button.textContent?.trim() === 'Import' && button.getBoundingClientRect().height > 0),
     cancelVisible: [...root.querySelectorAll('button')].some((button) => button.textContent?.trim() === 'Cancel Queue' && button.getBoundingClientRect().height > 0),
+    transitionKind: [...root.querySelectorAll('select')].find((select) => select.closest('label')?.textContent?.includes('Transition'))?.value ?? null,
+    transitionKindOptions: [...root.querySelectorAll('select')].find((select) => select.closest('label')?.textContent?.trim().startsWith('Transition'))?.options.length ?? 0,
+    transitionDurationUnit: [...root.querySelectorAll('select')].find((select) => select.closest('label')?.textContent?.includes('Duration unit'))?.value ?? null,
+    transitionDurationUnitOptions: [...root.querySelectorAll('select')].find((select) => select.closest('label')?.textContent?.includes('Duration unit'))?.options.length ?? 0,
+    transitionDuration: [...root.querySelectorAll('input[type=number]')].find((input) => input.closest('label')?.textContent?.includes('Transition duration'))?.value ?? null,
+    transitionDurationEnabled: Boolean([...root.querySelectorAll('input[type=number]')].find((input) => input.closest('label')?.textContent?.includes('Transition duration') && !input.disabled)),
     layerSelectorVisible: Boolean([...root.querySelectorAll('select')].find((select) => select.closest('label')?.textContent?.includes('Layer') && select.getBoundingClientRect().height > 0)),
     inspectorTriggerVisible: Boolean([...root.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'More' && button.getBoundingClientRect().height > 0)),
     docFixed: document.documentElement.scrollWidth === document.documentElement.clientWidth
@@ -132,6 +138,60 @@ const measureBank = (client, mode) => evaluate(client, `(() => {
     primaryCount: primary.length,
     badMedia,
     shortTargets,
+  };
+})()`);
+const measureEffectCatalog = (client) => evaluate(client, `(() => {
+  const root = [...document.querySelectorAll('.videoEffectScopeCatalog')].find((candidate) => {
+    const rect = candidate.getBoundingClientRect();
+    const style = getComputedStyle(candidate);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  });
+  const app = document.querySelector('.app');
+  if (!(root instanceof HTMLElement) || !(app instanceof HTMLElement)) return null;
+  const rect = root.getBoundingClientRect();
+  const stages = [...root.querySelectorAll('[data-effect-stage-id]')];
+  const controls = [...root.querySelectorAll('[data-effect-control]')];
+  const shortTargets = [...root.querySelectorAll('button, select, input')].filter((control) => {
+    const bounds = control.getBoundingClientRect();
+    return bounds.width > 0 && bounds.height > 0 && bounds.height < 43.5;
+  }).length;
+  return {
+    open: root.open,
+    rect: [rect.width, rect.height],
+    setupCount: root.querySelectorAll('.videoEffectCatalogSetupPanel').length,
+    scopeKinds: [...root.querySelectorAll('[data-effect-scope]')].map((node) => node.getAttribute('data-effect-scope')),
+    stageIds: stages.map((node) => Number(node.getAttribute('data-effect-stage-id'))),
+    effectIds: stages.map((node) => Number(node.getAttribute('data-effect-id'))),
+    controlCount: controls.filter((control) => control.getBoundingClientRect().height > 0).length,
+    presetOptions: root.querySelectorAll('.videoEffectScopeActions select option').length,
+    shortTargets,
+    docFixed: document.documentElement.scrollWidth === document.documentElement.clientWidth
+      && document.documentElement.scrollHeight === document.documentElement.clientHeight
+      && app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight,
+  };
+})()`);
+const measureTransitionBus = (client, compact) => evaluate(client, `(() => {
+  const candidates = [...document.querySelectorAll('.videoTransitionBusPanel${compact ? ".compact" : ":not(.compact)"}')];
+  const root = candidates.find((candidate) => {
+    const rect = candidate.getBoundingClientRect();
+    const style = getComputedStyle(candidate);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  });
+  if (!(root instanceof HTMLElement)) return null;
+  const active = root.querySelector('.videoTransitionBus.active');
+  const progress = active?.querySelector('progress');
+  const buttons = [...(active?.querySelectorAll('button') ?? [])];
+  const rect = root.getBoundingClientRect();
+  return {
+    rect: [rect.width, rect.height],
+    activeCount: root.querySelectorAll('.videoTransitionBus.active').length,
+    progress: progress instanceof HTMLProgressElement ? progress.value : null,
+    reverse: buttons.some((button) => button.textContent?.trim() === 'Reverse' && !button.disabled),
+    release: buttons.some((button) => button.textContent?.trim() === 'Release' && !button.disabled),
+    shortTargets: [...root.querySelectorAll('button, select, input')].filter((control) => {
+      const bounds = control.getBoundingClientRect();
+      return bounds.width > 0 && bounds.height > 0 && bounds.height < 43.5;
+    }).length,
   };
 })()`);
 
@@ -178,6 +238,23 @@ try {
     assert.deepEqual([edit.active, edit.queued, edit.pending], [1, 1, 1], "Edit renders independent runtime active/queued/pending truth");
     assert.equal(edit.importVisible && edit.layerSelectorVisible && edit.inspectorTriggerVisible, true, "Edit exposes persistent Import, layer selector, and inspector trigger");
     assert.equal(edit.shortTargets, 0, `Edit preserves 44px controls at ${viewport.width}x${viewport.height}`);
+    assert.equal(await click(client, '.videoMixerLayerPane .videoEffectScopeCatalog > summary'), true);
+    await waitFor(() => evaluate(client, "document.querySelector('.videoMixerLayerPane .videoEffectScopeCatalog[open]') !== null"), "Scoped FX catalog disclosure");
+    await evaluate(client, "document.querySelector('.videoMixerLayerPane .videoEffectScopeCatalog')?.scrollIntoView({block:'nearest'})");
+    const effects = await measureEffectCatalog(client);
+    assert.ok(effects?.rect[0] > 0 && effects?.rect[1] > 0, "Scoped FX catalog has nonzero visible geometry");
+    assert.equal(effects.setupCount, 1, "Scoped FX group/preset authoring is mounted");
+    assert.deepEqual(effects.scopeKinds.sort(), ["composition", "group", "output", "output", "transition"], "Transition Bus, Composition, Group, and every Output scope are rendered from stable catalog truth");
+    assert.deepEqual(effects.stageIds.sort((a, b) => a - b), [6_203, 6_204, 6_205, 6_206]);
+    assert.deepEqual(effects.effectIds.sort((a, b) => a - b), [6_303, 6_304, 6_305, 6_306]);
+    assert.equal(effects.controlCount, 4, "Stable scoped stage parameters are present for Transition Bus, Composition, Group, and Output chains");
+    assert.ok(effects.presetOptions >= 2, "Each scoped chain can select the backend-authored preset");
+    assert.equal(effects.shortTargets, 0, `Scoped FX preserves 44px controls at ${viewport.width}x${viewport.height}`);
+    assert.equal(effects.docFixed, true, `Expanded Scoped FX keeps app/document outer scroll fixed at ${viewport.width}x${viewport.height}`);
+    await evaluate(client, "document.querySelector('.videoTransitionBusPanel:not(.compact)')?.scrollIntoView({block:'nearest'})");
+    const editBus = await measureTransitionBus(client, false);
+    assert.ok(editBus?.rect[0] > 0 && editBus?.rect[1] > 0, "Edit transition bus is visible with nonzero geometry");
+    assert.deepEqual([editBus.activeCount, editBus.progress, editBus.reverse, editBus.release, editBus.shortTargets], [1, 500, true, true, 0], "Edit exposes exact active runtime progress, reversible Take, anytime Release, and 44px controls");
 
     assert.equal(await click(client, '[data-workspace-option="touch"]'), true);
     assert.equal(await click(client, '[data-control-domain="video"]'), true, "Control Video domain is explicitly selected");
@@ -190,9 +267,32 @@ try {
     assert.ok(control.rootRect[0] > 0 && control.rootRect[1] > 0, "Control root is actually visible with nonzero geometry");
     assert.equal(control.occupied, 32, "Control fixture mounts the same 32 authored occupied slots");
     assert.deepEqual([control.active, control.queued, control.pending], [1, 1, 1], "Control renders active/queued/pending runtime truth");
+    assert.deepEqual(
+      [control.transitionKind, control.transitionKindOptions, control.transitionDurationUnit, control.transitionDurationUnitOptions, control.transitionDuration, control.transitionDurationEnabled],
+      ["Crossfade", 9, "Milliseconds", 3, "750", true],
+      "Control exposes all transition modes and deterministic millisecond/beat/bar duration units",
+    );
+    await evaluate(client, `(() => {
+      const root = [...document.querySelectorAll('[data-video-clip-slot-bank=control]')].find((candidate) => candidate.getBoundingClientRect().height > 0);
+      const select = [...(root?.querySelectorAll('select') ?? [])].find((candidate) => candidate.closest('label')?.textContent?.includes('Duration unit'));
+      if (!(select instanceof HTMLSelectElement)) return false;
+      select.value = 'Beats';
+      select.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`);
+    const musical = await measureBank(client, "control");
+    assert.deepEqual(
+      [musical.transitionDurationUnit, musical.transitionDuration],
+      ["Beats", "0.75"],
+      "Control converts the shared fixed-point duration to beat units without changing identity",
+    );
     assert.equal(control.importVisible && control.cancelVisible && control.layerSelectorVisible && control.inspectorTriggerVisible, true, "Control exposes Import, cancel, layer selector, and inspector trigger");
     const take = await evaluate(client, `(() => { const button = document.querySelector('.touchDomainVideo [data-video-clip-slot-take]'); const rect = button?.getBoundingClientRect(); return button instanceof HTMLButtonElement && Boolean(rect && rect.width > 0 && rect.height >= 44) && !button.disabled; })()`);
     assert.equal(take, true, "Control has one visible enabled dominant queued Take target");
+    await evaluate(client, "document.querySelector('.touchDomainVideo .videoTransitionBusPanel.compact')?.scrollIntoView({block:'nearest'})");
+    const controlBus = await measureTransitionBus(client, true);
+    assert.ok(controlBus?.rect[0] > 0 && controlBus?.rect[1] > 0, "Control transition bus is visible with nonzero geometry");
+    assert.deepEqual([controlBus.activeCount, controlBus.progress, controlBus.reverse, controlBus.release, controlBus.shortTargets], [1, 500, true, true, 0], "Control exposes the same active runtime truth and reversible 44px controls");
     assert.equal(control.shortTargets, 0, `Control preserves 44px controls at ${viewport.width}x${viewport.height}`);
     console.log(`pass clip-slot-bank ${viewport.width}x${viewport.height} pads=${edit.padCount}/${control.padCount} cols=${edit.columns}/${control.columns} outer-scroll=0 targets<44=${edit.shortTargets}/${control.shortTargets}`);
   }

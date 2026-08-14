@@ -65,6 +65,13 @@ interface AppKeyboardControllerOptions {
   setCueFadePaused: (paused: boolean) => MaybePromise;
   playTimeline: () => MaybePromise;
   pauseTimeline: () => MaybePromise;
+  timelineSurfaceActive: Accessor<boolean>;
+  timelineLoopEnabled: Accessor<boolean>;
+  timelineLoopAvailable: Accessor<boolean>;
+  setTimelineLoopEnabled: (enabled: boolean) => MaybePromise;
+  scaleTimelineLoop: (scale: "half" | "double") => MaybePromise;
+  setTimelineLoopA: () => MaybePromise;
+  setTimelineLoopB: () => MaybePromise;
   setAllBlackout: (enabled: boolean) => MaybePromise;
   setBlackout: (enabled: boolean) => MaybePromise;
   setVideoBlackout: (enabled: boolean) => MaybePromise;
@@ -247,6 +254,35 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
       if (options.snapshot().timeline.playing) void options.pauseTimeline();
       else if (options.snapshot().timeline.duration_ms > 0) void options.playTimeline();
       return;
+    }
+    if (options.timelineSurfaceActive()) {
+      if (event.code === "KeyL" && !event.shiftKey) {
+        event.preventDefault();
+        if (options.timelineLoopAvailable()) {
+          void options.setTimelineLoopEnabled(!options.timelineLoopEnabled());
+        }
+        return;
+      }
+      if (event.code === "BracketLeft" && !event.shiftKey) {
+        event.preventDefault();
+        if (options.timelineLoopAvailable()) void options.scaleTimelineLoop("half");
+        return;
+      }
+      if (event.code === "BracketRight" && !event.shiftKey) {
+        event.preventDefault();
+        if (options.timelineLoopAvailable()) void options.scaleTimelineLoop("double");
+        return;
+      }
+      if (event.code === "KeyA" && event.shiftKey) {
+        event.preventDefault();
+        void options.setTimelineLoopA();
+        return;
+      }
+      if (event.code === "KeyB" && event.shiftKey) {
+        event.preventDefault();
+        void options.setTimelineLoopB();
+        return;
+      }
     }
     if (event.code === "KeyB") {
       event.preventDefault();

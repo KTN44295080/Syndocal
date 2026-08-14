@@ -41,6 +41,22 @@ assert.equal(localization.translateUiText("Live audio input stopped.", "ja"), "�
 assert.equal(localization.translateUiText("Bass level", "ja"), "低域レベル");
 assert.equal(localization.translateUiText("0 percent", "ja"), "0パーセント");
 assert.equal(localization.translateUiText("Checking", "ja"), "確認中");
+assert.equal(
+  localization.translateUiText("Media library: 2 imported, 1 reused, 3 failed, 4 skipped.", "ja"),
+  "メディアライブラリ: 2件 読み込み、1件 再利用、3件 失敗、4件 スキップ。",
+);
+assert.equal(
+  localization.translateUiText("Media availability: 2 verified, 1 need attention. Project history was not changed.", "ja"),
+  "メディア利用可否: 2件を検証済み、1件は要確認。プロジェクト履歴は変更されていません。",
+);
+assert.equal(
+  localization.translateUiText("Relinked media asset 7 and adopted the replacement.", "ja"),
+  "メディア素材 7 を再リンクし、置換コンテンツを採用しました。",
+);
+assert.equal(
+  localization.translateUiText("Media asset 7 does not match the expected content hash.", "ja"),
+  "メディア素材 7 は想定されたコンテンツハッシュと一致しません。",
+);
 assert.equal(localization.translateUiText("Clear Pending", "ja"), "クリア待ち");
 assert.equal(localization.translateUiText("Audio Reactive", "ja"), "オーディオリアクティブ");
 assert.equal(localization.translateUiText("Audio feature input level", "ja"), "音声特徴量の入力レベル");
@@ -282,10 +298,10 @@ assert.equal(
 );
 assert.equal(
   localization.translateUiText(
-    "Created an unsaved project from Festival Base (2 embedded profiles, 4 MIDI, 1 OSC, 3 DMX mappings). All DMX and video outputs are disabled and blacked out.",
+    "Created an unsaved project from Festival Base (2 embedded profiles, 4 MIDI, 1 OSC, 3 DMX mappings). Outputs remain disarmed until explicit Arm; authored output settings were preserved.",
     "ja",
   ),
-  "Festival Baseから未保存プロジェクトを作成しました（埋め込みプロファイル 2、MIDI 4、OSC 1、DMX 3）。DMXと映像出力はすべて無効・ブラックアウトです。",
+  "Festival Baseから未保存プロジェクトを作成しました（埋め込みプロファイル 2、MIDI 4、OSC 1、DMX 3）。出力は明示的にArmするまで停止状態です。作成済みの出力設定は保持されています。",
 );
 assert.equal(
   localization.translateUiText(

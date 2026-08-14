@@ -1,10 +1,10 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc, Condvar, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossbeam_queue::ArrayQueue;
@@ -17,6 +17,7 @@ use thiserror::Error;
 const INPUT_FRAME_QUEUE_CAPACITY: usize = 2;
 const DISCOVERY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const OUTPUT_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Error)]
 pub enum NdiError {
@@ -57,6 +58,68 @@ pub struct NdiOutput {
     endpoint_name: String,
     ndi: Option<NDI>,
     sender: Option<Sender>,
+}
+
+/// Acknowledgement handle for asynchronous NDI SDK/source destruction. The
+/// output-ownership teardown lease is owned by the cleanup thread and is
+/// released only after the SDK objects have actually been dropped. Keeping
+/// this handle in route state makes a timeout retryable without forgetting
+/// the old sender.
+#[derive(Debug, Clone)]
+pub struct NdiOutputTeardown {
+    state: Arc<(Mutex<NdiOutputTeardownState>, Condvar)>,
+}
+
+#[derive(Debug, Default)]
+struct NdiOutputTeardownState {
+    result: Option<Result<(), String>>,
+    lease_released: bool,
+}
+
+impl NdiOutputTeardown {
+    pub fn wait(&self, timeout: Duration) -> Result<(), NdiError> {
+        let (result_lock, changed) = &*self.state;
+        let mut state = result_lock
+            .lock()
+            .map_err(|_| NdiError::Worker("NDI teardown state lock was poisoned".to_string()))?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            if state.lease_released {
+                let Some(result) = state.result.as_ref() else {
+                    return Err(NdiError::Worker(
+                        "NDI teardown acknowledgement was published without a result".to_string(),
+                    ));
+                };
+                return match result {
+                    Ok(()) => Ok(()),
+                    Err(error) => Err(NdiError::Worker(error.clone())),
+                };
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(NdiError::Worker(
+                    "NDI output teardown acknowledgement timed out".to_string(),
+                ));
+            }
+            let (next, wait_result) = changed
+                .wait_timeout(state, remaining)
+                .map_err(|_| NdiError::Worker("NDI teardown wait was poisoned".to_string()))?;
+            state = next;
+            if wait_result.timed_out() && !state.lease_released {
+                return Err(NdiError::Worker(
+                    "NDI output teardown acknowledgement timed out".to_string(),
+                ));
+            }
+        }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.state
+            .0
+            .lock()
+            .map(|state| state.lease_released && state.result.is_some())
+            .unwrap_or(false)
+    }
 }
 
 impl NdiInput {
@@ -191,6 +254,86 @@ impl NdiOutput {
             .send_video(&ndi_frame);
         Ok(())
     }
+
+    /// Begin output destruction on a cleanup thread and keep the supplied
+    /// ownership lease there until the SDK/source objects are actually gone.
+    /// Callers may retain the returned handle after a timeout and retry the
+    /// acknowledgement without creating a replacement sender.
+    pub fn begin_close_with_lease<L>(mut self, lease: L) -> Result<NdiOutputTeardown, NdiError>
+    where
+        L: Send + 'static,
+    {
+        let Some(sender) = self.sender.take() else {
+            drop(self.ndi.take());
+            return start_teardown(|| {}, lease);
+        };
+        let ndi = self.ndi.take();
+        start_teardown(
+            move || {
+                drop(sender);
+                drop(ndi);
+            },
+            lease,
+        )
+    }
+
+    /// Compatibility helper for direct I/O callers. App-owned NDI output
+    /// routes must use `begin_close_with_lease` so transitions retain the
+    /// physical teardown fence.
+    pub fn close(self) -> Result<(), NdiError> {
+        let teardown = self.begin_close_with_lease(())?;
+        teardown.wait(OUTPUT_TEARDOWN_TIMEOUT)
+    }
+}
+
+fn start_teardown<F, L>(cleanup: F, lease: L) -> Result<NdiOutputTeardown, NdiError>
+where
+    F: FnOnce() + Send + 'static,
+    L: Send + 'static,
+{
+    let state = Arc::new((
+        Mutex::new(NdiOutputTeardownState::default()),
+        Condvar::new(),
+    ));
+    let worker_state = Arc::clone(&state);
+    thread::Builder::new()
+        .name("syndocal-ndi-output-cleanup".to_string())
+        .spawn(move || {
+            let cleanup_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(cleanup));
+            let result = cleanup_result
+                .map(|_| ())
+                .map_err(|_| "NDI output cleanup thread panicked".to_string());
+            let mut slot = worker_state
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            slot.result = Some(result);
+            worker_state.1.notify_all();
+            drop(slot);
+            // The public acknowledgement is complete only after the lease
+            // has drained. A recovery transition can therefore not become
+            // Ready in the interval between SDK destruction and ownership
+            // accounting.
+            drop(lease);
+            let mut slot = worker_state
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            slot.lease_released = true;
+            worker_state.1.notify_all();
+        })
+        .map_err(|error| {
+            NdiError::Worker(format!("NDI output cleanup failed to start: {error}"))
+        })?;
+    Ok(NdiOutputTeardown { state })
+}
+
+fn teardown_with_ack<F>(cleanup: F, timeout: Duration) -> Result<(), NdiError>
+where
+    F: FnOnce() + Send + 'static,
+{
+    let teardown = start_teardown(cleanup, ())?;
+    teardown.wait(timeout)
 }
 
 impl Drop for NdiOutput {
@@ -405,6 +548,40 @@ mod tests {
         assert!(source_name_matches("Program", "program"));
         assert!(source_name_matches("STAGE-PC (Program)", "Program"));
         assert!(!source_name_matches("STAGE-PC (Preview)", "Program"));
+    }
+
+    #[test]
+    fn teardown_ack_waits_for_injected_cleanup() {
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let result = teardown_with_ack(
+            move || {
+                started_tx.send(()).unwrap();
+                thread::sleep(Duration::from_millis(20));
+            },
+            Duration::from_secs(1),
+        );
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn teardown_ack_timeout_is_a_failure() {
+        let result = teardown_with_ack(
+            || thread::sleep(Duration::from_millis(100)),
+            Duration::from_millis(1),
+        );
+        assert!(
+            matches!(result, Err(NdiError::Worker(message)) if message.contains("acknowledgement timed out"))
+        );
+    }
+
+    #[test]
+    fn injected_slow_cleanup_remains_retryable_until_acknowledged() {
+        let teardown = start_teardown(|| thread::sleep(Duration::from_millis(80)), ()).unwrap();
+        assert!(teardown.wait(Duration::from_millis(1)).is_err());
+        assert!(!teardown.is_complete());
+        teardown.wait(Duration::from_secs(1)).unwrap();
+        assert!(teardown.is_complete());
     }
 
     #[test]

@@ -22,10 +22,12 @@ import {
 import { formatCompactClock } from "../clockDisplay";
 import type {
   AudioAnalysisSummary,
+  MediaAssetSummary,
   TimelineAudioClipSummary,
   TimelineLayerKind,
   TimelineLayerSummary,
   TimelineTrackKind,
+  TimelineVideoClipSummary,
 } from "../types";
 import type { TimelineCueDragState } from "../timelineCueDrag";
 import {
@@ -102,6 +104,8 @@ interface TimelineOverviewProps {
   events: TimelineOverviewEvent[];
   layerItemCounts: ReadonlyMap<number, number>;
   audioClips: TimelineAudioClipSummary[];
+  videoClips: TimelineVideoClipSummary[];
+  mediaAssets: MediaAssetSummary[];
   audioAnalysis: AudioAnalysisSummary | null;
   executionLive: boolean;
   markerAriaLabel: (event: TimelineOverviewEvent) => string;
@@ -112,6 +116,9 @@ interface TimelineOverviewProps {
   selectedRangeId: string | null;
   selectedEventId: number | null;
   selectedAudioClipId: number | null;
+  selectedVideoClipId: number | null;
+  selectedAudioClipIds: number[];
+  selectedVideoClipIds: number[];
   playheadX: number;
   visibleWindow: TimelineVisibleWindow;
   bpm: number;
@@ -128,12 +135,15 @@ interface TimelineOverviewProps {
   onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
   onSelectEvent: (eventId: number, openProperties?: boolean) => void;
   onOpenSuperScene: (cueId: number) => void;
-  onSelectAudioClip: (clipId: number) => void;
+  onSelectAudioClip: (clipId: number, additive?: boolean) => void;
+  onSelectVideoClip: (clipId: number, additive?: boolean) => void;
+  onOpenItemContextMenu: (point: { x: number; y: number }) => void;
   onInspectOverlapCluster: (cluster: TimelineOverviewOverlapCluster) => void;
   onUpdateLayer: (layer: TimelineLayerSummary) => void | Promise<void>;
   onOpenLayerMenu: (layer: TimelineLayerSummary, point: { x: number; y: number }) => void;
   onAddAudioClip: (layerId: number) => void | Promise<void>;
   onUpdateAudioClip: (clip: TimelineAudioClipSummary) => void | Promise<void>;
+  onUpdateVideoClip: (clip: TimelineVideoClipSummary) => void | Promise<void>;
   onStatus: (message: string) => void;
   onMoveEventPlacement: (eventId: number, timeMs: number, layerId: number, snapEnabled: boolean) => void;
   onResizeEventTime: (
@@ -247,6 +257,18 @@ interface TimelineSectionRowLayout {
   layers: TimelineLayerSummary[];
 }
 
+interface TimelineVideoClipDrag {
+  clipId: number;
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  original: TimelineVideoClipSummary;
+  preview: TimelineVideoClipSummary;
+  hoverLayerId: number | null;
+  rejection: "locked" | "kind" | null;
+  moved: boolean;
+}
+
 const timelineSectionKinds: TimelineLayerKind[] = ["Audio", "Lighting", "Video"];
 const timelineSectionHeaderHeightPx = 14;
 const timelineUserLaneHeightPx = 36;
@@ -346,6 +368,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const [canvasPanDrag, setCanvasPanDrag] = createSignal<TimelineCanvasPanDrag | null>(null);
   const [placementDrag, setPlacementDrag] = createSignal<TimelinePlacementDrag | null>(null);
   const [audioClipDrag, setAudioClipDrag] = createSignal<TimelineAudioClipDrag | null>(null);
+  const [videoClipDrag, setVideoClipDrag] = createSignal<TimelineVideoClipDrag | null>(null);
   const [rangeDrag, setRangeDrag] = createSignal<TimelineAutomationRangeDrag | null>(null);
   const [keyframeDrag, setKeyframeDrag] = createSignal<TimelineAutomationKeyframeDrag | null>(null);
   const [suppressClickEventId, setSuppressClickEventId] = createSignal<number | null>(null);
@@ -390,6 +413,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
         !eventFadeDrag() &&
         !placementDrag() &&
         !audioClipDrag() &&
+        !videoClipDrag() &&
         !rangeDrag() &&
         !keyframeDrag() &&
         !pan
@@ -405,6 +429,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       setEventFadeDrag(null);
       setPlacementDrag(null);
       setAudioClipDrag(null);
+      setVideoClipDrag(null);
       setRangeDrag(null);
       setKeyframeDrag(null);
       setCanvasPanDrag(null);
@@ -576,6 +601,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const renderedAudioClips = createMemo(() => props.legacyMode
     ? []
     : props.audioClips.filter((clip) => layerRowById().get(clip.layer_id)?.layer.kind === "Audio"));
+  const renderedVideoClips = createMemo(() => props.legacyMode
+    ? []
+    : props.videoClips.filter((clip) => layerRowById().get(clip.layer_id)?.layer.kind === "Video"));
+  const selectedAudioClipIds = createMemo(() => new Set(props.selectedAudioClipIds));
+  const selectedVideoClipIds = createMemo(() => new Set(props.selectedVideoClipIds));
   const superSceneEmptyHint = createMemo(() => props.superSceneEmptyHintCount === 1
     ? "The timeline is empty. 1 Cue has a child Timeline (open it from the TL badge in Scene Matrix)."
     : `The timeline is empty. ${props.superSceneEmptyHintCount} Cues have child Timelines (open them from the TL badges in Scene Matrix).`);
@@ -963,13 +993,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     }
     event.preventDefault();
     event.stopPropagation();
-    props.onSelectAudioClip(clip.id);
+    props.onSelectAudioClip(clip.id, event.shiftKey || event.ctrlKey || event.metaKey);
     const rect = event.currentTarget.getBoundingClientRect();
     const zone = timelineBlockGestureZone(
       event.clientX - rect.left,
       event.clientY - rect.top,
       Math.max(1, rect.width),
-      props.selectedAudioClipId === clip.id,
+      selectedAudioClipIds().has(clip.id),
       blockHeightPx(),
     );
     const mode = zone === "stretch-start"
@@ -1100,9 +1130,91 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     void props.onUpdateAudioClip(drag.preview);
   };
 
+  const beginVideoClipGesture = (
+    event: PointerEvent & { currentTarget: SVGGElement },
+    clip: TimelineVideoClipSummary,
+  ) => {
+    const layer = layerById().get(clip.layer_id);
+    if (layer?.locked) {
+      props.onStatus(`Timeline layer ${layer.label} is locked. Unlock it before editing Video Clips.`);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    props.onSelectVideoClip(clip.id, event.shiftKey || event.ctrlKey || event.metaKey);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setVideoClipDrag({
+      clipId: clip.id,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      original: { ...clip },
+      preview: { ...clip },
+      hoverLayerId: clip.layer_id,
+      rejection: null,
+      moved: false,
+    });
+  };
+  const moveVideoClipGesture = (event: PointerEvent & { currentTarget: SVGGElement }) => {
+    const drag = videoClipDrag();
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!drag || drag.pointerId !== event.pointerId || !svg) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const deltaMs = (event.clientX - drag.startClientX)
+      / Math.max(1, svg.getBoundingClientRect().width)
+      * timelineVisibleWindowSpanMs(props.visibleWindow);
+    const rawStartMs = Math.max(0, Math.round(drag.original.start_ms + deltaMs));
+    const preview = {
+      ...drag.preview,
+      start_ms: props.magnetEnabled ? props.snapTimeMs(rawStartMs) : rawStartMs,
+    };
+    const hoverLayerId = layerIdFromPoint(event.clientX, event.clientY);
+    const target = hoverLayerId === null ? undefined : layerById().get(hoverLayerId);
+    const rejection = !target
+      ? null
+      : target.kind !== "Video"
+        ? "kind" as const
+        : target.locked
+          ? "locked" as const
+          : null;
+    preview.layer_id = target && rejection === null ? target.id : drag.original.layer_id;
+    setVideoClipDrag({
+      ...drag,
+      preview,
+      hoverLayerId,
+      rejection,
+      moved: drag.moved
+        || Math.abs(event.clientX - drag.startClientX) >= 4
+        || Math.abs(event.clientY - drag.startClientY) >= 4,
+    });
+  };
+  const finishVideoClipGesture = (
+    event: PointerEvent & { currentTarget: SVGGElement },
+    canceled: boolean,
+  ) => {
+    const drag = videoClipDrag();
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setVideoClipDrag(null);
+    setSuppressCanvasClick(true);
+    if (canceled || !drag.moved) return;
+    if (drag.rejection) {
+      props.onStatus(drag.rejection === "locked"
+        ? "The target Video lane is locked. No changes were made."
+        : "Video Clips can only move within Video lanes. No changes were made.");
+      return;
+    }
+    void props.onUpdateVideoClip(drag.preview);
+  };
+
   const isCanvasTarget = (target: EventTarget | null) => {
     const element = target instanceof Element ? target : null;
-    return !element?.closest(".timelineMarker, .timelineAudioClip, .timelineAutomationRange, .timelineOverlapCluster, .timelinePlayheadGroup");
+    return !element?.closest(".timelineMarker, .timelineAudioClip, .timelineVideoClip, .timelineAutomationRange, .timelineOverlapCluster, .timelinePlayheadGroup");
   };
 
   const validatePlacementLayer = (layerId: number | null) => {
@@ -1688,6 +1800,21 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     if (drag.mode === "fade-out") return `Fade Out ${drag.preview.fade_out_ms} ms`;
     return `${formatCompactClock(drag.preview.start_ms)} · ${formatCompactClock(drag.preview.duration_ms)}`;
   };
+  const videoClipPreview = (clip: TimelineVideoClipSummary) =>
+    videoClipDrag()?.clipId === clip.id ? videoClipDrag()!.preview : clip;
+  const videoClipPixelWidth = (clip: TimelineVideoClipSummary) => Math.max(
+    0.8,
+    videoClipPreview(clip).duration_ms
+      / timelineVisibleWindowSpanMs(props.visibleWindow)
+      * overviewW(),
+  );
+  const videoClipCenterYPx = (clip: TimelineVideoClipSummary) => {
+    const row = layerRowById().get(videoClipPreview(clip).layer_id);
+    return (row?.top ?? 0) + 4 + blockHeightPx() / 2;
+  };
+  const videoClipLabel = (clip: TimelineVideoClipSummary) =>
+    props.mediaAssets.find((asset) => asset.id === clip.media_asset_id)?.label
+      ?? `Media ${clip.media_asset_id}`;
   const activeDragStamp = (event: TimelineOverviewEvent) => {
     const fade = eventFadeDrag();
     if (fade?.eventId === event.id) return `Fade ${fade.edge === "in" ? "In" : "Out"} ${fade.fadeMs} ms`;
@@ -2034,7 +2161,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       data-visible-start-ms={props.visibleWindow.start_ms}
       data-visible-end-ms={props.visibleWindow.end_ms}
       data-timeline-gesture-active={
-        markerDrag() || eventResizeDrag() || eventFadeDrag() || placementDrag() || audioClipDrag() ||
+        markerDrag() || eventResizeDrag() || eventFadeDrag() || placementDrag() || audioClipDrag() || videoClipDrag() ||
         rangeDrag() || keyframeDrag() || canvasPanDrag()
           ? "true"
           : "false"
@@ -2242,10 +2369,94 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           </g>
         )}
       </For>
+      <For each={renderedVideoClips()}>
+        {(clip) => {
+          const preview = () => videoClipPreview(clip);
+          return (
+            <g
+              class="timelineVideoClip"
+              classList={{
+                selected: selectedVideoClipIds().has(clip.id),
+                dragging: videoClipDrag()?.clipId === clip.id,
+                layerMuted: layerById().get(clip.layer_id)?.muted ?? false,
+              }}
+              data-timeline-video-clip-id={clip.id}
+              data-timeline-layer-id={preview().layer_id}
+              data-timeline-layer-kind="Video"
+              data-timeline-video-media-asset-id={clip.media_asset_id}
+              data-timeline-video-start-ms={preview().start_ms}
+              data-timeline-video-duration-ms={preview().duration_ms}
+              role="button"
+              tabindex={props.selectedVideoClipId === clip.id ? 0 : -1}
+              aria-label={`Video Clip ${videoClipLabel(clip)}, starts ${preview().start_ms} milliseconds, duration ${preview().duration_ms} milliseconds`}
+              transform={`translate(${viewBoxX(timelineTimeToVisibleRawRatio(preview().start_ms, props.visibleWindow) * 100)} ${videoClipCenterYPx(clip)})`}
+              onPointerDown={(event) => beginVideoClipGesture(event, clip)}
+              onPointerMove={moveVideoClipGesture}
+              onPointerUp={(event) => finishVideoClipGesture(event, false)}
+              onPointerCancel={(event) => finishVideoClipGesture(event, true)}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                props.onSelectVideoClip(clip.id, event.shiftKey || event.ctrlKey || event.metaKey);
+                props.onSeekTime(preview().start_ms);
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (!selectedVideoClipIds().has(clip.id)) {
+                  props.onSelectVideoClip(clip.id, event.shiftKey || event.ctrlKey || event.metaKey);
+                }
+                props.onOpenItemContextMenu({ x: event.clientX, y: event.clientY });
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                props.onSelectVideoClip(clip.id);
+                props.onSeekTime(preview().start_ms);
+              }}
+            >
+              <rect
+                class="timelineVideoClipBody"
+                x="0"
+                y={-blockHeightPx() / 2}
+                width={videoClipPixelWidth(clip)}
+                height={blockHeightPx()}
+                rx="1.6"
+              />
+              <rect
+                class="timelineVideoClipIdentityBand"
+                x="0"
+                y={-blockHeightPx() / 2}
+                width={videoClipPixelWidth(clip)}
+                height={blockUpperBandHeightPx()}
+              />
+              <text
+                class="timelineVideoClipLabel"
+                x={nameInsetPx}
+                y={-blockHeightPx() / 2 + blockUpperBandHeightPx() / 2}
+                dominant-baseline="central"
+                data-no-localize
+              >
+                {videoClipLabel(clip)}
+              </text>
+              <text
+                class="timelineVideoClipDuration"
+                x={nameInsetPx}
+                y={-blockHeightPx() / 2 + blockUpperBandHeightPx() + (blockHeightPx() - blockUpperBandHeightPx()) / 2}
+                dominant-baseline="central"
+                data-no-localize
+              >
+                {formatCompactClock(preview().duration_ms)}
+              </text>
+              <title>{`${videoClipLabel(clip)} / Video / ${preview().start_ms} ms / ${preview().duration_ms} ms`}</title>
+            </g>
+          );
+        }}
+      </For>
       <For each={renderedAudioClips()}>
         {(clip) => {
           const preview = () => audioClipPreview(clip);
-          const selected = () => props.selectedAudioClipId === clip.id;
+          const selected = () => selectedAudioClipIds().has(clip.id);
           return (
             <g
               class="timelineAudioClip"
@@ -2279,8 +2490,16 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               onClick={(pointerEvent) => {
                 pointerEvent.preventDefault();
                 pointerEvent.stopPropagation();
-                props.onSelectAudioClip(clip.id);
+                props.onSelectAudioClip(clip.id, pointerEvent.shiftKey || pointerEvent.ctrlKey || pointerEvent.metaKey);
                 props.onSeekTime(preview().start_ms);
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (!selectedAudioClipIds().has(clip.id)) {
+                  props.onSelectAudioClip(clip.id, event.shiftKey || event.ctrlKey || event.metaKey);
+                }
+                props.onOpenItemContextMenu({ x: event.clientX, y: event.clientY });
               }}
               onKeyDown={(keyboardEvent) => {
                 if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;

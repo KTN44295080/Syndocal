@@ -3,6 +3,7 @@ import { clampRange } from "../numericHelpers";
 import type { VideoLayerState, VideoLayerSummary, VideoOutputSummary } from "../types";
 import { formatDuration, formatVideoTime } from "../videoHelpers";
 import { VideoClipSlotBankPanel } from "./VideoClipSlotBankPanel";
+import { VideoTransitionBusPanel } from "./VideoTransitionBusPanel";
 
 interface TouchVideoPanelProps {
   layers: VideoLayerSummary[];
@@ -18,7 +19,8 @@ interface TouchVideoPanelProps {
   onFadeOutputOpacity: (outputId: number, opacity: number) => void | Promise<void>;
   onOpenOutputWindow: (outputId: number, testPattern?: boolean) => void | Promise<void>;
   clipSlotBank: ComponentProps<typeof VideoClipSlotBankPanel>;
-  clipSlotTake: { enabled: boolean; onTake: () => void | Promise<void> };
+  clipSlotTake: { enabled: boolean; label: string; onTake: () => void | Promise<void> };
+  transitionBuses: ComponentProps<typeof VideoTransitionBusPanel>;
 }
 
 export function TouchVideoPanel(props: TouchVideoPanelProps) {
@@ -36,9 +38,10 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
           data-video-clip-slot-take
           disabled={!props.clipSlotTake.enabled}
           onClick={() => void props.clipSlotTake.onTake()}
-        >Take</button>
+        >{props.clipSlotTake.label}</button>
       </div>
       <VideoClipSlotBankPanel {...props.clipSlotBank} />
+      <VideoTransitionBusPanel {...props.transitionBuses} compact />
       <Show when={props.outputs.length > 0}>
         <div class="touchVideoOutputGrid">
           <For each={props.outputs}>

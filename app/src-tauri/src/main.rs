@@ -37,37 +37,44 @@ use minisign_verify::PublicKey;
 use protocol::DmxControlAction;
 use protocol::{
     canonical_video_output_mapping_field, normalize_legacy_video_clip_slots,
-    normalize_legacy_video_media_assets, validate_engine_ready_video_clip_slots, AttributeControl,
-    AttributeResolution, AudioAnalysisSummary, AutoVjConfig, AutomationId,
-    AutomationKeyframeSummary, ChaserEffectRequest, ChaserStep, ChildTimelineSummary,
-    ChildTimelineTransportPathSegment, ClockSnapshot, ColorEffectRequest,
-    ColorMappingEffectRequest, CompositionId, CompositionSummary, CueEffectTarget,
-    CueFixtureTarget, CueId, CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile,
-    CustomFixtureProfileRequest, DmxControlMapping, DmxInputConfig, DmxInputProtocol,
-    DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectBeamTarget, EffectId,
-    EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
-    ExclusiveVideoTakeRequest, FixtureGroupSummary, FixtureId, FixtureLimits, FixturePreset,
-    FixtureProfileSummary, GeometrySummary, LearnedDmxControl, LearnedMidiControl,
-    LearnedOscControl, LfoEffectRequest, MachineOutputRole, MappingEffectRequest,
-    MediaAssetAvailability, MediaAssetId, MediaAssetRelinkOutcome, MediaAssetRelinkPolicy,
-    MediaAssetSummary, MediaContentHash, MediaHashAlgorithm, MidiControlAction, MidiControlMapping,
-    MidiFeedbackMessage, MidiInputSummary, MidiOutputSummary, MoveEffectBeamTarget,
-    MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
-    NodeGraphTransformOp, OperatorFeatureFaderResult, OperatorLockMode, OperatorPolicy,
-    OperatorSelectionContext, OscControlAction, OscControlMapping, OscInputConfig,
-    OutputOwnershipStatus, PatchFixtureRequest, PatchedFixtureSummary, PositionWaveEffectRequest,
-    ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus, Rotation3,
-    SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
-    StageObjectKind, StageObjectSummary, TimelineAudioClipId, TimelineAudioClipSummary,
-    TimelineEventId, TimelineLayerKind, TimelineSnapRequest, TimelineTrackKind,
-    TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary, ValueEffectRequest, Vec3,
-    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoClipRuntimeSnapshot,
-    VideoClipSlotId, VideoClipSlotSummary, VideoEffectTarget, VideoIsfEffectStageSummary,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
-    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
-    COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
+    normalize_legacy_video_media_assets, validate_engine_ready_video_clip_slots,
+    validate_engine_ready_video_effect_chains, AttributeControl, AttributeResolution,
+    AudioAnalysisSummary, AutoVjConfig, AutomationId, AutomationKeyframeSummary,
+    ChaserEffectRequest, ChaserStep, ChildTimelineSummary, ChildTimelineTransportPathSegment,
+    ClockSnapshot, ColorEffectRequest, ColorMappingEffectRequest, CompositionId,
+    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueNodeGraphTarget,
+    CurveEffectRequest, CustomFixtureProfileFile, CustomFixtureProfileRequest, DmxControlMapping,
+    DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig,
+    DmxOutputProtocol, EffectBeamTarget, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureGroupSummary,
+    FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary,
+    LearnedDmxControl, LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MachineOutputRole,
+    MappingEffectRequest, MediaAssetAvailability, MediaAssetId, MediaAssetRelinkOutcome,
+    MediaAssetRelinkPolicy, MediaAssetSummary, MediaContentHash, MediaHashAlgorithm,
+    MidiControlAction, MidiControlMapping, MidiFeedbackMessage, MidiInputSummary,
+    MidiOutputSummary, MoveEffectBeamTarget, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorFeatureFaderResult,
+    OperatorLockMode, OperatorPolicy, OperatorSelectionContext, OscControlAction,
+    OscControlMapping, OscInputConfig, OutputOwnershipStatus, PatchFixtureRequest,
+    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
+    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
+    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary,
+    TimelineAdvancedAuthoringSummary, TimelineAudioClipId, TimelineAudioClipSummary,
+    TimelineEventId, TimelineFollowSummary, TimelineId, TimelineItemGroupId,
+    TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind, TimelineLoopRegionSummary,
+    TimelineLoopScale, TimelinePhaseSummary, TimelineSnapRequest, TimelineSnapshot,
+    TimelineTrackKind, TimelineVideoClipSummary, TouchControlBinding, TouchFeaturePresetTarget,
+    TouchSurfaceSummary, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBackendState, VideoBlendMode, VideoClipRuntimeSnapshot, VideoClipSlotId,
+    VideoClipSlotSummary, VideoClipTakeDuration, VideoClipTakeDurationUnit, VideoClipTakeKind,
+    VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary, VideoEffectScope,
+    VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
+    VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
+    VideoLayerTransitionTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
+    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    VideoTransitionBusId, COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -300,6 +307,10 @@ struct AppState {
     /// boundaries; runtime slot transport intentionally stays history-free.
     #[cfg(test)]
     video_clip_slot_authoritative_publish_attempts: AtomicU64,
+    /// C1 catalog tests count the sole Published catalog boundary. Exact
+    /// receipt retries must never increment this counter.
+    #[cfg(test)]
+    video_effect_catalog_authoritative_publish_attempts: AtomicU64,
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
     program_audio_handoff: Arc<ProgramAudioHandoffCoordinator>,
     _media_audio_sync: MediaAudioSyncRuntime,
@@ -373,8 +384,18 @@ struct AppState {
     /// current epoch/policy image. A policy or identity change resets to the
     /// policy's `lock_on_load` default before any authoritative mutation.
     project_operator_sessions: Mutex<HashMap<String, ProjectOperatorSession>>,
-    /// Monotonic order of successful backend clip-runtime publications.
+    /// Monotonic order of successful backend clip-runtime publications and
+    /// subsequently observed engine-clock transition images.
     video_clip_slot_runtime_generation: AtomicU64,
+    /// Last runtime image paired with the generation above. Engine clock
+    /// advancement can change Clip Take progress without an IPC command, so a
+    /// read must advance the same monotonic fence whenever that image changes.
+    video_clip_slot_runtime_observed: Mutex<VideoClipRuntimeSnapshot>,
+    /// Monotonic fence for C3 Layer Transition Bus truth. Like Clip runtime,
+    /// engine-clock advancement is observed lazily and receives a new safe
+    /// JavaScript integer generation before publication to a renderer.
+    video_transition_runtime_generation: AtomicU64,
+    video_transition_runtime_observed: Mutex<VideoLayerTransitionRuntimeSnapshot>,
     /// Linearizes every external callback/remote engine send with project
     /// transaction baselines and identity publication.  Any path that also
     /// needs coordinator state must acquire this mutex first.
@@ -719,6 +740,195 @@ struct VideoClipSlotAuthoritativeReceiptRecord {
     expires_at: Instant,
 }
 
+/// The whole C1 catalog is one authored image. The client supplies only the
+/// central tables; renderer-facing Layer ISF data is always regenerated from
+/// those tables before persistence/history preflight and engine publication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoEffectCatalogApplyRequest {
+    effect_chains: Vec<VideoEffectChainSummary>,
+    effect_presets: Vec<VideoEffectPresetSummary>,
+    layer_groups: Vec<VideoLayerGroupSummary>,
+    #[serde(default)]
+    transition_buses: Vec<VideoLayerTransitionBusSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoEffectCatalogAuthoritativeCatalog {
+    effect_chains: Vec<VideoEffectChainSummary>,
+    effect_presets: Vec<VideoEffectPresetSummary>,
+    layer_groups: Vec<VideoLayerGroupSummary>,
+    transition_buses: Vec<VideoLayerTransitionBusSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoEffectCatalogAuthoritativeResult {
+    catalog: VideoEffectCatalogAuthoritativeCatalog,
+    mutation: ProjectHistoryMutationResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum TimelineAdvancedMutationRequest {
+    Apply {
+        authoring: TimelineAdvancedAuthoringSummary,
+    },
+    InsertMedia {
+        media_asset_id: MediaAssetId,
+        start_ms: u64,
+        #[serde(default)]
+        video_layer_id: Option<u32>,
+        #[serde(default)]
+        audio_layer_id: Option<u32>,
+    },
+    Group {
+        members: Vec<TimelineItemRef>,
+    },
+    Ungroup {
+        group_id: TimelineItemGroupId,
+    },
+    MoveGroup {
+        group_id: TimelineItemGroupId,
+        delta_ms: i64,
+    },
+    SetPhases {
+        phases: Vec<TimelinePhaseSummary>,
+    },
+    SetLoop {
+        loop_region: Option<TimelineLoopRegionSummary>,
+    },
+    SetFollow {
+        follow: Option<TimelineFollowSummary>,
+    },
+    SetGuide {
+        enabled: bool,
+    },
+    CreateTimeline {
+        label: String,
+    },
+    DuplicateTimeline {
+        timeline_id: TimelineId,
+    },
+    RemoveTimeline {
+        timeline_id: TimelineId,
+    },
+    ReorderTimelines {
+        timeline_ids: Vec<TimelineId>,
+    },
+    SelectTimeline {
+        timeline_id: TimelineId,
+        #[serde(default)]
+        play: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TimelineAdvancedAuthoritativeResult {
+    authoring: TimelineAdvancedAuthoringSummary,
+    timeline_bank: Vec<TimelineSnapshot>,
+    active_timeline_id: TimelineId,
+    mutation: ProjectHistoryMutationResult,
+}
+
+/// Legacy ISF commands now share the C1 server-authoritative history lane.
+/// Keep the historic effect-summary shape flat for existing controllers while
+/// exposing the nested mutation envelope the frontend uses to advance E/R/H.
+#[derive(Debug, Clone, Serialize)]
+struct LegacyVideoEffectCatalogMutationResult {
+    mutation: ProjectHistoryMutationResult,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LegacyVideoIsfEffectAuthoritativeResult {
+    #[serde(flatten)]
+    effect: VideoIsfEffectSummary,
+    mutation: ProjectHistoryMutationResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct VideoEffectCatalogAuthoritativeOperationKey {
+    request_id: u64,
+    owner_id: String,
+    window_label: String,
+    owner_incarnation: u64,
+    start_epoch: u64,
+    start_revision: u64,
+    start_checkpoint_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VideoEffectCatalogAuthoritativeRequestShape {
+    fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", content = "result", rename_all = "snake_case")]
+enum VideoEffectCatalogAuthoritativeTerminalResult {
+    Applied(VideoEffectCatalogAuthoritativeResult),
+    Timeline(TimelineAdvancedAuthoritativeResult),
+    Runtime(VideoLayerTransitionAuthoritativeRuntimeOutcome),
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoEffectCatalogAuthoritativeTerminalEnvelope {
+    shape_fingerprint: String,
+    terminal: VideoEffectCatalogAuthoritativeTerminalResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime: Option<VideoLayerTransitionAuthoritativeRuntimeResult>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum VideoLayerTransitionAuthoritativeRuntimeCommandKind {
+    Launch,
+    Release,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoLayerTransitionLaunchRequest {
+    bus_id: VideoTransitionBusId,
+    from: VideoLayerTransitionTarget,
+    to: VideoLayerTransitionTarget,
+    kind: VideoClipTakeKind,
+    duration: VideoClipTakeDuration,
+    curve: VideoLayerTransitionCurve,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VideoLayerTransitionReleaseRequest {
+    bus_id: VideoTransitionBusId,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoLayerTransitionAuthoritativeRuntimeOutcome {
+    command_kind: VideoLayerTransitionAuthoritativeRuntimeCommandKind,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoLayerTransitionAuthoritativeRuntimeResult {
+    command_kind: VideoLayerTransitionAuthoritativeRuntimeCommandKind,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    runtime_generation: u64,
+    runtime: VideoLayerTransitionRuntimeSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoLayerTransitionRuntimeReport {
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    runtime_generation: u64,
+    runtime: VideoLayerTransitionRuntimeSnapshot,
+}
+
+#[derive(Debug, Clone)]
+struct VideoEffectCatalogAuthoritativeReceiptRecord {
+    shape: VideoEffectCatalogAuthoritativeRequestShape,
+    terminal: VideoEffectCatalogAuthoritativeTerminalResult,
+    expires_at: Instant,
+}
+
 /// Tauri DTO for a new authored slot. The server, never the renderer,
 /// allocates its globally stable ID after the exact operation lane is won.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -804,6 +1014,19 @@ struct VideoClipSlotLaunchRequest {
     layer_id: VideoLayerId,
     #[serde(default)]
     slot_id: Option<VideoClipSlotId>,
+    #[serde(default)]
+    transition_kind: VideoClipTakeKind,
+    #[serde(default)]
+    transition_duration_ms: u64,
+    #[serde(default)]
+    transition_duration: Option<VideoClipTakeDuration>,
+}
+
+impl VideoClipSlotLaunchRequest {
+    fn effective_transition_duration(&self) -> VideoClipTakeDuration {
+        self.transition_duration
+            .unwrap_or_else(|| VideoClipTakeDuration::milliseconds(self.transition_duration_ms))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -966,6 +1189,19 @@ struct MediaAssetOperationRegistry {
     /// inheriting or replaying a terminal receipt under the new window.
     video_clip_slot_authoritative_retired_keys:
         Mutex<HashMap<VideoClipSlotAuthoritativeOperationKey, Instant>>,
+    /// C1 uses B3's exact terminal semantics with a catalog-specific typed
+    /// payload. The key binds IPC to a concrete WebView incarnation and the
+    /// caller's original E/R/H authority image.
+    video_effect_catalog_authoritative_receipts: Mutex<
+        HashMap<
+            VideoEffectCatalogAuthoritativeOperationKey,
+            VideoEffectCatalogAuthoritativeReceiptRecord,
+        >,
+    >,
+    video_effect_catalog_authoritative_lanes:
+        Mutex<HashMap<VideoEffectCatalogAuthoritativeOperationKey, Arc<Mutex<()>>>>,
+    video_effect_catalog_authoritative_retired_keys:
+        Mutex<HashMap<VideoEffectCatalogAuthoritativeOperationKey, Instant>>,
     /// Short-lived hover sessions are backend-owned and bind a registered
     /// renderer generation to one immutable private media copy. The existing
     /// media reaper owns their TTL cleanup too.
@@ -2211,6 +2447,142 @@ impl MediaAssetOperationRegistry {
         }
     }
 
+    fn video_effect_catalog_authoritative_receipt(
+        &self,
+        key: &VideoEffectCatalogAuthoritativeOperationKey,
+    ) -> Option<VideoEffectCatalogAuthoritativeReceiptRecord> {
+        let mut receipts = self
+            .video_effect_catalog_authoritative_receipts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = Instant::now();
+        receipts.retain(|_, record| record.expires_at > now);
+        let record = receipts.get_mut(key)?;
+        record.expires_at = now + MEDIA_ASSET_COMMIT_RECEIPT_TTL;
+        Some(record.clone())
+    }
+
+    fn ensure_video_effect_catalog_authoritative_key_not_retired(
+        &self,
+        key: &VideoEffectCatalogAuthoritativeOperationKey,
+    ) -> Result<(), String> {
+        let now = Instant::now();
+        let mut retired = self
+            .video_effect_catalog_authoritative_retired_keys
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        retired.retain(|_, expires_at| *expires_at > now);
+        if retired.contains_key(key) {
+            Err("Video effect catalog operation belongs to a retired renderer incarnation; start a new operation".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn video_effect_catalog_authoritative_publication_lane(
+        &self,
+        key: &VideoEffectCatalogAuthoritativeOperationKey,
+    ) -> Arc<Mutex<()>> {
+        let mut lanes = self
+            .video_effect_catalog_authoritative_lanes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(
+            lanes
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    }
+
+    /// Exact C1 retries recover one terminal ACK result. A reused identity
+    /// with different catalog bytes can query its earlier result but cannot
+    /// reach the engine or create a second undo entry.
+    fn video_effect_catalog_authoritative_terminal_single_flight<F>(
+        &self,
+        key: &VideoEffectCatalogAuthoritativeOperationKey,
+        shape: &VideoEffectCatalogAuthoritativeRequestShape,
+        publish: F,
+    ) -> Result<VideoEffectCatalogAuthoritativeTerminalResult, String>
+    where
+        F: FnOnce() -> Result<VideoEffectCatalogAuthoritativeTerminalResult, String>,
+    {
+        self.ensure_video_effect_catalog_authoritative_key_not_retired(key)?;
+        let lane = self.video_effect_catalog_authoritative_publication_lane(key);
+        let _lane_guard = lane.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.ensure_video_effect_catalog_authoritative_key_not_retired(key)?;
+        if let Some(record) = self.video_effect_catalog_authoritative_receipt(key) {
+            if record.shape == *shape {
+                return Ok(record.terminal);
+            }
+            return Err(format!(
+                "Video effect catalog operation already completed with shape {}; query its canonical terminal result instead of republishing",
+                record.shape.fingerprint
+            ));
+        }
+
+        let terminal = publish()?;
+        let now = Instant::now();
+        let mut receipts = self
+            .video_effect_catalog_authoritative_receipts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        receipts.retain(|_, record| record.expires_at > now);
+        receipts.insert(
+            key.clone(),
+            VideoEffectCatalogAuthoritativeReceiptRecord {
+                shape: shape.clone(),
+                terminal: terminal.clone(),
+                expires_at: now + MEDIA_ASSET_COMMIT_RECEIPT_TTL,
+            },
+        );
+        Ok(terminal)
+    }
+
+    /// Match B3 owner retirement: same-string owner reuse under a new WebView
+    /// incarnation must never replay an old C1 terminal receipt.
+    fn purge_video_effect_catalog_authoritative_for_owner(&self, owner_id: &str) {
+        let expires_at = Instant::now() + MEDIA_ASSET_COMMIT_RECEIPT_TTL;
+        let mut retired_keys = Vec::new();
+        {
+            let mut receipts = self
+                .video_effect_catalog_authoritative_receipts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            receipts.retain(|key, _| {
+                if key.owner_id == owner_id {
+                    retired_keys.push(key.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        {
+            let mut lanes = self
+                .video_effect_catalog_authoritative_lanes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            lanes.retain(|key, _| {
+                if key.owner_id == owner_id {
+                    retired_keys.push(key.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        if !retired_keys.is_empty() {
+            let mut retired = self
+                .video_effect_catalog_authoritative_retired_keys
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            retired.retain(|_, retired_at| *retired_at > Instant::now());
+            for key in retired_keys {
+                retired.insert(key, expires_at);
+            }
+        }
+    }
+
     /// Eagerly release everything past its TTL: reserved-but-unadopted slots,
     /// prepared imports/relinks (dropping their retained Windows file handles),
     /// and delivered commit receipts. Returns the number of entries reclaimed.
@@ -2274,6 +2646,15 @@ impl MediaAssetOperationRegistry {
             reclaimed += before - retired.len();
         }
         {
+            let mut retired = self
+                .video_effect_catalog_authoritative_retired_keys
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = retired.len();
+            retired.retain(|_, expires_at| *expires_at > now);
+            reclaimed += before - retired.len();
+        }
+        {
             let mut receipts = self
                 .authoritative_receipts
                 .lock()
@@ -2285,6 +2666,15 @@ impl MediaAssetOperationRegistry {
         {
             let mut receipts = self
                 .video_clip_slot_authoritative_receipts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = receipts.len();
+            receipts.retain(|_, record| record.expires_at > now);
+            reclaimed += before - receipts.len();
+        }
+        {
+            let mut receipts = self
+                .video_effect_catalog_authoritative_receipts
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let before = receipts.len();
@@ -2317,6 +2707,15 @@ impl MediaAssetOperationRegistry {
         {
             let mut lanes = self
                 .video_clip_slot_authoritative_lanes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = lanes.len();
+            lanes.retain(|_, lane| Arc::strong_count(lane) > 1);
+            reclaimed += before - lanes.len();
+        }
+        {
+            let mut lanes = self
+                .video_effect_catalog_authoritative_lanes
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let before = lanes.len();
@@ -4946,6 +5345,1754 @@ fn run_video_clip_slot_authoritative_operation_with_shape(
         .video_clip_slot_authoritative_terminal_single_flight(&key, &shape, || {
             execute(&owner_id, &expected_authority)
         })
+}
+
+fn video_effect_catalog_authoritative_shape(
+    request: &VideoEffectCatalogApplyRequest,
+) -> Result<VideoEffectCatalogAuthoritativeRequestShape, String> {
+    let payload = serde_json::to_vec(request)
+        .map_err(|error| format!("Unable to encode video effect catalog request shape: {error}"))?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"syndocal-video-effect-catalog-authoritative-shape-v1");
+    hasher.update((payload.len() as u64).to_le_bytes());
+    hasher.update(payload);
+    Ok(VideoEffectCatalogAuthoritativeRequestShape {
+        fingerprint: format!("{:x}", hasher.finalize()),
+    })
+}
+
+fn timeline_advanced_authoritative_shape(
+    request: &TimelineAdvancedMutationRequest,
+) -> Result<VideoEffectCatalogAuthoritativeRequestShape, String> {
+    let payload = serde_json::to_vec(request)
+        .map_err(|error| format!("Unable to encode Timeline operation shape: {error}"))?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"syndocal-timeline-advanced-authoritative-shape-v1");
+    hasher.update((payload.len() as u64).to_le_bytes());
+    hasher.update(payload);
+    Ok(VideoEffectCatalogAuthoritativeRequestShape {
+        fingerprint: format!("{:x}", hasher.finalize()),
+    })
+}
+
+/// Compatibility commands share the C1 receipt namespace, but their stable
+/// retry shape is the legacy command intent rather than the whole A-derived
+/// catalog. Rebuilding that catalog before receipt lookup would turn a lost
+/// reply into a second edit after the first ACK advanced A.
+fn legacy_video_effect_catalog_authoritative_shape(
+    command: &str,
+    payload: Value,
+) -> Result<VideoEffectCatalogAuthoritativeRequestShape, String> {
+    let payload = serde_json::to_vec(&json!({
+        "command": command,
+        "payload": payload,
+    }))
+    .map_err(|error| format!("Unable to encode legacy video effect request shape: {error}"))?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"syndocal-video-effect-catalog-legacy-shape-v1");
+    hasher.update((payload.len() as u64).to_le_bytes());
+    hasher.update(payload);
+    Ok(VideoEffectCatalogAuthoritativeRequestShape {
+        fingerprint: format!("{:x}", hasher.finalize()),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn video_effect_catalog_authoritative_operation_key(
+    request_id: u64,
+    binding: &VideoClipSlotCallerBinding,
+    start_epoch: u64,
+    start_revision: u64,
+    start_checkpoint_hash: String,
+) -> Result<VideoEffectCatalogAuthoritativeOperationKey, String> {
+    if request_id == 0 {
+        return Err("Video effect catalog operation request ID must be non-zero".to_string());
+    }
+    Ok(VideoEffectCatalogAuthoritativeOperationKey {
+        request_id,
+        owner_id: binding.owner_id.clone(),
+        window_label: binding.window_label.clone(),
+        owner_incarnation: binding.incarnation,
+        start_epoch,
+        start_revision,
+        start_checkpoint_hash,
+    })
+}
+
+fn video_effect_catalog_authoritative_expected_authority(
+    key: &VideoEffectCatalogAuthoritativeOperationKey,
+) -> MediaAssetPrepareAuthority {
+    MediaAssetPrepareAuthority {
+        epoch: key.start_epoch,
+        revision: key.start_revision,
+        checkpoint_hash: key.start_checkpoint_hash.clone(),
+    }
+}
+
+fn clear_transient_video_effect_catalog_kind(kind: &mut VideoEffectKind) {
+    let VideoEffectKind::Isf { effect } = kind;
+    for control in &mut effect.controls {
+        if control.kind == VideoIsfControlKind::Event {
+            control.value = [0.0; 4];
+        }
+    }
+    for stage in &mut effect.stack {
+        for control in &mut stage.controls {
+            if control.kind == VideoIsfControlKind::Event {
+                control.value = [0.0; 4];
+            }
+        }
+    }
+}
+
+fn project_legacy_video_isf_from_catalog_chain(
+    chain: &VideoEffectChainSummary,
+) -> Result<Option<VideoIsfEffectSummary>, String> {
+    if chain.stages.is_empty() {
+        return Ok(None);
+    }
+    let mut projected = Vec::with_capacity(chain.stages.len());
+    for stage in &chain.stages {
+        let VideoEffectKind::Isf { effect } = &stage.effect.kind;
+        let mut effect = effect.clone();
+        effect.enabled = !chain.bypassed && stage.enabled;
+        effect.stack.clear();
+        projected.push(effect);
+    }
+    let mut root = projected.remove(0);
+    root.stack = projected
+        .into_iter()
+        .map(|effect| VideoIsfEffectStageSummary {
+            enabled: effect.enabled,
+            label: effect.label,
+            source: effect.source,
+            source_path: effect.source_path,
+            description: effect.description,
+            categories: effect.categories,
+            controls: effect.controls,
+        })
+        .collect();
+    Ok(Some(root))
+}
+
+fn reconcile_catalog_clip_overrides(
+    layer: &mut protocol::VideoLayerSummary,
+    layer_chain: Option<&VideoEffectChainSummary>,
+) {
+    let Some(layer_chain) = layer_chain else {
+        for slot in &mut layer.clip_slots {
+            slot.effect_overrides.clear();
+        }
+        return;
+    };
+    for slot in &mut layer.clip_slots {
+        slot.effect_overrides.retain_mut(|effect_override| {
+            if let Some(effect_id) = effect_override.effect_id {
+                let Some(stage_index) = layer_chain
+                    .stages
+                    .iter()
+                    .position(|stage| stage.effect.id == effect_id)
+                else {
+                    return false;
+                };
+                effect_override.stage_index = stage_index;
+                true
+            } else if let Some(stage) = layer_chain.stages.get(effect_override.stage_index) {
+                effect_override.effect_id = Some(stage.effect.id);
+                true
+            } else {
+                // Preserve an invalid legacy positional reference so the
+                // engine-ready validator rejects it rather than silently
+                // retargeting an authored override.
+                true
+            }
+        });
+    }
+}
+
+/// `0` is a transport-only "allocate for me" sentinel for C1 catalog
+/// creation.  All issued identities remain engine-owned: the caller can only
+/// retain an ID that was already present in the exact authored A snapshot it
+/// fenced with E/R/H.  This keeps a stale/new caller from minting an arbitrary
+/// stable identity while still making retry receipts return the one allocation
+/// performed inside their terminal lane.
+fn normalize_video_effect_catalog_ids_with_allocator<FC, FS, FE, FP, FG, FB>(
+    authored_video: &protocol::VideoSnapshot,
+    request: &VideoEffectCatalogApplyRequest,
+    mut allocate_chain: FC,
+    mut allocate_stage: FS,
+    mut allocate_effect: FE,
+    mut allocate_preset: FP,
+    mut allocate_group: FG,
+    mut allocate_bus: FB,
+) -> Result<VideoEffectCatalogApplyRequest, String>
+where
+    FC: FnMut() -> Result<protocol::VideoEffectChainId, String>,
+    FS: FnMut() -> Result<protocol::VideoEffectStageId, String>,
+    FE: FnMut() -> Result<protocol::VideoEffectId, String>,
+    FP: FnMut() -> Result<protocol::VideoEffectPresetId, String>,
+    FG: FnMut() -> Result<protocol::VideoLayerGroupId, String>,
+    FB: FnMut() -> Result<protocol::VideoTransitionBusId, String>,
+{
+    let known_chains = authored_video
+        .effect_chains
+        .iter()
+        .map(|chain| chain.id.0)
+        .collect::<HashSet<_>>();
+    let known_stages = authored_video
+        .effect_chains
+        .iter()
+        .flat_map(|chain| chain.stages.iter().map(|stage| stage.id.0))
+        .collect::<HashSet<_>>();
+    let known_effects = authored_video
+        .effect_chains
+        .iter()
+        .flat_map(|chain| chain.stages.iter().map(|stage| stage.effect.id.0))
+        .collect::<HashSet<_>>();
+    let known_presets = authored_video
+        .effect_presets
+        .iter()
+        .map(|preset| preset.id.0)
+        .collect::<HashSet<_>>();
+    let known_groups = authored_video
+        .layer_groups
+        .iter()
+        .map(|group| group.id.0)
+        .collect::<HashSet<_>>();
+    let known_buses = authored_video
+        .transition_buses
+        .iter()
+        .map(|bus| bus.id.0)
+        .collect::<HashSet<_>>();
+    let mut normalized = request.clone();
+
+    macro_rules! retain_or_allocate {
+        ($id:expr, $known:expr, $allocate:expr, $domain:literal) => {
+            if $id.0 == 0 {
+                $id = $allocate()?;
+            } else if !$known.contains(&$id.0) {
+                return Err(format!(
+                    "Video effect catalog may only update an existing {} ID {}; use ID 0 for a new entity",
+                    $domain, $id.0
+                ));
+            }
+        };
+    }
+
+    // Resolve groups first because Group-scoped chains may use the same zero
+    // sentinel to refer to their single newly-created group. Multiple zero
+    // groups are legal (each gets a distinct monotonic ID), but a zero scope
+    // reference would then be ambiguous and is rejected rather than guessed.
+    let zero_group_count = normalized
+        .layer_groups
+        .iter()
+        .filter(|group| group.id.0 == 0)
+        .count();
+    let mut single_zero_group_id = None;
+    for group in &mut normalized.layer_groups {
+        let was_zero = group.id.0 == 0;
+        retain_or_allocate!(group.id, known_groups, allocate_group, "layer group");
+        if was_zero {
+            single_zero_group_id = Some(group.id);
+        }
+    }
+
+    let zero_bus_count = normalized
+        .transition_buses
+        .iter()
+        .filter(|bus| bus.id.0 == 0)
+        .count();
+    let mut single_zero_bus_id = None;
+    for bus in &mut normalized.transition_buses {
+        let was_zero = bus.id.0 == 0;
+        retain_or_allocate!(bus.id, known_buses, allocate_bus, "transition bus");
+        if was_zero {
+            single_zero_bus_id = Some(bus.id);
+        }
+    }
+
+    for chain in &mut normalized.effect_chains {
+        retain_or_allocate!(chain.id, known_chains, allocate_chain, "chain");
+        if let VideoEffectScope::Group { group_id } = &mut chain.scope {
+            if group_id.0 == 0 {
+                *group_id = match (zero_group_count, single_zero_group_id) {
+                    (1, Some(group_id)) => group_id,
+                    _ => {
+                        return Err(
+                            "A Group-scoped effect chain needs exactly one zero-ID layer group in the same catalog"
+                                .to_string(),
+                        )
+                    }
+                };
+            } else if !known_groups.contains(&group_id.0) {
+                return Err(format!(
+                    "Video effect catalog may only target an existing layer group ID {}; use one zero-ID group in this catalog for a new target",
+                    group_id.0
+                ));
+            }
+        }
+        if let VideoEffectScope::Transition {
+            owner: protocol::VideoTransitionEffectOwner::LayerBus { bus_id },
+        } = &mut chain.scope
+        {
+            if bus_id.0 == 0 {
+                *bus_id = match (zero_bus_count, single_zero_bus_id) {
+                    (1, Some(bus_id)) => bus_id,
+                    _ => return Err(
+                        "A LayerBus-scoped effect chain needs exactly one zero-ID transition bus in the same catalog"
+                            .to_string(),
+                    ),
+                };
+            } else if !known_buses.contains(&bus_id.0) {
+                return Err(format!(
+                    "Video effect catalog may only target an existing transition bus ID {}; use one zero-ID bus in this catalog for a new target",
+                    bus_id.0
+                ));
+            }
+        }
+        for stage in &mut chain.stages {
+            retain_or_allocate!(stage.id, known_stages, allocate_stage, "stage");
+            retain_or_allocate!(stage.effect.id, known_effects, allocate_effect, "effect");
+        }
+    }
+    for preset in &mut normalized.effect_presets {
+        retain_or_allocate!(preset.id, known_presets, allocate_preset, "preset");
+    }
+    Ok(normalized)
+}
+
+/// The only production allocator source for catalog IDs. It runs after the
+/// C1 E/R/H check and inside the operation's terminal single-flight closure,
+/// so lost-reply recovery cannot allocate a second set and legacy adapters use
+/// exactly the same monotonic domains as the public catalog IPC.
+fn normalize_video_effect_catalog_ids(
+    state: &AppState,
+    before_snapshot: &EngineSnapshot,
+    request: &VideoEffectCatalogApplyRequest,
+) -> Result<VideoEffectCatalogApplyRequest, String> {
+    let authored_video = before_snapshot
+        .authored_video
+        .as_ref()
+        .unwrap_or(&before_snapshot.video);
+    normalize_video_effect_catalog_ids_with_allocator(
+        authored_video,
+        request,
+        || Ok(state.engine.allocate_video_effect_chain_id()),
+        || Ok(state.engine.allocate_video_effect_stage_id()),
+        || Ok(state.engine.allocate_video_effect_id()),
+        || Ok(state.engine.allocate_video_effect_preset_id()),
+        || Ok(state.engine.allocate_video_layer_group_id()),
+        || Ok(state.engine.allocate_video_transition_bus_id()),
+    )
+}
+
+/// Reconstruct the persistence candidate from central C1 tables only. This is
+/// intentionally the same projection/override seam as the engine: the
+/// renderer's active video snapshot must never become the basis for history B.
+fn video_effect_catalog_candidate_snapshot(
+    mut snapshot: EngineSnapshot,
+    request: &VideoEffectCatalogApplyRequest,
+) -> Result<EngineSnapshot, String> {
+    // Begin strictly from canonical authored persistence, never renderer
+    // state. The EngineHandle Published command atomically mirrors that
+    // canonical C1 projection into its active `video` image, so B must carry
+    // the same completed projection in both fields.
+    let mut authored_video = snapshot
+        .authored_video
+        .clone()
+        .unwrap_or_else(|| snapshot.video.clone());
+    authored_video.effect_chains = request.effect_chains.clone();
+    authored_video.effect_presets = request.effect_presets.clone();
+    authored_video.layer_groups = request.layer_groups.clone();
+    authored_video.transition_buses = request.transition_buses.clone();
+
+    // Event is pulse-only runtime state. Strip it before both the candidate
+    // hash/history image and the one EngineHandle Published request so no
+    // Event=1 survives a save/retry boundary.
+    for chain in &mut authored_video.effect_chains {
+        for stage in &mut chain.stages {
+            clear_transient_video_effect_catalog_kind(&mut stage.effect.kind);
+        }
+    }
+    for preset in &mut authored_video.effect_presets {
+        for stage in &mut preset.payload.stages {
+            clear_transient_video_effect_catalog_kind(&mut stage.effect);
+        }
+    }
+    let layer_chains = authored_video.effect_chains.clone();
+    for layer in &mut authored_video.layers {
+        let layer_chain = layer_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id: layer.id })
+            .cloned();
+        layer.isf_effect = match layer_chain.as_ref() {
+            Some(chain) => project_legacy_video_isf_from_catalog_chain(chain)?,
+            None => None,
+        };
+        reconcile_catalog_clip_overrides(layer, layer_chain.as_ref());
+    }
+    validate_engine_ready_video_effect_chains(&authored_video)?;
+    snapshot.video = authored_video.clone();
+    snapshot.authored_video = Some(authored_video);
+    Ok(snapshot)
+}
+
+fn timeline_advanced_authoring_from_snapshot(
+    timeline: &protocol::TimelineSnapshot,
+) -> TimelineAdvancedAuthoringSummary {
+    TimelineAdvancedAuthoringSummary {
+        snap_request: None,
+        video_clips: timeline.video_clips.clone(),
+        audio_clips: timeline.audio_clips.clone(),
+        phases: timeline.phases.clone(),
+        item_groups: timeline.item_groups.clone(),
+        loop_region: timeline.loop_region.clone(),
+        follow: timeline.follow.clone(),
+        guide_enabled: timeline.guide_enabled,
+    }
+}
+
+fn timeline_shift_ms(value: u64, delta_ms: i64) -> Result<u64, String> {
+    if delta_ms >= 0 {
+        value
+            .checked_add(delta_ms as u64)
+            .ok_or_else(|| "Timeline group move exceeds the supported time range".to_string())
+    } else {
+        value
+            .checked_sub(delta_ms.unsigned_abs())
+            .ok_or_else(|| "Timeline group move would place an item before time zero".to_string())
+    }
+}
+
+fn timeline_advanced_candidate_for_request(
+    state: &AppState,
+    before: &EngineSnapshot,
+    request: &TimelineAdvancedMutationRequest,
+) -> Result<TimelineAdvancedAuthoringSummary, String> {
+    let mut authoring = timeline_advanced_authoring_from_snapshot(&before.timeline);
+    match request {
+        TimelineAdvancedMutationRequest::Apply {
+            authoring: requested,
+        } => {
+            authoring = requested.clone();
+            for phase in &mut authoring.phases {
+                if phase.id.0 == 0 {
+                    phase.id = state.engine.allocate_timeline_phase_id();
+                }
+            }
+        }
+        TimelineAdvancedMutationRequest::InsertMedia {
+            media_asset_id,
+            start_ms,
+            video_layer_id,
+            audio_layer_id,
+        } => {
+            let asset = before
+                .video
+                .media_assets
+                .iter()
+                .find(|asset| asset.id == *media_asset_id)
+                .ok_or_else(|| format!("MediaAsset {media_asset_id} was not found"))?;
+            if !matches!(
+                asset.source.kind,
+                VideoSourceKind::File | VideoSourceKind::StillImage
+            ) {
+                return Err(
+                    "Only file or still MediaAssets can be placed on a Timeline".to_string()
+                );
+            }
+            let duration_ms = asset
+                .source
+                .metadata
+                .and_then(|metadata| metadata.duration_ms)
+                .filter(|duration| *duration > 0)
+                .ok_or_else(|| {
+                    format!(
+                        "MediaAsset {media_asset_id} needs a known non-zero duration before Timeline placement"
+                    )
+                })?;
+            let resolve_layer = |requested: Option<u32>, kind: TimelineLayerKind| {
+                requested
+                    .and_then(|id| before.timeline.layers.iter().find(|layer| layer.id == id))
+                    .or_else(|| {
+                        before
+                            .timeline
+                            .layers
+                            .iter()
+                            .find(|layer| layer.kind == kind && !layer.locked)
+                    })
+                    .filter(|layer| layer.kind == kind && !layer.locked)
+                    .map(|layer| layer.id)
+            };
+            let has_video = matches!(asset.source.kind, VideoSourceKind::StillImage)
+                || asset
+                    .source
+                    .metadata
+                    .is_some_and(|metadata| metadata.width.is_some() && metadata.height.is_some());
+            let has_audio = asset
+                .source
+                .metadata
+                .is_some_and(|metadata| metadata.has_audio);
+            if !has_video && !has_audio {
+                return Err(format!(
+                    "MediaAsset {media_asset_id} has neither a video stream nor an audio stream"
+                ));
+            }
+            let video_clip_id = if has_video {
+                let video_layer_id = resolve_layer(*video_layer_id, TimelineLayerKind::Video)
+                    .ok_or_else(|| "An unlocked Video Timeline lane is required".to_string())?;
+                let video_clip_id = state.engine.allocate_timeline_video_clip_id();
+                authoring.video_clips.push(TimelineVideoClipSummary {
+                    id: video_clip_id,
+                    layer_id: video_layer_id,
+                    media_asset_id: *media_asset_id,
+                    start_ms: *start_ms,
+                    offset_ms: 0,
+                    duration_ms,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
+                });
+                Some(video_clip_id)
+            } else {
+                None
+            };
+            if has_audio {
+                let audio_layer_id = resolve_layer(*audio_layer_id, TimelineLayerKind::Audio)
+                    .ok_or_else(|| {
+                        "An unlocked Audio Timeline lane is required for this video's audio"
+                            .to_string()
+                    })?;
+                let audio_clip_id = state.engine.allocate_timeline_audio_clip_id();
+                authoring.audio_clips.push(TimelineAudioClipSummary {
+                    id: audio_clip_id,
+                    layer_id: audio_layer_id,
+                    media_asset_id: Some(*media_asset_id),
+                    path: String::new(),
+                    start_ms: *start_ms,
+                    offset_ms: 0,
+                    duration_ms,
+                    gain: 1.0,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
+                });
+                if let Some(video_clip_id) = video_clip_id {
+                    authoring.item_groups.push(TimelineItemGroupSummary {
+                        id: state.engine.allocate_timeline_item_group_id(),
+                        members: vec![
+                            TimelineItemRef::VideoClip {
+                                clip_id: video_clip_id,
+                            },
+                            TimelineItemRef::AudioClip {
+                                clip_id: audio_clip_id,
+                            },
+                        ],
+                    });
+                }
+            }
+        }
+        TimelineAdvancedMutationRequest::Group { members } => {
+            authoring.item_groups.push(TimelineItemGroupSummary {
+                id: state.engine.allocate_timeline_item_group_id(),
+                members: members.clone(),
+            });
+        }
+        TimelineAdvancedMutationRequest::Ungroup { group_id } => {
+            let previous_len = authoring.item_groups.len();
+            authoring.item_groups.retain(|group| group.id != *group_id);
+            if authoring.item_groups.len() == previous_len {
+                return Err(format!("Timeline item group {} was not found", group_id.0));
+            }
+        }
+        TimelineAdvancedMutationRequest::MoveGroup { group_id, delta_ms } => {
+            let group = authoring
+                .item_groups
+                .iter()
+                .find(|group| group.id == *group_id)
+                .cloned()
+                .ok_or_else(|| format!("Timeline item group {} was not found", group_id.0))?;
+            let mut snap = TimelineSnapRequest::default();
+            for member in group.members {
+                match member {
+                    TimelineItemRef::VideoClip { clip_id } => {
+                        let clip = authoring
+                            .video_clips
+                            .iter_mut()
+                            .find(|clip| clip.id == clip_id)
+                            .ok_or_else(|| "Grouped Video clip was not found".to_string())?;
+                        clip.start_ms = timeline_shift_ms(clip.start_ms, *delta_ms)?;
+                    }
+                    TimelineItemRef::AudioClip { clip_id } => {
+                        let clip = authoring
+                            .audio_clips
+                            .iter_mut()
+                            .find(|clip| clip.id == clip_id)
+                            .ok_or_else(|| "Grouped Audio clip was not found".to_string())?;
+                        clip.start_ms = timeline_shift_ms(clip.start_ms, *delta_ms)?;
+                    }
+                    TimelineItemRef::LightingEvent { event_id } => {
+                        let event = before
+                            .timeline
+                            .events
+                            .iter()
+                            .find(|event| event.id == event_id)
+                            .ok_or_else(|| "Grouped Scene Block was not found".to_string())?;
+                        snap.event_placements
+                            .push(protocol::TimelineEventPlacementUpdate {
+                                event_id,
+                                cue_id: event.cue_id,
+                                time_ms: timeline_shift_ms(event.time_ms, *delta_ms)?,
+                                time_beats: event.time_beats,
+                                track: event.track.clone(),
+                                layer_id: event.layer_id,
+                                duration_ms: event.duration_ms,
+                                duration_beats: event.duration_beats,
+                                conform_to_tempo: event.conform_to_tempo,
+                                loop_fill: event.loop_fill,
+                                fade_in_ms: event.fade_in_ms,
+                                fade_out_ms: event.fade_out_ms,
+                                loop_count: event.loop_count,
+                                jump_to_event_id: event.jump_to_event_id,
+                            });
+                    }
+                    TimelineItemRef::LightingAutomation { automation_id } => {
+                        let automation = before
+                            .timeline
+                            .automations
+                            .iter()
+                            .find(|automation| automation.id == automation_id)
+                            .ok_or_else(|| {
+                                "Grouped Lighting automation was not found".to_string()
+                            })?;
+                        let mut keyframes = automation.keyframes.clone();
+                        for keyframe in &mut keyframes {
+                            keyframe.time_ms = timeline_shift_ms(keyframe.time_ms, *delta_ms)?;
+                        }
+                        snap.lighting_automations.push(
+                            protocol::TimelineAutomationKeyframesUpdate {
+                                automation_id,
+                                keyframes,
+                            },
+                        );
+                    }
+                    TimelineItemRef::VideoAutomation { automation_id } => {
+                        let automation = before
+                            .timeline
+                            .video_automations
+                            .iter()
+                            .find(|automation| automation.id == automation_id)
+                            .ok_or_else(|| "Grouped Video automation was not found".to_string())?;
+                        let mut keyframes = automation.keyframes.clone();
+                        for keyframe in &mut keyframes {
+                            keyframe.time_ms = timeline_shift_ms(keyframe.time_ms, *delta_ms)?;
+                        }
+                        snap.video_automations.push(
+                            protocol::TimelineVideoAutomationKeyframesUpdate {
+                                automation_id,
+                                keyframes,
+                            },
+                        );
+                    }
+                }
+            }
+            authoring.snap_request = Some(snap);
+        }
+        TimelineAdvancedMutationRequest::SetPhases { phases } => {
+            authoring.phases = phases.clone();
+            for phase in &mut authoring.phases {
+                if phase.id.0 == 0 {
+                    phase.id = state.engine.allocate_timeline_phase_id();
+                }
+            }
+        }
+        TimelineAdvancedMutationRequest::SetLoop { loop_region } => {
+            authoring.loop_region = loop_region.clone();
+        }
+        TimelineAdvancedMutationRequest::SetFollow { follow } => {
+            authoring.follow = follow.clone();
+        }
+        TimelineAdvancedMutationRequest::SetGuide { enabled } => {
+            authoring.guide_enabled = *enabled;
+        }
+        TimelineAdvancedMutationRequest::CreateTimeline { .. }
+        | TimelineAdvancedMutationRequest::DuplicateTimeline { .. }
+        | TimelineAdvancedMutationRequest::RemoveTimeline { .. }
+        | TimelineAdvancedMutationRequest::ReorderTimelines { .. }
+        | TimelineAdvancedMutationRequest::SelectTimeline { .. } => {
+            return Err("Timeline bank commands require the bank mutation path".to_string());
+        }
+    }
+    Ok(authoring)
+}
+
+fn clear_timeline_bank_runtime(timeline: &mut TimelineSnapshot) {
+    timeline.playing = false;
+    timeline.position_ms = 0;
+    timeline.count_in_remaining_ms = 0;
+    timeline.audio_transport_revision = 0;
+    timeline.active_child_transports.clear();
+    timeline.loop_runtime = Default::default();
+    timeline.follow_runtime = Default::default();
+    timeline.guide_cues.clear();
+}
+
+fn timeline_bank_from_snapshot(before: &EngineSnapshot) -> Vec<TimelineSnapshot> {
+    let mut bank = before.timeline_bank.clone();
+    if let Some(active) = bank
+        .iter_mut()
+        .find(|timeline| timeline.id == before.timeline.id)
+    {
+        *active = before.timeline.clone();
+    } else {
+        bank.push(before.timeline.clone());
+    }
+    for timeline in &mut bank {
+        clear_timeline_bank_runtime(timeline);
+    }
+    bank
+}
+
+fn restitch_timeline_bank_follow_targets(bank: &mut [TimelineSnapshot]) {
+    for index in 0..bank.len() {
+        let next_id = bank.get(index + 1).map(|timeline| timeline.id);
+        if bank[index]
+            .follow
+            .as_ref()
+            .is_some_and(|follow| follow.enabled)
+        {
+            if let Some(next_id) = next_id {
+                if let Some(follow) = bank[index].follow.as_mut() {
+                    follow.next_timeline_id = next_id;
+                }
+            } else {
+                bank[index].follow = None;
+            }
+        }
+    }
+}
+
+fn timeline_bank_candidate_for_request(
+    state: &AppState,
+    before: &EngineSnapshot,
+    request: &TimelineAdvancedMutationRequest,
+) -> Result<(Vec<TimelineSnapshot>, TimelineId, bool), String> {
+    let mut bank = timeline_bank_from_snapshot(before);
+    let mut active_timeline_id = before.timeline.id;
+    let mut play = before.timeline.playing;
+    match request {
+        TimelineAdvancedMutationRequest::CreateTimeline { label } => {
+            let label = label.trim();
+            if label.is_empty() {
+                return Err("Timeline label cannot be empty".to_string());
+            }
+            let mut timeline = before.timeline.clone();
+            timeline.id = state.engine.allocate_timeline_id();
+            timeline.label = label.to_string();
+            timeline.events.clear();
+            timeline.automations.clear();
+            timeline.video_automations.clear();
+            timeline.audio = None;
+            timeline.audio_clips.clear();
+            timeline.video_clips.clear();
+            timeline.phases.clear();
+            timeline.item_groups.clear();
+            timeline.loop_region = None;
+            timeline.follow = None;
+            timeline.guide_enabled = false;
+            timeline.duration_ms = 0;
+            clear_timeline_bank_runtime(&mut timeline);
+            active_timeline_id = timeline.id;
+            play = false;
+            bank.push(timeline);
+        }
+        TimelineAdvancedMutationRequest::DuplicateTimeline { timeline_id } => {
+            let source_index = bank
+                .iter()
+                .position(|timeline| timeline.id == *timeline_id)
+                .ok_or_else(|| format!("Timeline {} was not found", timeline_id.0))?;
+            let mut duplicate = bank[source_index].clone();
+            duplicate.id = state.engine.allocate_timeline_id();
+            duplicate.label = format!("{} Copy", duplicate.label);
+            clear_timeline_bank_runtime(&mut duplicate);
+            let duplicate_id = duplicate.id;
+            if let Some(follow) = bank[source_index]
+                .follow
+                .as_mut()
+                .filter(|follow| follow.enabled)
+            {
+                follow.next_timeline_id = duplicate_id;
+            }
+            bank.insert(source_index + 1, duplicate);
+            active_timeline_id = duplicate_id;
+            play = false;
+        }
+        TimelineAdvancedMutationRequest::RemoveTimeline { timeline_id } => {
+            if bank.len() <= 1 {
+                return Err("The final Timeline cannot be removed".to_string());
+            }
+            let removed_index = bank
+                .iter()
+                .position(|timeline| timeline.id == *timeline_id)
+                .ok_or_else(|| format!("Timeline {} was not found", timeline_id.0))?;
+            bank.remove(removed_index);
+            if active_timeline_id == *timeline_id {
+                active_timeline_id = bank[removed_index.min(bank.len() - 1)].id;
+                play = false;
+            }
+            restitch_timeline_bank_follow_targets(&mut bank);
+        }
+        TimelineAdvancedMutationRequest::ReorderTimelines { timeline_ids } => {
+            if timeline_ids.len() != bank.len() {
+                return Err("Timeline reorder must contain every Timeline exactly once".to_string());
+            }
+            let mut by_id = bank
+                .into_iter()
+                .map(|timeline| (timeline.id, timeline))
+                .collect::<BTreeMap<_, _>>();
+            let mut reordered = Vec::with_capacity(timeline_ids.len());
+            for timeline_id in timeline_ids {
+                let timeline = by_id.remove(timeline_id).ok_or_else(|| {
+                    "Timeline reorder contains a missing or duplicate ID".to_string()
+                })?;
+                reordered.push(timeline);
+            }
+            if !by_id.is_empty() {
+                return Err("Timeline reorder omitted a Timeline".to_string());
+            }
+            bank = reordered;
+            restitch_timeline_bank_follow_targets(&mut bank);
+        }
+        TimelineAdvancedMutationRequest::SelectTimeline {
+            timeline_id,
+            play: next_play,
+        } => {
+            if !bank.iter().any(|timeline| timeline.id == *timeline_id) {
+                return Err(format!("Timeline {} was not found", timeline_id.0));
+            }
+            active_timeline_id = *timeline_id;
+            play = *next_play;
+        }
+        _ => return Err("Timeline authoring command is not a bank mutation".to_string()),
+    }
+    let mut validation = before.clone();
+    validation.timeline_bank = bank.clone();
+    validation.timeline = bank
+        .iter()
+        .find(|timeline| timeline.id == active_timeline_id)
+        .cloned()
+        .ok_or_else(|| "Active Timeline is missing from the bank candidate".to_string())?;
+    protocol::validate_timeline_bank(&validation, &validation.video.media_assets)?;
+    Ok((bank, active_timeline_id, play))
+}
+
+fn apply_timeline_advanced_candidate_to_snapshot(
+    mut snapshot: EngineSnapshot,
+    authoring: &TimelineAdvancedAuthoringSummary,
+) -> Result<EngineSnapshot, String> {
+    snapshot.timeline.video_clips = authoring.video_clips.clone();
+    snapshot.timeline.audio_clips = authoring.audio_clips.clone();
+    snapshot.timeline.phases = authoring.phases.clone();
+    snapshot.timeline.item_groups = authoring.item_groups.clone();
+    snapshot.timeline.loop_region = authoring.loop_region.clone();
+    snapshot.timeline.follow = authoring.follow.clone();
+    snapshot.timeline.guide_enabled = authoring.guide_enabled;
+    if let Some(request) = &authoring.snap_request {
+        for update in &request.event_placements {
+            let event = snapshot
+                .timeline
+                .events
+                .iter_mut()
+                .find(|event| event.id == update.event_id)
+                .ok_or_else(|| format!("Timeline event {} was not found", update.event_id))?;
+            event.time_ms = update.time_ms;
+            event.time_beats = update.time_beats;
+            event.track = update.track.clone();
+            event.layer_id = update.layer_id.or(event.layer_id);
+            event.duration_ms = update.duration_ms;
+            event.duration_beats = update.duration_beats;
+            event.conform_to_tempo = update.conform_to_tempo;
+            event.loop_fill = update.loop_fill;
+            event.fade_in_ms = update.fade_in_ms;
+            event.fade_out_ms = update.fade_out_ms;
+            event.loop_count = update.loop_count;
+            event.jump_to_event_id = update.jump_to_event_id;
+        }
+        for update in &request.lighting_automations {
+            let automation = snapshot
+                .timeline
+                .automations
+                .iter_mut()
+                .find(|automation| automation.id == update.automation_id)
+                .ok_or_else(|| {
+                    format!("Timeline automation {} was not found", update.automation_id)
+                })?;
+            automation.keyframes = update.keyframes.clone();
+        }
+        for update in &request.video_automations {
+            let automation = snapshot
+                .timeline
+                .video_automations
+                .iter_mut()
+                .find(|automation| automation.id == update.automation_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Timeline video automation {} was not found",
+                        update.automation_id
+                    )
+                })?;
+            automation.keyframes = update.keyframes.clone();
+        }
+    }
+    protocol::validate_timeline_authoring(&snapshot.timeline, &snapshot.video.media_assets)?;
+    if let Some(active) = snapshot
+        .timeline_bank
+        .iter_mut()
+        .find(|timeline| timeline.id == snapshot.timeline.id)
+    {
+        *active = snapshot.timeline.clone();
+        clear_timeline_bank_runtime(active);
+    } else {
+        let mut active = snapshot.timeline.clone();
+        clear_timeline_bank_runtime(&mut active);
+        snapshot.timeline_bank.push(active);
+    }
+    protocol::validate_timeline_bank(&snapshot, &snapshot.video.media_assets)?;
+    Ok(snapshot)
+}
+
+fn timeline_advanced_history_label(request: &TimelineAdvancedMutationRequest) -> &'static str {
+    match request {
+        TimelineAdvancedMutationRequest::Apply { .. } => "Apply Timeline authoring",
+        TimelineAdvancedMutationRequest::InsertMedia { .. } => "Insert Timeline media",
+        TimelineAdvancedMutationRequest::Group { .. } => "Group Timeline items",
+        TimelineAdvancedMutationRequest::Ungroup { .. } => "Ungroup Timeline items",
+        TimelineAdvancedMutationRequest::MoveGroup { .. } => "Move Timeline group",
+        TimelineAdvancedMutationRequest::SetPhases { .. } => "Set Timeline Phases",
+        TimelineAdvancedMutationRequest::SetLoop { .. } => "Set Timeline loop",
+        TimelineAdvancedMutationRequest::SetFollow { .. } => "Set Timeline Follow",
+        TimelineAdvancedMutationRequest::SetGuide { .. } => "Set Timeline Guide",
+        TimelineAdvancedMutationRequest::CreateTimeline { .. } => "Create Timeline",
+        TimelineAdvancedMutationRequest::DuplicateTimeline { .. } => "Duplicate Timeline",
+        TimelineAdvancedMutationRequest::RemoveTimeline { .. } => "Remove Timeline",
+        TimelineAdvancedMutationRequest::ReorderTimelines { .. } => "Reorder Timelines",
+        TimelineAdvancedMutationRequest::SelectTimeline { .. } => "Select Timeline",
+    }
+}
+
+fn commit_authoritative_timeline_advanced(
+    state: &AppState,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    request: &TimelineAdvancedMutationRequest,
+) -> Result<TimelineAdvancedAuthoritativeResult, String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_media_asset_commit(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err("Project transaction is active; retry the Timeline command".to_string());
+    }
+    let before_snapshot = state.engine.persistence_snapshot()?;
+    let bank_request = matches!(
+        request,
+        TimelineAdvancedMutationRequest::CreateTimeline { .. }
+            | TimelineAdvancedMutationRequest::DuplicateTimeline { .. }
+            | TimelineAdvancedMutationRequest::RemoveTimeline { .. }
+            | TimelineAdvancedMutationRequest::ReorderTimelines { .. }
+            | TimelineAdvancedMutationRequest::SelectTimeline { .. }
+    );
+    let (candidate_snapshot, bank_publication) = if bank_request {
+        let (timeline_bank, active_timeline_id, play) =
+            timeline_bank_candidate_for_request(state, &before_snapshot, request)?;
+        let mut candidate = before_snapshot.clone();
+        candidate.timeline_bank = timeline_bank.clone();
+        candidate.timeline = timeline_bank
+            .iter()
+            .find(|timeline| timeline.id == active_timeline_id)
+            .cloned()
+            .ok_or_else(|| "Active Timeline is missing from the bank candidate".to_string())?;
+        clear_timeline_bank_runtime(&mut candidate.timeline);
+        if let Some(active) = candidate
+            .timeline_bank
+            .iter_mut()
+            .find(|timeline| timeline.id == active_timeline_id)
+        {
+            *active = candidate.timeline.clone();
+        }
+        protocol::validate_timeline_bank(&candidate, &candidate.video.media_assets)?;
+        let timeline_bank = candidate.timeline_bank.clone();
+        (candidate, Some((timeline_bank, active_timeline_id, play)))
+    } else {
+        let authoring = timeline_advanced_candidate_for_request(state, &before_snapshot, request)?;
+        (
+            apply_timeline_advanced_candidate_to_snapshot(before_snapshot.clone(), &authoring)?,
+            None,
+        )
+    };
+    let authoring = timeline_advanced_authoring_from_snapshot(&candidate_snapshot.timeline);
+    let result_timeline_bank = candidate_snapshot.timeline_bank.clone();
+    let result_active_timeline_id = candidate_snapshot.timeline.id;
+    let before_project =
+        project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
+    let before = ProjectCheckpoint {
+        hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+        project: before_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+    };
+    let after_project =
+        project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
+    let after = ProjectCheckpoint {
+        project: after_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: String::new(),
+    };
+    let plan = prepare_internal_media_asset_commit(
+        &coordinator,
+        timeline_advanced_history_label(request),
+        "",
+        before,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )?;
+    run_admitted_internal_media_asset_transaction(
+        &state.project_transaction_active,
+        &mut coordinator,
+        plan,
+        || match &bank_publication {
+            Some((timeline_bank, active_timeline_id, play)) => state
+                .engine
+                .apply_timeline_bank_published(timeline_bank.clone(), *active_timeline_id, *play),
+            None => state
+                .engine
+                .apply_timeline_advanced_authoring_published(authoring.clone()),
+        },
+    )?;
+    Ok(TimelineAdvancedAuthoritativeResult {
+        authoring,
+        timeline_bank: result_timeline_bank,
+        active_timeline_id: result_active_timeline_id,
+        mutation: ProjectHistoryMutationResult {
+            history_status: project_history_status_for_coordinator(&coordinator),
+            authority: project_authority_bundle_from_coordinator(state, &coordinator),
+        },
+    })
+}
+
+/// C1's B3-style terminal body: revalidate authority under the external
+/// admission, build history B from persistence/authored state, send exactly
+/// one catalog Published command, then apply the preflighted history plan.
+/// Nothing after the engine ACK is fallible.
+fn commit_authoritative_video_effect_catalog(
+    state: &AppState,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    request: &VideoEffectCatalogApplyRequest,
+) -> Result<VideoEffectCatalogAuthoritativeResult, String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_media_asset_commit(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err(
+            "Project transaction is active; retry the video effect catalog command".to_string(),
+        );
+    }
+    let before_snapshot = state.engine.persistence_snapshot()?;
+    let normalized_request = normalize_video_effect_catalog_ids(state, &before_snapshot, request)?;
+    let before_project =
+        project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
+    let before = ProjectCheckpoint {
+        hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+        project: before_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+    };
+    let candidate_snapshot =
+        video_effect_catalog_candidate_snapshot(before_snapshot, &normalized_request)?;
+    let after_project =
+        project_file_for_save_from_parts(candidate_snapshot.clone(), &coordinator.ancillary);
+    let after = ProjectCheckpoint {
+        project: after_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: String::new(),
+    };
+    let plan = prepare_internal_media_asset_commit(
+        &coordinator,
+        "Apply video effect catalog",
+        "",
+        before,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )?;
+    let catalog = VideoEffectCatalogAuthoritativeCatalog {
+        effect_chains: candidate_snapshot
+            .authored_video
+            .as_ref()
+            .expect("C1 candidate always has canonical authored video")
+            .effect_chains
+            .clone(),
+        effect_presets: candidate_snapshot
+            .authored_video
+            .as_ref()
+            .expect("C1 candidate always has canonical authored video")
+            .effect_presets
+            .clone(),
+        layer_groups: candidate_snapshot
+            .authored_video
+            .as_ref()
+            .expect("C1 candidate always has canonical authored video")
+            .layer_groups
+            .clone(),
+        transition_buses: candidate_snapshot
+            .authored_video
+            .as_ref()
+            .expect("C1/C3 candidate always has canonical authored video")
+            .transition_buses
+            .clone(),
+    };
+    run_admitted_internal_media_asset_transaction(
+        &state.project_transaction_active,
+        &mut coordinator,
+        plan,
+        || {
+            #[cfg(test)]
+            state
+                .video_effect_catalog_authoritative_publish_attempts
+                .fetch_add(1, Ordering::AcqRel);
+            state
+                .engine
+                .apply_video_effect_catalog_with_transition_buses(
+                    catalog.effect_chains.clone(),
+                    catalog.effect_presets.clone(),
+                    catalog.layer_groups.clone(),
+                    catalog.transition_buses.clone(),
+                )
+        },
+    )?;
+    Ok(VideoEffectCatalogAuthoritativeResult {
+        catalog,
+        mutation: ProjectHistoryMutationResult {
+            history_status: project_history_status_for_coordinator(&coordinator),
+            authority: project_authority_bundle_from_coordinator(state, &coordinator),
+        },
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_video_effect_catalog_authoritative_command_impl(
+    state: &AppState,
+    request: VideoEffectCatalogApplyRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoEffectCatalogAuthoritativeResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let key = video_effect_catalog_authoritative_operation_key(
+        request_id,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let expected_authority = video_effect_catalog_authoritative_expected_authority(&key);
+    let shape = video_effect_catalog_authoritative_shape(&request)?;
+    let terminal = state
+        .media_asset_operations
+        .video_effect_catalog_authoritative_terminal_single_flight(&key, &shape, || {
+            commit_authoritative_video_effect_catalog(
+                state,
+                expected_authority.epoch,
+                &owner_id,
+                &expected_authority,
+                &request,
+            )
+            .map(VideoEffectCatalogAuthoritativeTerminalResult::Applied)
+        })?;
+    match terminal {
+        VideoEffectCatalogAuthoritativeTerminalResult::Applied(result) => Ok(result),
+        VideoEffectCatalogAuthoritativeTerminalResult::Timeline(_) => {
+            Err("Video effect catalog command received a Timeline terminal result".to_string())
+        }
+        VideoEffectCatalogAuthoritativeTerminalResult::Runtime(_) => Err(
+            "Video effect catalog command received a runtime transition terminal result"
+                .to_string(),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_timeline_advanced_authoritative_command_impl(
+    state: &AppState,
+    request: TimelineAdvancedMutationRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<TimelineAdvancedAuthoritativeResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let key = video_effect_catalog_authoritative_operation_key(
+        request_id,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let expected_authority = video_effect_catalog_authoritative_expected_authority(&key);
+    let shape = timeline_advanced_authoritative_shape(&request)?;
+    let terminal = state
+        .media_asset_operations
+        .video_effect_catalog_authoritative_terminal_single_flight(&key, &shape, || {
+            commit_authoritative_timeline_advanced(
+                state,
+                expected_authority.epoch,
+                &owner_id,
+                &expected_authority,
+                &request,
+            )
+            .map(VideoEffectCatalogAuthoritativeTerminalResult::Timeline)
+        })?;
+    match terminal {
+        VideoEffectCatalogAuthoritativeTerminalResult::Timeline(result) => Ok(result),
+        VideoEffectCatalogAuthoritativeTerminalResult::Applied(_) => {
+            Err("Timeline command received a video effect terminal result".to_string())
+        }
+        VideoEffectCatalogAuthoritativeTerminalResult::Runtime(_) => {
+            Err("Timeline command received a runtime transition terminal result".to_string())
+        }
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn apply_timeline_advanced_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: TimelineAdvancedMutationRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<TimelineAdvancedAuthoritativeResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    apply_timeline_advanced_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn apply_video_effect_catalog_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoEffectCatalogApplyRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoEffectCatalogAuthoritativeResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    apply_video_effect_catalog_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn get_video_effect_catalog_operation_terminal_result_impl(
+    state: &AppState,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<Option<VideoEffectCatalogAuthoritativeTerminalEnvelope>, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let key = video_effect_catalog_authoritative_operation_key(
+        request_id,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    state
+        .media_asset_operations
+        .ensure_video_effect_catalog_authoritative_key_not_retired(&key)?;
+    let Some(record) = state
+        .media_asset_operations
+        .video_effect_catalog_authoritative_receipt(&key)
+    else {
+        return Ok(None);
+    };
+    let runtime = match &record.terminal {
+        VideoEffectCatalogAuthoritativeTerminalResult::Runtime(outcome) => {
+            Some(fresh_authoritative_video_layer_transition_runtime_result(
+                state,
+                outcome.command_kind,
+                &owner_id,
+                &video_effect_catalog_authoritative_expected_authority(&key),
+            )?)
+        }
+        VideoEffectCatalogAuthoritativeTerminalResult::Applied(_) => None,
+        VideoEffectCatalogAuthoritativeTerminalResult::Timeline(_) => None,
+    };
+    Ok(Some(VideoEffectCatalogAuthoritativeTerminalEnvelope {
+        shape_fingerprint: record.shape.fingerprint,
+        terminal: record.terminal,
+        runtime,
+    }))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn get_video_effect_catalog_operation_terminal_result(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<Option<VideoEffectCatalogAuthoritativeTerminalEnvelope>, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    get_video_effect_catalog_operation_terminal_result_impl(
+        &state,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn get_timeline_advanced_operation_terminal_result(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<Option<VideoEffectCatalogAuthoritativeTerminalEnvelope>, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    get_video_effect_catalog_operation_terminal_result_impl(
+        &state,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+fn observe_current_video_layer_transition_runtime(
+    state: &AppState,
+) -> Result<(u64, VideoLayerTransitionRuntimeSnapshot), String> {
+    let runtime = state.engine.snapshot().video_transition_runtime;
+    let mut observed = state
+        .video_transition_runtime_observed
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let generation = if *observed == runtime {
+        state
+            .video_transition_runtime_generation
+            .load(Ordering::Acquire)
+    } else {
+        let next = state
+            .video_transition_runtime_generation
+            .load(Ordering::Acquire)
+            .checked_add(1)
+            .filter(|next| *next <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
+            .ok_or_else(|| {
+                "Video transition runtime generation is exhausted; restart Syndocal".to_string()
+            })?;
+        *observed = runtime.clone();
+        state
+            .video_transition_runtime_generation
+            .store(next, Ordering::Release);
+        next
+    };
+    Ok((generation, runtime))
+}
+
+fn commit_authoritative_video_layer_transition_runtime(
+    state: &AppState,
+    command_kind: VideoLayerTransitionAuthoritativeRuntimeCommandKind,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    publish: impl FnOnce() -> Result<(), String>,
+) -> Result<VideoLayerTransitionAuthoritativeRuntimeResult, String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_video_clip_slot_runtime(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    let runtime_generation = state
+        .video_transition_runtime_generation
+        .load(Ordering::Acquire)
+        .checked_add(1)
+        .filter(|next| *next <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
+        .ok_or_else(|| {
+            "Video transition runtime generation is exhausted; restart Syndocal".to_string()
+        })?;
+    publish()?;
+    let runtime = state.engine.snapshot().video_transition_runtime;
+    *state
+        .video_transition_runtime_observed
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = runtime.clone();
+    state
+        .video_transition_runtime_generation
+        .store(runtime_generation, Ordering::Release);
+    Ok(VideoLayerTransitionAuthoritativeRuntimeResult {
+        command_kind,
+        project_epoch: coordinator.epoch,
+        project_revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        runtime_generation,
+        runtime,
+    })
+}
+
+fn fresh_authoritative_video_layer_transition_runtime_result(
+    state: &AppState,
+    command_kind: VideoLayerTransitionAuthoritativeRuntimeCommandKind,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+) -> Result<VideoLayerTransitionAuthoritativeRuntimeResult, String> {
+    let (_external_admission, coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    ensure_project_transaction_owner_registered(state, owner_id)?;
+    if media_asset_prepare_authority(&coordinator) != *expected_authority {
+        return Err(
+            "Project changed since this video transition receipt was issued; retry".to_string(),
+        );
+    }
+    let (runtime_generation, runtime) = observe_current_video_layer_transition_runtime(state)?;
+    Ok(VideoLayerTransitionAuthoritativeRuntimeResult {
+        command_kind,
+        project_epoch: coordinator.epoch,
+        project_revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        runtime_generation,
+        runtime,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_video_layer_transition_runtime_operation<T: Serialize>(
+    state: &AppState,
+    command_kind: VideoLayerTransitionAuthoritativeRuntimeCommandKind,
+    command_name: &str,
+    request: &T,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+    publish: impl FnOnce() -> Result<(), String>,
+) -> Result<VideoLayerTransitionAuthoritativeRuntimeResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let key = video_effect_catalog_authoritative_operation_key(
+        request_id,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let expected_authority = video_effect_catalog_authoritative_expected_authority(&key);
+    let payload = serde_json::to_value(request)
+        .map_err(|error| format!("Unable to encode video transition request: {error}"))?;
+    let shape = legacy_video_effect_catalog_authoritative_shape(command_name, payload)?;
+    let terminal = state
+        .media_asset_operations
+        .video_effect_catalog_authoritative_terminal_single_flight(&key, &shape, || {
+            commit_authoritative_video_layer_transition_runtime(
+                state,
+                command_kind,
+                expected_epoch,
+                &owner_id,
+                &expected_authority,
+                publish,
+            )?;
+            Ok(VideoEffectCatalogAuthoritativeTerminalResult::Runtime(
+                VideoLayerTransitionAuthoritativeRuntimeOutcome { command_kind },
+            ))
+        })?;
+    ensure_video_clip_slot_caller_binding_current(state, &binding)?;
+    match terminal {
+        VideoEffectCatalogAuthoritativeTerminalResult::Runtime(outcome) => {
+            fresh_authoritative_video_layer_transition_runtime_result(
+                state,
+                outcome.command_kind,
+                &owner_id,
+                &expected_authority,
+            )
+        }
+        VideoEffectCatalogAuthoritativeTerminalResult::Applied(_) => Err(
+            "Video transition runtime command received an authored catalog terminal result"
+                .to_string(),
+        ),
+        VideoEffectCatalogAuthoritativeTerminalResult::Timeline(_) => {
+            Err("Video transition runtime command received a Timeline terminal result".to_string())
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_video_layer_transition_bus_authoritative_command_impl(
+    state: &AppState,
+    request: VideoLayerTransitionLaunchRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoLayerTransitionAuthoritativeRuntimeResult, String> {
+    let publish_request = request.clone();
+    run_video_layer_transition_runtime_operation(
+        state,
+        VideoLayerTransitionAuthoritativeRuntimeCommandKind::Launch,
+        "launch_video_layer_transition_bus",
+        &request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        caller_binding,
+        move || {
+            state.engine.launch_video_layer_transition_bus(
+                publish_request.bus_id,
+                publish_request.from,
+                publish_request.to,
+                publish_request.kind,
+                publish_request.duration,
+                publish_request.curve,
+            )
+        },
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn launch_video_layer_transition_bus_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoLayerTransitionLaunchRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoLayerTransitionAuthoritativeRuntimeResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    launch_video_layer_transition_bus_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn release_video_layer_transition_bus_authoritative_command_impl(
+    state: &AppState,
+    request: VideoLayerTransitionReleaseRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoLayerTransitionAuthoritativeRuntimeResult, String> {
+    let bus_id = request.bus_id;
+    run_video_layer_transition_runtime_operation(
+        state,
+        VideoLayerTransitionAuthoritativeRuntimeCommandKind::Release,
+        "release_video_layer_transition_bus",
+        &request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        caller_binding,
+        move || state.engine.release_video_layer_transition_bus(bus_id),
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn release_video_layer_transition_bus_authoritative(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: VideoLayerTransitionReleaseRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoLayerTransitionAuthoritativeRuntimeResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    release_video_layer_transition_bus_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+fn get_video_layer_transition_runtime_impl(
+    state: &AppState,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<VideoLayerTransitionRuntimeReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    if coordinator.epoch != expected_epoch
+        || coordinator.revision != expected_revision
+        || coordinator.checkpoint_hash != expected_checkpoint_hash
+    {
+        return Err(
+            "Project changed since this video transition runtime read was issued; retry"
+                .to_string(),
+        );
+    }
+    let (runtime_generation, runtime) = observe_current_video_layer_transition_runtime(state)?;
+    Ok(VideoLayerTransitionRuntimeReport {
+        project_epoch: coordinator.epoch,
+        project_revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        runtime_generation,
+        runtime,
+    })
+}
+
+#[tauri::command]
+fn get_video_layer_transition_runtime(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<VideoLayerTransitionRuntimeReport, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    get_video_layer_transition_runtime_impl(
+        &state,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
 }
 
 fn expect_video_clip_slot_authored_terminal(
@@ -9972,7 +12119,10 @@ struct UserTemplateFile {
     dmx_mappings: Vec<DmxControlMapping>,
 }
 
-const VIDEO_FILE_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov", "mkv", "avi", "webm", "hap", "hapq"];
+const VIDEO_FILE_EXTENSIONS: &[&str] = &[
+    "mp4", "m4v", "mov", "mkv", "avi", "webm", "hap", "hapq", "wav", "wave", "mp3", "m4a", "aac",
+    "flac", "ogg", "opus", "aif", "aiff",
+];
 const STILL_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg"];
 const ISF_FILE_EXTENSIONS: &[&str] = &["fs", "frag", "glsl", "isf"];
 const VISUALIZER_MODEL_ASSET_CACHE_LIMIT: usize = 64;
@@ -11957,6 +14107,7 @@ fn add_timeline_audio_clip(
         TimelineAudioClipSummary {
             id,
             layer_id,
+            media_asset_id: None,
             path,
             start_ms,
             offset_ms,
@@ -11989,6 +14140,7 @@ fn update_timeline_audio_clip(
         TimelineAudioClipSummary {
             id,
             layer_id,
+            media_asset_id: None,
             path,
             start_ms,
             offset_ms,
@@ -12023,6 +14175,22 @@ fn clear_timeline_audio(state: State<'_, AppState>) -> Result<(), String> {
     state
         .engine
         .send(EngineCommand::SetTimelineAudio(None))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_timeline_loop_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::SetTimelineLoopEnabled(enabled))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn scale_timeline_loop(state: State<'_, AppState>, scale: TimelineLoopScale) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::ScaleTimelineLoop(scale))
         .map_err(|error| error.to_string())
 }
 
@@ -12414,6 +14582,8 @@ fn connect_midi_control(
             MidiControlEvent::SeekTimelineBeat { direction } => {
                 EngineCommand::SeekTimelineBeat { direction }
             }
+            MidiControlEvent::ToggleTimelineLoop => EngineCommand::ToggleTimelineLoop,
+            MidiControlEvent::ScaleTimelineLoop(scale) => EngineCommand::ScaleTimelineLoop(scale),
             MidiControlEvent::SetBpm(bpm) => EngineCommand::SetBpm(bpm),
             MidiControlEvent::TapBpm => EngineCommand::TapBpm,
             MidiControlEvent::LightingMaster(master) => EngineCommand::SetLightingMaster(master),
@@ -12946,6 +15116,9 @@ fn validate_mapping_required_fields_for_midi(
         | MidiControlAction::TimelineSeek
         | MidiControlAction::TimelineBeatPrevious
         | MidiControlAction::TimelineBeatNext
+        | MidiControlAction::TimelineLoopToggle
+        | MidiControlAction::TimelineLoopHalf
+        | MidiControlAction::TimelineLoopDouble
         | MidiControlAction::SetBpm
         | MidiControlAction::TapBpm
         | MidiControlAction::LightingMaster
@@ -13094,6 +15267,9 @@ fn validate_mapping_required_fields_for_osc(
         | OscControlAction::TimelineSeek
         | OscControlAction::TimelineBeatPrevious
         | OscControlAction::TimelineBeatNext
+        | OscControlAction::TimelineLoopToggle
+        | OscControlAction::TimelineLoopHalf
+        | OscControlAction::TimelineLoopDouble
         | OscControlAction::SetBpm
         | OscControlAction::TapBpm
         | OscControlAction::LightingMaster
@@ -13333,6 +15509,8 @@ fn dispatch_external_control_event(
         OscInputEvent::SeekTimelineBeat { direction } => {
             EngineCommand::SeekTimelineBeat { direction }
         }
+        OscInputEvent::ToggleTimelineLoop => EngineCommand::ToggleTimelineLoop,
+        OscInputEvent::ScaleTimelineLoop(scale) => EngineCommand::ScaleTimelineLoop(scale),
         OscInputEvent::SyncTimelineTimecode {
             position_ms,
             source,
@@ -13596,6 +15774,8 @@ fn start_osc_input(
             OscInputEvent::SeekTimelineBeat { direction } => {
                 EngineCommand::SeekTimelineBeat { direction }
             }
+            OscInputEvent::ToggleTimelineLoop => EngineCommand::ToggleTimelineLoop,
+            OscInputEvent::ScaleTimelineLoop(scale) => EngineCommand::ScaleTimelineLoop(scale),
             OscInputEvent::SyncTimelineTimecode {
                 position_ms,
                 source,
@@ -18607,6 +20787,11 @@ fn commit_authoritative_video_clip_slot_runtime(
         );
     }
     publish()?;
+    let runtime = state.engine.snapshot().video_clip_runtime;
+    *state
+        .video_clip_slot_runtime_observed
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = runtime.clone();
     state
         .video_clip_slot_runtime_generation
         .store(runtime_generation, Ordering::Release);
@@ -18616,8 +20801,38 @@ fn commit_authoritative_video_clip_slot_runtime(
         project_revision: coordinator.revision,
         checkpoint_hash: coordinator.checkpoint_hash.clone(),
         runtime_generation,
-        runtime: state.engine.snapshot().video_clip_runtime,
+        runtime,
     })
+}
+
+fn observe_current_video_clip_runtime(
+    state: &AppState,
+) -> Result<(u64, VideoClipRuntimeSnapshot), String> {
+    let runtime = state.engine.snapshot().video_clip_runtime;
+    let mut observed = state
+        .video_clip_slot_runtime_observed
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let generation = if *observed == runtime {
+        state
+            .video_clip_slot_runtime_generation
+            .load(Ordering::Acquire)
+    } else {
+        let next = state
+            .video_clip_slot_runtime_generation
+            .load(Ordering::Acquire)
+            .checked_add(1)
+            .filter(|next| *next <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
+            .ok_or_else(|| {
+                "Video clip slot runtime generation is exhausted; restart Syndocal".to_string()
+            })?;
+        *observed = runtime.clone();
+        state
+            .video_clip_slot_runtime_generation
+            .store(next, Ordering::Release);
+        next
+    };
+    Ok((generation, runtime))
 }
 
 /// Materialize the live transport portion of a previously acknowledged
@@ -18640,15 +20855,14 @@ fn fresh_authoritative_video_clip_slot_runtime_result(
             "Project changed since this video clip runtime receipt was issued; retry".to_string(),
         );
     }
+    let (runtime_generation, runtime) = observe_current_video_clip_runtime(state)?;
     Ok(VideoClipSlotAuthoritativeRuntimeResult {
         command_kind,
         project_epoch: coordinator.epoch,
         project_revision: coordinator.revision,
         checkpoint_hash: coordinator.checkpoint_hash.clone(),
-        runtime_generation: state
-            .video_clip_slot_runtime_generation
-            .load(Ordering::Acquire),
-        runtime: state.engine.snapshot().video_clip_runtime,
+        runtime_generation,
+        runtime,
     })
 }
 
@@ -18680,14 +20894,13 @@ fn get_video_clip_slot_runtime_impl(
             "Project changed since this video clip runtime read was issued; retry".to_string(),
         );
     }
+    let (runtime_generation, runtime) = observe_current_video_clip_runtime(state)?;
     Ok(VideoClipRuntimeReport {
         project_epoch: coordinator.epoch,
         project_revision: coordinator.revision,
         checkpoint_hash: coordinator.checkpoint_hash.clone(),
-        runtime_generation: state
-            .video_clip_slot_runtime_generation
-            .load(Ordering::Acquire),
-        runtime: state.engine.snapshot().video_clip_runtime,
+        runtime_generation,
+        runtime,
     })
 }
 
@@ -20021,7 +22234,12 @@ fn launch_video_clip_slot_authoritative_command_impl(
                 || {
                     state
                         .engine
-                        .launch_video_clip_slot_published(request.layer_id, request.slot_id)
+                        .launch_video_clip_slot_with_transition_timing_published(
+                            request.layer_id,
+                            request.slot_id,
+                            request.transition_kind,
+                            request.effective_transition_duration(),
+                        )
                 },
             )?;
             Ok(VideoClipSlotAuthoritativeTerminalResult::Runtime(
@@ -22118,149 +24336,849 @@ fn set_video_layer_state(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-fn set_video_layer_isf_effect(
-    state: State<'_, AppState>,
+/// The legacy ISF IPC surface predates C1's central catalog.  Keep its
+/// request/response shapes, but make every authored mutation an adapter over
+/// the exact same canonical candidate + one-Published-history transaction as
+/// `apply_video_effect_catalog_authoritative`.
+fn legacy_video_effect_stage_summary(
+    stage: VideoIsfEffectStageSummary,
+    stage_id: protocol::VideoEffectStageId,
+    effect_id: protocol::VideoEffectId,
+) -> protocol::VideoEffectStageSummary {
+    protocol::VideoEffectStageSummary {
+        id: stage_id,
+        enabled: stage.enabled,
+        label: stage.label.clone(),
+        effect: protocol::VideoEffectSummary {
+            id: effect_id,
+            kind: VideoEffectKind::Isf {
+                effect: video_isf_root_from_stages(stage, Vec::new()),
+            },
+        },
+    }
+}
+
+fn legacy_video_effect_stages(effect: VideoIsfEffectSummary) -> Vec<VideoIsfEffectStageSummary> {
+    let mut stages = Vec::with_capacity(effect.stack.len() + 1);
+    stages.push(video_isf_stage_from_root(effect.clone()));
+    stages.extend(effect.stack);
+    stages
+}
+
+fn legacy_video_effect_catalog_request(
+    video: &protocol::VideoSnapshot,
+) -> VideoEffectCatalogApplyRequest {
+    VideoEffectCatalogApplyRequest {
+        effect_chains: video.effect_chains.clone(),
+        effect_presets: video.effect_presets.clone(),
+        layer_groups: video.layer_groups.clone(),
+        transition_buses: video.transition_buses.clone(),
+    }
+}
+
+fn legacy_video_effect_catalog_video(snapshot: &EngineSnapshot) -> protocol::VideoSnapshot {
+    snapshot
+        .authored_video
+        .clone()
+        .unwrap_or_else(|| snapshot.video.clone())
+}
+
+fn ensure_legacy_video_effect_layer_exists(
+    video: &protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+) -> Result<(), String> {
+    video
+        .layers
+        .iter()
+        .any(|layer| layer.id == layer_id)
+        .then_some(())
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))
+}
+
+fn legacy_layer_effect_chain_index(
+    request: &VideoEffectCatalogApplyRequest,
+    layer_id: VideoLayerId,
+) -> Option<usize> {
+    request
+        .effect_chains
+        .iter()
+        .position(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+}
+
+fn legacy_materialize_layer_effect_chain(
+    video: &protocol::VideoSnapshot,
+    request: &mut VideoEffectCatalogApplyRequest,
+    layer_id: VideoLayerId,
+) -> Result<usize, String> {
+    if let Some(index) = legacy_layer_effect_chain_index(request, layer_id) {
+        return Ok(index);
+    }
+    let legacy_effect = video
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))?
+        .isf_effect
+        .clone();
+    // New compatibility entities use the public C1 zero sentinel. The shared
+    // terminal lane below, not a catalog-max calculation here, obtains the
+    // actual EngineHandle identity after A is fenced.
+    let chain_id = protocol::VideoEffectChainId(0);
+    let stages = legacy_effect
+        .map(legacy_video_effect_stages)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|stage| {
+            legacy_video_effect_stage_summary(
+                stage,
+                protocol::VideoEffectStageId(0),
+                protocol::VideoEffectId(0),
+            )
+        })
+        .collect::<Vec<_>>();
+    request.effect_chains.push(VideoEffectChainSummary {
+        id: chain_id,
+        scope: VideoEffectScope::Layer { layer_id },
+        bypassed: false,
+        stages,
+    });
+    Ok(request.effect_chains.len() - 1)
+}
+
+fn legacy_replace_layer_effect_chain(
+    video: &protocol::VideoSnapshot,
+    request: &mut VideoEffectCatalogApplyRequest,
     layer_id: VideoLayerId,
     effect: Option<VideoIsfEffectSummary>,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    validate_video_layer_ids(&snapshot, &[layer_id])?;
+    ensure_legacy_video_effect_layer_exists(video, layer_id)?;
+    let Some(effect) = effect else {
+        request
+            .effect_chains
+            .retain(|chain| chain.scope != VideoEffectScope::Layer { layer_id });
+        return Ok(());
+    };
+    let index = legacy_materialize_layer_effect_chain(video, request, layer_id)?;
+    let existing = request.effect_chains[index].stages.clone();
+    request.effect_chains[index].bypassed = false;
+    request.effect_chains[index].stages = legacy_video_effect_stages(effect)
+        .into_iter()
+        .enumerate()
+        .map(|(index, stage)| {
+            let prior = existing.get(index);
+            legacy_video_effect_stage_summary(
+                stage,
+                prior
+                    .map(|stage| stage.id)
+                    .unwrap_or(protocol::VideoEffectStageId(0)),
+                prior
+                    .map(|stage| stage.effect.id)
+                    .unwrap_or(protocol::VideoEffectId(0)),
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok(())
+}
+
+/// A legacy command has no request/receipt ID, but it must still build its
+/// full canonical request from the exact E/R/H persistence image it commits.
+/// Capture only provides A; the completion path revalidates that same A under
+/// the rotation lane, so a catalog write between these two boundaries is a
+/// fail-closed retry rather than a whole-catalog lost update.
+struct LegacyVideoEffectCatalogAuthorityCapture {
+    owner_id: String,
+    binding: VideoClipSlotCallerBinding,
+    authority: MediaAssetPrepareAuthority,
+    snapshot: EngineSnapshot,
+}
+
+/// Read the exact authored A image only after the caller binding and optional
+/// C1 E/R/H fence have been checked under external admission. The terminal
+/// receipt path calls this only after it knows no earlier ACK exists.
+fn capture_legacy_video_effect_catalog_authority_for_binding(
+    state: &AppState,
+    owner_id: &str,
+    binding: &VideoClipSlotCallerBinding,
+    expected_authority: Option<&MediaAssetPrepareAuthority>,
+) -> Result<LegacyVideoEffectCatalogAuthorityCapture, String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    ensure_video_clip_slot_caller_binding_current(state, binding)?;
+    if let Some(expected_authority) = expected_authority {
+        validate_authoritative_media_asset_commit(
+            state,
+            &mut coordinator,
+            expected_authority.epoch,
+            owner_id,
+            expected_authority,
+        )?;
+    }
+    let snapshot = state.engine.persistence_snapshot()?;
+    Ok(LegacyVideoEffectCatalogAuthorityCapture {
+        owner_id: owner_id.to_string(),
+        binding: binding.clone(),
+        authority: media_asset_prepare_authority(&coordinator),
+        snapshot,
+    })
+}
+
+fn capture_legacy_video_effect_catalog_authority(
+    state: &AppState,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<LegacyVideoEffectCatalogAuthorityCapture, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    capture_legacy_video_effect_catalog_authority_for_binding(state, &owner_id, &binding, None)
+}
+
+/// Compatibility ingress is a closure over the A-captured canonical video,
+/// never a caller-built catalog read before authority admission. `after_a` is
+/// intentionally internal/testable: it proves a racing C1 publish makes the
+/// old adapter candidate fail closed instead of overwriting it.
+fn mutate_legacy_video_effect_catalog_authoritatively<T, F, H>(
+    state: &AppState,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+    mutate: F,
+    after_a: H,
+) -> Result<(T, ProjectHistoryMutationResult), String>
+where
+    F: FnOnce(&protocol::VideoSnapshot, &mut VideoEffectCatalogApplyRequest) -> Result<T, String>,
+    H: FnOnce(),
+{
+    let capture = capture_legacy_video_effect_catalog_authority(state, owner_id, caller_binding)?;
+    after_a();
+    let video = legacy_video_effect_catalog_video(&capture.snapshot);
+    let mut request = legacy_video_effect_catalog_request(&video);
+    let result = mutate(&video, &mut request)?;
+
+    // This is a revalidation of the captured caller, not a new authority
+    // capture. Hold the same rotation lane as C1 through the definitive ACK
+    // so a replacement WebView cannot use an old catalog image.
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    ensure_video_clip_slot_caller_binding_current(state, &capture.binding)?;
+    let committed = commit_authoritative_video_effect_catalog(
+        state,
+        capture.authority.epoch,
+        &capture.owner_id,
+        &capture.authority,
+        &request,
+    )?;
+    Ok((result, committed.mutation))
+}
+
+/// Production legacy ingress is receipt-backed exactly like the public C1
+/// catalog call.  The command shape is checked before A is read; exact retry
+/// therefore returns the original ACK/catalog/allocation without running the
+/// mutation closure or creating a second history entry.
+#[allow(clippy::too_many_arguments)]
+fn mutate_legacy_video_effect_catalog_authoritative_command_impl<F>(
+    state: &AppState,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+    shape: VideoEffectCatalogAuthoritativeRequestShape,
+    mutate: F,
+) -> Result<VideoEffectCatalogAuthoritativeResult, String>
+where
+    F: FnOnce(&protocol::VideoSnapshot, &mut VideoEffectCatalogApplyRequest) -> Result<(), String>,
+{
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let key = video_effect_catalog_authoritative_operation_key(
+        request_id,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let expected_authority = video_effect_catalog_authoritative_expected_authority(&key);
+    let terminal = state
+        .media_asset_operations
+        .video_effect_catalog_authoritative_terminal_single_flight(&key, &shape, || {
+            let capture = capture_legacy_video_effect_catalog_authority_for_binding(
+                state,
+                &owner_id,
+                &binding,
+                Some(&expected_authority),
+            )?;
+            let video = legacy_video_effect_catalog_video(&capture.snapshot);
+            let mut request = legacy_video_effect_catalog_request(&video);
+            mutate(&video, &mut request)?;
+            commit_authoritative_video_effect_catalog(
+                state,
+                expected_authority.epoch,
+                &owner_id,
+                &expected_authority,
+                &request,
+            )
+            .map(VideoEffectCatalogAuthoritativeTerminalResult::Applied)
+        })?;
+    match terminal {
+        VideoEffectCatalogAuthoritativeTerminalResult::Applied(result) => Ok(result),
+        VideoEffectCatalogAuthoritativeTerminalResult::Timeline(_) => {
+            Err("Legacy video effect command received a Timeline terminal result".to_string())
+        }
+        VideoEffectCatalogAuthoritativeTerminalResult::Runtime(_) => Err(
+            "Legacy video effect command received a runtime transition terminal result".to_string(),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mutate_legacy_video_effect_catalog_for_window<F>(
+    state: &AppState,
+    window: &WebviewWindow,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    shape: VideoEffectCatalogAuthoritativeRequestShape,
+    mutate: F,
+) -> Result<VideoEffectCatalogAuthoritativeResult, String>
+where
+    F: FnOnce(&protocol::VideoSnapshot, &mut VideoEffectCatalogApplyRequest) -> Result<(), String>,
+{
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(state, window.label(), &owner_id)?;
+    mutate_legacy_video_effect_catalog_authoritative_command_impl(
+        state,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+        shape,
+        mutate,
+    )
+}
+
+fn legacy_video_effect_from_catalog_result(
+    result: &VideoEffectCatalogAuthoritativeResult,
+    layer_id: VideoLayerId,
+) -> Result<VideoIsfEffectSummary, String> {
+    let chain = result
+        .catalog
+        .effect_chains
+        .iter()
+        .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+        .ok_or_else(|| format!("Video layer {layer_id} has no canonical ISF effect chain"))?;
+    project_legacy_video_isf_from_catalog_chain(chain)?.ok_or_else(|| {
+        format!("Video layer {layer_id} has no canonical ISF effect stages after publication")
+    })
+}
+
+#[tauri::command]
+fn set_video_layer_isf_effect(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    layer_id: VideoLayerId,
+    effect: Option<VideoIsfEffectSummary>,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
     let effect = effect.map(sanitize_video_isf_effect).transpose()?;
-    validate_project_isf_source_budget_after_replacement(&snapshot, layer_id, effect.as_ref())?;
-    state
-        .engine
-        .set_video_layer_isf_effect_published(layer_id, effect)
+    let shape = legacy_video_effect_catalog_authoritative_shape(
+        "set_video_layer_isf_effect",
+        json!({ "layer_id": layer_id, "effect": effect }),
+    )?;
+    let result = mutate_legacy_video_effect_catalog_for_window(
+        &state,
+        &window,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        shape,
+        move |video, request| legacy_replace_layer_effect_chain(video, request, layer_id, effect),
+    )?;
+    Ok(LegacyVideoEffectCatalogMutationResult {
+        mutation: result.mutation,
+    })
 }
 
 #[tauri::command]
 fn apply_builtin_video_isf_effect(
     state: State<'_, AppState>,
+    window: WebviewWindow,
     layer_id: VideoLayerId,
     preset_id: String,
-) -> Result<VideoIsfEffectSummary, String> {
-    let snapshot = state.engine.snapshot();
-    validate_video_layer_ids(&snapshot, &[layer_id])?;
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoIsfEffectAuthoritativeResult, String> {
     let preset_id = preset_id.trim();
     let effect = video::builtin_isf_effect(preset_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("Unknown built-in VJ effect '{preset_id}'"))?;
-    validate_project_isf_source_budget_after_replacement(&snapshot, layer_id, Some(&effect))?;
-    state
-        .engine
-        .set_video_layer_isf_effect_published(layer_id, Some(effect.clone()))?;
-    Ok(effect)
+    let shape = legacy_video_effect_catalog_authoritative_shape(
+        "apply_builtin_video_isf_effect",
+        json!({ "layer_id": layer_id, "preset_id": preset_id, "effect": effect }),
+    )?;
+    let result = mutate_legacy_video_effect_catalog_for_window(
+        &state,
+        &window,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        shape,
+        move |video, request| {
+            legacy_replace_layer_effect_chain(video, request, layer_id, Some(effect))
+        },
+    )?;
+    Ok(LegacyVideoIsfEffectAuthoritativeResult {
+        effect: legacy_video_effect_from_catalog_result(&result, layer_id)?,
+        mutation: result.mutation,
+    })
+}
+
+/// Direct add and built-in add may resolve to byte-identical ISF summaries,
+/// but they are distinct IPC intents. Preserve the command and, for built-ins,
+/// the original preset ID in the terminal shape so same-ID cross-kind traffic
+/// cannot recover the wrong receipt.
+fn legacy_video_effect_catalog_append_shape(
+    command: &str,
+    layer_id: VideoLayerId,
+    effect: &VideoIsfEffectSummary,
+    builtin_preset_id: Option<&str>,
+) -> Result<VideoEffectCatalogAuthoritativeRequestShape, String> {
+    let payload = match builtin_preset_id {
+        Some(preset_id) => json!({
+            "layer_id": layer_id,
+            "preset_id": preset_id,
+            "effect": effect,
+        }),
+        None => json!({ "layer_id": layer_id, "effect": effect }),
+    };
+    legacy_video_effect_catalog_authoritative_shape(command, payload)
+}
+
+fn legacy_video_effect_catalog_append_response(
+    effect: VideoIsfEffectSummary,
+    result: VideoEffectCatalogAuthoritativeResult,
+) -> LegacyVideoIsfEffectAuthoritativeResult {
+    LegacyVideoIsfEffectAuthoritativeResult {
+        effect,
+        mutation: result.mutation,
+    }
 }
 
 fn append_video_isf_effect(
     state: &AppState,
+    window: &WebviewWindow,
     layer_id: VideoLayerId,
     effect: VideoIsfEffectSummary,
-) -> Result<VideoIsfEffectSummary, String> {
+    command: &'static str,
+    builtin_preset_id: Option<&str>,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoIsfEffectAuthoritativeResult, String> {
     let effect = sanitize_video_isf_effect(effect)?;
     if !effect.stack.is_empty() {
         return Err("Only one ISF stage can be appended at a time".to_string());
     }
-    let snapshot = state.engine.snapshot();
-    validate_video_layer_ids(&snapshot, &[layer_id])?;
-    validate_project_isf_source_budget_after_addition(
-        &snapshot,
-        video_isf_effect_source_bytes(&effect)?,
+    // Retain the sanitised ingress value for the historic add response.  The
+    // terminal receipt deliberately returns the complete catalog instead, so
+    // reprojecting that catalog here would incorrectly return stage zero when
+    // appending a later stage.
+    let response = effect.clone();
+    let shape =
+        legacy_video_effect_catalog_append_shape(command, layer_id, &effect, builtin_preset_id)?;
+    let result = mutate_legacy_video_effect_catalog_for_window(
+        state,
+        window,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        shape,
+        move |video, request| {
+            let index = legacy_materialize_layer_effect_chain(video, request, layer_id)?;
+            let stage = legacy_video_effect_stage_summary(
+                video_isf_stage_from_root(effect),
+                protocol::VideoEffectStageId(0),
+                protocol::VideoEffectId(0),
+            );
+            request.effect_chains[index].stages.push(stage);
+            Ok(())
+        },
     )?;
-    let stage = video_isf_stage_from_root(effect.clone());
-    state
-        .engine
-        .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Add(stage))?;
-    Ok(effect)
+    Ok(legacy_video_effect_catalog_append_response(
+        response, result,
+    ))
 }
 
 #[tauri::command]
 fn add_video_layer_isf_effect(
     state: State<'_, AppState>,
+    window: WebviewWindow,
     layer_id: VideoLayerId,
     effect: VideoIsfEffectSummary,
-) -> Result<VideoIsfEffectSummary, String> {
-    append_video_isf_effect(state.inner(), layer_id, effect)
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoIsfEffectAuthoritativeResult, String> {
+    append_video_isf_effect(
+        state.inner(),
+        &window,
+        layer_id,
+        effect,
+        "add_video_layer_isf_effect",
+        None,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
 }
 
 #[tauri::command]
 fn add_builtin_video_isf_effect(
     state: State<'_, AppState>,
+    window: WebviewWindow,
     layer_id: VideoLayerId,
     preset_id: String,
-) -> Result<VideoIsfEffectSummary, String> {
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoIsfEffectAuthoritativeResult, String> {
     let preset_id = preset_id.trim();
     let effect = video::builtin_isf_effect(preset_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("Unknown built-in VJ effect '{preset_id}'"))?;
-    append_video_isf_effect(state.inner(), layer_id, effect)
+    append_video_isf_effect(
+        state.inner(),
+        &window,
+        layer_id,
+        effect,
+        "add_builtin_video_isf_effect",
+        Some(preset_id),
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
+}
+
+fn legacy_video_effect_catalog_stack_shape(
+    layer_id: VideoLayerId,
+    mutation: &VideoIsfStackMutation,
+) -> Result<VideoEffectCatalogAuthoritativeRequestShape, String> {
+    let payload = match mutation {
+        VideoIsfStackMutation::Add(stage) => {
+            json!({ "layer_id": layer_id, "kind": "add", "stage": stage })
+        }
+        VideoIsfStackMutation::Move { stage_index, delta } => json!({
+            "layer_id": layer_id,
+            "kind": "move",
+            "stage_index": stage_index,
+            "delta": delta,
+        }),
+        VideoIsfStackMutation::Remove { stage_index } => json!({
+            "layer_id": layer_id,
+            "kind": "remove",
+            "stage_index": stage_index,
+        }),
+        VideoIsfStackMutation::SetEnabled {
+            stage_index,
+            enabled,
+        } => json!({
+            "layer_id": layer_id,
+            "kind": "set_enabled",
+            "stage_index": stage_index,
+            "enabled": enabled,
+        }),
+        VideoIsfStackMutation::Reset { stage_index } => json!({
+            "layer_id": layer_id,
+            "kind": "reset",
+            "stage_index": stage_index,
+        }),
+        VideoIsfStackMutation::SetControl {
+            stage_index,
+            control_name,
+            value,
+        } => json!({
+            "layer_id": layer_id,
+            "kind": "set_control",
+            "stage_index": stage_index,
+            "control_name": control_name,
+            "value": value,
+        }),
+    };
+    legacy_video_effect_catalog_authoritative_shape("mutate_video_layer_isf_stack", payload)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mutate_legacy_video_layer_isf_catalog(
+    state: &AppState,
+    window: &WebviewWindow,
+    layer_id: VideoLayerId,
+    mutation: VideoIsfStackMutation,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    let shape = legacy_video_effect_catalog_stack_shape(layer_id, &mutation)?;
+    let result = mutate_legacy_video_effect_catalog_for_window(
+        state,
+        window,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        shape,
+        move |video, request| {
+            let chain_index = legacy_materialize_layer_effect_chain(video, request, layer_id)?;
+            let stages = &mut request.effect_chains[chain_index].stages;
+            match mutation {
+                VideoIsfStackMutation::Add(stage) => {
+                    stages.push(legacy_video_effect_stage_summary(
+                        stage,
+                        protocol::VideoEffectStageId(0),
+                        protocol::VideoEffectId(0),
+                    ));
+                }
+                VideoIsfStackMutation::Move { stage_index, delta } => {
+                    let target = stage_index
+                        .checked_add_signed(delta as isize)
+                        .filter(|target| *target < stages.len())
+                        .ok_or_else(|| "ISF effect stage move is outside the stack".to_string())?;
+                    stages.swap(stage_index, target);
+                }
+                VideoIsfStackMutation::Remove { stage_index } => {
+                    if stage_index >= stages.len() {
+                        return Err("ISF effect stage was not found".to_string());
+                    }
+                    stages.remove(stage_index);
+                }
+                VideoIsfStackMutation::SetEnabled {
+                    stage_index,
+                    enabled,
+                } => {
+                    let stage = stages
+                        .get_mut(stage_index)
+                        .ok_or_else(|| "ISF effect stage was not found".to_string())?;
+                    stage.enabled = enabled;
+                }
+                VideoIsfStackMutation::Reset { stage_index } => {
+                    let stage = stages
+                        .get_mut(stage_index)
+                        .ok_or_else(|| "ISF effect stage was not found".to_string())?;
+                    let VideoEffectKind::Isf { effect } = &mut stage.effect.kind;
+                    for control in &mut effect.controls {
+                        control.value = control.default;
+                        if control.kind == VideoIsfControlKind::Event {
+                            control.value = [0.0; 4];
+                        }
+                    }
+                }
+                VideoIsfStackMutation::SetControl {
+                    stage_index,
+                    control_name,
+                    value,
+                } => {
+                    let stage = stages
+                        .get_mut(stage_index)
+                        .ok_or_else(|| "ISF effect stage was not found".to_string())?;
+                    let VideoEffectKind::Isf { effect } = &mut stage.effect.kind;
+                    let control = effect
+                        .controls
+                        .iter_mut()
+                        .find(|control| control.name == control_name)
+                        .ok_or_else(|| format!("ISF control '{control_name}' was not found"))?;
+                    if control.kind == VideoIsfControlKind::Event {
+                        return Err(
+                        "ISF Event controls are runtime pulses; use pulse_video_layer_isf_event"
+                            .to_string(),
+                    );
+                    }
+                    control.value = value;
+                }
+            }
+            Ok(())
+        },
+    )?;
+    Ok(LegacyVideoEffectCatalogMutationResult {
+        mutation: result.mutation,
+    })
 }
 
 #[tauri::command]
 fn move_video_layer_isf_effect(
     state: State<'_, AppState>,
+    window: WebviewWindow,
     layer_id: VideoLayerId,
     stage_index: usize,
     delta: i32,
-) -> Result<(), String> {
-    state
-        .engine
-        .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Move { stage_index, delta })
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    mutate_legacy_video_layer_isf_catalog(
+        &state,
+        &window,
+        layer_id,
+        VideoIsfStackMutation::Move { stage_index, delta },
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
 }
 
 #[tauri::command]
 fn remove_video_layer_isf_effect(
     state: State<'_, AppState>,
+    window: WebviewWindow,
     layer_id: VideoLayerId,
     stage_index: usize,
-) -> Result<(), String> {
-    state
-        .engine
-        .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Remove { stage_index })
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    mutate_legacy_video_layer_isf_catalog(
+        &state,
+        &window,
+        layer_id,
+        VideoIsfStackMutation::Remove { stage_index },
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
 }
 
 #[tauri::command]
 fn set_video_layer_isf_effect_enabled(
     state: State<'_, AppState>,
+    window: WebviewWindow,
     layer_id: VideoLayerId,
     stage_index: usize,
     enabled: bool,
-) -> Result<(), String> {
-    state.engine.mutate_video_layer_isf_stack(
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    mutate_legacy_video_layer_isf_catalog(
+        &state,
+        &window,
         layer_id,
         VideoIsfStackMutation::SetEnabled {
             stage_index,
             enabled,
         },
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
     )
 }
 
 #[tauri::command]
 fn reset_video_layer_isf_effect(
     state: State<'_, AppState>,
+    window: WebviewWindow,
     layer_id: VideoLayerId,
     stage_index: usize,
-) -> Result<(), String> {
-    state
-        .engine
-        .mutate_video_layer_isf_stack(layer_id, VideoIsfStackMutation::Reset { stage_index })
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    mutate_legacy_video_layer_isf_catalog(
+        &state,
+        &window,
+        layer_id,
+        VideoIsfStackMutation::Reset { stage_index },
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    )
 }
 
 #[tauri::command]
 fn set_video_layer_isf_control(
     state: State<'_, AppState>,
+    window: WebviewWindow,
     layer_id: VideoLayerId,
     stage_index: usize,
     control_name: String,
     value: [f32; 4],
-) -> Result<(), String> {
-    state.engine.mutate_video_layer_isf_stack(
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    mutate_legacy_video_layer_isf_catalog(
+        &state,
+        &window,
         layer_id,
         VideoIsfStackMutation::SetControl {
             stage_index,
             control_name,
             value,
         },
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
     )
 }
 
@@ -28868,6 +31786,9 @@ fn register_project_transaction_owner(
             state
                 .media_asset_operations
                 .purge_video_clip_slot_authoritative_for_owner(retired_owner);
+            state
+                .media_asset_operations
+                .purge_video_effect_catalog_authoritative_for_owner(retired_owner);
         }
     }
     Ok(recovered)
@@ -28969,6 +31890,9 @@ fn retire_project_transaction_owner_for_window(
         state
             .media_asset_operations
             .purge_video_clip_slot_authoritative_for_owner(retired_owner);
+        state
+            .media_asset_operations
+            .purge_video_effect_catalog_authoritative_for_owner(retired_owner);
     }
     Ok(recovered)
 }
@@ -34131,9 +37055,9 @@ fn validate_unique_ids(label: &str, ids: impl IntoIterator<Item = u64>) -> Resul
 
 fn validate_project_timeline_audio_clips(snapshot: &EngineSnapshot) -> Result<(), String> {
     for clip in &snapshot.timeline.audio_clips {
-        if clip.path.trim().is_empty() {
+        if clip.path.trim().is_empty() && clip.media_asset_id.is_none() {
             return Err(format!(
-                "Project timeline audio clip {} has an empty path",
+                "Project timeline audio clip {} has neither a path nor MediaAsset",
                 clip.id
             ));
         }
@@ -40056,6 +42980,37 @@ fn video_recording_ffmpeg_command(
     command
 }
 
+/// A single output-preview input captured in the same order as the NDI and
+/// Spout output workers. The ownership epoch fences all C1 renderer caches,
+/// while the snapshot carries the matching runtime clip-slot truth.
+///
+/// Keep the epoch read before the snapshot: this is the output ownership
+/// boundary used by the production transport renderers as well.
+struct VideoOutputPreviewEffectSnapshot {
+    snapshot: EngineSnapshot,
+    project_render_epoch: u64,
+}
+
+impl VideoOutputPreviewEffectSnapshot {
+    fn render_context(&self) -> video::VideoEffectRenderContext<'_> {
+        video::VideoEffectRenderContext {
+            clip_runtime: &self.snapshot.video_clip_runtime,
+            project_render_epoch: self.project_render_epoch,
+        }
+    }
+}
+
+fn capture_video_output_preview_effect_snapshot(
+    engine: &EngineHandle,
+) -> VideoOutputPreviewEffectSnapshot {
+    let project_render_epoch = engine.output_ownership_status().epoch;
+    let snapshot = engine.snapshot();
+    VideoOutputPreviewEffectSnapshot {
+        snapshot,
+        project_render_epoch,
+    }
+}
+
 fn run_video_output_recording(
     engine: EngineHandle,
     renderer: Arc<Mutex<AppVideoPreviewRenderer>>,
@@ -40089,13 +43044,20 @@ fn run_video_output_recording(
     let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
     let mut next_frame_at = Instant::now();
     while !stop.load(Ordering::Relaxed) {
-        let snapshot = engine.snapshot();
+        let output_preview = capture_video_output_preview_effect_snapshot(&engine);
         let frame = renderer.lock().ok().and_then(|mut renderer| {
             renderer
                 .frame_provider_mut()
-                .set_bpm(Some(snapshot.clock.bpm));
+                .set_bpm(Some(output_preview.snapshot.clock.bpm));
             renderer
-                .render_output_preview(&snapshot.video, output_id, width, height)
+                .render_output_preview_with_effects_and_transitions(
+                    &output_preview.snapshot.video,
+                    output_preview.render_context(),
+                    &output_preview.snapshot.video_transition_runtime,
+                    output_id,
+                    width,
+                    height,
+                )
                 .ok()
         });
         match frame {
@@ -40687,21 +43649,37 @@ fn get_debug_video_output_preview(
     height: u32,
     decode_budget: Option<usize>,
 ) -> Result<video::VideoFrame, String> {
-    let snapshot = state.engine.snapshot();
+    let output_preview = capture_video_output_preview_effect_snapshot(&state.engine);
     let mut renderer = state
         .video_preview
         .lock()
         .map_err(|_| "Video preview renderer lock was poisoned".to_string())?;
     renderer
         .frame_provider_mut()
-        .set_bpm(Some(snapshot.clock.bpm));
-    let decode_budget =
-        resolved_video_preview_decode_budget(&renderer, snapshot.video.layers.len(), decode_budget);
+        .set_bpm(Some(output_preview.snapshot.clock.bpm));
+    let decode_budget = resolved_video_preview_decode_budget(
+        &renderer,
+        output_preview.snapshot.video.layers.len(),
+        decode_budget,
+    );
     renderer
-        .warm_output_decode_queue(&snapshot.video, output_id, width, height, decode_budget)
+        .warm_output_decode_queue(
+            &output_preview.snapshot.video,
+            output_id,
+            width,
+            height,
+            decode_budget,
+        )
         .map_err(|error| format!("{error:?}"))?;
     renderer
-        .render_output_preview(&snapshot.video, output_id, width, height)
+        .render_output_preview_with_effects_and_transitions(
+            &output_preview.snapshot.video,
+            output_preview.render_context(),
+            &output_preview.snapshot.video_transition_runtime,
+            output_id,
+            width,
+            height,
+        )
         .map_err(|error| format!("{error:?}"))
 }
 
@@ -40923,6 +43901,10 @@ fn vj_preview_render_snapshot(
     Ok(protocol::VideoSnapshot {
         layers: vec![layer],
         media_assets: Vec::new(),
+        effect_chains: Vec::new(),
+        effect_presets: Vec::new(),
+        layer_groups: Vec::new(),
+        transition_buses: Vec::new(),
         compositions: Vec::new(),
         outputs: Vec::new(),
         mapping_presets: Vec::new(),
@@ -41081,7 +44063,16 @@ fn get_live_video_monitor_frame(
     let sequence = LIVE_VIDEO_MONITOR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let (width, height) = live_video_monitor_dimensions(width, height);
     let quality = live_video_monitor_quality(quality);
-    let snapshot = state.engine.snapshot();
+    let (snapshot, program_render_epoch) = match monitor_kind {
+        LiveVideoMonitorKind::Program => {
+            let output_preview = capture_video_output_preview_effect_snapshot(&state.engine);
+            (
+                output_preview.snapshot,
+                Some(output_preview.project_render_epoch),
+            )
+        }
+        LiveVideoMonitorKind::Preview => (state.engine.snapshot(), None),
+    };
     let render_started = Instant::now();
     let mut rendered_preview_summary: Option<VjPreviewTransportSummary> = None;
     let frame = match monitor_kind {
@@ -41124,7 +44115,18 @@ fn get_live_video_monitor_frame(
                 .warm_output_decode_queue(&snapshot.video, output_id, width, height, decode_budget)
                 .map_err(|error| format!("{error:?}"))?;
             renderer
-                .render_output_preview(&snapshot.video, output_id, width, height)
+                .render_output_preview_with_effects_and_transitions(
+                    &snapshot.video,
+                    video::VideoEffectRenderContext {
+                        clip_runtime: &snapshot.video_clip_runtime,
+                        project_render_epoch: program_render_epoch
+                            .expect("Program monitor captures an output render epoch"),
+                    },
+                    &snapshot.video_transition_runtime,
+                    output_id,
+                    width,
+                    height,
+                )
                 .map_err(|error| format!("{error:?}"))?
         }
         LiveVideoMonitorKind::Preview => {
@@ -41554,6 +44556,71 @@ mod live_video_monitor_tests {
 
     fn read_u64(packet: &[u8], offset: usize) -> u64 {
         u64::from_le_bytes(packet[offset..offset + 8].try_into().unwrap())
+    }
+
+    #[test]
+    fn c1_output_preview_effect_context_uses_runtime_clip_truth_and_ownership_epoch() {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot
+            .video_clip_runtime
+            .layers
+            .push(protocol::VideoClipLayerRuntimeSummary {
+                layer_id: 17,
+                active_slot_id: Some(VideoClipSlotId(23)),
+                ..Default::default()
+            });
+        let captured = VideoOutputPreviewEffectSnapshot {
+            snapshot,
+            project_render_epoch: 41,
+        };
+
+        let context = captured.render_context();
+
+        assert_eq!(context.project_render_epoch, 41);
+        assert_eq!(context.clip_runtime, &captured.snapshot.video_clip_runtime);
+        assert_eq!(context.clip_runtime.layers[0].layer_id, 17);
+        assert_eq!(
+            context.clip_runtime.layers[0].active_slot_id,
+            Some(VideoClipSlotId(23))
+        );
+    }
+
+    #[test]
+    fn c1_effect_aware_output_preview_production_seams_are_wired() {
+        let source = include_str!("main.rs");
+        let routes = [
+            (
+                "run_video_output_recording",
+                "fn finish_video_recording_status",
+            ),
+            (
+                "get_debug_video_output_preview",
+                "fn get_vj_preview_transport",
+            ),
+            (
+                "get_live_video_monitor_frame",
+                "fn video_preview_decode_budget",
+            ),
+        ];
+
+        for (route, next_route) in routes {
+            let route_start = source
+                .find(&format!("fn {route}("))
+                .unwrap_or_else(|| panic!("missing output preview route {route}"));
+            let route_end = source[route_start..]
+                .find(next_route)
+                .map(|offset| route_start + offset)
+                .unwrap_or_else(|| panic!("missing boundary after output preview route {route}"));
+            let route_source = &source[route_start..route_end];
+            assert!(
+                route_source.contains("capture_video_output_preview_effect_snapshot"),
+                "{route} must sample the NDI/Spout-order ownership epoch with its snapshot"
+            );
+            assert!(
+                route_source.contains("render_output_preview_with_effects"),
+                "{route} must retain output mapping/blackout/last-valid behavior through the C1 renderer"
+            );
+        }
     }
 
     #[test]
@@ -45366,7 +48433,7 @@ fn video_source_file_dialog_filter(
     kind: &VideoSourceKind,
 ) -> Result<(&'static str, &'static [&'static str]), String> {
     match kind {
-        VideoSourceKind::File => Ok(("Video Files", VIDEO_FILE_EXTENSIONS)),
+        VideoSourceKind::File => Ok(("Video and Audio Files", VIDEO_FILE_EXTENSIONS)),
         VideoSourceKind::StillImage => Ok(("Still Images", STILL_IMAGE_EXTENSIONS)),
         VideoSourceKind::Camera
         | VideoSourceKind::ScreenCapture
@@ -46890,6 +49957,7 @@ pub(crate) mod tests {
                 media_asset_reaper: Mutex::new(None),
                 media_asset_authoritative_publish_attempts: AtomicU64::new(0),
                 video_clip_slot_authoritative_publish_attempts: AtomicU64::new(0),
+                video_effect_catalog_authoritative_publish_attempts: AtomicU64::new(0),
                 media_audio,
                 program_audio_handoff: Arc::clone(&program_audio_handoff),
                 _media_audio_sync: MediaAudioSyncRuntime::idle_for_tests(program_audio_handoff),
@@ -46950,6 +50018,11 @@ pub(crate) mod tests {
                 project_transaction_owner_rotation: Mutex::new(()),
                 project_operator_sessions: Mutex::new(HashMap::new()),
                 video_clip_slot_runtime_generation: AtomicU64::new(0),
+                video_clip_slot_runtime_observed: Mutex::new(VideoClipRuntimeSnapshot::default()),
+                video_transition_runtime_generation: AtomicU64::new(0),
+                video_transition_runtime_observed: Mutex::new(
+                    VideoLayerTransitionRuntimeSnapshot::default(),
+                ),
                 project_external_command_admission: Arc::new(
                     ProjectExternalCommandAdmission::default(),
                 ),
@@ -58713,9 +61786,11 @@ f 1 2 3
     fn video_source_file_dialog_filter_accepts_local_media_kinds_only() {
         let (video_label, video_exts) =
             video_source_file_dialog_filter(&VideoSourceKind::File).unwrap();
-        assert_eq!(video_label, "Video Files");
+        assert_eq!(video_label, "Video and Audio Files");
         assert!(video_exts.contains(&"mp4"));
         assert!(video_exts.contains(&"mov"));
+        assert!(video_exts.contains(&"wav"));
+        assert!(video_exts.contains(&"mp3"));
 
         let (image_label, image_exts) =
             video_source_file_dialog_filter(&VideoSourceKind::StillImage).unwrap();
@@ -58855,6 +61930,10 @@ f 1 2 3
                 mapping: VideoOutputMapping::default(),
             }],
             mapping_presets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             auto_vj: protocol::AutoVjSnapshot::default(),
             master_opacity: 1.0,
             blackout: false,
@@ -61312,8 +64391,14 @@ f 1 2 3
         effect.stack = vec![stage; video::VIDEO_ISF_EFFECT_STACK_MAX_STAGES];
         project.snapshot.video.layers[0].isf_effect = Some(effect);
         let error = validate_project_file(&project).unwrap_err();
-        assert!(error.contains("9 stages"));
-        assert!(error.contains("limit is 8"));
+        assert!(error.contains(&format!(
+            "{} stages",
+            video::VIDEO_ISF_EFFECT_STACK_MAX_STAGES + 1
+        )));
+        assert!(error.contains(&format!(
+            "limit is {}",
+            video::VIDEO_ISF_EFFECT_STACK_MAX_STAGES
+        )));
     }
 
     #[test]
@@ -63301,6 +66386,7 @@ f 1 2 3
         let mut display = engine.snapshot();
         for _ in 0..30 {
             if display.timeline.layers.len() == 2
+                && display.timeline.events.len() == 2
                 && display
                     .timeline
                     .events
@@ -63463,6 +66549,7 @@ f 1 2 3
         project.snapshot.timeline.audio_clips = vec![TimelineAudioClipSummary {
             id: 700,
             layer_id: 10,
+            media_asset_id: None,
             path: missing_audio_path.clone(),
             start_ms: 1_250,
             offset_ms: 200,
@@ -63556,6 +66643,7 @@ f 1 2 3
             audio_clips: vec![TimelineAudioClipSummary {
                 id: 302,
                 layer_id: 31,
+                media_asset_id: None,
                 path: "C:/media/child-bed.wav".to_string(),
                 start_ms: 0,
                 offset_ms: 125,
@@ -68349,6 +71437,7 @@ mod media_audio_playback_tests {
         let clip = TimelineAudioClipSummary {
             id: 7,
             layer_id: 10,
+            media_asset_id: None,
             path: "fixture.wav".to_string(),
             start_ms: 1_000,
             offset_ms: 0,
@@ -70787,6 +73876,1876 @@ mod live_audio_input_tests {
         );
     }
 
+    /// Small, real ISF source with an Event input. C1 must accept its pulse at
+    /// the IPC boundary but persist the catalog and its legacy projection with
+    /// the value reset to zero.
+    const C1_TEST_ISF_EVENT_SOURCE: &str = r#"/*{
+      "DESCRIPTION": "C1 event seam",
+      "INPUTS": [
+        {"NAME":"inputImage","TYPE":"image"},
+        {"NAME":"pulse","TYPE":"event"}
+      ]
+    }*/
+    void main() {
+      gl_FragColor = IMG_THIS_PIXEL(inputImage);
+    }"#;
+
+    fn c1_test_event_effect(value: f32) -> VideoIsfEffectSummary {
+        let prepared = video::prepare_isf_shader(C1_TEST_ISF_EVENT_SOURCE)
+            .expect("prepare C1 Event ISF effect");
+        let mut effect = video::isf_effect_from_prepared(
+            "C1 event seam".to_string(),
+            C1_TEST_ISF_EVENT_SOURCE.to_string(),
+            Some("filters/c1-event-seam.fs".to_string()),
+            &prepared,
+        );
+        let pulse = effect
+            .controls
+            .iter_mut()
+            .find(|control| control.kind == VideoIsfControlKind::Event)
+            .expect("prepared C1 ISF has Event control");
+        pulse.value = [value, 0.0, 0.0, 0.0];
+        effect
+    }
+
+    fn c1_catalog_chain(
+        _harness: &MediaAssetA6CommandHarness,
+        scope: VideoEffectScope,
+        label: &str,
+        effect: VideoIsfEffectSummary,
+    ) -> VideoEffectChainSummary {
+        // C1 creation uses the wire-level zero sentinel. The terminal lane is
+        // responsible for replacing it with EngineHandle allocator values and
+        // retaining the allocated result for an exact retry.
+        VideoEffectChainSummary {
+            id: protocol::VideoEffectChainId(0),
+            scope,
+            bypassed: false,
+            stages: vec![protocol::VideoEffectStageSummary {
+                id: protocol::VideoEffectStageId(0),
+                enabled: true,
+                label: label.to_string(),
+                effect: protocol::VideoEffectSummary {
+                    id: protocol::VideoEffectId(0),
+                    kind: VideoEffectKind::Isf { effect },
+                },
+            }],
+        }
+    }
+
+    fn c1_layer_catalog_request(
+        harness: &MediaAssetA6CommandHarness,
+        layer_id: VideoLayerId,
+        event_value: f32,
+    ) -> VideoEffectCatalogApplyRequest {
+        VideoEffectCatalogApplyRequest {
+            effect_chains: vec![c1_catalog_chain(
+                harness,
+                VideoEffectScope::Layer { layer_id },
+                "C1 layer stage",
+                c1_test_event_effect(event_value),
+            )],
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
+        }
+    }
+
+    /// The shared B3 fixture seeds through an intentionally direct Engine
+    /// transaction, then resets its coordinator from the render snapshot.
+    /// C1 tests start from the persistence authority that a real caller would
+    /// capture after that setup has settled, rather than treating the fixture
+    /// setup itself as an untracked catalog mutation.
+    fn c1_stabilize_fixture_authority(harness: &MediaAssetA6CommandHarness) {
+        let mut coordinator = harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("stabilize C1 fixture coordinator");
+        reconcile_project_checkpoint_for_coordinator(&harness.state, &mut coordinator)
+            .expect("reconcile C1 fixture persistence authority");
+    }
+
+    fn c1_assert_one_authored_mutation(
+        harness: &MediaAssetA6CommandHarness,
+        baseline: MediaAssetA6CommandMutationBaseline,
+    ) {
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            1,
+            "only the original C1 request reaches EngineHandle::apply_video_effect_catalog"
+        );
+        assert_one_authoritative_history_mutation(harness, baseline);
+    }
+
+    fn assert_one_authoritative_history_mutation(
+        harness: &MediaAssetA6CommandHarness,
+        baseline: MediaAssetA6CommandMutationBaseline,
+    ) {
+        let coordinator = harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("C1 coordinator after catalog commit");
+        assert_eq!(
+            coordinator.revision,
+            baseline.revision + 1,
+            "C1 revision mismatch: history_generation={}, undo={}, publication_generation={}, next_transaction_id={}",
+            coordinator.history_generation,
+            coordinator.history.undo.len(),
+            coordinator.publication_generation,
+            coordinator.next_transaction_id,
+        );
+        assert_eq!(
+            coordinator.history_generation,
+            baseline.history_generation + 1
+        );
+        assert_eq!(coordinator.history.undo.len(), baseline.undo_len + 1);
+        assert_eq!(
+            coordinator.publication_generation,
+            baseline.publication_generation + 1
+        );
+        assert!(coordinator.history.pending.is_empty());
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_success_reply_loss_and_event_persistence_are_atomic() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let baseline = harness.mutation_baseline();
+        let request = c1_layer_catalog_request(&harness, layer_id, 1.0);
+        let request_shape = video_effect_catalog_authoritative_shape(&request)
+            .expect("encode original C1 request shape");
+        let before_snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("capture C1 candidate baseline");
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let binding = capture_video_clip_slot_caller_binding_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect("capture C1 caller incarnation");
+        let applied = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            84_001,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding.clone()),
+        )
+        .expect("apply C1 catalog through authoritative core");
+        let retried = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request,
+            84_001,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding.clone()),
+        )
+        .expect("reply-loss retry returns the recorded terminal result");
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::to_value(&retried).unwrap(),
+            "a retry must recover exactly the first terminal DTO"
+        );
+        assert!(
+            applied.catalog.effect_chains.iter().all(|chain| {
+                chain.id.0 != 0
+                    && chain
+                        .stages
+                        .iter()
+                        .all(|stage| stage.id.0 != 0 && stage.effect.id.0 != 0)
+            }),
+            "the receipt, rather than the caller, owns every allocated C1 ID"
+        );
+        let expected_candidate = video_effect_catalog_candidate_snapshot(
+            before_snapshot,
+            &VideoEffectCatalogApplyRequest {
+                effect_chains: applied.catalog.effect_chains.clone(),
+                effect_presets: applied.catalog.effect_presets.clone(),
+                layer_groups: applied.catalog.layer_groups.clone(),
+                transition_buses: applied.catalog.transition_buses.clone(),
+            },
+        )
+        .expect("rebuild the normalized C1 candidate B");
+        c1_assert_one_authored_mutation(&harness, baseline);
+        let actual_persistence = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("capture engine C1 persistence B");
+        let coordinator = harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("C1 coordinator for candidate hash");
+        let candidate_project =
+            project_file_for_save_from_parts(expected_candidate.clone(), &coordinator.ancillary);
+        let actual_project =
+            project_file_for_save_from_parts(actual_persistence.clone(), &coordinator.ancillary);
+        assert_eq!(
+            candidate_project, actual_project,
+            "candidate B and engine persistence must have the same durable project image"
+        );
+        let actual_persistence_hash =
+            project_checkpoint_hash(&actual_project, &coordinator.mappings)
+                .expect("hash engine C1 persistence B");
+        assert_eq!(
+            applied.mutation.authority.checkpoint_hash, actual_persistence_hash,
+            "C1 committed authority must name the catalog candidate B"
+        );
+        drop(coordinator);
+
+        let persisted = actual_persistence
+            .authored_video
+            .expect("C1 authored video snapshot");
+        assert_eq!(
+            expected_candidate
+                .authored_video
+                .expect("C1 candidate retains the canonical authored video"),
+            persisted,
+            "engine persistence must equal the fully projected candidate video B"
+        );
+        assert_eq!(persisted.effect_chains, applied.catalog.effect_chains);
+        assert_eq!(persisted.effect_presets, applied.catalog.effect_presets);
+        assert_eq!(persisted.layer_groups, applied.catalog.layer_groups);
+        let event_value = match &persisted.effect_chains[0].stages[0].effect.kind {
+            VideoEffectKind::Isf { effect } => {
+                effect
+                    .controls
+                    .iter()
+                    .find(|control| control.kind == VideoIsfControlKind::Event)
+                    .expect("persisted C1 Event control")
+                    .value[0]
+            }
+        };
+        assert_eq!(event_value, 0.0, "Event state is never persisted");
+        let legacy_event_value = persisted
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .expect("persisted C1 layer")
+            .isf_effect
+            .as_ref()
+            .expect("canonical Layer chain reprojects legacy ISF")
+            .controls
+            .iter()
+            .find(|control| control.kind == VideoIsfControlKind::Event)
+            .expect("legacy projection C1 Event control")
+            .value[0];
+        assert_eq!(legacy_event_value, 0.0);
+        let recovered = get_video_effect_catalog_operation_terminal_result_impl(
+            &harness.state,
+            84_001,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding),
+        )
+        .expect("read C1 terminal receipt")
+        .expect("C1 terminal receipt exists");
+        assert_eq!(recovered.shape_fingerprint, request_shape.fingerprint);
+    }
+
+    #[test]
+    fn timeline_advanced_authoritative_bank_mutations_are_ordered_recoverable_and_history_safe() {
+        let harness = MediaAssetA6CommandHarness::new();
+        c1_stabilize_fixture_authority(&harness);
+        let baseline = harness.mutation_baseline();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let request = TimelineAdvancedMutationRequest::CreateTimeline {
+            label: "Verse".to_string(),
+        };
+        let created = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            84_701,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("create a second Timeline through the authoritative bank lane");
+        assert_eq!(created.timeline_bank.len(), 2);
+        assert_eq!(created.active_timeline_id, created.timeline_bank[1].id);
+        assert_eq!(created.timeline_bank[1].label, "Verse");
+        let retried = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request,
+            84_701,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("recover the exact Timeline create receipt without allocating again");
+        assert_eq!(
+            serde_json::to_value(&created).unwrap(),
+            serde_json::to_value(&retried).unwrap()
+        );
+        assert_one_authoritative_history_mutation(&harness, baseline);
+
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let duplicated = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            TimelineAdvancedMutationRequest::DuplicateTimeline {
+                timeline_id: created.active_timeline_id,
+            },
+            84_702,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("duplicate an authored Timeline with a fresh stable ID");
+        assert_eq!(duplicated.timeline_bank.len(), 3);
+        assert_ne!(duplicated.active_timeline_id, created.active_timeline_id);
+
+        let reversed_ids = duplicated
+            .timeline_bank
+            .iter()
+            .rev()
+            .map(|timeline| timeline.id)
+            .collect::<Vec<_>>();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let reordered = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            TimelineAdvancedMutationRequest::ReorderTimelines {
+                timeline_ids: reversed_ids.clone(),
+            },
+            84_703,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("reorder the complete bank atomically");
+        assert_eq!(
+            reordered
+                .timeline_bank
+                .iter()
+                .map(|timeline| timeline.id)
+                .collect::<Vec<_>>(),
+            reversed_ids
+        );
+
+        let remove_id = reordered.timeline_bank[1].id;
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let removed = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            TimelineAdvancedMutationRequest::RemoveTimeline {
+                timeline_id: remove_id,
+            },
+            84_704,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("remove one non-final Timeline atomically");
+        assert_eq!(removed.timeline_bank.len(), 2);
+        assert!(removed
+            .timeline_bank
+            .iter()
+            .all(|timeline| timeline.id != remove_id));
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read final Timeline bank persistence");
+        assert_eq!(persisted.timeline_bank, removed.timeline_bank);
+        protocol::validate_timeline_bank(&persisted, &persisted.video.media_assets).unwrap();
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_rejects_stale_window_owner_and_invalid_candidate_without_mutation(
+    ) {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let request = c1_layer_catalog_request(&harness, layer_id, 0.0);
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let baseline = harness.mutation_baseline();
+        let wrong_window = VideoClipSlotCallerBinding {
+            window_label: "other-c1-window".to_string(),
+            owner_id: MEDIA_ASSET_A6_OWNER.to_string(),
+            incarnation: 1,
+        };
+        let error = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            84_011,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(wrong_window),
+        )
+        .expect_err("unregistered WebView must not borrow the owner binding");
+        assert!(error.contains("renderer incarnation changed"));
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(harness.mutation_baseline().revision, baseline.revision);
+
+        let invalid_request = c1_layer_catalog_request(&harness, u64::MAX, 0.0);
+        let error = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            invalid_request,
+            84_012,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("invalid catalog must fail before one Published ACK");
+        assert!(error.contains("unknown") || error.contains("missing"));
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            0
+        );
+        let after = harness.mutation_baseline();
+        assert_eq!(after.revision, baseline.revision);
+        assert_eq!(after.history_generation, baseline.history_generation);
+        assert_eq!(after.undo_len, baseline.undo_len);
+        b3_assert_authority_matches_persistence(&harness);
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_accepts_five_scopes_preset_and_group_in_one_history_entry(
+    ) {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let authored = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("C1 five-scope persistence")
+            .authored_video
+            .expect("C1 five-scope authored video");
+        let composition_id = authored
+            .compositions
+            .iter()
+            .find(|composition| composition.layer_ids.contains(&layer_id))
+            .expect("seed layer belongs to a composition")
+            .id;
+        let group_id = protocol::VideoLayerGroupId(0);
+        let request = VideoEffectCatalogApplyRequest {
+            effect_chains: vec![
+                c1_catalog_chain(
+                    &harness,
+                    VideoEffectScope::Layer { layer_id },
+                    "Layer",
+                    c1_test_event_effect(0.0),
+                ),
+                c1_catalog_chain(
+                    &harness,
+                    VideoEffectScope::Clip { layer_id, slot_id },
+                    "Clip",
+                    c1_test_event_effect(0.0),
+                ),
+                c1_catalog_chain(
+                    &harness,
+                    VideoEffectScope::Transition {
+                        owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id },
+                    },
+                    "Clip take",
+                    c1_test_event_effect(0.0),
+                ),
+                c1_catalog_chain(
+                    &harness,
+                    VideoEffectScope::Composition { composition_id },
+                    "Composition",
+                    c1_test_event_effect(0.0),
+                ),
+                c1_catalog_chain(
+                    &harness,
+                    VideoEffectScope::Group { group_id },
+                    "Group",
+                    c1_test_event_effect(0.0),
+                ),
+            ],
+            effect_presets: vec![protocol::VideoEffectPresetSummary {
+                id: protocol::VideoEffectPresetId(0),
+                label: "C1 immutable preset".to_string(),
+                payload: protocol::VideoEffectPresetPayload {
+                    bypassed: false,
+                    stages: vec![protocol::VideoEffectPresetStagePayload {
+                        enabled: true,
+                        label: "Preset stage".to_string(),
+                        effect: VideoEffectKind::Isf {
+                            effect: c1_test_event_effect(0.0),
+                        },
+                    }],
+                },
+            }],
+            layer_groups: vec![VideoLayerGroupSummary {
+                id: group_id,
+                label: "C1 group".to_string(),
+                composition_id,
+                layer_ids: vec![layer_id],
+            }],
+            transition_buses: Vec::new(),
+        };
+        let baseline = harness.mutation_baseline();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let result = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request,
+            84_021,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("all C1 catalog scopes, preset, and group commit atomically");
+        c1_assert_one_authored_mutation(&harness, baseline);
+        assert_eq!(result.catalog.effect_chains.len(), 5);
+        assert_eq!(result.catalog.effect_presets.len(), 1);
+        assert_eq!(result.catalog.layer_groups.len(), 1);
+        let allocated_group_id = result.catalog.layer_groups[0].id;
+        assert_ne!(allocated_group_id.0, 0);
+        assert_ne!(result.catalog.effect_presets[0].id.0, 0);
+        assert!(result.catalog.effect_chains.iter().all(|chain| {
+            chain.id.0 != 0
+                && chain
+                    .stages
+                    .iter()
+                    .all(|stage| stage.id.0 != 0 && stage.effect.id.0 != 0)
+        }));
+        assert!(result.catalog.effect_chains.iter().any(|chain| {
+            chain.scope
+                == VideoEffectScope::Group {
+                    group_id: allocated_group_id,
+                }
+        }));
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("persisted five-scope catalog")
+            .authored_video
+            .expect("persisted five-scope authored video");
+        assert_eq!(persisted.effect_chains, result.catalog.effect_chains);
+        assert_eq!(persisted.effect_presets, result.catalog.effect_presets);
+        assert_eq!(persisted.layer_groups, result.catalog.layer_groups);
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_receipts_are_bound_to_the_original_window_incarnation() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let request = c1_layer_catalog_request(&harness, layer_id, 0.0);
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let old_binding = capture_video_clip_slot_caller_binding_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect("capture original C1 owner incarnation");
+        apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request,
+            84_031,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(old_binding.clone()),
+        )
+        .expect("create C1 receipt owned by the original window");
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .expect("retire C1 owner")
+            .remove("media-asset-a6");
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .expect("retire C1 owner incarnation")
+            .remove("media-asset-a6");
+        harness
+            .state
+            .media_asset_operations
+            .purge_video_effect_catalog_authoritative_for_owner(MEDIA_ASSET_A6_OWNER);
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .expect("re-register C1 owner string")
+            .insert(
+                "media-asset-a6".to_string(),
+                MEDIA_ASSET_A6_OWNER.to_string(),
+            );
+        let new_incarnation = allocate_project_transaction_owner_incarnation(&harness.state)
+            .expect("allocate C1 replacement incarnation");
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .expect("register C1 replacement incarnation")
+            .insert("media-asset-a6".to_string(), new_incarnation);
+        let error = get_video_effect_catalog_operation_terminal_result_impl(
+            &harness.state,
+            84_031,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(old_binding),
+        )
+        .expect_err("ABA owner reuse cannot recover the original C1 receipt");
+        assert!(error.contains("renderer incarnation changed"));
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            1,
+            "an old terminal receipt cannot republish under a replacement window"
+        );
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_operator_locks_block_new_catalog_mutations() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let request = c1_layer_catalog_request(&harness, layer_id, 0.0);
+        let mut partial_policy = sample_operator_policy();
+        partial_policy.lock_mode = OperatorLockMode::Partial;
+        {
+            let mut coordinator = harness
+                .state
+                .project_coordinator
+                .lock()
+                .expect("install C1 Partial lock policy");
+            coordinator.ancillary.operator_policy = Some(partial_policy.clone());
+            harness
+                .state
+                .project_operator_sessions
+                .lock()
+                .expect("install locked C1 Partial session")
+                .insert(
+                    MEDIA_ASSET_A6_OWNER.to_string(),
+                    ProjectOperatorSession {
+                        project_epoch: coordinator.epoch,
+                        policy: partial_policy,
+                        unlocked: false,
+                    },
+                );
+        }
+        c1_stabilize_fixture_authority(&harness);
+        let partial_baseline = harness.mutation_baseline();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let error = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            84_041,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("Partial operator lock blocks C1 authoring");
+        assert!(error.contains("Partial Lock"));
+        let after_partial = harness.mutation_baseline();
+        assert_eq!(after_partial.revision, partial_baseline.revision);
+        assert_eq!(
+            after_partial.history_generation,
+            partial_baseline.history_generation
+        );
+        assert_eq!(after_partial.undo_len, partial_baseline.undo_len);
+        let mut full_policy = sample_operator_policy();
+        full_policy.lock_mode = OperatorLockMode::Full;
+        {
+            let mut coordinator = harness
+                .state
+                .project_coordinator
+                .lock()
+                .expect("replace C1 coordinator policy with Full");
+            coordinator.ancillary.operator_policy = Some(full_policy.clone());
+            harness
+                .state
+                .project_operator_sessions
+                .lock()
+                .expect("replace C1 lock session with Full")
+                .get_mut(MEDIA_ASSET_A6_OWNER)
+                .expect("C1 partial session exists")
+                .policy = full_policy;
+        }
+        c1_stabilize_fixture_authority(&harness);
+        let full_baseline = harness.mutation_baseline();
+        let (full_epoch, full_revision, full_hash) = b3_authority_arguments(&harness);
+        let error = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request,
+            84_042,
+            full_epoch,
+            full_revision,
+            full_hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("Full operator lock blocks C1 authoring");
+        assert!(error.contains("Full Lock"));
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            0
+        );
+        let after = harness.mutation_baseline();
+        assert_eq!(after.revision, full_baseline.revision);
+        assert_eq!(after.history_generation, full_baseline.history_generation);
+        assert_eq!(after.undo_len, full_baseline.undo_len);
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_legacy_isf_adapter_projects_canonical_history_once() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let baseline = harness.mutation_baseline();
+        mutate_legacy_video_effect_catalog_authoritatively(
+            &harness.state,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+            move |video, request| {
+                legacy_replace_layer_effect_chain(
+                    video,
+                    request,
+                    layer_id,
+                    Some(c1_test_event_effect(1.0)),
+                )
+            },
+            || {},
+        )
+        .expect("legacy adapter captures A before constructing its C1 candidate");
+        c1_assert_one_authored_mutation(&harness, baseline);
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("legacy adapter persistence")
+            .authored_video
+            .expect("legacy adapter authored video");
+        let chain = persisted
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+            .expect("legacy adapter persists canonical Layer chain");
+        assert_eq!(chain.stages.len(), 1);
+        let VideoEffectKind::Isf { effect } = &chain.stages[0].effect.kind;
+        assert_eq!(
+            effect
+                .controls
+                .iter()
+                .find(|control| control.kind == VideoIsfControlKind::Event)
+                .expect("canonical Event control")
+                .value[0],
+            0.0,
+            "legacy ingress may never persist Event=1"
+        );
+        let legacy = persisted
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .expect("legacy adapter layer")
+            .isf_effect
+            .as_ref()
+            .expect("legacy projection remains available");
+        assert_eq!(legacy.label, effect.label);
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_legacy_adapter_same_layer_race_rejects_without_overwrite()
+    {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let baseline = harness.mutation_baseline();
+        let binding = capture_video_clip_slot_caller_binding_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect("capture legacy adapter caller binding");
+        let concurrent_state = Arc::clone(&harness.state);
+        let concurrent_request = c1_layer_catalog_request(&harness, layer_id, 0.0);
+
+        let error = mutate_legacy_video_effect_catalog_authoritatively(
+            &harness.state,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding),
+            move |video, request| {
+                legacy_replace_layer_effect_chain(
+                    video,
+                    request,
+                    layer_id,
+                    Some(c1_test_event_effect(1.0)),
+                )
+            },
+            move || {
+                // Pause after A, publish another Layer chain, then resume the
+                // stale adapter candidate. It must fail instead of restoring
+                // its old whole-catalog image over this newer chain.
+                let authority = {
+                    let coordinator = concurrent_state
+                        .project_coordinator
+                        .lock()
+                        .expect("read concurrent C1 authority");
+                    MediaAssetPrepareAuthority {
+                        epoch: coordinator.epoch,
+                        revision: coordinator.revision,
+                        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+                    }
+                };
+                apply_video_effect_catalog_authoritative_command_impl(
+                    &concurrent_state,
+                    concurrent_request,
+                    84_061,
+                    authority.epoch,
+                    authority.revision,
+                    authority.checkpoint_hash,
+                    MEDIA_ASSET_A6_OWNER.to_string(),
+                    None,
+                )
+                .expect("concurrent same-layer C1 catalog commits while adapter is paused");
+            },
+        )
+        .expect_err("stale legacy catalog must not overwrite same-layer C1 chain");
+        assert!(
+            error.contains("Project changed")
+                || error.contains("revision")
+                || error.contains("checkpoint")
+                || error.contains("epoch"),
+            "stale A must fail as an authority conflict: {error}"
+        );
+        c1_assert_one_authored_mutation(&harness, baseline);
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("same-layer race persistence")
+            .authored_video
+            .expect("same-layer race authored video");
+        let chain = persisted
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+            .expect("concurrent same-layer chain survives stale adapter");
+        assert_eq!(chain.stages[0].label, "C1 layer stage");
+
+        mutate_legacy_video_effect_catalog_authoritatively(
+            &harness.state,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+            move |video, request| {
+                legacy_replace_layer_effect_chain(
+                    video,
+                    request,
+                    layer_id,
+                    Some(c1_test_event_effect(1.0)),
+                )
+            },
+            || {},
+        )
+        .expect("fresh legacy retry replaces the current same-layer chain once");
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            2,
+            "the failed stale adapter reaches no second Published command"
+        );
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("same-layer retry persistence")
+            .authored_video
+            .expect("same-layer retry authored video");
+        let chain = persisted
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+            .expect("fresh legacy retry replaces same-layer chain");
+        assert_eq!(chain.stages[0].label, "C1 event seam");
+        b3_assert_authority_matches_persistence(&harness);
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_legacy_adapter_different_layer_race_preserves_both_on_retry(
+    ) {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (legacy_layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let (concurrent_layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let baseline = harness.mutation_baseline();
+        let concurrent_state = Arc::clone(&harness.state);
+        let concurrent_request = c1_layer_catalog_request(&harness, concurrent_layer_id, 0.0);
+
+        let error = mutate_legacy_video_effect_catalog_authoritatively(
+            &harness.state,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+            move |video, request| {
+                legacy_replace_layer_effect_chain(
+                    video,
+                    request,
+                    legacy_layer_id,
+                    Some(c1_test_event_effect(1.0)),
+                )
+            },
+            move || {
+                let authority = {
+                    let coordinator = concurrent_state
+                        .project_coordinator
+                        .lock()
+                        .expect("read different-layer C1 authority");
+                    MediaAssetPrepareAuthority {
+                        epoch: coordinator.epoch,
+                        revision: coordinator.revision,
+                        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+                    }
+                };
+                apply_video_effect_catalog_authoritative_command_impl(
+                    &concurrent_state,
+                    concurrent_request,
+                    84_062,
+                    authority.epoch,
+                    authority.revision,
+                    authority.checkpoint_hash,
+                    MEDIA_ASSET_A6_OWNER.to_string(),
+                    None,
+                )
+                .expect("concurrent different-layer C1 catalog commits while adapter is paused");
+            },
+        )
+        .expect_err("stale legacy catalog must not erase a different-layer chain");
+        assert!(
+            error.contains("Project changed")
+                || error.contains("revision")
+                || error.contains("checkpoint")
+                || error.contains("epoch")
+        );
+        c1_assert_one_authored_mutation(&harness, baseline);
+
+        mutate_legacy_video_effect_catalog_authoritatively(
+            &harness.state,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+            move |video, request| {
+                legacy_replace_layer_effect_chain(
+                    video,
+                    request,
+                    legacy_layer_id,
+                    Some(c1_test_event_effect(1.0)),
+                )
+            },
+            || {},
+        )
+        .expect("fresh legacy retry keeps the concurrent different-layer chain");
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("different-layer retry persistence")
+            .authored_video
+            .expect("different-layer retry authored video");
+        assert!(persisted.effect_chains.iter().any(|chain| chain.scope
+            == VideoEffectScope::Layer {
+                layer_id: legacy_layer_id
+            }));
+        assert!(persisted.effect_chains.iter().any(|chain| {
+            chain.scope
+                == VideoEffectScope::Layer {
+                    layer_id: concurrent_layer_id,
+                }
+        }));
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            2,
+            "only the concurrent catalog and the fresh retry publish"
+        );
+        b3_assert_authority_matches_persistence(&harness);
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_legacy_adapter_rejects_a_rotated_window_after_a_capture()
+    {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let baseline = harness.mutation_baseline();
+        let binding = capture_video_clip_slot_caller_binding_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect("capture original legacy adapter incarnation");
+        let rotated_state = Arc::clone(&harness.state);
+
+        let error = mutate_legacy_video_effect_catalog_authoritatively(
+            &harness.state,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding),
+            move |video, request| {
+                legacy_replace_layer_effect_chain(
+                    video,
+                    request,
+                    layer_id,
+                    Some(c1_test_event_effect(1.0)),
+                )
+            },
+            move || {
+                let _rotation = rotated_state
+                    .project_transaction_owner_rotation
+                    .lock()
+                    .expect("lock legacy owner rotation");
+                let incarnation = allocate_project_transaction_owner_incarnation(&rotated_state)
+                    .expect("allocate replacement legacy renderer incarnation");
+                rotated_state
+                    .project_transaction_owner_incarnations
+                    .lock()
+                    .expect("rotate legacy renderer incarnation")
+                    .insert("media-asset-a6".to_string(), incarnation);
+            },
+        )
+        .expect_err("legacy adapter must reject its A image after WebView rotation");
+        assert!(error.contains("renderer incarnation changed"));
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            0,
+            "a rotated caller cannot enqueue an authoritative catalog publish"
+        );
+        let after = harness.mutation_baseline();
+        assert_eq!(after.revision, baseline.revision);
+        assert_eq!(after.history_generation, baseline.history_generation);
+        assert_eq!(after.undo_len, baseline.undo_len);
+        b3_assert_authority_matches_persistence(&harness);
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_zero_ids_allocate_distinct_domains_and_reject_new_nonzero(
+    ) {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (first_layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let (second_layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let baseline = harness.mutation_baseline();
+        let mut forbidden = c1_layer_catalog_request(&harness, first_layer_id, 0.0);
+        forbidden.effect_chains[0].id = protocol::VideoEffectChainId(9_999_991);
+        let error = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            forbidden,
+            84_071,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("external callers cannot mint arbitrary nonzero C1 identities");
+        assert!(error.contains("use ID 0 for a new entity"));
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(harness.mutation_baseline().revision, baseline.revision);
+
+        let request = VideoEffectCatalogApplyRequest {
+            effect_chains: vec![
+                c1_catalog_chain(
+                    &harness,
+                    VideoEffectScope::Layer {
+                        layer_id: first_layer_id,
+                    },
+                    "first zero chain",
+                    c1_test_event_effect(0.0),
+                ),
+                c1_catalog_chain(
+                    &harness,
+                    VideoEffectScope::Layer {
+                        layer_id: second_layer_id,
+                    },
+                    "second zero chain",
+                    c1_test_event_effect(0.0),
+                ),
+            ],
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let applied = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request,
+            84_072,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("two zero chain/stage/effect triples allocate independently");
+        assert_ne!(
+            applied.catalog.effect_chains[0].id,
+            applied.catalog.effect_chains[1].id
+        );
+        assert_ne!(
+            applied.catalog.effect_chains[0].stages[0].id,
+            applied.catalog.effect_chains[1].stages[0].id
+        );
+        assert_ne!(
+            applied.catalog.effect_chains[0].stages[0].effect.id,
+            applied.catalog.effect_chains[1].stages[0].effect.id
+        );
+        c1_assert_one_authored_mutation(&harness, baseline);
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_zero_allocator_fails_partial_request_without_mutating_input(
+    ) {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let authored_video = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("capture zero allocator A")
+            .authored_video
+            .expect("fixture has authored video");
+        let request = c1_layer_catalog_request(&harness, layer_id, 0.0);
+        let allocated_chain = std::cell::Cell::new(false);
+        let error = normalize_video_effect_catalog_ids_with_allocator(
+            &authored_video,
+            &request,
+            || {
+                allocated_chain.set(true);
+                Ok(protocol::VideoEffectChainId(700_001))
+            },
+            || Err("synthetic Video effect stage allocator exhausted".to_string()),
+            || Ok(protocol::VideoEffectId(700_001)),
+            || Ok(protocol::VideoEffectPresetId(700_001)),
+            || Ok(protocol::VideoLayerGroupId(700_001)),
+            || Ok(protocol::VideoTransitionBusId(700_001)),
+        )
+        .expect_err("allocation overflow after a prior domain allocation fails closed");
+        assert!(allocated_chain.get());
+        assert!(error.contains("allocator exhausted"));
+        assert_eq!(request.effect_chains[0].id.0, 0);
+        assert_eq!(request.effect_chains[0].stages[0].id.0, 0);
+        assert_eq!(request.effect_chains[0].stages[0].effect.id.0, 0);
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            0,
+            "a partial backend allocation reaches neither Published nor history"
+        );
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_legacy_readd_after_removal_never_reuses_retired_ids() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let initial = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            c1_layer_catalog_request(&harness, layer_id, 0.0),
+            84_081,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("allocate initial C1 chain through the real EngineHandle");
+        let retired_chain_id = initial.catalog.effect_chains[0].id;
+        let retired_stage_id = initial.catalog.effect_chains[0].stages[0].id;
+        let retired_effect_id = initial.catalog.effect_chains[0].stages[0].effect.id;
+
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            VideoEffectCatalogApplyRequest {
+                effect_chains: Vec::new(),
+                effect_presets: Vec::new(),
+                layer_groups: Vec::new(),
+                transition_buses: Vec::new(),
+            },
+            84_082,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("remove the complete canonical C1 catalog");
+        c1_stabilize_fixture_authority(&harness);
+
+        mutate_legacy_video_effect_catalog_authoritatively(
+            &harness.state,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+            move |video, request| {
+                legacy_replace_layer_effect_chain(
+                    video,
+                    request,
+                    layer_id,
+                    Some(c1_test_event_effect(0.0)),
+                )
+            },
+            || {},
+        )
+        .expect("legacy re-add uses the same real EngineHandle allocator lane");
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read legacy re-add persistence")
+            .authored_video
+            .expect("read legacy re-add authored video");
+        let readded = persisted
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+            .expect("legacy re-add persists one Layer chain");
+        assert!(readded.id.0 > retired_chain_id.0);
+        assert!(readded.stages[0].id.0 > retired_stage_id.0);
+        assert!(readded.stages[0].effect.id.0 > retired_effect_id.0);
+        b3_assert_authority_matches_persistence(&harness);
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_legacy_response_keeps_effect_shape_and_nested_mutation() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let (effect, mutation) = mutate_legacy_video_effect_catalog_authoritatively(
+            &harness.state,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+            move |video, request| {
+                legacy_replace_layer_effect_chain(
+                    video,
+                    request,
+                    layer_id,
+                    Some(c1_test_event_effect(0.0)),
+                )?;
+                Ok(c1_test_event_effect(0.0))
+            },
+            || {},
+        )
+        .expect("legacy mutation produces the authoritative history result");
+        let value =
+            serde_json::to_value(LegacyVideoIsfEffectAuthoritativeResult { effect, mutation })
+                .expect("serialize legacy effect response");
+        assert!(
+            value.get("label").is_some(),
+            "old effect fields stay top-level"
+        );
+        assert!(
+            value
+                .get("mutation")
+                .and_then(|mutation| mutation.get("authority"))
+                .is_some(),
+            "server-authoritative frontend routing can advance E/R/H from every effect response"
+        );
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_legacy_terminal_retry_recovers_one_ack_and_rejects_aba() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let baseline = harness.mutation_baseline();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let binding = capture_video_clip_slot_caller_binding_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect("capture legacy terminal caller binding");
+        let effect = c1_test_event_effect(0.0);
+        let shape = legacy_video_effect_catalog_authoritative_shape(
+            "set_video_layer_isf_effect",
+            json!({ "layer_id": layer_id, "effect": effect }),
+        )
+        .expect("encode legacy terminal intent shape");
+        let applied = mutate_legacy_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            84_091,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding.clone()),
+            shape.clone(),
+            move |video, request| {
+                legacy_replace_layer_effect_chain(
+                    video,
+                    request,
+                    layer_id,
+                    Some(c1_test_event_effect(0.0)),
+                )
+            },
+        )
+        .expect("the legacy terminal lane publishes exactly one canonical catalog");
+        let retried = mutate_legacy_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            84_091,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding.clone()),
+            shape.clone(),
+            |_video, _request| -> Result<(), String> {
+                panic!("exact legacy retry must return its receipt before rebuilding A")
+            },
+        )
+        .expect("reply-loss retry recovers the original legacy terminal result");
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::to_value(&retried).unwrap(),
+            "normal and recovered legacy catalog DTOs are byte-identical"
+        );
+        c1_assert_one_authored_mutation(&harness, baseline);
+        let recovered = get_video_effect_catalog_operation_terminal_result_impl(
+            &harness.state,
+            84_091,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding.clone()),
+        )
+        .expect("legacy terminal query succeeds")
+        .expect("legacy terminal receipt exists");
+        let recovered_json = serde_json::to_value(&recovered).expect("serialize legacy receipt");
+        assert!(
+            recovered_json
+                .pointer("/terminal/result/mutation/authority")
+                .is_some(),
+            "recovered catalog receipt exposes the same authoritative E/R/H mutation"
+        );
+
+        let mismatched_shape = legacy_video_effect_catalog_authoritative_shape(
+            "set_video_layer_isf_effect",
+            json!({ "layer_id": layer_id, "effect": c1_test_event_effect(1.0) }),
+        )
+        .expect("encode mismatched legacy intent shape");
+        let error = mutate_legacy_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            84_091,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding.clone()),
+            mismatched_shape,
+            |_video, _request| Ok(()),
+        )
+        .expect_err("same legacy terminal identity with different intent must not republish");
+        assert!(error.contains("already completed with shape"));
+
+        let replacement_incarnation =
+            allocate_project_transaction_owner_incarnation(&harness.state)
+                .expect("allocate replacement legacy terminal incarnation");
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .expect("rotate legacy terminal incarnation")
+            .insert("media-asset-a6".to_string(), replacement_incarnation);
+        let error = mutate_legacy_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            84_091,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding),
+            shape,
+            |_video, _request| Ok(()),
+        )
+        .expect_err("a retired legacy window cannot recover its receipt after ABA rotation");
+        assert!(error.contains("renderer incarnation changed"));
+        assert_eq!(
+            harness
+                .state
+                .video_effect_catalog_authoritative_publish_attempts
+                .load(Ordering::Acquire),
+            1,
+            "legacy reply recovery never creates a second Published ACK"
+        );
+    }
+
+    #[test]
+    fn video_effect_catalog_authoritative_legacy_append_intents_are_cross_kind_distinct_and_keep_added_response(
+    ) {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let binding = capture_video_clip_slot_caller_binding_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect("capture append caller binding");
+        let builtin = video::builtin_isf_effect("invert")
+            .expect("resolve invert builtin")
+            .expect("invert builtin exists");
+        let direct_shape = legacy_video_effect_catalog_append_shape(
+            "add_video_layer_isf_effect",
+            layer_id,
+            &builtin,
+            None,
+        )
+        .expect("encode direct add shape");
+        let builtin_shape = legacy_video_effect_catalog_append_shape(
+            "add_builtin_video_isf_effect",
+            layer_id,
+            &builtin,
+            Some("invert"),
+        )
+        .expect("encode builtin add shape");
+        assert_ne!(
+            direct_shape.fingerprint, builtin_shape.fingerprint,
+            "a resolved builtin effect may equal direct input but never shares its terminal intent"
+        );
+        let baseline = harness.mutation_baseline();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let direct_effect = builtin.clone();
+        mutate_legacy_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            84_101,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding.clone()),
+            direct_shape,
+            move |video, request| {
+                let index = legacy_materialize_layer_effect_chain(video, request, layer_id)?;
+                request.effect_chains[index]
+                    .stages
+                    .push(legacy_video_effect_stage_summary(
+                        video_isf_stage_from_root(direct_effect),
+                        protocol::VideoEffectStageId(0),
+                        protocol::VideoEffectId(0),
+                    ));
+                Ok(())
+            },
+        )
+        .expect("direct add publishes one canonical catalog");
+        let error = mutate_legacy_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            84_101,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding.clone()),
+            builtin_shape,
+            |_video, _request| -> Result<(), String> {
+                panic!("cross-kind receipt collision must reject before rebuilding A")
+            },
+        )
+        .expect_err("direct add receipt cannot be replayed as add_builtin");
+        assert!(error.contains("already completed with shape"));
+        c1_assert_one_authored_mutation(&harness, baseline);
+
+        let second_effect = c1_test_event_effect(0.0);
+        let second_shape = legacy_video_effect_catalog_append_shape(
+            "add_video_layer_isf_effect",
+            layer_id,
+            &second_effect,
+            None,
+        )
+        .expect("encode later direct add shape");
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let second_for_mutation = second_effect.clone();
+        let second_result = mutate_legacy_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            84_102,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(binding),
+            second_shape,
+            move |video, request| {
+                let index = legacy_materialize_layer_effect_chain(video, request, layer_id)?;
+                request.effect_chains[index]
+                    .stages
+                    .push(legacy_video_effect_stage_summary(
+                        video_isf_stage_from_root(second_for_mutation),
+                        protocol::VideoEffectStageId(0),
+                        protocol::VideoEffectId(0),
+                    ));
+                Ok(())
+            },
+        )
+        .expect("second add publishes a later canonical stage");
+        let normal_response =
+            legacy_video_effect_catalog_append_response(second_effect.clone(), second_result);
+        assert_eq!(normal_response.effect.label, second_effect.label);
+        assert_eq!(normal_response.effect.source, second_effect.source);
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read second add persistence")
+            .authored_video
+            .expect("read second add authored video");
+        let chain = persisted
+            .effect_chains
+            .iter()
+            .find(|chain| chain.scope == VideoEffectScope::Layer { layer_id })
+            .expect("second add Layer chain");
+        let VideoEffectKind::Isf { effect: root } = &chain.stages[0].effect.kind;
+        assert_ne!(
+            normal_response.effect.label, root.label,
+            "second-stage normal response is the newly-added effect, not the legacy root projection"
+        );
+
+        // Exercise the same response seam for a second-stage add_builtin.
+        // The resolved source is intentionally different from the root so a
+        // catalog re-projection would be observable here.
+        let builtin_harness = MediaAssetA6CommandHarness::new();
+        let (builtin_layer_id, _asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(&builtin_harness);
+        c1_stabilize_fixture_authority(&builtin_harness);
+        let builtin_binding = capture_video_clip_slot_caller_binding_for_window_label(
+            &builtin_harness.state,
+            "media-asset-a6",
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect("capture builtin append caller binding");
+        let first_builtin = video::builtin_isf_effect("invert")
+            .expect("resolve initial builtin")
+            .expect("initial builtin exists");
+        let first_shape = legacy_video_effect_catalog_append_shape(
+            "add_builtin_video_isf_effect",
+            builtin_layer_id,
+            &first_builtin,
+            Some("invert"),
+        )
+        .expect("encode initial builtin shape");
+        let (epoch, revision, hash) = b3_authority_arguments(&builtin_harness);
+        let first_for_mutation = first_builtin.clone();
+        mutate_legacy_video_effect_catalog_authoritative_command_impl(
+            &builtin_harness.state,
+            84_103,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(builtin_binding.clone()),
+            first_shape,
+            move |video, request| {
+                let index =
+                    legacy_materialize_layer_effect_chain(video, request, builtin_layer_id)?;
+                request.effect_chains[index]
+                    .stages
+                    .push(legacy_video_effect_stage_summary(
+                        video_isf_stage_from_root(first_for_mutation),
+                        protocol::VideoEffectStageId(0),
+                        protocol::VideoEffectId(0),
+                    ));
+                Ok(())
+            },
+        )
+        .expect("initial builtin add publishes one root stage");
+        let second_builtin = video::builtin_isf_effect("monochrome")
+            .expect("resolve second builtin")
+            .expect("second builtin exists");
+        let second_builtin_shape = legacy_video_effect_catalog_append_shape(
+            "add_builtin_video_isf_effect",
+            builtin_layer_id,
+            &second_builtin,
+            Some("monochrome"),
+        )
+        .expect("encode second builtin shape");
+        let (epoch, revision, hash) = b3_authority_arguments(&builtin_harness);
+        let second_builtin_for_mutation = second_builtin.clone();
+        let second_builtin_result = mutate_legacy_video_effect_catalog_authoritative_command_impl(
+            &builtin_harness.state,
+            84_104,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            Some(builtin_binding),
+            second_builtin_shape,
+            move |video, request| {
+                let index =
+                    legacy_materialize_layer_effect_chain(video, request, builtin_layer_id)?;
+                request.effect_chains[index]
+                    .stages
+                    .push(legacy_video_effect_stage_summary(
+                        video_isf_stage_from_root(second_builtin_for_mutation),
+                        protocol::VideoEffectStageId(0),
+                        protocol::VideoEffectId(0),
+                    ));
+                Ok(())
+            },
+        )
+        .expect("second builtin add publishes a later stage");
+        let builtin_response = legacy_video_effect_catalog_append_response(
+            second_builtin.clone(),
+            second_builtin_result,
+        );
+        assert_eq!(builtin_response.effect.label, second_builtin.label);
+        assert_eq!(builtin_response.effect.source, second_builtin.source);
+        assert_ne!(builtin_response.effect.label, first_builtin.label);
+    }
+
+    #[test]
+    fn video_transition_bus_c3_catalog_runtime_retry_release_and_read_are_authoritative() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (first_layer_id, _, _, _) = seed_video_clip_slot_layer(&harness);
+        let (second_layer_id, _, _, _) = seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let authored = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("capture C3 authored A")
+            .authored_video
+            .expect("C3 fixture has authored video");
+        let composition_id = authored
+            .compositions
+            .iter()
+            .find(|composition| {
+                composition.layer_ids.contains(&first_layer_id)
+                    && composition.layer_ids.contains(&second_layer_id)
+            })
+            .expect("both C3 layers share Main")
+            .id;
+        let first = VideoLayerTransitionTarget::Layer {
+            layer_id: first_layer_id,
+        };
+        let second = VideoLayerTransitionTarget::Layer {
+            layer_id: second_layer_id,
+        };
+        let request = VideoEffectCatalogApplyRequest {
+            effect_chains: vec![c1_catalog_chain(
+                &harness,
+                VideoEffectScope::Transition {
+                    owner: protocol::VideoTransitionEffectOwner::LayerBus {
+                        bus_id: VideoTransitionBusId(0),
+                    },
+                },
+                "C3 Bus FX",
+                c1_test_event_effect(0.0),
+            )],
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: vec![VideoLayerTransitionBusSummary {
+                id: VideoTransitionBusId(0),
+                label: "C3 A/B".to_string(),
+                composition_id,
+                enabled: true,
+                members: vec![first.clone(), second.clone()],
+                default_from: first.clone(),
+                default_to: second.clone(),
+                default_kind: VideoClipTakeKind::Crossfade,
+                default_duration: VideoClipTakeDuration {
+                    unit: VideoClipTakeDurationUnit::Beats,
+                    value_milliunits: 1_000,
+                },
+                default_curve: VideoLayerTransitionCurve::EaseInOut,
+                matte_source: None,
+            }],
+        };
+        let baseline = harness.mutation_baseline();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let applied = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request,
+            84_201,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("C3 bus and LayerBus FX publish in one authored transaction");
+        let bus = applied.catalog.transition_buses[0].clone();
+        assert_ne!(bus.id.0, 0);
+        assert_eq!(
+            applied.catalog.effect_chains[0].scope,
+            VideoEffectScope::Transition {
+                owner: protocol::VideoTransitionEffectOwner::LayerBus { bus_id: bus.id },
+            }
+        );
+        c1_assert_one_authored_mutation(&harness, baseline);
+        b3_assert_authority_matches_persistence(&harness);
+
+        let runtime_baseline = harness.mutation_baseline();
+        let authority = harness.authority();
+        let launch_request = VideoLayerTransitionLaunchRequest {
+            bus_id: bus.id,
+            from: first,
+            to: second,
+            kind: bus.default_kind,
+            duration: bus.default_duration,
+            curve: bus.default_curve,
+        };
+        let launched = launch_video_layer_transition_bus_authoritative_command_impl(
+            &harness.state,
+            launch_request.clone(),
+            84_202,
+            authority.epoch,
+            authority.revision,
+            authority.checkpoint_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("launch C3 bus through history-free authority lane");
+        assert_eq!(
+            launched.command_kind,
+            VideoLayerTransitionAuthoritativeRuntimeCommandKind::Launch
+        );
+        assert_eq!(launched.runtime.buses.len(), 1);
+        assert_eq!(launched.runtime.buses[0].duration_ms, 500);
+        let retried = launch_video_layer_transition_bus_authoritative_command_impl(
+            &harness.state,
+            launch_request,
+            84_202,
+            authority.epoch,
+            authority.revision,
+            authority.checkpoint_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("lost C3 launch reply recovers fresh runtime without republish");
+        assert!(retried.runtime_generation >= launched.runtime_generation);
+        assert_eq!(
+            harness.mutation_baseline().revision,
+            runtime_baseline.revision
+        );
+        assert_eq!(
+            harness.mutation_baseline().undo_len,
+            runtime_baseline.undo_len
+        );
+
+        release_video_layer_transition_bus_authoritative_command_impl(
+            &harness.state,
+            VideoLayerTransitionReleaseRequest { bus_id: bus.id },
+            84_203,
+            authority.epoch,
+            authority.revision,
+            authority.checkpoint_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("release C3 bus at any progress");
+        let terminal = get_video_effect_catalog_operation_terminal_result_impl(
+            &harness.state,
+            84_202,
+            authority.epoch,
+            authority.revision,
+            authority.checkpoint_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("query C3 launch receipt")
+        .expect("C3 launch receipt exists");
+        assert!(matches!(
+            terminal.terminal,
+            VideoEffectCatalogAuthoritativeTerminalResult::Runtime(_)
+        ));
+        assert!(terminal
+            .runtime
+            .expect("fresh C3 runtime attached")
+            .runtime
+            .buses
+            .is_empty());
+        let read = get_video_layer_transition_runtime_impl(
+            &harness.state,
+            authority.epoch,
+            authority.revision,
+            authority.checkpoint_hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("Full-readable C3 runtime report");
+        assert!(read.runtime.buses.is_empty());
+        assert_eq!(
+            harness.mutation_baseline().revision,
+            runtime_baseline.revision
+        );
+    }
+
     #[test]
     fn video_clip_slot_b3_authored_commands_use_one_ack_history_and_exact_retry() {
         let harness = MediaAssetA6CommandHarness::new();
@@ -71267,6 +76226,9 @@ mod live_audio_input_tests {
             VideoClipSlotLaunchRequest {
                 layer_id,
                 slot_id: Some(slot_id),
+                transition_kind: VideoClipTakeKind::Cut,
+                transition_duration_ms: 0,
+                transition_duration: None,
             },
             83_203,
             epoch,
@@ -71681,6 +76643,136 @@ mod live_audio_input_tests {
     }
 
     #[test]
+    fn video_clip_slot_c2_crossfade_polling_advances_generation_and_retry_returns_current_truth() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _asset_id, alternate_asset_id, outgoing_slot_id) =
+            seed_video_clip_slot_layer(&harness);
+        let incoming_slot_id = harness.state.engine.allocate_video_clip_slot_id();
+        harness
+            .state
+            .engine
+            .create_video_clip_slot_published(
+                layer_id,
+                VideoClipSlotSummary {
+                    id: incoming_slot_id,
+                    media_asset_id: alternate_asset_id,
+                    in_point_ms: 0,
+                    out_point_ms: None,
+                    loop_mode: Default::default(),
+                    speed: 0.0,
+                    cue_points: Vec::new(),
+                    launch_quantization: Default::default(),
+                    effect_overrides: Vec::new(),
+                },
+                None,
+                false,
+            )
+            .expect("add C2 incoming slot");
+        *harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("reset C2 coordinator after seed") =
+            project_coordinator_for_initial_snapshot(harness.state.engine.snapshot());
+
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let initial = get_video_clip_slot_runtime_impl(
+            &harness.state,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("observe initial C2 runtime");
+        assert_eq!(
+            initial.runtime.layers[0].active_slot_id,
+            Some(outgoing_slot_id)
+        );
+        queue_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            VideoClipSlotQueueRequest {
+                layer_id,
+                slot_id: incoming_slot_id,
+            },
+            83_250,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("queue C2 incoming slot");
+        let request = VideoClipSlotLaunchRequest {
+            layer_id,
+            slot_id: None,
+            transition_kind: VideoClipTakeKind::Wipe,
+            transition_duration_ms: 0,
+            transition_duration: Some(VideoClipTakeDuration {
+                unit: VideoClipTakeDurationUnit::Beats,
+                value_milliunits: 500,
+            }),
+        };
+        let launched = launch_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            83_251,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("launch C2 crossfade");
+        let transition = launched.runtime.layers[0]
+            .transition
+            .as_ref()
+            .expect("C2 launch publishes dual-source runtime truth");
+        assert_eq!(transition.outgoing_slot_id, outgoing_slot_id);
+        assert_eq!(transition.incoming_slot_id, incoming_slot_id);
+        assert_eq!(transition.duration_ms, 250);
+        assert_eq!(transition.kind, VideoClipTakeKind::Wipe);
+        assert_eq!(transition.duration, request.effective_transition_duration());
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let completed = loop {
+            let report = get_video_clip_slot_runtime_impl(
+                &harness.state,
+                epoch,
+                revision,
+                hash.clone(),
+                MEDIA_ASSET_A6_OWNER.to_string(),
+                None,
+            )
+            .expect("poll current C2 runtime");
+            if report.runtime.layers[0].transition.is_none()
+                && report.runtime.layers[0].active_slot_id == Some(incoming_slot_id)
+            {
+                break report;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "C2 transition timed out"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(completed.runtime_generation > launched.runtime_generation);
+        let retried = launch_video_clip_slot_authoritative_command_impl(
+            &harness.state,
+            request,
+            83_251,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("exact C2 retry reads current runtime truth");
+        assert_eq!(retried.runtime_generation, completed.runtime_generation);
+        assert_eq!(retried.runtime, completed.runtime);
+    }
+
+    #[test]
     fn video_clip_slot_b3_direct_import_assign_is_ordered_atomic_and_receipted() {
         let harness = MediaAssetA6CommandHarness::new();
         let (layer_id, _asset_id, _alternate_asset_id, anchor_slot_id) =
@@ -71691,6 +76783,9 @@ mod live_audio_input_tests {
             VideoClipSlotLaunchRequest {
                 layer_id,
                 slot_id: Some(anchor_slot_id),
+                transition_kind: VideoClipTakeKind::Cut,
+                transition_duration_ms: 0,
+                transition_duration: None,
             },
             83_301,
             epoch,
@@ -72599,6 +77694,8 @@ fn main() {
             media_asset_authoritative_publish_attempts: AtomicU64::new(0),
             #[cfg(test)]
             video_clip_slot_authoritative_publish_attempts: AtomicU64::new(0),
+            #[cfg(test)]
+            video_effect_catalog_authoritative_publish_attempts: AtomicU64::new(0),
             media_audio,
             program_audio_handoff,
             _media_audio_sync: media_audio_sync,
@@ -72652,6 +77749,11 @@ fn main() {
             project_transaction_owner_rotation: Mutex::new(()),
             project_operator_sessions: Mutex::new(HashMap::new()),
             video_clip_slot_runtime_generation: AtomicU64::new(0),
+            video_clip_slot_runtime_observed: Mutex::new(VideoClipRuntimeSnapshot::default()),
+            video_transition_runtime_generation: AtomicU64::new(0),
+            video_transition_runtime_observed: Mutex::new(
+                VideoLayerTransitionRuntimeSnapshot::default(),
+            ),
             project_external_command_admission: Arc::new(ProjectExternalCommandAdmission::default()),
             project_save_publication: Mutex::new(()),
             snapshot_sync: Mutex::new(SnapshotSyncState::default()),
@@ -72769,6 +77871,8 @@ fn main() {
             remove_timeline_audio_clip,
             set_timeline_audio_master,
             clear_timeline_audio,
+            set_timeline_loop_enabled,
+            scale_timeline_loop,
             list_midi_inputs,
             list_midi_outputs,
             list_serial_ports,
@@ -72904,6 +78008,13 @@ fn main() {
             launch_video_clip_slot_authoritative,
             seek_video_clip_slot_authoritative,
             get_video_clip_slot_operation_terminal_result,
+            apply_video_effect_catalog_authoritative,
+            get_video_effect_catalog_operation_terminal_result,
+            apply_timeline_advanced_authoritative,
+            get_timeline_advanced_operation_terminal_result,
+            launch_video_layer_transition_bus_authoritative,
+            release_video_layer_transition_bus_authoritative,
+            get_video_layer_transition_runtime,
             commit_prepared_video_file_layer,
             commit_prepared_still_image_layer,
             commit_prepared_local_media_layers,

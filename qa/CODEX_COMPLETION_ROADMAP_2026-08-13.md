@@ -687,6 +687,13 @@ Preserve legacy built-in color/FX and ISF ordering. Add enable/bypass, reorder, 
 
 ### C3. Layer Transition Bus
 
+Status (2026-08-14): implemented and accepted. Stable authored/runtime bus IDs, explicit
+layer/group membership, all nine transition kinds, reversible active identity, deterministic
+conflict rejection, scoped LayerBus FX, authoritative retry/read recovery, renderer/NDI/Spout/
+Program/recording integration, Edit+Control UI, 5-viewport browser proof, full Rust suites,
+release build, and maximized native Control > Video mount are green. Layer duplication now
+updates bus topology atomically and publication failure restores the exact pre-command image.
+
 - stable bus IDs;
 - explicit member layers/groups;
 - scoped from/to;
@@ -1277,6 +1284,132 @@ Recording requires an explicit state machine such as `Idle -> Preparing -> Recor
 - one-hour maximum-condition recording with Preview/Program, NDI/Spout, effects, and audio input;
 - inspect duration, frame count, audio samples, drift, corruption, and finalization time;
 - crash/fault tests preserve the original project and produce either a recoverable partial artifact or an explicit nonrecoverable report.
+
+## 16A. Critical path L-TL: Timeline Phases, musical loop, linked media, and follow transitions
+
+This is an explicit completion tranche, not optional polish. It extends the one shared
+Lighting/Video/Audio/Automation Timeline without creating a second transport or a VJ-only path.
+
+### L-TL1. Phase model and Guide voice
+
+- Add stable authored `TimelinePhaseId` and ordered, non-overlapping Phase ranges on a Timeline.
+- A Phase has a canonical label and a typed role. Built-in roles include `Intro`, `Verse`,
+  `PreChorus`, `Chorus`, `Bridge`, `Breakdown`, `Outro`, and `Custom`; Custom retains its authored label.
+- Phase boundaries use the same ShowClock/time domain as Timeline events. Moving or resizing a Phase is
+  one authoritative history mutation and cannot silently move its child events.
+- When Guide is enabled, entering a Phase speaks its operator label exactly once per forward boundary
+  crossing. Seeking into a Phase speaks it once after the seek settles; pausing/resuming inside the same
+  Phase does not repeat it.
+- Guide speech is a dedicated monitor/cue bus, never Program audio and never recorded unless that cue bus
+  is explicitly routed into the recording. Click and Guide have independent enable, gain, device/routing,
+  and fault truth.
+- Built-in English guide vocabulary is recorded/localized and deterministic. Custom labels use a bounded
+  offline TTS/cache path or fail visibly to text-only guidance; they never require a live network service.
+- Project replacement, timeline switch, seek, loop wrap, follow transition, and clock discontinuity reset
+  the guide de-duplication fence explicitly; stale speech from the previous generation is cancelled.
+
+### L-TL2. Musical A-B loop
+
+- Add authored/runtime loop truth with stable owner Timeline ID, A and B positions, enabled/armed state,
+  and a musical length expressed against the ShowClock grid. A must be before B and the interval must
+  resolve to at least one engine tick.
+- The loop may be armed while the playhead is outside `[A,B)`. It begins only when normal playback first
+  enters the range; arming must not seek or jump the playhead into it.
+- At B, playback wraps sample/tick-exactly to A without double-triggering lighting events, video launches,
+  audio samples, Phase announcements, or Timeline automation at either boundary.
+- `1/2` halves the musical loop length and `x2` doubles it, anchored to the active loop start and quantized
+  to the current beat/bar grid. Both are available before entry and during looping. Limits, rounding, and
+  the maximum project/timeline boundary are fail-closed and visible.
+- Disable/Break is available at any time. Disabling does not seek: playback continues linearly from the
+  current position. When Guide is enabled, every actual loop wrap speaks `Looping`; disabling an armed or
+  active loop speaks `Break` once. Merely editing A/B while disabled does not speak.
+- BPM changes do not rewrite authored A/B. The runtime resolves the next wrap against the current
+  ShowClock generation, with discontinuity Hold semantics and no retroactive boundary firing.
+- Commands exist for Set A, Set B, Enable/Disable, Clear, `1/2`, and `x2`; all have configurable shortcuts
+  and use the shared command/mapping system so keyboard, MIDI, OSC, DMX, Touch, and Remote can target the
+  same typed action. Default keyboard bindings must not shadow text input or existing safety controls.
+
+### L-TL3. Independent channel lanes and Media Library placement
+
+- The Timeline continues to render independent Lighting, Video, Audio, and Automation lanes under one
+  playhead. Lighting accepts existing Scene/Scene Block placement unchanged.
+- A visual MediaAsset can be dragged/click-inserted from Media Library onto a Video lane. An audio asset
+  can be placed onto an Audio lane. Placement creates stable clip IDs that reference the catalog asset;
+  it does not copy a pathname into the Timeline or route through Clip Slot/VJ Take runtime.
+- A video asset with an audio stream creates one Video clip and one Audio clip at the same start, with
+  matched trim/duration, in one atomic authoritative mutation. Stream probing/preparation must finish
+  before publication; failure leaves both lanes and history unchanged.
+- Missing/relinked media, proxies, waveform/thumbnail data, decoder readiness, and runtime playheads are
+  machine/runtime truth and cannot overwrite the authored clips.
+
+### L-TL4. Linked groups and selection/edit semantics
+
+- Add stable `TimelineItemGroupId` and an authored group table. A group may contain two or more compatible
+  Timeline items across Lighting, Video, Audio, and Automation lanes; membership is explicit, unique, and
+  validated against the same Timeline.
+- Auto-split A/V placement creates one group containing its Video and Audio clips.
+- Selecting any group member selects the complete group by default. Move, ripple move, duplicate, delete,
+  trim, split, nudge, quantize, copy/paste, and lane-valid reorder operate atomically on all members while
+  preserving relative offsets. A modifier can temporarily select/edit one member without silently
+  dissolving the group.
+- Multiple selected items can be grouped from the context menu and keyboard command; grouped items can be
+  ungrouped the same way. Invalid cross-Timeline membership and incompatible target lanes reject without
+  partial movement or history entry.
+- Group/ungroup and every grouped edit are one Undo/Redo mutation. Focus/selection returns to the same
+  logical items after success, failure, Undo, Redo, save/reload, and project replacement.
+
+### L-TL5. Timeline Follow and crossfade
+
+- Add an authored ordered Timeline bank. `Follow` optionally starts the next Timeline (the item directly
+  below the current one in canonical bank order) when the current Timeline reaches its natural end.
+- Follow does not fire on Stop, manual seek to end, project replacement, loop wrap, fault, or an explicitly
+  aborted transition. The next Timeline is captured by stable ID when the transition is admitted; reorder
+  races cannot redirect an in-flight Follow.
+- A Follow transition has typed duration (milliseconds/beats/bars), audio fade curve, video transition,
+  lighting fade policy, BPM destination, and optional preroll. Cut uses zero duration; all other modes use
+  nonzero bounded timing resolved once at transition admission.
+- During the transition, outgoing and incoming Timelines run concurrently under one authoritative
+  transition generation. Audio crossfades without double monitoring, video uses the canonical output
+  transition path, and lighting merges/fades by the authored policy without destroying either Timeline's
+  Scene state.
+- Click BPM slews monotonically from outgoing to incoming BPM across the exact transition duration. Beat
+  phase remains continuous; it does not reset at admission or completion.
+- When Guide is enabled, `Trans` is spoken on a configurable musical cadence during the transition,
+  defaulting to every four bars, plus at most one final destination Phase announcement. `Trans` cues use
+  the same monitor-only guide bus and generation cancellation rules as Phase/Loop cues.
+- Missing media, unavailable audio device, late decoder, clock discontinuity, or next-Timeline validation
+  failure follows an explicit Hold/Cut/Fault policy selected before publication. It must never leave both
+  Timelines emitting indefinitely or advance history twice.
+
+### L-TL6. UI and interaction contract
+
+- Phase blocks and names are visible on a dedicated Phase ruler above the channel lanes; they do not
+  consume a Lighting/Video/Audio lane.
+- Click, Guide, loop A/B, `1/2`, `x2`, Break, Follow, and transition status remain reachable at all required
+  viewports using reflow/disclosure/internal scrolling. Existing typography, 44 px targets, and Timeline
+  editing density are not globally reduced.
+- Video/Audio asset placement has exact lane drop targets plus keyboard/click fallback. Context menus expose
+  Group/Ungroup only when the selection is eligible, and announce the result accessibly.
+- Runtime badges distinguish `Loop armed`, `Looping`, `Follow pending`, `Transitioning`, `Held`, and `Fault`;
+  UI must not infer them from authored fields or playhead position.
+
+### L-TL7. Required proof before completion
+
+- protocol migration/roundtrip and malformed Phase/loop/group/follow rejection;
+- engine unit tests for boundary de-duplication, outside-range arming, wrap, `1/2`, `x2`, Break, seek,
+  BPM/discontinuity, Phase/Guide generation fences, and one-history rollback;
+- atomic A/V split placement and group move/trim/delete/Undo/Redo/save/reload tests;
+- follow bank ordering, captured-ID race, Cut and timed crossfade, BPM slew, `Trans` cadence, fault/abort,
+  and exactly-once next-Timeline start tests;
+- audio sample and video-frame continuity measurements plus lighting output assertions at transition
+  boundaries; no event/sample double fire;
+- browser and native UI tests for drag/click placement, multi-select context Group/Ungroup, shortcuts,
+  Phase ruler, loop controls/status, Guide speech routing, and required viewport containment;
+- release native build and maximized-window QA using representative Lighting+Video+Audio Timelines,
+  including an A/V file that auto-splits and follows into the next Timeline.
+
+This tranche is complete only when authored state, runtime truth, authoritative history/terminal recovery,
+renderer/audio execution, shared mappings, UI, accessibility/localization, and native evidence are all green.
 
 ## 17. Critical path M: media-derived data, cache, and performance envelope
 

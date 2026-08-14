@@ -150,7 +150,8 @@ assert.match(componentSource, /\[releaseOnly, setReleaseOnly\] = createSignal\(f
 assert.match(componentSource, /filter_support[\s\S]*?filters fail closed/, "optional Share metadata support must be disclosed");
 assert.match(componentSource, /list_gdtf_fixture_cache/, "offline cache must be visible");
 assert.match(componentSource, /get_fixture_profile_health/, "project profile health must be visible");
-assert.match(componentSource, /create_custom_fixture_profile/, "verified fixture packs must be loadable through the custom-profile boundary");
+assert.match(componentSource, /preview_custom_fixture_profile/, "verified fixture packs must stay session-only until an atomic Patch commit");
+assert.doesNotMatch(componentSource, /create_custom_fixture_profile/, "catalog selection must not dirty the project before Patch succeeds");
 assert.match(componentSource, /onRepair/, "missing profile repair must use the App mutation boundary");
 assert.match(componentSource, /if \(cachedEntry\)[\s\S]*?loadCachedProfile\(cachedEntry,\s*true\)/, "cached online results must load without another authenticated download");
 assert.match(tauriSource, /GdtfFixtureCacheMetadata[\s\S]*?manufacturer:[\s\S]*?revision:/, "cache sidecar must contain only fixture identity metadata");
@@ -162,4 +163,4 @@ assert.doesNotMatch(
 assert.match(tauriSource, /fixture_profile_repair_layout_matches/, "repair must compare the exact DMX layout");
 assert.match(tauriSource, /\?rid=\{rid\}[\s\S]*?downloadFile\.php/, "Share downloads must use the public revision-ID GET contract");
 
-console.log("fixture catalog helpers: 62 assertions passed");
+console.log("fixture catalog helpers: 63 assertions passed");

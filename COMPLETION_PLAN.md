@@ -11,7 +11,7 @@
 
 以下がすべて満たされたとき、Syndocal v1.0 とする。
 
-**完了判定: 100% (2026-07-12)。** ソフトウェア、配布物、3 OS CI、文書の全ゲートを通過した。実機DMX波形と署名/公証は、リポジトリ外の機材・資格情報を要する外部受入項目として `qa/M4_IO_VALIDATION.md` と `qa/M6_RELEASE_VALIDATION.md` に分離している。
+**2026-07-12 時点の旧 v1.0 判定は完了。現在の拡張完成判定は未完了。** 追加された Media/VJ/Effects/Transition/Timeline 要件を含む現行の唯一の完遂基準は `qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md` とする。実機DMX波形と署名/公証は、リポジトリ外の機材・資格情報を要する外部受入項目として `qa/M4_IO_VALIDATION.md` と `qa/M6_RELEASE_VALIDATION.md` に分離している。
 
 ### 機能要件
 - [x] 照明: GDTF/カスタムプロファイルのパッチ → 2D マッピング → キュー/タイムライン/エフェクト → Art-Net / sACN / シリアル DMX 出力。ループバック、1時間ソーク、予算ゲートは合格。物理リグ受入は外部項目として記録。
@@ -19,6 +19,7 @@
 - [x] 動画デコード: FFmpeg CLI 抽出ではなく、**インプロセスのデコードワーカー**(libav + HAP)でフレーム供給する。
 - [x] 共有エフェクト: 1 つの LFO/PositionWave ソースが照明と映像の両方を駆動する。
 - [x] タイムライン: キューイベント + 照明/映像オートメーションが 1 本のタイムラインで同期する。
+- [ ] 高度なタイムライン: Phase/Guide voice、musical A-B loop (`1/2`/`x2`/Break + mapping shortcuts)、Media LibraryからのVideo/Audio配置と音声付き映像のatomic split、linked Group/Ungroup、Timeline bank FollowとA/V/Lighting crossfade・BPM slew・`Trans` Guideを完遂する。正確なモデル/UX/受入条件は master roadmap §16A。
 - [x] 外部 I/O: MIDI 入出力、OSC、Web リモート、feature境界付きNDI実配線。Spout/Syphonは診断付きUnavailableとしてv1.1へ明示的に延期。
 - [x] プロジェクト: `.sdc` の保存/読込/検証/自動リカバリが完結し、外部ファイル欠損時も自己完結スナップショットで復元できる。
 

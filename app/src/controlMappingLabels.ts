@@ -44,6 +44,9 @@ export const controlMappingTargetLabel = (mapping: DmxControlMapping | MidiContr
     case "TimelineSeek": return "Timeline seek";
     case "TimelineBeatPrevious": return "Timeline previous beat";
     case "TimelineBeatNext": return "Timeline next beat";
+    case "TimelineLoopToggle": return "Timeline loop toggle";
+    case "TimelineLoopHalf": return "Timeline loop 1/2";
+    case "TimelineLoopDouble": return "Timeline loop ×2";
     case "SetBpm": return `Set BPM ${mapping.low}-${mapping.high}`;
     case "TapBpm": return "Tap BPM";
     case "LightingMaster": return "Lighting master";

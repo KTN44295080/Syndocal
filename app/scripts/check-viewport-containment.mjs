@@ -1273,6 +1273,16 @@ function installOperatorVjMockInPage() {
     const [first, ...stack] = stages;
     return { ...first, stack };
   };
+  const recordAuthoritativeHistory = () => {
+    mock.historyStatus = {
+      can_undo: true,
+      can_redo: false,
+      undo_depth: mock.historyStatus.undo_depth + 1,
+      redo_depth: 0,
+      undo_label: "Set Video Layer Isf Effect",
+      redo_label: null,
+    };
+  };
   const monitorPacket = (kind) => {
     const packet = Array.from({ length: 40 }, () => 0);
     packet[0] = 0x53;
@@ -1306,7 +1316,8 @@ function installOperatorVjMockInPage() {
     }
     if (command === "set_video_layer_isf_effect") {
       mock.effectsByLayerId[args.layerId] = clone(args.effect);
-      return null;
+      recordAuthoritativeHistory();
+      return {};
     }
     if (command === "set_video_layer_isf_effect_enabled") {
       const effect = currentEffect(args.layerId);
@@ -1315,7 +1326,8 @@ function installOperatorVjMockInPage() {
       else if (effect.stack?.[args.stageIndex - 1]) effect.stack[args.stageIndex - 1].enabled = args.enabled;
       else throw new Error("Operator VJ fixture stage is unavailable");
       mock.effectsByLayerId[args.layerId] = effect;
-      return null;
+      recordAuthoritativeHistory();
+      return {};
     }
     if (command === "move_video_layer_isf_effect") {
       const stages = effectStages(currentEffect(args.layerId));
@@ -1323,14 +1335,16 @@ function installOperatorVjMockInPage() {
       if (!stages[args.stageIndex] || !stages[targetIndex]) throw new Error("Operator VJ fixture move is unavailable");
       [stages[args.stageIndex], stages[targetIndex]] = [stages[targetIndex], stages[args.stageIndex]];
       mock.effectsByLayerId[args.layerId] = effectFromStages(stages);
-      return null;
+      recordAuthoritativeHistory();
+      return {};
     }
     if (command === "remove_video_layer_isf_effect") {
       const stages = effectStages(currentEffect(args.layerId));
       if (!stages[args.stageIndex]) throw new Error("Operator VJ fixture removal is unavailable");
       stages.splice(args.stageIndex, 1);
       mock.effectsByLayerId[args.layerId] = effectFromStages(stages);
-      return null;
+      recordAuthoritativeHistory();
+      return {};
     }
     if (command === "pulse_video_layer_isf_event") {
       const effect = currentEffect(args.layerId);
@@ -2506,7 +2520,10 @@ async function measureTimelinePaneExpansionState(client) {
     const controlContextFaders = [...document.querySelectorAll('.controlContextPane > .faders')].find(isVisible);
     const timelineOperatorBar = [...document.querySelectorAll('[data-timeline-operator-bar]')].find(isVisible);
     const timelineOperatorControls = controlContextHeader
-      ? [...controlContextHeader.querySelectorAll('button, summary')].filter(isVisible)
+      ? [...controlContextHeader.querySelectorAll('button, summary')].filter((control) => (
+          isVisible(control) &&
+          !control.closest('.timelineToolsDisclosurePanel, .groupLiveMixerDisclosurePanel')
+        ))
       : [];
     const timelineOperatorControlCenters = timelineOperatorControls.map((control) => {
       const rect = control.getBoundingClientRect();
@@ -2604,6 +2621,16 @@ async function measureTimelinePaneExpansionState(client) {
       timelineOperatorControlCount: timelineOperatorControls.length,
       timelineOperatorCenterSpread: Math.round(timelineOperatorCenterSpread * 100) / 100,
       timelineOperatorControlMinimumHeight: Math.round(timelineOperatorControlMinimumHeight * 100) / 100,
+      timelineOperatorControlMetrics: timelineOperatorControls.map((control) => {
+        const rect = control.getBoundingClientRect();
+        return {
+          label: control.getAttribute('aria-label') || control.getAttribute('title') || (control.textContent || '').trim(),
+          x: Math.round(rect.x * 100) / 100,
+          y: Math.round(rect.y * 100) / 100,
+          width: Math.round(rect.width * 100) / 100,
+          height: Math.round(rect.height * 100) / 100,
+        };
+      }),
       timelineOperatorContainedInHeader: Boolean(
         timelineOperatorBar &&
         controlContextHeader &&
@@ -3069,6 +3096,7 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     checks,
     failedChecks,
     before,
+    toolsOpened,
     beforeResized,
     expanded,
     expandedResized,
@@ -12466,7 +12494,7 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
   const commitIndex = calls.findIndex((call, index) =>
     index > mutationIndex && call.command === "commit_project_transaction"
   );
-  const snapshotIndex = calls.findIndex((call, index) => index > commitIndex && call.command === "get_snapshot");
+  const snapshotIndex = calls.findIndex((call, index) => index > Math.max(mutationIndex, commitIndex) && call.command === "get_snapshot");
   const expectedHeading = locale === "ja" ? "レイヤー" : "Layers";
   const expectedAdvanced = locale === "ja" ? "詳細" : "Advanced";
   const expectedBypassed = locale === "ja" ? "バイパス" : "Bypassed";
@@ -12574,12 +12602,12 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
     advancedUnmountsOnClose:
       collapsed.advancedDomCount === 0 && collapsed.layerOne?.advancedExpanded === "false",
     bypassTransactionSnapshotAndAria:
-      beginIndex >= 0 && mutationIndex > beginIndex && commitIndex > mutationIndex && snapshotIndex > commitIndex &&
-      calls.filter((call) => call.command === "begin_project_transaction").length === 6 &&
+      mutationIndex >= 0 && snapshotIndex > mutationIndex &&
+      calls.filter((call) => call.command === "begin_project_transaction").length === 0 &&
       calls.filter((call) => call.command === "set_video_layer_isf_effect_enabled").length === 3 &&
       calls.filter((call) => call.command === "move_video_layer_isf_effect").length === 2 &&
       calls.filter((call) => call.command === "remove_video_layer_isf_effect").length === 1 &&
-      calls.filter((call) => call.command === "commit_project_transaction").length === 6 &&
+      calls.filter((call) => call.command === "commit_project_transaction").length === 0 &&
       calls.filter((call) => call.command === "cancel_project_transaction").length === 0 &&
       calls.filter((call) => call.command === "get_snapshot").length === 6 &&
       calls[mutationIndex]?.args?.layerId === 1 && calls[mutationIndex]?.args?.stageIndex === 0 &&
@@ -18479,6 +18507,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
+  await setTimelineToolsDisclosureOpen(client, true);
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const before = await measureSceneMatrixPane(client);
@@ -19027,6 +19056,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
+  await setTimelineToolsDisclosureOpen(client, true);
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const initialPane = await measureSceneMatrixPane(client);
@@ -19035,6 +19065,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
+  await setTimelineToolsDisclosureOpen(client, true);
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const crossBank = await exerciseSceneMatrixCrossBankMoveAndUndo(client);
@@ -19687,6 +19718,7 @@ async function runSceneSettingsViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
+  await setTimelineToolsDisclosureOpen(client, true);
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
 
@@ -20041,6 +20073,7 @@ async function runSceneSettingsViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
+  await setTimelineToolsDisclosureOpen(client, true);
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(80);
   const oneClickStripGesture = await clickSceneSettingsStrip(
@@ -21553,8 +21586,8 @@ async function runTimelineSlimViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, 'control');
   await selectControlSurface(client, 'live');
-  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await setTimelineToolsDisclosureOpen(client, true);
+  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await sleep(120);
   const visual = await measureTimelineSlimVisual(client);
   const deskSurfaceAria = await exerciseTimelineDeskSurfaceAria(client);
@@ -21569,8 +21602,8 @@ async function runTimelineSlimViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, 'control');
   await selectControlSurface(client, 'live');
-  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await setTimelineToolsDisclosureOpen(client, true);
+  await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await sleep(120);
   const implicitVisual = await measureTimelineSlimVisual(client);
   const expectedDeskSurfaceIds = ['automation', 'playback', 'show'];
@@ -21962,6 +21995,7 @@ async function openTimelineShowFixture(client, viewport, fixture) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
+  await setTimelineToolsDisclosureOpen(client, true);
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(180);
 }
@@ -22075,6 +22109,7 @@ async function runSceneBlockHourViewport(client, viewport) {
     const bodyRect = body?.getBoundingClientRect();
     const svgRect = marker?.ownerSVGElement?.getBoundingClientRect();
     if (!marker || !bodyRect || !svgRect) return null;
+    const hit = document.elementFromPoint(bodyRect.left + bodyRect.width / 2, bodyRect.top + 5);
     return {
       x: bodyRect.left + bodyRect.width / 2,
       // T15 keeps T4's upper move band inside the thicker two-line block.
@@ -22085,6 +22120,9 @@ async function runSceneBlockHourViewport(client, viewport) {
       previewStartMs: Number(marker.getAttribute("data-timeline-preview-start-ms")),
       visibleStartMs: Number(range?.getAttribute("data-visible-start-ms")),
       visibleEndMs: Number(range?.getAttribute("data-visible-end-ms")),
+      hitTag: hit?.tagName ?? null,
+      hitClass: hit?.getAttribute("class") ?? null,
+      hitLabel: hit?.getAttribute("aria-label") ?? null,
     };
   });
   let dragStats = null;
@@ -22194,7 +22232,7 @@ async function runSceneBlockHourViewport(client, viewport) {
         editExtentMs: Number(range?.getAttribute("data-edit-extent-ms")),
       };
     };
-    const playheadTitle = document.querySelector(".timelineTimeStat")?.getAttribute("title") ?? "";
+    const playheadTitle = document.querySelector(".timelineOperatorTime, .timelineTimeStat")?.getAttribute("title") ?? "";
     const playheadMatch = playheadTitle.match(/^\s*(-?\d+(?:\.\d+)?)/);
     const playheadMs = playheadMatch ? Number(playheadMatch[1]) : Number.NaN;
     const beforePanNext = read();
@@ -23014,6 +23052,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
+  await setTimelineToolsDisclosureOpen(client, true);
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(180);
   await openSceneBlockBrowser(client);
@@ -25054,6 +25093,7 @@ async function runFxVisualViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
+  await setTimelineToolsDisclosureOpen(client, true);
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   const stripGesture = await clickSceneSettingsStrip(
     client,
@@ -29085,6 +29125,9 @@ async function main() {
               `/${result.before.timelineOperatorControlCount ?? 0}` +
               `/spread${result.before.timelineOperatorCenterSpread ?? 0} ` +
             `mixerDisclosure=${result.before.visibleLiveMixerCount ?? 0} ` +
+            `tools=${JSON.stringify(result.toolsOpened?.toolsDisclosurePanelRect ?? null)}` +
+              `/contained${result.toolsOpened?.toolsDisclosurePanelHorizontallyContained ?? false}` +
+              `/interactive${result.toolsOpened?.toolsDisclosureInteractiveCount ?? 0} ` +
             `matrix=${result.before.t25Density?.sceneMatrixRect?.height ?? 0} ` +
             `liveToolbar=${result.before.t25Density?.liveDeskToolbarRect?.height ?? 0} ` +
             `band=${result.before.persistentBandRect?.height ?? 0} ` +

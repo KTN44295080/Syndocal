@@ -1,4 +1,5 @@
 import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
+import type { MachineOutputRole, OutputOwnershipStatus } from "../types";
 
 type StandbySyncRole = "primary" | "standby";
 
@@ -39,6 +40,21 @@ const emptyStatus: StandbySyncStatus = {
 const standbyDirectoryStorageKey = "syndocal.standbySyncDirectory";
 const standbyRoleStorageKey = "syndocal.standbySyncRole";
 
+const emptyOwnershipStatus: OutputOwnershipStatus = {
+  role: "Standby",
+  effective_role: "Standby",
+  desired_role: "Standby",
+  persisted_role: null,
+  state: "Failed",
+  generation: 0,
+  epoch: 0,
+  lighting_allowed: false,
+  video_allowed: false,
+  lighting_reason: "StartupDenied",
+  video_reason: "StartupDenied",
+  error: "Machine output ownership has not been initialized",
+};
+
 function storedValue(key: string): string {
   try {
     return window.localStorage.getItem(key) ?? "";
@@ -59,6 +75,36 @@ function formatHeartbeat(ageMs: number | null): string {
   return `${(ageMs / 1000).toFixed(1)} s`;
 }
 
+function ownershipReasonLabel(reason: OutputOwnershipStatus["lighting_reason"]): string {
+  switch (reason) {
+    case "OwnedByMachineRole":
+      return "Owned by this machine role";
+    case "BlockedByMachineRole":
+      return "Blocked by this machine role";
+    case "Transitioning":
+      return "Transition in progress";
+    case "ProjectSwapDisarmed":
+      return "Project changed — outputs disarmed";
+    case "StartupDenied":
+      return "Startup denied output ownership";
+    case "TransitionFailed":
+      return "Transition failed; outputs remain fenced";
+  }
+}
+
+function ownershipStateLabel(state: OutputOwnershipStatus["state"]): string {
+  switch (state) {
+    case "Ready":
+      return "Ready";
+    case "Transitioning":
+      return "Transitioning — outputs fenced";
+    case "Activating":
+      return "Activating — outputs fenced";
+    case "Failed":
+      return "Failed — outputs fenced";
+  }
+}
+
 interface StandbySyncPanelProps {
   backendAvailable: boolean;
   invokeCommand: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -69,6 +115,8 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const [directory, setDirectory] = createSignal(storedValue(standbyDirectoryStorageKey));
   const [role, setRole] = createSignal<StandbySyncRole>(initialRole === "standby" ? "standby" : "primary");
   const [status, setStatus] = createSignal<StandbySyncStatus>(emptyStatus);
+  const [machineRole, setMachineRole] = createSignal<MachineOutputRole>("Standby");
+  const [ownershipStatus, setOwnershipStatus] = createSignal<OutputOwnershipStatus>(emptyOwnershipStatus);
   const [busy, setBusy] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
   const [forceConfirmed, setForceConfirmed] = createSignal(false);
@@ -90,7 +138,13 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
 
   const pollStatus = async () => {
     try {
-      setStatus(await props.invokeCommand<StandbySyncStatus>("standby_sync_status"));
+      const [syncStatus, outputStatus] = await Promise.all([
+        props.invokeCommand<StandbySyncStatus>("standby_sync_status"),
+        props.invokeCommand<OutputOwnershipStatus>("get_output_ownership_status"),
+      ]);
+      setStatus(syncStatus);
+      setOwnershipStatus(outputStatus);
+      setMachineRole(outputStatus.desired_role);
     } catch (error) {
       setActionError(String(error));
     }
@@ -129,6 +183,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         directory: directory(),
         role: role(),
       }));
+      await pollStatus();
     } catch (error) {
       setActionError(String(error));
     } finally {
@@ -141,8 +196,44 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
     setActionError(null);
     try {
       setStatus(await props.invokeCommand<StandbySyncStatus>("stop_standby_sync"));
+      await pollStatus();
     } catch (error) {
       setActionError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changeMachineRole = async (nextRole: MachineOutputRole) => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      const outputStatus = await props.invokeCommand<OutputOwnershipStatus>(
+        "set_output_ownership_role",
+        { role: nextRole },
+      );
+      setOwnershipStatus(outputStatus);
+      setMachineRole(outputStatus.effective_role);
+    } catch (error) {
+      setActionError(String(error));
+      await pollStatus();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const armMachineRole = async () => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      const outputStatus = await props.invokeCommand<OutputOwnershipStatus>(
+        "arm_output_ownership_role",
+      );
+      setOwnershipStatus(outputStatus);
+      setMachineRole(outputStatus.desired_role);
+    } catch (error) {
+      setActionError(String(error));
+      await pollStatus();
     } finally {
       setBusy(false);
     }
@@ -175,8 +266,71 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
       </header>
 
       <p class="textPretty standbyIntro">
-        Replicate complete show checkpoints through a dedicated shared folder. Standby always follows with DMX and video outputs disarmed.
+        Replicate complete show checkpoints through a dedicated shared folder. Output ownership stays local to this machine; Standby is fenced before it follows.
       </p>
+
+      <div class="split">
+        <label>
+          Machine output role
+          <select
+            data-io-control="machine-output-role"
+            aria-label="Machine output role"
+            value={machineRole()}
+            disabled={!props.backendAvailable || busy() || ownershipStatus().state === "Transitioning" || ownershipStatus().state === "Activating" || (status().running && status().role === "standby")}
+            onChange={(event) => void changeMachineRole(event.currentTarget.value as MachineOutputRole)}
+          >
+            <option value="Lighting">Lighting</option>
+            <option value="Video">Video</option>
+            <option value="Both">Both</option>
+            <option value="Standby">Standby</option>
+          </select>
+        </label>
+        <div class="standbyModeSummary" aria-live="polite">
+          <small>Output ownership</small>
+          <strong>{machineRole()}</strong>
+        </div>
+      </div>
+
+      <div class="buttonRow">
+        <button
+          data-io-control="arm-machine-output-role"
+          aria-label="Arm selected machine output role"
+          onClick={() => void armMachineRole()}
+          disabled={!props.backendAvailable || busy() || ownershipStatus().state === "Transitioning" || ownershipStatus().state === "Activating" || (status().running && status().role === "standby")}
+        >
+          Arm selected role
+        </button>
+      </div>
+
+      <dl class="standbyStatusGrid tabularNums" aria-label="Output ownership">
+        <div>
+          <dt>Effective role</dt>
+          <dd>{ownershipStatus().effective_role} — {ownershipStateLabel(ownershipStatus().state)}</dd>
+        </div>
+        <div>
+          <dt>Desired role</dt>
+          <dd>{ownershipStatus().desired_role}</dd>
+        </div>
+        <div>
+          <dt>Persisted role</dt>
+          <dd>{ownershipStatus().persisted_role ?? "Not persisted"}</dd>
+        </div>
+        <div>
+          <dt>Lighting output</dt>
+          <dd>{ownershipStatus().lighting_allowed ? "Allowed" : "Blocked"} — {ownershipReasonLabel(ownershipStatus().lighting_reason)}</dd>
+        </div>
+        <div>
+          <dt>Video output</dt>
+          <dd>{ownershipStatus().video_allowed ? "Allowed" : "Blocked"} — {ownershipReasonLabel(ownershipStatus().video_reason)}</dd>
+        </div>
+        <div>
+          <dt>Generation / epoch</dt>
+          <dd>{ownershipStatus().generation} / {ownershipStatus().epoch}</dd>
+        </div>
+      </dl>
+      <Show when={ownershipStatus().error}>
+        <p class="fieldError textPretty" role="alert" aria-live="polite">{ownershipStatus().error}</p>
+      </Show>
 
       <label>
         Shared Folder
@@ -220,7 +374,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         <button
           class="danger"
           onClick={requestTakeOver}
-          disabled={!props.backendAvailable || status().role !== "standby" || status().generation === null || busy()}
+          disabled={!props.backendAvailable || !status().running || status().role !== "standby" || ownershipStatus().effective_role !== "Standby" || ownershipStatus().state !== "Ready" || status().generation === null || busy()}
         >
           Take Over
         </button>
@@ -249,9 +403,9 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
 
       <dialog ref={takeoverDialog} class="standbyTakeoverDialog" aria-labelledby="standby-takeover-title">
         <form method="dialog">
-          <h2 id="standby-takeover-title" class="textBalance">Arm standby outputs?</h2>
+          <h2 id="standby-takeover-title" class="textBalance">Keep outputs fenced during Take Over?</h2>
           <p class="textPretty">
-            Take Over loads the latest replicated project with its original DMX and video output state. Confirm the old Primary cannot still transmit.
+            Take Over loads the latest replicated project while this machine remains Standby. Stop synchronization and choose an explicit machine role later before arming outputs.
           </p>
           <Show when={forceRequired()}>
             <label class="remoteLanToggle standbyFenceConfirmation">

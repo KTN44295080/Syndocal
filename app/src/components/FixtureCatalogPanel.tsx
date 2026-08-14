@@ -34,7 +34,7 @@ interface FixtureCatalogPanelProps {
   onShareUser: (value: string) => void;
   onSharePassword: (value: string) => void;
   onProfileLoaded: (profile: FixtureProfileSummary, message: string, openPatch: boolean) => void;
-  onRepair: (fixtureId: number, profilePath: string, modeName: string | null) => Promise<void>;
+  onRepair: (fixtureId: number, profile: FixtureProfileSummary, modeName: string | null) => Promise<void>;
   onMessage: (message: string) => void;
 }
 
@@ -199,7 +199,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     try {
       const request = verifiedFixtureProfileRequest(entry.id);
       if (!request) throw new Error(`Verified fixture profile '${entry.id}' was not found`);
-      const profile = await tauriInvoke<FixtureProfileSummary>("create_custom_fixture_profile", { request });
+      const profile = await tauriInvoke<FixtureProfileSummary>("preview_custom_fixture_profile", { request });
       props.onProfileLoaded(profile, `Loaded verified ${entry.name}`, true);
     } catch (error) {
       props.onMessage(String(error));
@@ -214,7 +214,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     if (!health?.repairable || !profile) return;
     setBusy("repair");
     try {
-      await props.onRepair(health.fixture_id, profile.source_path, props.selectedMode || null);
+      await props.onRepair(health.fixture_id, profile, props.selectedMode || null);
       await refreshLocalCatalog();
     } catch (error) {
       props.onMessage(String(error));

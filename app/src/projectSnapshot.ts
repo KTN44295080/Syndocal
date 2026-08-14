@@ -85,10 +85,13 @@ export const projectComparableSnapshot = (snapshot: EngineSnapshot) => {
     })),
   };
   comparable.clock = {
-    ...comparable.clock,
+    bpm: comparable.clock.bpm,
     beat_phase: 0,
     beat_counter: 0,
     tap_count: 0,
+    source: "Manual",
+    external_sync_age_ms: null,
+    external_sync_locked: false,
   };
   comparable.dmx_preview = [];
   comparable.dmx_previews = [];

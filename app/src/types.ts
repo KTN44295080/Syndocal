@@ -134,6 +134,9 @@ export type MidiControlAction =
   | "TimelineSeek"
   | "TimelineBeatPrevious"
   | "TimelineBeatNext"
+  | "TimelineLoopToggle"
+  | "TimelineLoopHalf"
+  | "TimelineLoopDouble"
   | "LightingMaster"
   | "GroupSubmaster"
   | "SetBpm"
@@ -222,6 +225,9 @@ export type OscControlAction =
   | "TimelineSeek"
   | "TimelineBeatPrevious"
   | "TimelineBeatNext"
+  | "TimelineLoopToggle"
+  | "TimelineLoopHalf"
+  | "TimelineLoopDouble"
   | "LightingMaster"
   | "GroupSubmaster"
   | "SetBpm"
@@ -1712,6 +1718,41 @@ export interface VideoClipPendingLaunchSummary {
   target_boundary_ordinal: number;
   clock_generation: number;
   held_for_clock_discontinuity: boolean;
+  transition_kind: VideoClipTakeKind;
+  duration: VideoClipTakeDuration;
+  resolved_duration_ms: number;
+}
+
+export type VideoClipTakeKind =
+  | "Cut"
+  | "Crossfade"
+  | "Dip"
+  | "Wipe"
+  | "Luma"
+  | "Displacement"
+  | "Blur"
+  | "Glitch"
+  | "Custom";
+
+export type VideoClipTakeDurationUnit = "Milliseconds" | "Beats" | "Bars";
+
+export interface VideoClipTakeDuration {
+  unit: VideoClipTakeDurationUnit;
+  /** Fixed-point thousandths: 1000 is one beat/bar; milliseconds are exact. */
+  value_milliunits: number;
+}
+
+export interface VideoClipTakeTransitionSummary {
+  origin_slot_id: VideoClipSlotId;
+  outgoing_slot_id: VideoClipSlotId;
+  incoming_slot_id: VideoClipSlotId;
+  kind: VideoClipTakeKind;
+  elapsed_ms: number;
+  duration_ms: number;
+  duration: VideoClipTakeDuration;
+  progress_millis: number;
+  incoming_playhead_ms: number;
+  incoming_playing: boolean;
 }
 
 /** Ephemeral engine truth. It is intentionally separate from `.sdc` snapshots. */
@@ -1720,6 +1761,7 @@ export interface VideoClipLayerRuntimeSummary {
   active_slot_id?: VideoClipSlotId | null;
   queued_slot_id?: VideoClipSlotId | null;
   pending_launch?: VideoClipPendingLaunchSummary | null;
+  transition?: VideoClipTakeTransitionSummary | null;
   playhead_ms: number;
   playing: boolean;
   ping_pong_reverse: boolean;
@@ -1855,6 +1897,161 @@ export interface VideoLayerSummary {
   isf_effect?: VideoIsfEffectSummary | null;
   clip_slots?: VideoClipSlotSummary[];
   default_clip_slot_id?: VideoClipSlotId | null;
+}
+
+export type VideoEffectId = number;
+export type VideoEffectChainId = number;
+export type VideoEffectStageId = number;
+export type VideoEffectPresetId = number;
+export type VideoLayerGroupId = number;
+export type VideoTransitionBusId = number;
+
+export type VideoTransitionEffectOwner =
+  | { kind: "clip_take"; layer_id: number }
+  | { kind: "layer_bus"; bus_id: VideoTransitionBusId };
+
+export type VideoEffectScope =
+  | { scope: "clip"; layer_id: number; slot_id: VideoClipSlotId }
+  | { scope: "layer"; layer_id: number }
+  | { scope: "transition"; owner: VideoTransitionEffectOwner }
+  | { scope: "composition"; composition_id: number }
+  | { scope: "group"; group_id: VideoLayerGroupId }
+  | { scope: "output"; output_id: number };
+
+export type VideoEffectKind = { kind: "isf"; effect: VideoIsfEffectSummary };
+
+export interface VideoEffectSummary {
+  id: VideoEffectId;
+  kind: VideoEffectKind;
+}
+
+export interface VideoEffectStageSummary {
+  id: VideoEffectStageId;
+  enabled: boolean;
+  label: string;
+  effect: VideoEffectSummary;
+}
+
+export interface VideoEffectChainSummary {
+  id: VideoEffectChainId;
+  scope: VideoEffectScope;
+  bypassed: boolean;
+  stages: VideoEffectStageSummary[];
+}
+
+export interface VideoEffectPresetStagePayload {
+  enabled: boolean;
+  label: string;
+  effect: VideoEffectKind;
+}
+
+export interface VideoEffectPresetPayload {
+  bypassed: boolean;
+  stages: VideoEffectPresetStagePayload[];
+}
+
+export interface VideoEffectPresetSummary {
+  id: VideoEffectPresetId;
+  label: string;
+  payload: VideoEffectPresetPayload;
+}
+
+export interface VideoLayerGroupSummary {
+  id: VideoLayerGroupId;
+  label: string;
+  composition_id: number;
+  layer_ids: number[];
+}
+
+export type VideoLayerTransitionTarget =
+  | { kind: "layer"; layer_id: number }
+  | { kind: "group"; group_id: VideoLayerGroupId };
+
+export type VideoLayerTransitionCurve = "linear" | "ease_in" | "ease_out" | "ease_in_out";
+
+export interface VideoLayerTransitionBusSummary {
+  id: VideoTransitionBusId;
+  label: string;
+  composition_id: number;
+  enabled: boolean;
+  members: VideoLayerTransitionTarget[];
+  default_from: VideoLayerTransitionTarget;
+  default_to: VideoLayerTransitionTarget;
+  default_kind: VideoClipTakeKind;
+  default_duration: VideoClipTakeDuration;
+  default_curve: VideoLayerTransitionCurve;
+  matte_source?: VideoLayerTransitionTarget | null;
+}
+
+export interface VideoLayerTransitionBusRuntimeSummary {
+  bus_id: VideoTransitionBusId;
+  origin_from: VideoLayerTransitionTarget;
+  from: VideoLayerTransitionTarget;
+  to: VideoLayerTransitionTarget;
+  kind: VideoClipTakeKind;
+  curve: VideoLayerTransitionCurve;
+  elapsed_ms: number;
+  duration_ms: number;
+  duration: VideoClipTakeDuration;
+  progress_millis: number;
+}
+
+export interface VideoLayerTransitionRuntimeSnapshot {
+  buses: VideoLayerTransitionBusRuntimeSummary[];
+}
+
+export type VideoLayerTransitionAuthoritativeRuntimeCommandKind = "launch" | "release";
+
+export interface VideoLayerTransitionAuthoritativeRuntimeResult {
+  command_kind: VideoLayerTransitionAuthoritativeRuntimeCommandKind;
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  runtime_generation: number;
+  runtime: VideoLayerTransitionRuntimeSnapshot;
+}
+
+export interface VideoLayerTransitionRuntimeReport {
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  runtime_generation: number;
+  runtime: VideoLayerTransitionRuntimeSnapshot;
+}
+
+export interface VideoLayerTransitionAuthoritativeRuntimeOutcome {
+  command_kind: VideoLayerTransitionAuthoritativeRuntimeCommandKind;
+}
+
+export interface VideoEffectCatalog {
+  effect_chains: VideoEffectChainSummary[];
+  effect_presets: VideoEffectPresetSummary[];
+  layer_groups: VideoLayerGroupSummary[];
+  transition_buses: VideoLayerTransitionBusSummary[];
+}
+
+export interface VideoEffectCatalogAuthoritativeResult {
+  catalog: VideoEffectCatalog;
+  mutation: ProjectHistoryMutationResult;
+}
+
+export interface TimelineAdvancedAuthoritativeResult {
+  authoring: TimelineAdvancedAuthoringSummary;
+  timeline_bank: TimelineSnapshot[];
+  active_timeline_id: number;
+  mutation: ProjectHistoryMutationResult;
+}
+
+export type VideoEffectCatalogTerminalResult =
+  | { kind: "applied"; result: VideoEffectCatalogAuthoritativeResult }
+  | { kind: "timeline"; result: TimelineAdvancedAuthoritativeResult }
+  | { kind: "runtime"; result: VideoLayerTransitionAuthoritativeRuntimeOutcome }
+  | { kind: "failure"; result: { message: string } };
+
+export interface VideoEffectCatalogTerminalEnvelope {
+  shape_fingerprint: string;
+  terminal: VideoEffectCatalogTerminalResult;
+  runtime?: VideoLayerTransitionAuthoritativeRuntimeResult | null;
 }
 
 export interface VideoLayerTarget {
@@ -2040,6 +2237,10 @@ export interface VideoSnapshot {
   master_opacity: number;
   blackout: boolean;
   auto_vj?: AutoVjSnapshot;
+  effect_chains?: VideoEffectChainSummary[];
+  effect_presets?: VideoEffectPresetSummary[];
+  layer_groups?: VideoLayerGroupSummary[];
+  transition_buses?: VideoLayerTransitionBusSummary[];
 }
 
 export interface AutoVjConfig {
@@ -2219,6 +2420,7 @@ export interface TimelineLayerSummary {
 export interface TimelineAudioClipSummary {
   id: number;
   layer_id: number;
+  media_asset_id?: number | null;
   path: string;
   start_ms: number;
   offset_ms: number;
@@ -2334,13 +2536,151 @@ export interface ChildTimelineSummary {
   duration_ms?: number;
 }
 
+export type TimelinePhaseRole =
+  | "intro"
+  | "verse"
+  | "pre_chorus"
+  | "chorus"
+  | "bridge"
+  | "breakdown"
+  | "outro"
+  | "custom";
+
+export interface TimelinePhaseSummary {
+  id: number;
+  label: string;
+  role: TimelinePhaseRole;
+  start_ms: number;
+  end_ms: number;
+}
+
+export interface TimelineVideoClipSummary {
+  id: number;
+  layer_id: number;
+  media_asset_id: number;
+  start_ms: number;
+  offset_ms: number;
+  duration_ms: number;
+  fade_in_ms: number;
+  fade_out_ms: number;
+}
+
+export type TimelineItemRef =
+  | { kind: "lighting_event"; event_id: number }
+  | { kind: "video_clip"; clip_id: number }
+  | { kind: "audio_clip"; clip_id: number }
+  | { kind: "lighting_automation"; automation_id: number }
+  | { kind: "video_automation"; automation_id: number };
+
+export interface TimelineItemGroupSummary {
+  id: number;
+  members: TimelineItemRef[];
+}
+
+export interface TimelineLoopRegionSummary {
+  a_ms: number;
+  b_ms: number;
+  enabled: boolean;
+  musical_length_beats?: number | null;
+}
+
+export type TimelineFollowLightingPolicy = "hold_then_cut" | "linear_merge";
+export type TimelineFollowFaultPolicy = "hold" | "cut" | "fault";
+
+export interface TimelineFollowSummary {
+  enabled: boolean;
+  next_timeline_id: number;
+  duration: VideoClipTakeDuration;
+  curve: VideoLayerTransitionCurve;
+  video_kind: VideoClipTakeKind;
+  lighting_policy: TimelineFollowLightingPolicy;
+  destination_bpm?: number | null;
+  preroll_ms: number;
+  trans_cadence_bars: number;
+  fault_policy: TimelineFollowFaultPolicy;
+}
+
+export type TimelineLoopRuntimeStatus = "disabled" | "armed" | "looping";
+export interface TimelineLoopRuntimeSummary {
+  generation: number;
+  status: TimelineLoopRuntimeStatus;
+  a_ms?: number | null;
+  b_ms?: number | null;
+  musical_length_millibeats?: number | null;
+  wrap_count: number;
+}
+
+export type TimelineFollowRuntimeStatus = "idle" | "pending" | "transitioning" | "held" | "fault";
+export interface TimelineFollowRuntimeSummary {
+  generation: number;
+  status: TimelineFollowRuntimeStatus;
+  source_timeline_id?: number | null;
+  target_timeline_id?: number | null;
+  elapsed_ms: number;
+  duration_ms: number;
+  progress_millis: number;
+  fault?: string | null;
+}
+
+export type TimelineGuideCueKind =
+  | { kind: "phase"; phase_id: number }
+  | { kind: "looping" }
+  | { kind: "break" }
+  | { kind: "trans" };
+
+export interface TimelineGuideCueSummary {
+  generation: number;
+  sequence: number;
+  at_ms: number;
+  label: string;
+  cue: TimelineGuideCueKind;
+}
+
+export interface TimelineAdvancedAuthoringSummary {
+  snap_request?: unknown | null;
+  video_clips: TimelineVideoClipSummary[];
+  audio_clips: TimelineAudioClipSummary[];
+  phases: TimelinePhaseSummary[];
+  item_groups: TimelineItemGroupSummary[];
+  loop_region?: TimelineLoopRegionSummary | null;
+  follow?: TimelineFollowSummary | null;
+  guide_enabled: boolean;
+}
+
+export type TimelineAdvancedMutationRequest =
+  | { kind: "apply"; authoring: TimelineAdvancedAuthoringSummary }
+  | { kind: "insert_media"; media_asset_id: number; start_ms: number; video_layer_id?: number | null; audio_layer_id?: number | null }
+  | { kind: "group"; members: TimelineItemRef[] }
+  | { kind: "ungroup"; group_id: number }
+  | { kind: "move_group"; group_id: number; delta_ms: number }
+  | { kind: "set_phases"; phases: TimelinePhaseSummary[] }
+  | { kind: "set_loop"; loop_region?: TimelineLoopRegionSummary | null }
+  | { kind: "set_follow"; follow?: TimelineFollowSummary | null }
+  | { kind: "set_guide"; enabled: boolean }
+  | { kind: "create_timeline"; label: string }
+  | { kind: "duplicate_timeline"; timeline_id: number }
+  | { kind: "remove_timeline"; timeline_id: number }
+  | { kind: "reorder_timelines"; timeline_ids: number[] }
+  | { kind: "select_timeline"; timeline_id: number; play?: boolean };
+
 export interface TimelineSnapshot {
+  id?: number;
+  label?: string;
   layers?: TimelineLayerSummary[];
   events: TimelineCueEventSummary[];
   automations: TimelineAutomationSummary[];
   video_automations: TimelineVideoAutomationSummary[];
   audio?: AudioAnalysisSummary | null;
   audio_clips?: TimelineAudioClipSummary[];
+  video_clips?: TimelineVideoClipSummary[];
+  phases?: TimelinePhaseSummary[];
+  item_groups?: TimelineItemGroupSummary[];
+  loop_region?: TimelineLoopRegionSummary | null;
+  follow?: TimelineFollowSummary | null;
+  guide_enabled?: boolean;
+  loop_runtime?: TimelineLoopRuntimeSummary;
+  follow_runtime?: TimelineFollowRuntimeSummary;
+  guide_cues?: TimelineGuideCueSummary[];
   audio_offset_ms?: number;
   audio_muted?: boolean;
   metronome_enabled?: boolean;
@@ -3098,6 +3438,7 @@ export interface EngineSnapshot {
   active_fade?: ActiveFadeSummary | null;
   programmer: ProgrammerSnapshot;
   timeline: TimelineSnapshot;
+  timeline_bank?: TimelineSnapshot[];
   video: VideoSnapshot;
   authored_video?: VideoSnapshot | null;
   effects: EffectSummary[];

@@ -1,11 +1,20 @@
 import { Show } from "solid-js";
 import type { TimelineContextDrawer, TimelineDeskSurface } from "../uiModes";
+import type {
+  TimelineFollowRuntimeSummary,
+  TimelineFollowSummary,
+  TimelineLoopRegionSummary,
+  TimelineLoopRuntimeSummary,
+  TimelinePhaseSummary,
+  TimelineSnapshot,
+} from "../types";
 import type { TimelineStretchMode } from "../timelineBlockGestures";
 import {
   TIMELINE_MIN_VISIBLE_WINDOW_MS,
   timelineVisibleWindowSpanMs,
   type TimelineVisibleWindow,
 } from "../timelineViewport";
+import { TimelinePerformanceEditor } from "./TimelinePerformanceEditor";
 
 interface TimelineOperatorBarProps {
   childTimelineLabel: string | null;
@@ -16,6 +25,13 @@ interface TimelineOperatorBarProps {
   metronomeEnabled: boolean;
   countInBeats: number;
   countInRemainingMs: number;
+  phases: TimelinePhaseSummary[];
+  guideEnabled: boolean;
+  loopRegion: TimelineLoopRegionSummary | null;
+  loopRuntime: TimelineLoopRuntimeSummary;
+  timelines: TimelineSnapshot[];
+  activeTimelineId: number;
+  followRuntime: TimelineFollowRuntimeSummary;
   visibleWindow: TimelineVisibleWindow;
   overviewShowDurationMs: number;
   overviewEditExtentMs: number;
@@ -33,6 +49,17 @@ interface TimelineOperatorBarProps {
   onPause: () => void | Promise<void>;
   onPlay: () => void | Promise<void>;
   onSetMetronome: (enabled: boolean, countInBeats: number) => void | Promise<void>;
+  onSetGuideEnabled: (enabled: boolean) => void | Promise<void>;
+  onSetPhases: (phases: TimelinePhaseSummary[]) => void | Promise<void>;
+  onSetLoopRegion: (region: TimelineLoopRegionSummary | null) => void | Promise<void>;
+  onSetLoopEnabled: (enabled: boolean) => void | Promise<void>;
+  onScaleLoop: (scale: "half" | "double") => void | Promise<void>;
+  onCreateTimeline: (label: string) => void | Promise<void>;
+  onDuplicateTimeline: (timelineId: number) => void | Promise<void>;
+  onRemoveTimeline: (timelineId: number) => void | Promise<void>;
+  onReorderTimelines: (timelineIds: number[]) => void | Promise<void>;
+  onSelectTimeline: (timelineId: number, play: boolean) => void | Promise<void>;
+  onSetFollow: (follow: TimelineFollowSummary | null) => void | Promise<void>;
   onPanOverview: (direction: -1 | 1) => void;
   onZoomOverview: (scale: number) => void;
   onFitOverview: () => void;
@@ -62,6 +89,15 @@ const formatOperatorTime = (timeMs: number) => {
 
 export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
   const selectedCueArmed = () => props.selectedCueId !== null && props.armedCueId === props.selectedCueId;
+  const loopEnabled = () => props.loopRuntime.status !== "disabled";
+  const setLoopBoundary = (edge: "a" | "b") => {
+    const current = props.loopRegion;
+    const position = Math.max(0, Math.round(props.positionMs));
+    const next = edge === "a"
+      ? { a_ms: position, b_ms: Math.max(position + 1, current?.b_ms ?? position + 4_000), enabled: current?.enabled ?? false, musical_length_beats: current?.musical_length_beats ?? null }
+      : { a_ms: Math.min(current?.a_ms ?? 0, Math.max(0, position - 1)), b_ms: Math.max(position, (current?.a_ms ?? 0) + 1), enabled: current?.enabled ?? false, musical_length_beats: current?.musical_length_beats ?? null };
+    void props.onSetLoopRegion(next);
+  };
   return (
     <div class="timelineOperatorBar" role="toolbar" aria-label="Timeline tools" data-timeline-operator-bar>
       <div class="timelineTransport" role="group" aria-label="Timeline transport">
@@ -100,6 +136,15 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
             {`${Math.ceil(props.countInRemainingMs / Math.max(1, 60_000 / props.bpm))}`}
           </output>
         </Show>
+        <button type="button" classList={{ active: props.guideEnabled }} aria-pressed={props.guideEnabled} data-timeline-guide title="Announce phases and loop transitions" onClick={() => void props.onSetGuideEnabled(!props.guideEnabled)}>Guide</button>
+      </div>
+      <div class="timelineLoopControls" role="group" aria-label="Timeline A-B loop controls">
+        <button type="button" data-timeline-loop-boundary title="Set loop A at playhead" onClick={() => setLoopBoundary("a")}>A</button>
+        <button type="button" data-timeline-loop-boundary title="Set loop B at playhead" onClick={() => setLoopBoundary("b")}>B</button>
+        <button type="button" classList={{ active: loopEnabled() }} aria-pressed={loopEnabled()} disabled={props.loopRegion === null} title={loopEnabled() ? "Disable loop (Break)" : "Enable or arm loop"} data-timeline-loop-toggle onClick={() => void props.onSetLoopEnabled(!loopEnabled())}>Loop</button>
+        <button type="button" title="Halve loop length" disabled={props.loopRegion === null} onClick={() => void props.onScaleLoop("half")}>1/2</button>
+        <button type="button" title="Double loop length" disabled={props.loopRegion === null} onClick={() => void props.onScaleLoop("double")}>×2</button>
+        <output class={`timelineLoopState ${props.loopRuntime.status}`} aria-live="polite" data-no-localize>{props.loopRuntime.status === "armed" ? "ARMED" : props.loopRuntime.status === "looping" ? `LOOP ×${props.loopRuntime.wrap_count}` : "OFF"}</output>
       </div>
       <details class="timelineToolsDisclosure">
         <summary title="Timeline tools" aria-label="Timeline tools">
@@ -231,6 +276,26 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
               {(label) => <output class="timelineArmedCue" data-timeline-armed-cue={props.armedCueId ?? undefined}>Armed: {label()}</output>}
             </Show>
           </div>
+          <TimelinePerformanceEditor
+            timelines={props.timelines}
+            activeTimelineId={props.activeTimelineId}
+            bpm={props.bpm}
+            positionMs={props.positionMs}
+            durationMs={props.durationMs}
+            phases={props.phases}
+            visibleWindow={props.visibleWindow}
+            followRuntime={props.followRuntime}
+            loopRegion={props.loopRegion}
+            onCreateTimeline={props.onCreateTimeline}
+            onDuplicateTimeline={props.onDuplicateTimeline}
+            onRemoveTimeline={props.onRemoveTimeline}
+            onReorderTimelines={props.onReorderTimelines}
+            onSelectTimeline={props.onSelectTimeline}
+            onSetFollow={props.onSetFollow}
+            onSetPhases={props.onSetPhases}
+            onSetLoopRegion={props.onSetLoopRegion}
+            onSeek={props.onSeek}
+          />
         </div>
       </details>
     </div>

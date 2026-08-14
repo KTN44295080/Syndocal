@@ -27,8 +27,17 @@ import type {
   VideoBlendMode,
   VideoAudioMonitorStatus,
   VideoFrame,
+  VideoEffectCatalog,
+  VideoEffectCatalogAuthoritativeResult,
+  VideoEffectCatalogTerminalEnvelope,
+  VideoEffectPresetId,
+  VideoEffectScope,
   VideoIsfEffectSummary,
   VideoLayerState,
+  VideoLayerTransitionAuthoritativeRuntimeCommandKind,
+  VideoLayerTransitionAuthoritativeRuntimeResult,
+  VideoLayerTransitionRuntimeReport,
+  VideoLayerTransitionRuntimeSnapshot,
   VideoOutputRenderPlan,
   VideoOutputWindowCloseSummary,
   VideoOutputWindowStatus,
@@ -44,6 +53,8 @@ import type {
   VideoClipSlotAuthoritativeTerminalEnvelope,
   VideoClipSlotId,
   VideoClipSlotSummary,
+  VideoClipTakeDuration,
+  VideoClipTakeKind,
   VideoSourceKind,
 } from "./types";
 
@@ -91,6 +102,7 @@ interface VideoRuntimeControllerOptions {
   setAudioOutputDevices: Setter<string[]>;
   setVideoRecordingStatus: Setter<VideoRecordingStatus>;
   setVideoClipRuntime: Setter<VideoClipRuntimeSnapshot>;
+  setVideoTransitionRuntime: Setter<VideoLayerTransitionRuntimeSnapshot>;
   setExternalVideoIoPlans: Setter<ExternalVideoIoPlans | null>;
   setExternalVideoTransportStatus: Setter<ExternalVideoTransportStatus | null>;
   setExternalVideoTransportReport: Setter<ExternalVideoTransportSyncReport | null>;
@@ -116,9 +128,13 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   // stable project-transaction owner.  The backend retains the definitive
   // terminal receipt and rejects a duplicate ID with a different shape.
   let videoClipSlotRequestId = Math.max(1, Date.now());
+  let videoEffectCatalogRequestId = Math.max(1, Date.now());
   let appliedRuntimeEpoch: number | null = null;
   let appliedRuntimeGeneration = -1;
+  let appliedTransitionRuntimeEpoch: number | null = null;
+  let appliedTransitionRuntimeGeneration = -1;
   const nextVideoClipSlotRequestId = () => ++videoClipSlotRequestId;
+  const nextVideoEffectCatalogRequestId = () => ++videoEffectCatalogRequestId;
   const setMessageIfAuthorityCurrent = (authority: ProjectAuthorityToken, message: string) => {
     if (options.isProjectAuthorityCurrent(authority)) options.setMessage(message);
   };
@@ -126,6 +142,164 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     if (!options.isIsfEventPulseBusy()) return true;
     options.setMessage("Wait for the active FX Event pulse to finish.");
     return false;
+  };
+  const commitVideoEffectCatalog = async (catalog: VideoEffectCatalog) => {
+    if (!canMutateVideoIsf()) return null;
+    const beforePreflight = options.getCurrentProjectAuthority();
+    const { authority } = await options.prepareMediaAssetOperationStart(beforePreflight);
+    const requestId = nextVideoEffectCatalogRequestId();
+    const args = {
+      request: catalog,
+      requestId,
+      expectedRevision: authority.project_revision,
+      expectedCheckpointHash: authority.checkpoint_hash,
+      __expectedProjectEpoch: authority.project_epoch,
+    };
+    let result: VideoEffectCatalogAuthoritativeResult;
+    let applicationCurrent = false;
+    try {
+      result = await options.invoke<VideoEffectCatalogAuthoritativeResult>(
+        "apply_video_effect_catalog_authoritative",
+        args,
+      );
+      applicationCurrent = options.authoritativeApplicationIsCurrent(result);
+    } catch (error) {
+      const terminal = await options.invoke<VideoEffectCatalogTerminalEnvelope | null>(
+        "get_video_effect_catalog_operation_terminal_result",
+        {
+          requestId,
+          expectedEpoch: authority.project_epoch,
+          expectedRevision: authority.project_revision,
+          expectedCheckpointHash: authority.checkpoint_hash,
+          ownerId: options.projectTransactionOwnerId,
+        },
+      ).catch(() => null);
+      if (!terminal) throw error;
+      if (typeof terminal.shape_fingerprint !== "string" || terminal.shape_fingerprint.length === 0) {
+        throw new Error("Video effect catalog receipt omitted its request-shape fingerprint.");
+      }
+      if (terminal.terminal.kind === "failure") throw new Error(terminal.terminal.result.message);
+      if (terminal.terminal.kind !== "applied") {
+        throw new Error("Video effect catalog receipt returned a runtime transition outcome.");
+      }
+      applicationCurrent = options.authoritativeApplicationIsCurrent(terminal);
+      result = terminal.terminal.result;
+    }
+    if (!applicationCurrent) return null;
+    await options.refreshSnapshot();
+    if (!options.isProjectAuthorityCurrent(result.mutation.authority)) return null;
+    await refreshVideoPreviewDiagnostics(true);
+    return result;
+  };
+  const applyVideoEffectCatalog = async (catalog: VideoEffectCatalog) => {
+    try {
+      return await commitVideoEffectCatalog(catalog);
+    } catch (error) {
+      options.setMessage(`Scoped video FX update failed: ${String(error)}`);
+      return null;
+    }
+  };
+  const currentVideoEffectCatalog = (): VideoEffectCatalog => {
+    const video = options.snapshot().authored_video ?? options.snapshot().video;
+    return {
+      effect_chains: structuredClone(video.effect_chains ?? []),
+      effect_presets: structuredClone(video.effect_presets ?? []),
+      layer_groups: structuredClone(video.layer_groups ?? []),
+      transition_buses: structuredClone(video.transition_buses ?? []),
+    };
+  };
+  const sameVideoEffectScope = (left: VideoEffectScope, right: VideoEffectScope) =>
+    JSON.stringify(left) === JSON.stringify(right);
+  const importVideoEffectScopeIsf = async (scope: VideoEffectScope) => {
+    if (!canMutateVideoIsf()) return null;
+    const authority = options.getCurrentProjectAuthority();
+    const effect = await options.invoke<VideoIsfEffectSummary | null>("select_video_isf_file");
+    if (!effect) return null;
+    if (!sameProjectAuthority(authority, options.getCurrentProjectAuthority())) {
+      options.setMessage("Project changed while the ISF file dialog was open; nothing was applied.");
+      return null;
+    }
+    const catalog = currentVideoEffectCatalog();
+    let chain = catalog.effect_chains.find((entry) => sameVideoEffectScope(entry.scope, scope));
+    if (!chain) {
+      chain = { id: 0, scope, bypassed: false, stages: [] };
+      catalog.effect_chains.push(chain);
+    }
+    chain.stages.push({
+      id: 0,
+      enabled: effect.enabled,
+      label: effect.label,
+      effect: { id: 0, kind: { kind: "isf", effect } },
+    });
+    return applyVideoEffectCatalog(catalog);
+  };
+  const applyVideoEffectPreset = async (scope: VideoEffectScope, presetId: VideoEffectPresetId) => {
+    const catalog = currentVideoEffectCatalog();
+    const preset = catalog.effect_presets.find((entry) => entry.id === presetId);
+    if (!preset) {
+      options.setMessage(`Video effect preset ${presetId} is no longer available.`);
+      return null;
+    }
+    const existing = catalog.effect_chains.find((entry) => sameVideoEffectScope(entry.scope, scope));
+    const next = {
+      id: existing?.id ?? 0,
+      scope,
+      bypassed: preset.payload.bypassed,
+      stages: preset.payload.stages.map((stage) => ({
+        id: 0,
+        enabled: stage.enabled,
+        label: stage.label,
+        effect: { id: 0, kind: structuredClone(stage.effect) },
+      })),
+    };
+    catalog.effect_chains = existing
+      ? catalog.effect_chains.map((entry) => entry === existing ? next : entry)
+      : [...catalog.effect_chains, next];
+    return applyVideoEffectCatalog(catalog);
+  };
+  const removeVideoEffectChain = async (scope: VideoEffectScope) => {
+    const catalog = currentVideoEffectCatalog();
+    catalog.effect_chains = catalog.effect_chains.filter((entry) => !sameVideoEffectScope(entry.scope, scope));
+    return applyVideoEffectCatalog(catalog);
+  };
+  const invokeLegacyVideoEffectAuthoritative = async <T,>(
+    command: string,
+    commandArgs: Record<string, unknown>,
+  ): Promise<{ value: T | null; recovered: boolean } | null> => {
+    const beforePreflight = options.getCurrentProjectAuthority();
+    const { authority } = await options.prepareMediaAssetOperationStart(beforePreflight);
+    const requestId = nextVideoEffectCatalogRequestId();
+    try {
+      const value = await options.invoke<T>(command, {
+        ...commandArgs,
+        requestId,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+        __expectedProjectEpoch: authority.project_epoch,
+      });
+      return options.authoritativeApplicationIsCurrent(value)
+        ? { value, recovered: false }
+        : null;
+    } catch (error) {
+      const terminal = await options.invoke<VideoEffectCatalogTerminalEnvelope | null>(
+        "get_video_effect_catalog_operation_terminal_result",
+        {
+          requestId,
+          expectedEpoch: authority.project_epoch,
+          expectedRevision: authority.project_revision,
+          expectedCheckpointHash: authority.checkpoint_hash,
+          ownerId: options.projectTransactionOwnerId,
+        },
+      ).catch(() => null);
+      if (!terminal) throw error;
+      if (typeof terminal.shape_fingerprint !== "string" || terminal.shape_fingerprint.length === 0) {
+        throw new Error("Video effect catalog receipt omitted its request-shape fingerprint.");
+      }
+      if (terminal.terminal.kind === "failure") throw new Error(terminal.terminal.result.message);
+      return options.authoritativeApplicationIsCurrent(terminal)
+        ? { value: null, recovered: true }
+        : null;
+    }
   };
   const recoverVideoClipSlotTerminal = async (
     preparedImportToken: number,
@@ -212,6 +386,122 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       return applyVideoClipSlotRuntime(result) ? result : null;
     } catch (error) {
       if (showError) setMessageIfAuthorityCurrent(authority, String(error));
+      return null;
+    }
+  };
+  const applyVideoTransitionRuntime = (
+    result: VideoLayerTransitionRuntimeReport | VideoLayerTransitionAuthoritativeRuntimeResult,
+  ) => {
+    const generationCanApply = videoClipSlotRuntimeGenerationCanApply(
+      appliedTransitionRuntimeEpoch,
+      appliedTransitionRuntimeGeneration,
+      result.project_epoch,
+      result.runtime_generation,
+    );
+    if (!options.isProjectAuthorityCurrent({
+      project_epoch: result.project_epoch,
+      project_revision: result.project_revision,
+      checkpoint_hash: result.checkpoint_hash,
+    }) || !generationCanApply) return false;
+    appliedTransitionRuntimeEpoch = result.project_epoch;
+    appliedTransitionRuntimeGeneration = result.runtime_generation;
+    options.setVideoTransitionRuntime(result.runtime);
+    return true;
+  };
+  const resetVideoTransitionRuntimeFence = () => {
+    appliedTransitionRuntimeEpoch = null;
+    appliedTransitionRuntimeGeneration = -1;
+    options.setVideoTransitionRuntime({ buses: [] });
+  };
+  const refreshVideoTransitionRuntime = async (showError = false) => {
+    const authority = options.getCurrentProjectAuthority();
+    try {
+      const result = await options.invoke<VideoLayerTransitionRuntimeReport>(
+        "get_video_layer_transition_runtime",
+        {
+          expectedEpoch: authority.project_epoch,
+          expectedRevision: authority.project_revision,
+          expectedCheckpointHash: authority.checkpoint_hash,
+          ownerId: options.projectTransactionOwnerId,
+        },
+      );
+      return applyVideoTransitionRuntime(result) ? result : null;
+    } catch (error) {
+      if (showError) setMessageIfAuthorityCurrent(authority, String(error));
+      return null;
+    }
+  };
+  const runVideoTransitionRuntime = async <T extends Record<string, unknown>>(
+    command: "launch_video_layer_transition_bus_authoritative" | "release_video_layer_transition_bus_authoritative",
+    commandKind: VideoLayerTransitionAuthoritativeRuntimeCommandKind,
+    request: T,
+  ) => {
+    const authority = options.getCurrentProjectAuthority();
+    const requestId = nextVideoEffectCatalogRequestId();
+    const args = {
+      request,
+      requestId,
+      expectedEpoch: authority.project_epoch,
+      expectedRevision: authority.project_revision,
+      expectedCheckpointHash: authority.checkpoint_hash,
+      ownerId: options.projectTransactionOwnerId,
+    };
+    let result: VideoLayerTransitionAuthoritativeRuntimeResult;
+    try {
+      result = await options.invoke<VideoLayerTransitionAuthoritativeRuntimeResult>(command, args);
+    } catch (error) {
+      const terminal = await options.invoke<VideoEffectCatalogTerminalEnvelope | null>(
+        "get_video_effect_catalog_operation_terminal_result",
+        {
+          requestId,
+          expectedEpoch: authority.project_epoch,
+          expectedRevision: authority.project_revision,
+          expectedCheckpointHash: authority.checkpoint_hash,
+          ownerId: options.projectTransactionOwnerId,
+        },
+      ).catch(() => null);
+      if (!terminal) throw error;
+      if (typeof terminal.shape_fingerprint !== "string" || terminal.shape_fingerprint.length === 0) {
+        throw new Error("Video transition receipt omitted its request-shape fingerprint.");
+      }
+      if (terminal.terminal.kind !== "runtime" || terminal.terminal.result.command_kind !== commandKind || !terminal.runtime) {
+        throw new Error("Video transition terminal receipt did not match the requested runtime command.");
+      }
+      result = terminal.runtime;
+    }
+    if (result.command_kind !== commandKind) {
+      throw new Error(`Video transition command kind mismatch: expected ${commandKind}, received ${result.command_kind}.`);
+    }
+    return applyVideoTransitionRuntime(result) ? result : null;
+  };
+  const launchVideoLayerTransitionBus = async (request: {
+    bus_id: number;
+    from: { kind: "layer"; layer_id: number } | { kind: "group"; group_id: number };
+    to: { kind: "layer"; layer_id: number } | { kind: "group"; group_id: number };
+    kind: VideoClipTakeKind;
+    duration: VideoClipTakeDuration;
+    curve: "linear" | "ease_in" | "ease_out" | "ease_in_out";
+  }) => {
+    try {
+      return await runVideoTransitionRuntime(
+        "launch_video_layer_transition_bus_authoritative",
+        "launch",
+        request,
+      );
+    } catch (error) {
+      options.setMessage(`Layer transition launch failed: ${String(error)}`);
+      return null;
+    }
+  };
+  const releaseVideoLayerTransitionBus = async (busId: number) => {
+    try {
+      return await runVideoTransitionRuntime(
+        "release_video_layer_transition_bus_authoritative",
+        "release",
+        { bus_id: busId },
+      );
+    } catch (error) {
+      options.setMessage(`Layer transition release failed: ${String(error)}`);
       return null;
     }
   };
@@ -356,9 +646,25 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       return result;
     } catch (error) { options.setMessage(String(error)); return null; }
   };
-  const launchVideoClipSlot = async (layerId: number, slotId: VideoClipSlotId | null = null) => {
+  const launchVideoClipSlot = async (
+    layerId: number,
+    slotId: VideoClipSlotId | null = null,
+    transitionKind: VideoClipTakeKind = "Cut",
+    transitionDuration: VideoClipTakeDuration = { unit: "Milliseconds", value_milliunits: 0 },
+  ) => {
     try {
-      const result = await runVideoClipSlotRuntime("launch_video_clip_slot_authoritative", { layer_id: layerId, slot_id: slotId });
+      const result = await runVideoClipSlotRuntime("launch_video_clip_slot_authoritative", {
+        layer_id: layerId,
+        slot_id: slotId,
+        transition_kind: transitionKind,
+        transition_duration_ms: 0,
+        transition_duration: transitionKind === "Cut"
+          ? { unit: "Milliseconds", value_milliunits: 0 }
+          : {
+            unit: transitionDuration.unit,
+            value_milliunits: Math.max(1, Math.round(transitionDuration.value_milliunits)),
+          },
+      });
       if (result) options.setMessage(`Launched video clip slot ${slotId ?? "default"}.`);
       return result;
     } catch (error) { options.setMessage(String(error)); return null; }
@@ -974,7 +1280,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const setVideoLayerIsfEffect = async (layerId: number, effect: VideoIsfEffectSummary | null) => {
     if (!canMutateVideoIsf()) return;
     try {
-      await options.invoke("set_video_layer_isf_effect", { layerId, effect });
+      const result = await invokeLegacyVideoEffectAuthoritative<unknown>("set_video_layer_isf_effect", { layerId, effect });
+      if (!result) return;
       options.setMessage(effect ? `${effect.enabled ? "Applied" : "Bypassed"} ISF ${effect.label} on layer ${layerId}.` : `Cleared ISF on layer ${layerId}.`);
       await options.refreshSnapshot();
       await refreshVideoPreviewDiagnostics(false);
@@ -985,12 +1292,18 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const importVideoLayerIsf = async (layerId: number) => {
     if (!canMutateVideoIsf()) return;
     try {
+      const authority = options.getCurrentProjectAuthority();
       const effect = await options.invoke<VideoIsfEffectSummary | null>("select_video_isf_file");
       if (!effect) {
         options.setMessage("ISF import canceled.");
         return;
       }
-      await options.invoke("add_video_layer_isf_effect", { layerId, effect });
+      if (!sameProjectAuthority(authority, options.getCurrentProjectAuthority())) {
+        options.setMessage("Project changed while the ISF file dialog was open; nothing was applied.");
+        return;
+      }
+      const result = await invokeLegacyVideoEffectAuthoritative<VideoIsfEffectSummary>("add_video_layer_isf_effect", { layerId, effect });
+      if (!result) return;
       options.setMessage(`Added imported FX ${effect.label} to layer ${layerId}.`);
       await options.refreshSnapshot();
       await refreshVideoPreviewDiagnostics(false);
@@ -1001,11 +1314,12 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const applyBuiltinVideoIsfEffect = async (layerId: number, presetId: string) => {
     if (!canMutateVideoIsf()) return;
     try {
-      const effect = await options.invoke<VideoIsfEffectSummary>("add_builtin_video_isf_effect", {
+      const applied = await invokeLegacyVideoEffectAuthoritative<VideoIsfEffectSummary>("add_builtin_video_isf_effect", {
         layerId,
         presetId,
       });
-      options.setMessage(`Added built-in FX ${effect.label} to layer ${layerId}.`);
+      if (!applied) return;
+      options.setMessage(`Added built-in FX ${applied.value?.label ?? presetId} to layer ${layerId}.`);
       await options.refreshSnapshot();
       await refreshVideoPreviewDiagnostics(false);
     } catch (error) {
@@ -1015,7 +1329,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const moveVideoLayerIsfEffect = async (layerId: number, stageIndex: number, delta: -1 | 1) => {
     if (!canMutateVideoIsf()) return;
     try {
-      await options.invoke("move_video_layer_isf_effect", { layerId, stageIndex, delta });
+      const result = await invokeLegacyVideoEffectAuthoritative<unknown>("move_video_layer_isf_effect", { layerId, stageIndex, delta });
+      if (!result) return;
       options.setMessage(`Moved FX ${stageIndex + 1} on layer ${layerId}.`);
       await options.refreshSnapshot();
       await refreshVideoPreviewDiagnostics(true);
@@ -1024,7 +1339,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const removeVideoLayerIsfEffect = async (layerId: number, stageIndex: number) => {
     if (!canMutateVideoIsf()) return;
     try {
-      await options.invoke("remove_video_layer_isf_effect", { layerId, stageIndex });
+      const result = await invokeLegacyVideoEffectAuthoritative<unknown>("remove_video_layer_isf_effect", { layerId, stageIndex });
+      if (!result) return;
       options.setMessage(`Removed FX ${stageIndex + 1} from layer ${layerId}.`);
       await options.refreshSnapshot();
       await refreshVideoPreviewDiagnostics(false);
@@ -1033,7 +1349,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const setVideoLayerIsfEffectEnabled = async (layerId: number, stageIndex: number, enabled: boolean) => {
     if (!canMutateVideoIsf()) return;
     try {
-      await options.invoke("set_video_layer_isf_effect_enabled", { layerId, stageIndex, enabled });
+      const result = await invokeLegacyVideoEffectAuthoritative<unknown>("set_video_layer_isf_effect_enabled", { layerId, stageIndex, enabled });
+      if (!result) return;
       options.setMessage(`${enabled ? "Enabled" : "Bypassed"} FX ${stageIndex + 1} on layer ${layerId}.`);
       await options.refreshSnapshot();
       await refreshVideoPreviewDiagnostics(true);
@@ -1042,7 +1359,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const resetVideoLayerIsfEffect = async (layerId: number, stageIndex: number) => {
     if (!canMutateVideoIsf()) return;
     try {
-      await options.invoke("reset_video_layer_isf_effect", { layerId, stageIndex });
+      const result = await invokeLegacyVideoEffectAuthoritative<unknown>("reset_video_layer_isf_effect", { layerId, stageIndex });
+      if (!result) return;
       options.setMessage(`Reset FX ${stageIndex + 1} on layer ${layerId}.`);
       await options.refreshSnapshot();
       await refreshVideoPreviewDiagnostics(true);
@@ -1056,7 +1374,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   ) => {
     if (!canMutateVideoIsf()) return;
     try {
-      await options.invoke("set_video_layer_isf_control", { layerId, stageIndex, controlName, value });
+      const result = await invokeLegacyVideoEffectAuthoritative<unknown>("set_video_layer_isf_control", { layerId, stageIndex, controlName, value });
+      if (!result) return;
       await options.refreshSnapshot();
       await refreshVideoPreviewDiagnostics(true);
     } catch (error) { options.setMessage(`FX control failed: ${String(error)}`); }
@@ -1334,6 +1653,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     queueVideoClipSlot, cancelQueuedVideoClipSlot, launchVideoClipSlot, seekVideoClipSlot,
     importAndAssignVideoClipSlots,
     refreshVideoClipSlotRuntime, resetVideoClipSlotRuntimeFence,
+    refreshVideoTransitionRuntime, resetVideoTransitionRuntimeFence,
+    launchVideoLayerTransitionBus, releaseVideoLayerTransitionBus,
     playVideoLayerAudioMonitor, stopVideoLayerAudioMonitor, setVideoLayerAudioMonitorVolume,
     refreshVideoAudioMonitorStatus,
     refreshAudioOutputDevices,
@@ -1342,6 +1663,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     refreshVideoLayerMetadata, relinkMediaAsset, importVideoLayerIsf, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect,
     moveVideoLayerIsfEffect, removeVideoLayerIsfEffect, setVideoLayerIsfEffectEnabled,
     resetVideoLayerIsfEffect, setVideoLayerIsfControl, triggerVideoLayerIsfEvent,
+    applyVideoEffectCatalog, importVideoEffectScopeIsf, applyVideoEffectPreset, removeVideoEffectChain,
     renderDebugVideoPreview, loadVideoLayerThumbnail, loadMediaAssetThumbnail, beginMediaAssetPreview, loadMediaAssetPreviewFrame, endMediaAssetPreview, refreshVideoPreviewDiagnostics,
     refreshVideoOutputRenderPlans, refreshVideoOutputWindowStatuses, refreshSnapshotAndVideoOutputRenderPlans,
     syncOpenVideoOutputWindows, closeOpenVideoOutputWindows, openAllVideoOutputWindows,

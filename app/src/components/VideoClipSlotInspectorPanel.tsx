@@ -5,8 +5,10 @@ import type {
   VideoClipEffectOverrideSummary,
   VideoClipSlotId,
   VideoClipSlotSummary,
+  VideoEffectCatalog,
   VideoLayerSummary,
 } from "../types";
+import { VideoEffectScopePanel } from "./VideoEffectScopePanel";
 
 export interface VideoClipSlotInspectorPanelProps {
   layer: VideoLayerSummary | null;
@@ -14,6 +16,7 @@ export interface VideoClipSlotInspectorPanelProps {
   assets: MediaAssetSummary[];
   returnFocus: HTMLElement | null;
   removeDisabledReason: string | null;
+  effectCatalog: VideoEffectCatalog;
   onClose: () => void;
   onCreate: (assetId: number, beforeSlotId: VideoClipSlotId | null) => void | Promise<unknown>;
   onAssign: (slotId: VideoClipSlotId, assetId: number) => void | Promise<unknown>;
@@ -22,6 +25,10 @@ export interface VideoClipSlotInspectorPanelProps {
   onDuplicate: (slotId: VideoClipSlotId) => void | Promise<unknown>;
   onSetDefault: (slotId: VideoClipSlotId) => void | Promise<unknown>;
   onReorder: (slotId: VideoClipSlotId, direction: -1 | 1) => void | Promise<unknown>;
+  onApplyEffectCatalog: (catalog: VideoEffectCatalog) => void | Promise<unknown>;
+  onImportScopeIsf: Parameters<typeof VideoEffectScopePanel>[0]["onImportIsf"];
+  onApplyEffectPreset: Parameters<typeof VideoEffectScopePanel>[0]["onApplyPreset"];
+  onRemoveEffectChain: Parameters<typeof VideoEffectScopePanel>[0]["onRemoveChain"];
 }
 
 const focusableSelector = "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
@@ -159,6 +166,15 @@ export function VideoClipSlotInspectorPanel(props: VideoClipSlotInspectorPanelPr
               <summary>Effect overrides</summary>
               <label>JSON effect override list<textarea rows="5" value={effectOverrides()} onInput={(event) => setEffectOverrides(event.currentTarget.value)} /></label>
             </details>
+            <VideoEffectScopePanel
+              scopeLabel="Clip FX"
+              scope={{ scope: "clip", layer_id: props.layer!.id, slot_id: current().id }}
+              catalog={props.effectCatalog}
+              onApplyCatalog={props.onApplyEffectCatalog}
+              onImportIsf={props.onImportScopeIsf}
+              onApplyPreset={props.onApplyEffectPreset}
+              onRemoveChain={props.onRemoveEffectChain}
+            />
             <button type="button" class="primary" onClick={save}>Save Clip</button>
           </>}
         </Show>

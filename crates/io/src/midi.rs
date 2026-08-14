@@ -9,7 +9,8 @@ use protocol::{
     video_output_mapping_field_value, CueId, CueLiveDirection, EffectId, EngineSnapshot, FixtureId,
     LearnedMidiControl, MidiControlAction, MidiControlMapping, MidiControlMessage,
     MidiFeedbackMessage, MidiInputSummary, MidiOutputSummary, NodeGraphId,
-    OperatorSelectionContext, VideoLayerId, VideoLayerState, VideoOutputId, VideoParam,
+    OperatorSelectionContext, TimelineLoopScale, VideoLayerId, VideoLayerState, VideoOutputId,
+    VideoParam,
 };
 use thiserror::Error;
 
@@ -284,6 +285,8 @@ pub enum MidiControlEvent {
     SeekTimelineBeat {
         direction: i32,
     },
+    ToggleTimelineLoop,
+    ScaleTimelineLoop(TimelineLoopScale),
     SetBpm(f32),
     TapBpm,
     LightingMaster(f32),
@@ -844,6 +847,17 @@ fn feedback_value_for_mapping(
             Some(if blackout { 1.0 } else { 0.0 })
         }
         MidiControlAction::TimelinePlay => Some(if snapshot.timeline.playing { 1.0 } else { 0.0 }),
+        MidiControlAction::TimelineLoopToggle => Some(
+            if matches!(
+                snapshot.timeline.loop_runtime.status,
+                protocol::TimelineLoopRuntimeStatus::Disabled
+            ) {
+                0.0
+            } else {
+                1.0
+            },
+        ),
+        MidiControlAction::TimelineLoopHalf | MidiControlAction::TimelineLoopDouble => None,
         MidiControlAction::TimelineSeek => Some(normalize_feedback_range(
             snapshot.timeline.position_ms as f32,
             mapping.low,
@@ -1442,6 +1456,14 @@ fn event_from_mapping(
             .then_some(MidiControlEvent::SeekTimelineBeat { direction: -1 }),
         MidiControlAction::TimelineBeatNext => is_mapping_trigger(mapping, message)
             .then_some(MidiControlEvent::SeekTimelineBeat { direction: 1 }),
+        MidiControlAction::TimelineLoopToggle => {
+            is_mapping_trigger(mapping, message).then_some(MidiControlEvent::ToggleTimelineLoop)
+        }
+        MidiControlAction::TimelineLoopHalf => is_mapping_trigger(mapping, message)
+            .then_some(MidiControlEvent::ScaleTimelineLoop(TimelineLoopScale::Half)),
+        MidiControlAction::TimelineLoopDouble => is_mapping_trigger(mapping, message).then_some(
+            MidiControlEvent::ScaleTimelineLoop(TimelineLoopScale::Double),
+        ),
         MidiControlAction::SetBpm => Some(MidiControlEvent::SetBpm(ranged_value)),
         MidiControlAction::TapBpm => {
             is_mapping_trigger(mapping, message).then_some(MidiControlEvent::TapBpm)
@@ -2526,6 +2548,9 @@ mod tests {
                         metadata: None,
                     },
                     blend_mode: protocol::VideoBlendMode::Normal,
+                    media_asset_id: None,
+                    clip_slots: Vec::new(),
+                    default_clip_slot_id: None,
                     state: VideoLayerState {
                         opacity: 0.5,
                         solo: true,
@@ -3040,6 +3065,21 @@ mod tests {
             low: 0.0,
             high: 1.0,
         };
+        let loop_toggle = MidiControlMapping {
+            number: 26,
+            action: MidiControlAction::TimelineLoopToggle,
+            ..tap_bpm.clone()
+        };
+        let loop_half = MidiControlMapping {
+            number: 27,
+            action: MidiControlAction::TimelineLoopHalf,
+            ..tap_bpm.clone()
+        };
+        let loop_double = MidiControlMapping {
+            number: 28,
+            action: MidiControlAction::TimelineLoopDouble,
+            ..tap_bpm.clone()
+        };
 
         assert_eq!(
             events_from_midi_message(&[0xb0, 20, 127], std::slice::from_ref(&play)),
@@ -3073,6 +3113,20 @@ mod tests {
             vec![MidiControlEvent::TapBpm]
         );
         assert!(events_from_midi_message(&[0x90, 25, 0], &[tap_bpm]).is_empty());
+        assert_eq!(
+            events_from_midi_message(&[0x90, 26, 127], &[loop_toggle]),
+            vec![MidiControlEvent::ToggleTimelineLoop]
+        );
+        assert_eq!(
+            events_from_midi_message(&[0x90, 27, 127], &[loop_half]),
+            vec![MidiControlEvent::ScaleTimelineLoop(TimelineLoopScale::Half)]
+        );
+        assert_eq!(
+            events_from_midi_message(&[0x90, 28, 127], &[loop_double]),
+            vec![MidiControlEvent::ScaleTimelineLoop(
+                TimelineLoopScale::Double
+            )]
+        );
     }
 
     #[test]

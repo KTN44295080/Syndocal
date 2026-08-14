@@ -7904,6 +7904,7 @@ fn parse_super_scenes(
                         audio_clips.push(TimelineAudioClipSummary {
                             id: next_audio_clip_id,
                             layer_id,
+                            media_asset_id: None,
                             path: path.to_string(),
                             start_ms,
                             offset_ms: u64::try_from(position.max(0)).unwrap_or(0),
@@ -9596,7 +9597,7 @@ mod tests {
         for output in &mut snapshot_to_load.dmx_outputs {
             output.enabled = false;
         }
-        let engine = engine::EngineHandle::start(DmxOutputConfig {
+        let engine = engine::EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -13613,7 +13614,7 @@ mod tests {
         for output in &mut snapshot_to_load.dmx_outputs {
             output.enabled = false;
         }
-        let engine = engine::EngineHandle::start(DmxOutputConfig {
+        let engine = engine::EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -13715,7 +13716,7 @@ mod tests {
         for output in &mut snapshot_to_load.dmx_outputs {
             output.enabled = false;
         }
-        let engine = engine::EngineHandle::start(DmxOutputConfig {
+        let engine = engine::EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -13793,7 +13794,7 @@ mod tests {
         for output in &mut snapshot.dmx_outputs {
             output.enabled = false;
         }
-        let engine = engine::EngineHandle::start(DmxOutputConfig {
+        let engine = engine::EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -13852,7 +13853,7 @@ mod tests {
         for output in &mut snapshot_to_load.dmx_outputs {
             output.enabled = false;
         }
-        let engine = engine::EngineHandle::start(DmxOutputConfig {
+        let engine = engine::EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -13956,7 +13957,7 @@ mod tests {
             ..DmxOutputConfig::default()
         };
         snapshot_to_load.dmx_outputs = vec![snapshot_to_load.output.clone()];
-        let engine = engine::EngineHandle::start(DmxOutputConfig {
+        let engine = engine::EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -14183,7 +14184,7 @@ mod tests {
         for output in &mut snapshot_to_load.dmx_outputs {
             output.enabled = false;
         }
-        let engine = engine::EngineHandle::start(DmxOutputConfig {
+        let engine = engine::EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -14238,7 +14239,7 @@ mod tests {
         for output in &mut snapshot_to_load.dmx_outputs {
             output.enabled = false;
         }
-        let engine = engine::EngineHandle::start(DmxOutputConfig {
+        let engine = engine::EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -14299,7 +14300,7 @@ mod tests {
         for output in &mut snapshot_to_load.dmx_outputs {
             output.enabled = false;
         }
-        let engine = engine::EngineHandle::start(DmxOutputConfig {
+        let engine = engine::EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -14410,7 +14411,7 @@ mod tests {
         for output in &mut snapshot_to_load.dmx_outputs {
             output.enabled = false;
         }
-        let engine = engine::EngineHandle::start(DmxOutputConfig {
+        let engine = engine::EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -18066,7 +18067,7 @@ mod tests {
         };
         let dimmer_targets = feature_targets("Dimmer");
         let linear_targets = feature_targets("Dimmer linear");
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });

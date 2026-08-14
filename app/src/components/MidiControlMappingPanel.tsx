@@ -250,6 +250,9 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
             <option value="VideoOutputMappingPreset">Video Output Mapping Preset</option>
             <option value="VideoOutputBlackout">Video Output Blackout</option>
             <option value="TimelinePlay">Timeline Play</option>
+            <option value="TimelineLoopToggle">Timeline Loop Toggle</option>
+            <option value="TimelineLoopHalf">Timeline Loop 1/2</option>
+            <option value="TimelineLoopDouble">Timeline Loop ×2</option>
             <option value="TimelineSeek">Timeline Seek</option>
             <option value="TimelineBeatPrevious">Beat Previous</option>
             <option value="TimelineBeatNext">Beat Next</option>

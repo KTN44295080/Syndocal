@@ -76,6 +76,7 @@ import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
 import { TimelineOperatorBar } from "./components/TimelineOperatorBar";
+import { removeTimelineAudioClipFromAdvancedAuthoring } from "./timelineAdvancedAuthoring";
 import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
 import { EditableTouchSurface } from "./components/EditableTouchSurface";
 import { TouchColorPalettePanel } from "./components/TouchColorPalettePanel";
@@ -327,12 +328,21 @@ import type {
   ChildTimelineSummary,
   TimelineCueEventSummary,
   TimelineAudioClipSummary,
+  TimelineAdvancedAuthoringSummary,
+  TimelineAdvancedAuthoritativeResult,
+  TimelineAdvancedMutationRequest,
   TimelineAutomationSummary,
+  TimelineFollowSummary,
   TimelineGroupAutomationAddResult,
+  TimelineItemRef,
   TimelineLayerSummary,
+  TimelineLoopRegionSummary,
+  TimelinePhaseSummary,
   TimelineTrackKind,
   TimelineSnapshot,
+  VideoEffectCatalogTerminalEnvelope,
   TimelineVideoAutomationSummary,
+  TimelineVideoClipSummary,
   TouchControlBinding,
   TouchSurfaceSummary,
   UsbRdmRequest,
@@ -344,10 +354,14 @@ import type {
   VideoClipRuntimeSnapshot,
   VideoClipSlotId,
   VideoClipSlotSummary,
+  VideoClipTakeDurationUnit,
+  VideoClipTakeKind,
   VideoFrame,
+  VideoEffectCatalog,
   VideoEffectTarget,
   VideoLayerSummary,
   VideoLayerState,
+  VideoLayerTransitionRuntimeSnapshot,
   VideoOutputKind,
   VideoOutputMapping,
   VideoOutputRenderPlan,
@@ -838,15 +852,6 @@ const projectMutationCommands = new Set([
   "set_video_layer_order",
   "set_video_layer_label",
   "set_video_layer_state",
-  "set_video_layer_isf_effect",
-  "apply_builtin_video_isf_effect",
-  "add_video_layer_isf_effect",
-  "add_builtin_video_isf_effect",
-  "move_video_layer_isf_effect",
-  "remove_video_layer_isf_effect",
-  "set_video_layer_isf_effect_enabled",
-  "reset_video_layer_isf_effect",
-  "set_video_layer_isf_control",
   "fade_video_layer_opacity",
   "launch_video_clip",
   "take_video_clip",
@@ -945,6 +950,17 @@ const serverAuthoritativeProjectMutationCommands = new Set([
   "duplicate_video_clip_slot_authoritative",
   "set_default_video_clip_slot_authoritative",
   "import_and_assign_video_clip_slots_authoritative",
+  "apply_video_effect_catalog_authoritative",
+  "apply_timeline_advanced_authoritative",
+  "set_video_layer_isf_effect",
+  "apply_builtin_video_isf_effect",
+  "add_video_layer_isf_effect",
+  "add_builtin_video_isf_effect",
+  "move_video_layer_isf_effect",
+  "remove_video_layer_isf_effect",
+  "set_video_layer_isf_effect_enabled",
+  "reset_video_layer_isf_effect",
+  "set_video_layer_isf_control",
 ]);
 
 // These owner-scoped operations cannot create a project mutation. Full Lock
@@ -953,6 +969,8 @@ const serverAuthoritativeProjectMutationCommands = new Set([
 const mediaAssetTerminalRecoveryCommands = new Set([
   "get_media_asset_operation_terminal_result",
   "get_video_clip_slot_operation_terminal_result",
+  "get_video_effect_catalog_operation_terminal_result",
+  "get_timeline_advanced_operation_terminal_result",
   "cancel_media_asset_operation",
 ]);
 
@@ -963,6 +981,7 @@ const mediaAssetAvailabilityReadOnlyCommands = new Set([
   "start_media_asset_availability_operation",
   "inspect_reserved_media_asset_availability",
   "get_video_clip_slot_runtime",
+  "get_video_layer_transition_runtime",
 ]);
 
 /**
@@ -1201,6 +1220,11 @@ const invoke = async <T,>(command: string, args?: Record<string, unknown>): Prom
       markAuthoritativeApplicationCurrent(result, current);
     }
     if (command === "get_video_clip_slot_operation_terminal_result") {
+      const current = dispatchProjectHistoryMutationFromUnknown(result);
+      markAuthoritativeApplicationCurrent(result, current);
+    }
+    if (command === "get_video_effect_catalog_operation_terminal_result"
+      || command === "get_timeline_advanced_operation_terminal_result") {
       const current = dispatchProjectHistoryMutationFromUnknown(result);
       markAuthoritativeApplicationCurrent(result, current);
     }
@@ -2204,6 +2228,10 @@ export default function App() {
   const [selectedVideoClipSlotLayerId, setSelectedVideoClipSlotLayerId] = createSignal<number | null>(null);
   const [selectedVideoClipSlotId, setSelectedVideoClipSlotId] = createSignal<VideoClipSlotId | null>(null);
   const [videoClipRuntime, setVideoClipRuntime] = createSignal<VideoClipRuntimeSnapshot>({ layers: [] });
+  const [videoTransitionRuntime, setVideoTransitionRuntime] = createSignal<VideoLayerTransitionRuntimeSnapshot>({ buses: [] });
+  const [videoClipTakeKind, setVideoClipTakeKind] = createSignal<VideoClipTakeKind>("Cut");
+  const [videoClipTakeDurationUnit, setVideoClipTakeDurationUnit] = createSignal<VideoClipTakeDurationUnit>("Milliseconds");
+  const [videoClipTakeDurationMilliunits, setVideoClipTakeDurationMilliunits] = createSignal(1_000);
   const [videoClipSlotInspectorOpen, setVideoClipSlotInspectorOpen] = createSignal(false);
   const [videoClipSlotInspectorTrigger, setVideoClipSlotInspectorTrigger] = createSignal<HTMLElement | null>(null);
   const [isfEventPulseBusy, setIsfEventPulseBusy] = createSignal(false);
@@ -2235,6 +2263,7 @@ export default function App() {
   const videoThumbnailSignatures = new Map<number, string>();
   const mediaAssetThumbnailSignatures = new Map<number, string>();
   const authorizeVideoThumbnailAccess = () => setVideoThumbnailAccessAuthorized(true);
+  let spokenTimelineGuideKey = "";
   const resetMediaAssetUiForProjectReplacement = () => {
     videoThumbnailGeneration += 1;
     mediaAssetThumbnailGeneration += 1;
@@ -2252,10 +2281,15 @@ export default function App() {
     setLastMediaAssetImportReport(null);
     setProjectDropState(null);
     resetVideoClipSlotRuntimeFence();
+    resetVideoTransitionRuntimeFence();
     setSelectedVideoClipSlotLayerId(null);
     setSelectedVideoClipSlotId(null);
     setVideoClipSlotInspectorOpen(false);
     setVideoClipSlotInspectorTrigger(null);
+    spokenTimelineGuideKey = "";
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
     // A failed A bootstrap must not leave a retry error on a newly admitted B
     // or C project.  The old operation is already aborted by the authority
     // transition; its guarded finally block cannot clear a newer busy state.
@@ -2682,6 +2716,10 @@ export default function App() {
       position_ms: Math.min(transport?.position_ms ?? 0, normalized.duration_ms ?? 0),
       duration_ms: normalized.duration_ms ?? 0,
     };
+  });
+  const timelineBank = createMemo<TimelineSnapshot[]>(() => {
+    const bank = snapshot().timeline_bank ?? [];
+    return bank.length > 0 ? bank : [snapshot().timeline];
   });
   const snapshotTimelineEvents = createMemo(() => activeTimeline().events);
   const snapshotTimelineEventById = createMemo(() => new Map(
@@ -3166,7 +3204,98 @@ export default function App() {
     if (controlStageEditFixtures) {
       setLiveFixtures(controlStageEditFixtures);
     }
-    setSnapshot((current) => ({
+    setSnapshot((current) => {
+      const timeline: TimelineSnapshot = {
+        ...current.timeline,
+        id: timelineLayeredFixture ? 901 : current.timeline.id,
+        label: timelineLayeredFixture ? "Intro / Verse" : current.timeline.label,
+        layers: timelineLayeredFixture
+          ? structuredClone(viewportFixtureData.layeredTimelineLayers)
+          : current.timeline.layers,
+        audio: timelineLayeredFixture
+          ? structuredClone(viewportFixtureData.layeredTimelineAudioAnalysis)
+          : current.timeline.audio,
+        audio_clips: timelineLayeredFixture
+          ? structuredClone(viewportFixtureData.layeredTimelineAudioClips).map((clip, index) => ({
+              ...clip,
+              media_asset_id: index === 0 ? 900 : clip.media_asset_id,
+            }))
+          : current.timeline.audio_clips,
+        video_clips: timelineLayeredFixture
+          ? [{ id: 800, layer_id: 14, media_asset_id: 900, start_ms: 250, offset_ms: 100, duration_ms: 3_200, fade_in_ms: 400, fade_out_ms: 600 }]
+          : current.timeline.video_clips,
+        phases: timelineLayeredFixture
+          ? [
+              { id: 810, label: "Intro", role: "intro", start_ms: 0, end_ms: 1_500 },
+              { id: 811, label: "Verse", role: "verse", start_ms: 1_500, end_ms: 3_000 },
+              { id: 812, label: "Chorus", role: "chorus", start_ms: 3_000, end_ms: 5_000 },
+            ]
+          : current.timeline.phases,
+        item_groups: timelineLayeredFixture
+          ? [{ id: 820, members: [{ kind: "video_clip", clip_id: 800 }, { kind: "audio_clip", clip_id: 700 }] }]
+          : current.timeline.item_groups,
+        loop_region: timelineLayeredFixture
+          ? { a_ms: 1_500, b_ms: 3_000, enabled: true, musical_length_beats: 4 }
+          : current.timeline.loop_region,
+        follow: timelineLayeredFixture
+          ? {
+              enabled: true,
+              next_timeline_id: 902,
+              duration: { unit: "Milliseconds", value_milliunits: 1_000 },
+              curve: "ease_in_out",
+              video_kind: "Crossfade",
+              lighting_policy: "linear_merge",
+              destination_bpm: 132,
+              preroll_ms: 1_000,
+              trans_cadence_bars: 4,
+              fault_policy: "hold",
+            }
+          : current.timeline.follow,
+        guide_enabled: timelineLayeredFixture ? true : current.timeline.guide_enabled,
+        loop_runtime: timelineLayeredFixture
+          ? { generation: 8, status: "looping", a_ms: 1_500, b_ms: 3_000, musical_length_millibeats: 4_000, wrap_count: 2 }
+          : current.timeline.loop_runtime,
+        follow_runtime: timelineLayeredFixture
+          ? { generation: 4, status: "transitioning", source_timeline_id: 901, target_timeline_id: 902, elapsed_ms: 500, duration_ms: 1_000, progress_millis: 500 }
+          : current.timeline.follow_runtime,
+        audio_offset_ms: timelineLayeredFixture ? 0 : current.timeline.audio_offset_ms,
+        audio_muted: timelineLayeredFixture ? false : current.timeline.audio_muted,
+        playing: timelineFixture ? true : current.timeline.playing,
+        duration_ms: sceneBlockHourFixture
+          ? 3_600_000
+          : sceneBlockLargeFixture
+          ? Math.max(...timelineFixtureEvents.map(timelinePlacementDisplayEndMs))
+          : timelineFixture ? 5000 : 4000,
+        position_ms: sceneBlockHourFixture ? 1_800_000 : 1000,
+        events: timelineFixture ? timelineFixtureEvents : current.timeline.events,
+        automations: [
+          {
+            id: 1,
+            fixture_id: 1,
+            attribute: "Dimmer",
+            track: "Lighting",
+            enabled: true,
+            keyframes: [
+              { time_ms: 0, value: 65535, interpolation: "Linear" },
+              { time_ms: sceneBlockHourFixture ? 3_600_000 : 4000, value: 0, interpolation: "Step" },
+            ],
+          },
+        ],
+        video_automations: [
+          {
+            id: 2,
+            layer_id: 1,
+            param: "Opacity",
+            track: "Video",
+            enabled: true,
+            keyframes: [
+              { time_ms: 0, value: 1, interpolation: "Linear" },
+              { time_ms: sceneBlockHourFixture ? 3_600_000 : 4000, value: 0, interpolation: "Step" },
+            ],
+          },
+        ],
+      };
+      return ({
       ...current,
       fixtures: cueNodeGraphFixture
         ? []
@@ -3231,55 +3360,28 @@ export default function App() {
       touch_surface: touchComposedFixture
         ? structuredClone(viewportFixtureData.touchSurface)
         : current.touch_surface,
-      timeline: {
-        ...current.timeline,
-        layers: timelineLayeredFixture
-          ? structuredClone(viewportFixtureData.layeredTimelineLayers)
-          : current.timeline.layers,
-        audio: timelineLayeredFixture
-          ? structuredClone(viewportFixtureData.layeredTimelineAudioAnalysis)
-          : current.timeline.audio,
-        audio_clips: timelineLayeredFixture
-          ? structuredClone(viewportFixtureData.layeredTimelineAudioClips)
-          : current.timeline.audio_clips,
-        audio_offset_ms: timelineLayeredFixture ? 0 : current.timeline.audio_offset_ms,
-        audio_muted: timelineLayeredFixture ? false : current.timeline.audio_muted,
-        playing: timelineFixture ? true : current.timeline.playing,
-        duration_ms: sceneBlockHourFixture
-          ? 3_600_000
-          : sceneBlockLargeFixture
-          ? Math.max(...timelineFixtureEvents.map(timelinePlacementDisplayEndMs))
-          : timelineFixture ? 5000 : 4000,
-        position_ms: sceneBlockHourFixture ? 1_800_000 : 1000,
-        events: timelineFixture ? timelineFixtureEvents : current.timeline.events,
-        automations: [
-          {
-            id: 1,
-            fixture_id: 1,
-            attribute: "Dimmer",
-            track: "Lighting",
-            enabled: true,
-            keyframes: [
-              { time_ms: 0, value: 65535, interpolation: "Linear" },
-              { time_ms: sceneBlockHourFixture ? 3_600_000 : 4000, value: 0, interpolation: "Step" },
-            ],
-          },
-        ],
-        video_automations: [
-          {
-            id: 2,
-            layer_id: 1,
-            param: "Opacity",
-            track: "Video",
-            enabled: true,
-            keyframes: [
-              { time_ms: 0, value: 1, interpolation: "Linear" },
-              { time_ms: sceneBlockHourFixture ? 3_600_000 : 4000, value: 0, interpolation: "Step" },
-            ],
-          },
-        ],
-      },
-    }));
+      timeline,
+      timeline_bank: timelineLayeredFixture
+        ? [
+            timeline,
+            {
+              ...timeline,
+              id: 902,
+              label: "Bridge / Outro",
+              playing: false,
+              position_ms: 0,
+              phases: [
+                { id: 813, label: "Bridge", role: "bridge", start_ms: 0, end_ms: 2_500 },
+                { id: 814, label: "Outro", role: "outro", start_ms: 2_500, end_ms: 5_000 },
+              ],
+              follow: null,
+              follow_runtime: { generation: 0, status: "idle", elapsed_ms: 0, duration_ms: 0, progress_millis: 0 },
+              loop_runtime: { generation: 0, status: "disabled", wrap_count: 0 },
+            },
+          ]
+        : current.timeline_bank,
+    });
+    });
     if (blindFixture) {
       const liveRedValues = Array.from({ length: 512 }, () => 0);
       for (const address of [1, 9, 17]) {
@@ -3544,12 +3646,43 @@ export default function App() {
       })),
       default_clip_slot_id: 5_001,
     };
+    const c1FixtureEffect = {
+      enabled: true,
+      label: "Viewport Gain",
+      source: "/*{\"CREDIT\":\"Syndocal viewport fixture\",\"INPUTS\":[{\"NAME\":\"gain\",\"TYPE\":\"float\",\"DEFAULT\":1.0,\"MIN\":0.0,\"MAX\":2.0}]}*/\nvoid main(){ gl_FragColor = IMG_THIS_PIXEL(inputImage) * gain; }",
+      source_path: null,
+      description: "Viewport-only scoped FX fixture",
+      categories: ["Test"],
+      controls: [{
+        name: "gain",
+        kind: "Float" as const,
+        value: [1, 0, 0, 0] as [number, number, number, number],
+        default: [1, 0, 0, 0] as [number, number, number, number],
+        minimum: [0, 0, 0, 0] as [number, number, number, number],
+        maximum: [2, 0, 0, 0] as [number, number, number, number],
+        labels: [],
+        values: [],
+      }],
+      stack: [],
+    };
+    layers[0].isf_effect = structuredClone(c1FixtureEffect);
+    const effectChains = [
+      { id: 6_101, scope: { scope: "layer" as const, layer_id: layers[0].id }, bypassed: false, stages: [{ id: 6_201, enabled: true, label: "Viewport Gain", effect: { id: 6_301, kind: { kind: "isf" as const, effect: structuredClone(c1FixtureEffect) } } }] },
+      { id: 6_102, scope: { scope: "clip" as const, layer_id: layers[0].id, slot_id: 5_002 }, bypassed: false, stages: [{ id: 6_202, enabled: true, label: "Clip Gain", effect: { id: 6_302, kind: { kind: "isf" as const, effect: structuredClone(c1FixtureEffect) } } }] },
+      { id: 6_103, scope: { scope: "composition" as const, composition_id: composition.id }, bypassed: false, stages: [{ id: 6_203, enabled: true, label: "Composition Gain", effect: { id: 6_303, kind: { kind: "isf" as const, effect: structuredClone(c1FixtureEffect) } } }] },
+      { id: 6_104, scope: { scope: "group" as const, group_id: 6_401 }, bypassed: false, stages: [{ id: 6_204, enabled: true, label: "Group Gain", effect: { id: 6_304, kind: { kind: "isf" as const, effect: structuredClone(c1FixtureEffect) } } }] },
+      { id: 6_105, scope: { scope: "output" as const, output_id: outputs[0].id }, bypassed: false, stages: [{ id: 6_205, enabled: true, label: "Output Gain", effect: { id: 6_305, kind: { kind: "isf" as const, effect: structuredClone(c1FixtureEffect) } } }] },
+      { id: 6_106, scope: { scope: "transition" as const, owner: { kind: "layer_bus" as const, bus_id: 6_601 } }, bypassed: false, stages: [{ id: 6_206, enabled: true, label: "Bus Gain", effect: { id: 6_306, kind: { kind: "isf" as const, effect: structuredClone(c1FixtureEffect) } } }] },
+    ];
     setWorkspaceTab("control");
     setControlMode("mixer");
     setTouchControlDomain("video");
     setSelectedVideoOutputId(outputs[0]?.id ?? null);
     setSelectedVideoClipSlotLayerId(layers[0]?.id ?? null);
     setSelectedVideoClipSlotId(5_002);
+    setVideoClipTakeKind("Crossfade");
+    setVideoClipTakeDurationUnit("Milliseconds");
+    setVideoClipTakeDurationMilliunits(750);
     setVideoClipRuntime({
       layers: [{
         layer_id: layers[0].id,
@@ -3561,10 +3694,27 @@ export default function App() {
           target_boundary_ordinal: 12,
           clock_generation: 3,
           held_for_clock_discontinuity: false,
+          transition_kind: "Crossfade",
+          duration: { unit: "Milliseconds", value_milliunits: 750 },
+          resolved_duration_ms: 750,
         },
         playhead_ms: 2_400,
         playing: true,
         ping_pong_reverse: false,
+      }],
+    });
+    setVideoTransitionRuntime({
+      buses: [{
+        bus_id: 6_601,
+        origin_from: { kind: "group", group_id: 6_401 },
+        from: { kind: "group", group_id: 6_401 },
+        to: { kind: "layer", layer_id: layers[1].id },
+        kind: "Crossfade",
+        curve: "ease_in_out",
+        elapsed_ms: 375,
+        duration_ms: 750,
+        duration: { unit: "Milliseconds", value_milliunits: 750 },
+        progress_millis: 500,
       }],
     });
     setVideoProgramAudioEnabled(true);
@@ -3576,6 +3726,29 @@ export default function App() {
         media_assets: mediaAssets,
         compositions: [composition],
         outputs,
+        effect_chains: effectChains,
+        effect_presets: [{
+          id: 6_501,
+          label: "Viewport Gain Preset",
+          payload: {
+            bypassed: false,
+            stages: [{ enabled: true, label: "Viewport Gain", effect: { kind: "isf", effect: structuredClone(c1FixtureEffect) } }],
+          },
+        }],
+        layer_groups: [{ id: 6_401, label: "Viewport Group", composition_id: composition.id, layer_ids: [layers[0].id] }],
+        transition_buses: [{
+          id: 6_601,
+          label: "Viewport A/B",
+          composition_id: composition.id,
+          enabled: true,
+          members: [{ kind: "group", group_id: 6_401 }, { kind: "layer", layer_id: layers[1].id }],
+          default_from: { kind: "group", group_id: 6_401 },
+          default_to: { kind: "layer", layer_id: layers[1].id },
+          default_kind: "Crossfade",
+          default_duration: { unit: "Milliseconds", value_milliunits: 750 },
+          default_curve: "ease_in_out",
+          matte_source: null,
+        }],
       },
     }));
     if (viewportMediaOperationFixture) {
@@ -12811,6 +12984,229 @@ export default function App() {
     }
     return { authority, provenance: "read_only" };
   };
+  let timelineAdvancedRequestId = Math.max(1, Date.now());
+  const commitTimelineAdvanced = async (
+    request: TimelineAdvancedMutationRequest,
+  ): Promise<TimelineAdvancedAuthoritativeResult | null> => {
+    const beforePreflight = captureProjectAuthorityIdentity();
+    const { authority } = await prepareMediaAssetOperationStart(beforePreflight);
+    const requestId = ++timelineAdvancedRequestId;
+    const args = {
+      request,
+      requestId,
+      expectedRevision: authority.project_revision,
+      expectedCheckpointHash: authority.checkpoint_hash,
+      __expectedProjectEpoch: authority.project_epoch,
+    };
+    let result: TimelineAdvancedAuthoritativeResult;
+    let applicationCurrent = false;
+    try {
+      result = await invoke<TimelineAdvancedAuthoritativeResult>(
+        "apply_timeline_advanced_authoritative",
+        args,
+      );
+      applicationCurrent = authoritativeApplicationIsCurrent(result);
+    } catch (error) {
+      const terminal = await invoke<VideoEffectCatalogTerminalEnvelope | null>(
+        "get_timeline_advanced_operation_terminal_result",
+        {
+          requestId,
+          expectedEpoch: authority.project_epoch,
+          expectedRevision: authority.project_revision,
+          expectedCheckpointHash: authority.checkpoint_hash,
+          ownerId: projectTransactionOwnerId,
+        },
+      ).catch(() => null);
+      if (!terminal) throw error;
+      if (typeof terminal.shape_fingerprint !== "string" || terminal.shape_fingerprint.length === 0) {
+        throw new Error("Timeline receipt omitted its request-shape fingerprint.");
+      }
+      if (terminal.terminal.kind === "failure") throw new Error(terminal.terminal.result.message);
+      if (terminal.terminal.kind !== "timeline") {
+        throw new Error("Timeline receipt returned a different command-family outcome.");
+      }
+      applicationCurrent = authoritativeApplicationIsCurrent(terminal);
+      result = terminal.terminal.result;
+    }
+    if (!applicationCurrent) return null;
+    await refreshSnapshot();
+    if (!projectAuthorityTokenIsCurrent(
+      result.mutation.authority,
+      captureProjectAuthorityIdentity(),
+    )) {
+      return null;
+    }
+    return result;
+  };
+
+  const currentTimelineAdvancedAuthoring = (): TimelineAdvancedAuthoringSummary => ({
+    video_clips: activeTimeline().video_clips ?? [],
+    audio_clips: activeTimeline().audio_clips ?? [],
+    phases: activeTimeline().phases ?? [],
+    item_groups: activeTimeline().item_groups ?? [],
+    loop_region: activeTimeline().loop_region ?? null,
+    follow: activeTimeline().follow ?? null,
+    guide_enabled: activeTimeline().guide_enabled ?? false,
+  });
+
+  const groupTimelineItems = async (members: TimelineItemRef[]) => {
+    try {
+      await commitTimelineAdvanced({ kind: "group", members });
+      setMessage(`Grouped ${members.length} Timeline items.`);
+    } catch (error) {
+      setMessage(`Timeline grouping failed: ${String(error)}`);
+    }
+  };
+  const ungroupTimelineItem = async (item: TimelineItemRef) => {
+    const group = (activeTimeline().item_groups ?? []).find((candidate) =>
+      candidate.members.some((member) => JSON.stringify(member) === JSON.stringify(item)));
+    if (!group) return;
+    try {
+      await commitTimelineAdvanced({ kind: "ungroup", group_id: group.id });
+      setMessage("Timeline group released.");
+    } catch (error) {
+      setMessage(`Timeline ungroup failed: ${String(error)}`);
+    }
+  };
+  const moveTimelineGroup = async (groupId: number, deltaMs: number) => {
+    await commitTimelineAdvanced({ kind: "move_group", group_id: groupId, delta_ms: deltaMs });
+  };
+
+  const insertMediaAssetOnTimeline = async (mediaAssetId: MediaAssetId) => {
+    try {
+      const result = await commitTimelineAdvanced({
+        kind: "insert_media",
+        media_asset_id: mediaAssetId,
+        start_ms: snapTimeMs(activeTimeline().position_ms),
+      });
+      if (result) setMessage("Media placed on the Timeline.");
+    } catch (error) {
+      setMessage(`Timeline media placement failed: ${String(error)}`);
+    }
+  };
+  const setTimelineGuideEnabled = async (enabled: boolean) => {
+    try {
+      await commitTimelineAdvanced({ kind: "set_guide", enabled });
+    } catch (error) {
+      setMessage(`Timeline Guide update failed: ${String(error)}`);
+    }
+  };
+  const setTimelinePhases = async (phases: TimelinePhaseSummary[]) => {
+    try {
+      await commitTimelineAdvanced({ kind: "set_phases", phases });
+    } catch (error) {
+      setMessage(`Timeline Phase update failed: ${String(error)}`);
+    }
+  };
+  const setTimelineLoopRegion = async (loopRegion: TimelineLoopRegionSummary | null) => {
+    try {
+      await commitTimelineAdvanced({ kind: "set_loop", loop_region: loopRegion });
+    } catch (error) {
+      setMessage(`Timeline loop update failed: ${String(error)}`);
+    }
+  };
+  const setTimelineFollow = async (follow: TimelineFollowSummary | null) => {
+    try {
+      await commitTimelineAdvanced({ kind: "set_follow", follow });
+    } catch (error) {
+      setMessage(`Timeline Follow update failed: ${String(error)}`);
+    }
+  };
+  const createTimeline = async (label: string) => {
+    try {
+      await commitTimelineAdvanced({ kind: "create_timeline", label });
+      setMessage(`Created Timeline ${label}.`);
+    } catch (error) {
+      setMessage(`Timeline creation failed: ${String(error)}`);
+    }
+  };
+  const duplicateTimeline = async (timelineId: number) => {
+    try {
+      await commitTimelineAdvanced({ kind: "duplicate_timeline", timeline_id: timelineId });
+      setMessage("Timeline duplicated.");
+    } catch (error) {
+      setMessage(`Timeline duplication failed: ${String(error)}`);
+    }
+  };
+  const removeTimeline = async (timelineId: number) => {
+    try {
+      await commitTimelineAdvanced({ kind: "remove_timeline", timeline_id: timelineId });
+      setMessage("Timeline removed.");
+    } catch (error) {
+      setMessage(`Timeline removal failed: ${String(error)}`);
+    }
+  };
+  const reorderTimelines = async (timelineIds: number[]) => {
+    try {
+      await commitTimelineAdvanced({ kind: "reorder_timelines", timeline_ids: timelineIds });
+    } catch (error) {
+      setMessage(`Timeline reorder failed: ${String(error)}`);
+    }
+  };
+  const selectTimeline = async (timelineId: number, play: boolean) => {
+    try {
+      await commitTimelineAdvanced({ kind: "select_timeline", timeline_id: timelineId, play });
+    } catch (error) {
+      setMessage(`Timeline selection failed: ${String(error)}`);
+    }
+  };
+  const setTimelineLoopEnabled = async (enabled: boolean) => {
+    try {
+      await invoke<void>("set_timeline_loop_enabled", { enabled });
+    } catch (error) {
+      setMessage(`Timeline loop transport failed: ${String(error)}`);
+    }
+  };
+  const scaleTimelineLoop = async (scale: "half" | "double") => {
+    try {
+      await invoke<void>("scale_timeline_loop", { scale });
+    } catch (error) {
+      setMessage(`Timeline loop resize failed: ${String(error)}`);
+    }
+  };
+  const setTimelineLoopAAtPlayhead = async () => {
+    const timeline = activeTimeline();
+    const aMs = Math.max(0, Math.round(timeline.position_ms));
+    const defaultLengthMs = Math.max(1, Math.round(240_000 / Math.max(20, snapshot().clock.bpm)));
+    const maximumEnd = Math.max(aMs + 1, timeline.duration_ms || aMs + defaultLengthMs);
+    const bMs = timeline.loop_region && timeline.loop_region.b_ms > aMs
+      ? timeline.loop_region.b_ms
+      : Math.min(maximumEnd, aMs + defaultLengthMs);
+    await setTimelineLoopRegion({
+      a_ms: aMs,
+      b_ms: bMs,
+      enabled: timeline.loop_region?.enabled ?? true,
+      musical_length_beats: Math.max(0.001, (bMs - aMs) * snapshot().clock.bpm / 60_000),
+    });
+  };
+  const setTimelineLoopBAtPlayhead = async () => {
+    const timeline = activeTimeline();
+    const bMs = Math.max(1, Math.round(timeline.position_ms));
+    const defaultLengthMs = Math.max(1, Math.round(240_000 / Math.max(20, snapshot().clock.bpm)));
+    const aMs = timeline.loop_region?.a_ms ?? Math.max(0, bMs - defaultLengthMs);
+    if (bMs <= aMs) {
+      setMessage("Loop B must be after Loop A.");
+      return;
+    }
+    await setTimelineLoopRegion({
+      a_ms: aMs,
+      b_ms: bMs,
+      enabled: timeline.loop_region?.enabled ?? true,
+      musical_length_beats: Math.max(0.001, (bMs - aMs) * snapshot().clock.bpm / 60_000),
+    });
+  };
+  createEffect(() => {
+    const cues = activeTimeline().guide_cues ?? [];
+    const cue = cues.at(-1);
+    if (!cue || typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    const key = `${cue.generation}:${cue.sequence}`;
+    if (key === spokenTimelineGuideKey) return;
+    spokenTimelineGuideKey = key;
+    const utterance = new SpeechSynthesisUtterance(cue.label);
+    utterance.lang = uiLocale() === "ja" ? "ja-JP" : "en-US";
+    utterance.rate = 1;
+    window.speechSynthesis.speak(utterance);
+  });
 
   createEffect(() => {
     const current = currentProjectControlMappings();
@@ -14890,6 +15286,20 @@ export default function App() {
         }));
         return;
       }
+      const currentClip = (activeTimeline().audio_clips ?? []).find((candidate) => candidate.id === clip.id);
+      const linkedGroup = (activeTimeline().item_groups ?? []).find((group) =>
+        group.members.some((member) => member.kind === "audio_clip" && member.clip_id === clip.id));
+      if (currentClip && linkedGroup && currentClip.start_ms !== clip.start_ms) {
+        await moveTimelineGroup(linkedGroup.id, Math.round(clip.start_ms - currentClip.start_ms));
+        await refreshSnapshot();
+        return;
+      }
+      if (currentClip?.media_asset_id !== null && currentClip?.media_asset_id !== undefined) {
+        const authoring = currentTimelineAdvancedAuthoring();
+        authoring.audio_clips = authoring.audio_clips.map((candidate) => candidate.id === clip.id ? clip : candidate);
+        await commitTimelineAdvanced({ kind: "apply", authoring });
+        return;
+      }
       await invoke("update_timeline_audio_clip", {
         id: clip.id,
         layerId: clip.layer_id,
@@ -14925,6 +15335,14 @@ export default function App() {
             audio_clips: (current.timeline.audio_clips ?? []).filter((clip) => clip.id !== clipId),
           },
         }));
+        return;
+      }
+      const linkedGroup = (activeTimeline().item_groups ?? []).find((group) =>
+        group.members.some((member) => member.kind === "audio_clip" && member.clip_id === clipId));
+      const currentClip = (activeTimeline().audio_clips ?? []).find((clip) => clip.id === clipId);
+      if (linkedGroup || (currentClip?.media_asset_id !== null && currentClip?.media_asset_id !== undefined)) {
+        const authoring = removeTimelineAudioClipFromAdvancedAuthoring(currentTimelineAdvancedAuthoring(), clipId);
+        await commitTimelineAdvanced({ kind: "apply", authoring });
         return;
       }
       await invoke("remove_timeline_audio_clip", { clipId });
@@ -16553,6 +16971,10 @@ export default function App() {
     importAndAssignVideoClipSlots,
     refreshVideoClipSlotRuntime,
     resetVideoClipSlotRuntimeFence,
+    refreshVideoTransitionRuntime,
+    resetVideoTransitionRuntimeFence,
+    launchVideoLayerTransitionBus,
+    releaseVideoLayerTransitionBus,
     playVideoLayerAudioMonitor,
     stopVideoLayerAudioMonitor,
     setVideoLayerAudioMonitorVolume,
@@ -16576,6 +16998,10 @@ export default function App() {
     resetVideoLayerIsfEffect,
     setVideoLayerIsfControl,
     triggerVideoLayerIsfEvent,
+    applyVideoEffectCatalog,
+    importVideoEffectScopeIsf,
+    applyVideoEffectPreset,
+    removeVideoEffectChain,
     renderDebugVideoPreview,
     loadVideoLayerThumbnail,
     loadMediaAssetThumbnail,
@@ -16647,6 +17073,7 @@ export default function App() {
     setAudioOutputDevices,
     setVideoRecordingStatus,
     setVideoClipRuntime,
+    setVideoTransitionRuntime,
     setExternalVideoIoPlans,
     setExternalVideoTransportStatus,
     setExternalVideoTransportReport,
@@ -16656,6 +17083,15 @@ export default function App() {
     setVideoOutputPreviewId,
     setVideoOutputPreviewMode,
   });
+  const videoEffectCatalog = (): VideoEffectCatalog => {
+    const video = snapshot().authored_video ?? snapshot().video;
+    return {
+      effect_chains: video.effect_chains ?? [],
+      effect_presets: video.effect_presets ?? [],
+      layer_groups: video.layer_groups ?? [],
+      transition_buses: video.transition_buses ?? [],
+    };
+  };
   let vjPreviewRequestGeneration = 0;
   let vjPreviewPollInFlight: Promise<VjPreviewTransportSummary | null> | null = null;
   const isVjPreviewTransportSummary = (value: unknown): value is VjPreviewTransportSummary => {
@@ -16742,6 +17178,25 @@ export default function App() {
       if (requestGeneration === vjPreviewRequestGeneration) setVjPreviewTransportBusy(false);
     }
   };
+
+  const updateTimelineVideoClip = async (clip: TimelineVideoClipSummary) => {
+    try {
+      const currentClip = (activeTimeline().video_clips ?? []).find((candidate) => candidate.id === clip.id);
+      if (!currentClip) throw new Error(`Timeline Video Clip ${clip.id} was not found.`);
+      const linkedGroup = (activeTimeline().item_groups ?? []).find((group) =>
+        group.members.some((member) => member.kind === "video_clip" && member.clip_id === clip.id));
+      if (linkedGroup && currentClip.start_ms !== clip.start_ms) {
+        await moveTimelineGroup(linkedGroup.id, Math.round(clip.start_ms - currentClip.start_ms));
+        await refreshSnapshot();
+        return;
+      }
+      const authoring = currentTimelineAdvancedAuthoring();
+      authoring.video_clips = authoring.video_clips.map((candidate) => candidate.id === clip.id ? clip : candidate);
+      await commitTimelineAdvanced({ kind: "apply", authoring });
+    } catch (error) {
+      setMessage(`Timeline Video Clip update failed: ${String(error)}`);
+    }
+  };
   const stageVjPreviewLayer = async (
     layerId: number,
     expectedAuthority?: ProjectAuthorityToken,
@@ -16789,15 +17244,23 @@ export default function App() {
   });
   createEffect(() => {
     if (!isTauriRuntime()) {
-      if (viewportFixture !== "vj-bank") setVideoClipRuntime({ layers: [] });
+      if (viewportFixture !== "vj-bank") {
+        setVideoClipRuntime({ layers: [] });
+        setVideoTransitionRuntime({ buses: [] });
+      }
       return;
     }
     const editVideoVisible = workspaceTab() === "control" && controlMode() === "mixer";
     const controlVideoVisible = workspaceTab() === "touch";
     if (!editVideoVisible && !controlVideoVisible) return;
     void refreshVideoClipSlotRuntime(true);
+    void refreshVideoTransitionRuntime(true);
     const intervalId = window.setInterval(() => void refreshVideoClipSlotRuntime(), 250);
-    onCleanup(() => window.clearInterval(intervalId));
+    const transitionIntervalId = window.setInterval(() => void refreshVideoTransitionRuntime(), 100);
+    onCleanup(() => {
+      window.clearInterval(intervalId);
+      window.clearInterval(transitionIntervalId);
+    });
   });
   createEffect(() => {
     const layer = selectedVideoClipSlotLayer();
@@ -16832,7 +17295,17 @@ export default function App() {
   const takeSelectedVideoClipSlot = async () => {
     const layer = selectedVideoClipSlotLayer();
     if (!layer) return;
-    const result = await launchVideoClipSlot(layer.id, null);
+    const runtime = selectedVideoClipSlotRuntime();
+    const activeTransition = runtime?.transition ?? null;
+    const result = await launchVideoClipSlot(
+      layer.id,
+      activeTransition?.outgoing_slot_id ?? null,
+      activeTransition?.kind ?? videoClipTakeKind(),
+      activeTransition?.duration ?? {
+        unit: videoClipTakeDurationUnit(),
+        value_milliunits: videoClipTakeDurationMilliunits(),
+      },
+    );
     if (result && videoProgramAudioEnabled() && videoLayerHasMonitorableAudio(layer.id)) {
       await refreshVideoAudioMonitorStatus(true);
     }
@@ -20422,6 +20895,13 @@ export default function App() {
     setCueFadePaused,
     playTimeline,
     pauseTimeline,
+    timelineSurfaceActive: () => controlMode() === "live" && timelineDeskSurface() === "show",
+    timelineLoopEnabled: () => (activeTimeline().loop_runtime?.status ?? "disabled") !== "disabled",
+    timelineLoopAvailable: () => activeTimeline().loop_region !== null && activeTimeline().loop_region !== undefined,
+    setTimelineLoopEnabled,
+    scaleTimelineLoop,
+    setTimelineLoopA: setTimelineLoopAAtPlayhead,
+    setTimelineLoopB: setTimelineLoopBAtPlayhead,
     setAllBlackout,
     setBlackout,
     setVideoBlackout,
@@ -21659,10 +22139,31 @@ export default function App() {
               return layer ? cancelQueuedVideoClipSlot(layer.id) : Promise.resolve(null);
             },
             onSetQuantization: updateVideoClipSlotQuantization,
+            get transitionKind() { return videoClipTakeKind(); },
+            get transitionDurationUnit() { return videoClipTakeDurationUnit(); },
+            get transitionDurationMilliunits() { return videoClipTakeDurationMilliunits(); },
+            onSetTransitionKind: setVideoClipTakeKind,
+            onSetTransitionDurationUnit: setVideoClipTakeDurationUnit,
+            onSetTransitionDurationMilliunits: (value) => setVideoClipTakeDurationMilliunits(
+              Math.max(1, Math.min(600_000, Math.round(value || 1))),
+            ),
           }}
           clipSlotTake={{
-            get enabled() { return selectedVideoClipSlotRuntime()?.queued_slot_id != null; },
+            get enabled() {
+              const runtime = selectedVideoClipSlotRuntime();
+              return runtime?.transition != null || runtime?.queued_slot_id != null;
+            },
+            get label() { return selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take"; },
             onTake: takeSelectedVideoClipSlot,
+          }}
+          transitionBuses={{
+            get catalog() { return videoEffectCatalog(); },
+            get compositions() { return snapshot().video.compositions; },
+            get runtime() { return videoTransitionRuntime(); },
+            get busy() { return isfEventPulseBusy(); },
+            onApplyCatalog: applyVideoEffectCatalog,
+            onLaunch: launchVideoLayerTransitionBus,
+            onRelease: releaseVideoLayerTransitionBus,
           }}
         />
         <Show when={videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
@@ -21670,6 +22171,7 @@ export default function App() {
             layer={selectedVideoClipSlotLayer()}
             slotId={selectedVideoClipSlotId()}
             assets={snapshot().video.media_assets}
+            effectCatalog={videoEffectCatalog()}
             returnFocus={videoClipSlotInspectorTrigger()}
             removeDisabledReason={selectedVideoClipSlotId() === null ? "Select a Clip Slot to remove." : videoClipSlotRemoveDisabledReason(selectedVideoClipSlotId()!)}
             onClose={() => {
@@ -21701,6 +22203,10 @@ export default function App() {
               return layer ? setDefaultVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
             }}
             onReorder={reorderVideoClipSlotByDirection}
+            onApplyEffectCatalog={applyVideoEffectCatalog}
+            onImportScopeIsf={importVideoEffectScopeIsf}
+            onApplyEffectPreset={applyVideoEffectPreset}
+            onRemoveEffectChain={removeVideoEffectChain}
           />
         </Show>
         </Show>
@@ -22166,9 +22672,21 @@ export default function App() {
               return layer ? cancelQueuedVideoClipSlot(layer.id) : Promise.resolve(null);
             },
             onSetQuantization: updateVideoClipSlotQuantization,
+            get transitionKind() { return videoClipTakeKind(); },
+            get transitionDurationUnit() { return videoClipTakeDurationUnit(); },
+            get transitionDurationMilliunits() { return videoClipTakeDurationMilliunits(); },
+            onSetTransitionKind: setVideoClipTakeKind,
+            onSetTransitionDurationUnit: setVideoClipTakeDurationUnit,
+            onSetTransitionDurationMilliunits: (value) => setVideoClipTakeDurationMilliunits(
+              Math.max(1, Math.min(600_000, Math.round(value || 1))),
+            ),
           }}
           clipSlotTake={{
-            get enabled() { return selectedVideoClipSlotRuntime()?.queued_slot_id != null; },
+            get enabled() {
+              const runtime = selectedVideoClipSlotRuntime();
+              return runtime?.transition != null || runtime?.queued_slot_id != null;
+            },
+            get label() { return selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take"; },
             onTake: takeSelectedVideoClipSlot,
           }}
           mediaLibrary={{
@@ -22180,6 +22698,7 @@ export default function App() {
             backendAvailable: isTauriRuntime(),
             onVerify: inspectMediaAssetIds,
             onRelink: relinkMediaLibraryAsset,
+            onAddToTimeline: insertMediaAssetOnTimeline,
             onPreviewStart: beginMediaAssetPreview,
             onPreviewFrame: loadMediaAssetPreviewFrame,
             onPreviewEnd: endMediaAssetPreview,
@@ -22224,6 +22743,19 @@ export default function App() {
             onRemoveCuePoint: removeVideoCuePoint,
             onRemoveLayer: removeVideoLayer,
           }}
+          effectScopes={{
+            get catalog() { return videoEffectCatalog(); },
+            get compositions() { return snapshot().video.compositions; },
+            get outputs() { return snapshot().video.outputs; },
+            get transitionRuntime() { return videoTransitionRuntime(); },
+            get busy() { return isfEventPulseBusy(); },
+            onApplyCatalog: applyVideoEffectCatalog,
+            onImportIsf: importVideoEffectScopeIsf,
+            onApplyPreset: applyVideoEffectPreset,
+            onRemoveChain: removeVideoEffectChain,
+            onLaunchTransition: launchVideoLayerTransitionBus,
+            onReleaseTransition: releaseVideoLayerTransitionBus,
+          }}
           timelineAutomation={{
             get layers() { return snapshot().video.layers; },
             get selectedLayerId() { return selectedVideoAutomationLayerId(); },
@@ -22267,6 +22799,7 @@ export default function App() {
             layer={selectedVideoClipSlotLayer()}
             slotId={selectedVideoClipSlotId()}
             assets={snapshot().video.media_assets}
+            effectCatalog={videoEffectCatalog()}
             returnFocus={videoClipSlotInspectorTrigger()}
             removeDisabledReason={selectedVideoClipSlotId() === null ? "Select a Clip Slot to remove." : videoClipSlotRemoveDisabledReason(selectedVideoClipSlotId()!)}
             onClose={() => {
@@ -22298,6 +22831,10 @@ export default function App() {
               return layer ? setDefaultVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
             }}
             onReorder={reorderVideoClipSlotByDirection}
+            onApplyEffectCatalog={applyVideoEffectCatalog}
+            onImportScopeIsf={importVideoEffectScopeIsf}
+            onApplyEffectPreset={applyVideoEffectPreset}
+            onRemoveEffectChain={removeVideoEffectChain}
           />
         </Show>
         </Show>
@@ -22456,6 +22993,13 @@ export default function App() {
                   metronomeEnabled={activeTimeline().metronome_enabled ?? false}
                   countInBeats={activeTimeline().count_in_beats ?? 4}
                   countInRemainingMs={activeTimeline().count_in_remaining_ms ?? 0}
+                  phases={activeTimeline().phases ?? []}
+                  guideEnabled={activeTimeline().guide_enabled ?? false}
+                  loopRegion={activeTimeline().loop_region ?? null}
+                  loopRuntime={activeTimeline().loop_runtime ?? { generation: 0, status: "disabled", wrap_count: 0 }}
+                  timelines={timelineBank()}
+                  activeTimelineId={activeTimeline().id ?? snapshot().timeline.id ?? 1}
+                  followRuntime={activeTimeline().follow_runtime ?? { generation: 0, status: "idle", elapsed_ms: 0, duration_ms: 0, progress_millis: 0 }}
                   visibleWindow={timelineVisibleWindow()}
                   overviewShowDurationMs={timelineOverviewShowDurationMs()}
                   overviewEditExtentMs={timelineOverviewEditExtentMs()}
@@ -22475,6 +23019,17 @@ export default function App() {
                   onPause={pauseTimeline}
                   onPlay={playTimeline}
                   onSetMetronome={setTimelineMetronome}
+                  onSetGuideEnabled={setTimelineGuideEnabled}
+                  onSetPhases={setTimelinePhases}
+                  onSetLoopRegion={setTimelineLoopRegion}
+                  onSetLoopEnabled={setTimelineLoopEnabled}
+                  onScaleLoop={scaleTimelineLoop}
+                  onCreateTimeline={createTimeline}
+                  onDuplicateTimeline={duplicateTimeline}
+                  onRemoveTimeline={removeTimeline}
+                  onReorderTimelines={reorderTimelines}
+                  onSelectTimeline={selectTimeline}
+                  onSetFollow={setTimelineFollow}
                   onPanOverview={panTimelineOverview}
                   onZoomOverview={zoomTimelineOverview}
                   onFitOverview={fitTimelineOverview}
@@ -23082,6 +23637,7 @@ export default function App() {
               classList={{ timelineShowSurfaceBlockDrawerOpen: timelineContextDrawer() === "block" }}
             >
             <TimelineCueEventsPanel
+              embeddedControls={false}
               contextDrawer={timelineContextDrawer()}
               childTimelineLabel={timelineChildCue()?.label ?? null}
               cueIdentities={cueIdentities()}
@@ -23092,6 +23648,23 @@ export default function App() {
               metronomeEnabled={activeTimeline().metronome_enabled ?? false}
               countInBeats={activeTimeline().count_in_beats ?? 4}
               countInRemainingMs={activeTimeline().count_in_remaining_ms ?? 0}
+              phases={activeTimeline().phases ?? []}
+              guideEnabled={activeTimeline().guide_enabled ?? false}
+              loopRegion={activeTimeline().loop_region ?? null}
+              loopRuntime={activeTimeline().loop_runtime ?? {
+                generation: 0,
+                status: "disabled",
+                wrap_count: 0,
+              }}
+              timelineBank={timelineBank()}
+              activeTimelineId={activeTimeline().id ?? snapshot().timeline.id ?? 0}
+              followRuntime={activeTimeline().follow_runtime ?? {
+                generation: 0,
+                status: "idle",
+                elapsed_ms: 0,
+                duration_ms: 0,
+                progress_millis: 0,
+              }}
               executingLive={timelineExecutionLive()}
               cuesCount={snapshot().cues.length}
               superSceneCueCount={superSceneCueCount()}
@@ -23119,6 +23692,9 @@ export default function App() {
               selectionRevision={timelineSceneBlockSelectionRevision()}
               audioAnalysis={audioAnalysis()}
               audioClips={activeTimeline().audio_clips ?? []}
+              videoClips={activeTimeline().video_clips ?? []}
+              mediaAssets={snapshot().video.media_assets}
+              itemGroups={activeTimeline().item_groups ?? []}
               audioOffsetMs={activeTimeline().audio_offset_ms ?? 0}
               audioMuted={activeTimeline().audio_muted ?? false}
               audioWaveformPoints={audioWaveformPoints()}
@@ -23148,6 +23724,17 @@ export default function App() {
               onPause={pauseTimeline}
               onPlay={playTimeline}
               onSetMetronome={setTimelineMetronome}
+              onSetGuideEnabled={setTimelineGuideEnabled}
+              onSetPhases={setTimelinePhases}
+              onSetLoopRegion={setTimelineLoopRegion}
+              onSetLoopEnabled={setTimelineLoopEnabled}
+              onScaleLoop={scaleTimelineLoop}
+              onCreateTimeline={createTimeline}
+              onDuplicateTimeline={duplicateTimeline}
+              onRemoveTimeline={removeTimeline}
+              onReorderTimelines={reorderTimelines}
+              onSelectTimeline={selectTimeline}
+              onSetFollow={setTimelineFollow}
               onSeekOverviewTime={seekTimelineFromOverviewTime}
               onMoveEventPlacement={moveTimelineCueEventToPlacement}
               onResizeEventTime={resizeTimelineCueEventToTime}
@@ -23172,6 +23759,9 @@ export default function App() {
               onApplyAudioBpm={applyAudioBpm}
               onAddAudioClip={addTimelineAudioClip}
               onUpdateAudioClip={updateTimelineAudioClip}
+              onUpdateVideoClip={updateTimelineVideoClip}
+              onGroupItems={groupTimelineItems}
+              onUngroupItem={ungroupTimelineItem}
               onRemoveAudioClip={removeTimelineAudioClip}
               onSetAudioMaster={setTimelineAudioMaster}
               onSnapMode={setTimelineSnapMode}

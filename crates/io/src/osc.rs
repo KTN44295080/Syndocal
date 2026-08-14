@@ -10,7 +10,7 @@ use std::{
 
 use protocol::{
     ClockSource, CueId, EffectId, FixtureId, LearnedOscControl, NodeGraphId, OscControlAction,
-    OscControlMapping, OscInputConfig, VideoLayerId, VideoOutputId, VideoParam,
+    OscControlMapping, OscInputConfig, TimelineLoopScale, VideoLayerId, VideoOutputId, VideoParam,
 };
 use rosc::{decoder, OscMessage, OscPacket, OscType};
 use thiserror::Error;
@@ -78,6 +78,8 @@ pub enum OscInputEvent {
     SeekTimelineBeat {
         direction: i32,
     },
+    ToggleTimelineLoop,
+    ScaleTimelineLoop(TimelineLoopScale),
     SyncTimelineTimecode {
         position_ms: u64,
         source: ClockSource,
@@ -972,6 +974,13 @@ fn event_from_mapping(message: &OscMessage, mapping: &OscControlMapping) -> Opti
             .then_some(OscInputEvent::SeekTimelineBeat { direction: -1 }),
         OscControlAction::TimelineBeatNext => is_positive_osc_trigger(first_arg)
             .then_some(OscInputEvent::SeekTimelineBeat { direction: 1 }),
+        OscControlAction::TimelineLoopToggle => {
+            is_positive_osc_trigger(first_arg).then_some(OscInputEvent::ToggleTimelineLoop)
+        }
+        OscControlAction::TimelineLoopHalf => is_positive_osc_trigger(first_arg)
+            .then_some(OscInputEvent::ScaleTimelineLoop(TimelineLoopScale::Half)),
+        OscControlAction::TimelineLoopDouble => is_positive_osc_trigger(first_arg)
+            .then_some(OscInputEvent::ScaleTimelineLoop(TimelineLoopScale::Double)),
         OscControlAction::SetBpm => Some(OscInputEvent::SetBpm(ranged_value)),
         OscControlAction::TapBpm => {
             is_positive_osc_trigger(first_arg).then_some(OscInputEvent::TapBpm)
@@ -2739,6 +2748,37 @@ mod tests {
                 OscInputEvent::SeekTimelineBeat { direction: -1 },
                 OscInputEvent::SeekTimelineBeat { direction: 1 },
             ]
+        );
+    }
+
+    #[test]
+    fn maps_assignable_osc_timeline_loop_controls() {
+        let mapping = |action| OscControlMapping {
+            address: "/timeline/loop".to_string(),
+            action,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+        assert_eq!(
+            event_from_control_value(1.0, &mapping(OscControlAction::TimelineLoopToggle)),
+            Some(OscInputEvent::ToggleTimelineLoop)
+        );
+        assert_eq!(
+            event_from_control_value(1.0, &mapping(OscControlAction::TimelineLoopHalf)),
+            Some(OscInputEvent::ScaleTimelineLoop(TimelineLoopScale::Half))
+        );
+        assert_eq!(
+            event_from_control_value(1.0, &mapping(OscControlAction::TimelineLoopDouble)),
+            Some(OscInputEvent::ScaleTimelineLoop(TimelineLoopScale::Double))
         );
     }
 

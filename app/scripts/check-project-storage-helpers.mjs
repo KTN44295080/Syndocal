@@ -217,6 +217,35 @@ assert.equal(
   "Live Mixer strobe changes must not dirty the project",
 );
 
+const externallySyncedClockSnapshot = JSON.parse(JSON.stringify(autoVjProjectSnapshot));
+externallySyncedClockSnapshot.clock = {
+  bpm: 128,
+  beat_phase: 0.25,
+  beat_counter: 42,
+  tap_count: 3,
+  source: "MidiClock",
+  external_sync_age_ms: 7,
+  external_sync_locked: true,
+};
+const laterExternalClockSnapshot = JSON.parse(JSON.stringify(externallySyncedClockSnapshot));
+laterExternalClockSnapshot.clock.beat_phase = 0.9;
+laterExternalClockSnapshot.clock.beat_counter = 43;
+laterExternalClockSnapshot.clock.tap_count = 4;
+laterExternalClockSnapshot.clock.source = "Link";
+laterExternalClockSnapshot.clock.external_sync_age_ms = 91;
+laterExternalClockSnapshot.clock.external_sync_locked = false;
+assert.equal(
+  projectSnapshot.projectSnapshotSignature(externallySyncedClockSnapshot),
+  projectSnapshot.projectSnapshotSignature(laterExternalClockSnapshot),
+  "runtime clock phase, source and lock age must not dirty or rotate project recovery",
+);
+laterExternalClockSnapshot.clock.bpm = 129;
+assert.notEqual(
+  projectSnapshot.projectSnapshotSignature(externallySyncedClockSnapshot),
+  projectSnapshot.projectSnapshotSignature(laterExternalClockSnapshot),
+  "authored BPM remains part of the project signature",
+);
+
 const dirtySceneBlockDraft = {
   cue_id: 500,
   time_ms: 123_456,

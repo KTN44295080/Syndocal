@@ -2,11 +2,22 @@ import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup,
 import type { TimelineEventDraft } from "../editorDrafts";
 import type {
   AudioAnalysisSummary,
+  MediaAssetSummary,
   TimelineAudioClipSummary,
   TimelineCueEventSummary,
   TimelineLayerKind,
   TimelineLayerSummary,
+  TimelineLoopRegionSummary,
+  TimelineLoopRuntimeSummary,
+  TimelineFollowRuntimeSummary,
+  TimelineFollowSummary,
+  TimelineItemGroupSummary,
+  TimelineItemRef,
+  TimelinePhaseRole,
+  TimelinePhaseSummary,
+  TimelineSnapshot,
   TimelineTrackKind,
+  TimelineVideoClipSummary,
 } from "../types";
 import type { CueIdentitySource } from "../identityColor";
 import type { TimelineCueDragState } from "../timelineCueDrag";
@@ -23,6 +34,7 @@ import {
   type TimelineOverviewEvent,
   type TimelineOverviewOverlapCluster,
 } from "./TimelineOverview";
+import { TimelineBankPanel } from "./TimelineBankPanel";
 import {
   TimelineSceneBlocksEditor,
   type TimelineSceneBlockCueOption,
@@ -56,6 +68,7 @@ interface AudioBeatMarker {
 }
 
 interface TimelineCueEventsPanelProps {
+  embeddedControls: boolean;
   contextDrawer: TimelineContextDrawer;
   childTimelineLabel: string | null;
   cueIdentities?: Record<number, CueIdentitySource>;
@@ -66,6 +79,13 @@ interface TimelineCueEventsPanelProps {
   metronomeEnabled: boolean;
   countInBeats: number;
   countInRemainingMs: number;
+  phases: TimelinePhaseSummary[];
+  guideEnabled: boolean;
+  loopRegion: TimelineLoopRegionSummary | null;
+  loopRuntime: TimelineLoopRuntimeSummary;
+  timelineBank: TimelineSnapshot[];
+  activeTimelineId: number;
+  followRuntime: TimelineFollowRuntimeSummary;
   executingLive: boolean;
   cuesCount: number;
   superSceneCueCount: number;
@@ -88,6 +108,9 @@ interface TimelineCueEventsPanelProps {
   selectionRevision: number;
   audioAnalysis: AudioAnalysisSummary | null;
   audioClips: TimelineAudioClipSummary[];
+  videoClips: TimelineVideoClipSummary[];
+  mediaAssets: MediaAssetSummary[];
+  itemGroups: TimelineItemGroupSummary[];
   audioOffsetMs: number;
   audioMuted: boolean;
   audioWaveformPoints: string;
@@ -120,6 +143,17 @@ interface TimelineCueEventsPanelProps {
   onPause: () => void | Promise<void>;
   onPlay: () => void | Promise<void>;
   onSetMetronome: (enabled: boolean, countInBeats: number) => void | Promise<void>;
+  onSetGuideEnabled: (enabled: boolean) => void | Promise<void>;
+  onSetPhases: (phases: TimelinePhaseSummary[]) => void | Promise<void>;
+  onSetLoopRegion: (region: TimelineLoopRegionSummary | null) => void | Promise<void>;
+  onSetLoopEnabled: (enabled: boolean) => void | Promise<void>;
+  onScaleLoop: (scale: "half" | "double") => void | Promise<void>;
+  onCreateTimeline: (label: string) => void | Promise<void>;
+  onDuplicateTimeline: (timelineId: number) => void | Promise<void>;
+  onRemoveTimeline: (timelineId: number) => void | Promise<void>;
+  onReorderTimelines: (timelineIds: number[]) => void | Promise<void>;
+  onSelectTimeline: (timelineId: number, play: boolean) => void | Promise<void>;
+  onSetFollow: (follow: TimelineFollowSummary | null) => void | Promise<void>;
   onSeekOverviewTime: (timeMs: number) => void;
   onMoveEventPlacement: (
     eventId: number,
@@ -160,6 +194,9 @@ interface TimelineCueEventsPanelProps {
   onApplyAudioBpm: () => void | Promise<void>;
   onAddAudioClip: (layerId: number) => void | Promise<void>;
   onUpdateAudioClip: (clip: TimelineAudioClipSummary) => void | Promise<void>;
+  onUpdateVideoClip: (clip: TimelineVideoClipSummary) => void | Promise<void>;
+  onGroupItems: (items: TimelineItemRef[]) => void | Promise<void>;
+  onUngroupItem: (item: TimelineItemRef) => void | Promise<void>;
   onRemoveAudioClip: (clipId: number) => void | Promise<void>;
   onSetAudioMaster: (offsetMs: number, muted: boolean) => void | Promise<void>;
   onSnapMode: (mode: TimelineSnapMode) => void;
@@ -207,6 +244,9 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   let layerMenuReturnFocus: HTMLElement | null = null;
   let layerDialogReturnFocus: HTMLElement | null = null;
   const [selectedAudioClipId, setSelectedAudioClipId] = createSignal<number | null>(null);
+  const [selectedVideoClipId, setSelectedVideoClipId] = createSignal<number | null>(null);
+  const [selectedTimelineItems, setSelectedTimelineItems] = createSignal<TimelineItemRef[]>([]);
+  const [itemContextMenu, setItemContextMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [pendingRemoveAudioClipId, setPendingRemoveAudioClipId] = createSignal<number | null>(null);
   const [layerMenu, setLayerMenu] = createSignal<{ layerId: number; x: number; y: number } | null>(null);
   const [layerRename, setLayerRename] = createSignal("");
@@ -215,14 +255,120 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   const [pendingRemoveLayerId, setPendingRemoveLayerId] = createSignal<number | null>(null);
   const [reassignTargetLayerId, setReassignTargetLayerId] = createSignal<number | null>(null);
   const [blockDrawerBrowserMode, setBlockDrawerBrowserMode] = createSignal(false);
+  const loopRuntimeEnabled = () => props.loopRuntime.status !== "disabled";
+  const defaultLoopLengthMs = () => Math.max(1, Math.round(240_000 / Math.max(20, props.bpm)));
+  const setLoopAAtPlayhead = () => {
+    const aMs = Math.max(0, Math.round(props.positionMs));
+    const existingB = props.loopRegion?.b_ms ?? 0;
+    const maximumEnd = Math.max(aMs + 1, props.durationMs || aMs + defaultLoopLengthMs());
+    const bMs = existingB > aMs
+      ? existingB
+      : Math.min(maximumEnd, aMs + defaultLoopLengthMs());
+    void props.onSetLoopRegion({
+      a_ms: aMs,
+      b_ms: bMs,
+      enabled: props.loopRegion?.enabled ?? true,
+      musical_length_beats: 4,
+    });
+  };
+  const setLoopBAtPlayhead = () => {
+    const bMs = Math.max(1, Math.round(props.positionMs));
+    const aMs = props.loopRegion?.a_ms ?? Math.max(0, bMs - defaultLoopLengthMs());
+    if (bMs <= aMs) {
+      props.onTimelineStatus("Loop B must be after Loop A.");
+      return;
+    }
+    void props.onSetLoopRegion({
+      a_ms: aMs,
+      b_ms: bMs,
+      enabled: props.loopRegion?.enabled ?? true,
+      musical_length_beats: props.loopRegion?.musical_length_beats ?? 4,
+    });
+  };
+  const updatePhase = (phaseId: number, patch: Partial<TimelinePhaseSummary>) => {
+    void props.onSetPhases(props.phases.map((phase) => phase.id === phaseId
+      ? { ...phase, ...patch }
+      : phase));
+  };
+  const addPhase = () => {
+    const startMs = Math.max(0, Math.round(props.positionMs));
+    const nextStart = props.phases
+      .filter((phase) => phase.start_ms > startMs)
+      .map((phase) => phase.start_ms)
+      .sort((left, right) => left - right)[0];
+    const endMs = Math.max(
+      startMs + 1,
+      Math.min(props.durationMs || startMs + defaultLoopLengthMs() * 4, nextStart ?? startMs + defaultLoopLengthMs() * 4),
+    );
+    void props.onSetPhases([
+      ...props.phases,
+      {
+        id: 0,
+        label: `Phase ${props.phases.length + 1}`,
+        role: "custom" as TimelinePhaseRole,
+        start_ms: startMs,
+        end_ms: endMs,
+      },
+    ].sort((left, right) => left.start_ms - right.start_ms));
+  };
   const layerAddTitleId = `${createUniqueId()}-timeline-layer-add-title`;
   const layerRemoveTitleId = `${createUniqueId()}-timeline-layer-remove-title`;
   const layerRemoveDescriptionId = `${createUniqueId()}-timeline-layer-remove-description`;
   const selectedAudioClip = () => props.audioClips.find((clip) => clip.id === selectedAudioClipId()) ?? null;
+  const selectedVideoClip = () => props.videoClips.find((clip) => clip.id === selectedVideoClipId()) ?? null;
+  const timelineItemKey = (item: TimelineItemRef) => {
+    switch (item.kind) {
+      case "video_clip": return `video:${item.clip_id}`;
+      case "audio_clip": return `audio:${item.clip_id}`;
+      case "lighting_event": return `event:${item.event_id}`;
+      case "lighting_automation": return `lighting-automation:${item.automation_id}`;
+      case "video_automation": return `video-automation:${item.automation_id}`;
+    }
+  };
+  const selectedTimelineItemRefs = createMemo<TimelineItemRef[]>(() => {
+    const videoIds = new Set(props.videoClips.map((clip) => clip.id));
+    const audioIds = new Set(props.audioClips.map((clip) => clip.id));
+    return selectedTimelineItems().filter((item) => item.kind === "video_clip"
+      ? videoIds.has(item.clip_id)
+      : item.kind === "audio_clip" ? audioIds.has(item.clip_id) : true);
+  });
+  const selectedAudioClipIds = createMemo(() => selectedTimelineItemRefs()
+    .filter((item): item is Extract<TimelineItemRef, { kind: "audio_clip" }> => item.kind === "audio_clip")
+    .map((item) => item.clip_id));
+  const selectedVideoClipIds = createMemo(() => selectedTimelineItemRefs()
+    .filter((item): item is Extract<TimelineItemRef, { kind: "video_clip" }> => item.kind === "video_clip")
+    .map((item) => item.clip_id));
+  const itemGroupForSelection = createMemo(() => props.itemGroups.find((group) =>
+    selectedTimelineItemRefs().some((selected) => group.members.some((member) =>
+      JSON.stringify(member) === JSON.stringify(selected)))) ?? null);
+  const expandLinkedSelection = (item: TimelineItemRef, additive = false) => {
+    const group = props.itemGroups.find((candidate) => candidate.members.some((member) =>
+      JSON.stringify(member) === JSON.stringify(item)));
+    const members = group?.members ?? [item];
+    const next = additive ? [...selectedTimelineItems()] : [];
+    const keys = new Set(next.map(timelineItemKey));
+    for (const member of members) {
+      if (!keys.has(timelineItemKey(member))) next.push(member);
+    }
+    setSelectedTimelineItems(next);
+    if (!additive) {
+      setSelectedAudioClipId(null);
+      setSelectedVideoClipId(null);
+    }
+    if (item.kind === "audio_clip") setSelectedAudioClipId(item.clip_id);
+    if (item.kind === "video_clip") setSelectedVideoClipId(item.clip_id);
+  };
+  const selectAudioClip = (clipId: number, additive = false) =>
+    expandLinkedSelection({ kind: "audio_clip", clip_id: clipId }, additive);
+  const selectVideoClip = (clipId: number, additive = false) =>
+    expandLinkedSelection({ kind: "video_clip", clip_id: clipId }, additive);
   const pendingRemoveAudioClip = () =>
     props.audioClips.find((clip) => clip.id === pendingRemoveAudioClipId()) ?? null;
   createEffect(() => {
     if (selectedAudioClipId() !== null && !selectedAudioClip()) setSelectedAudioClipId(null);
+    if (selectedVideoClipId() !== null && !selectedVideoClip()) setSelectedVideoClipId(null);
+    const retained = selectedTimelineItemRefs();
+    if (retained.length !== selectedTimelineItems().length) setSelectedTimelineItems(retained);
   });
   createEffect(() => {
     if (props.contextDrawer !== "block" && blockDrawerBrowserMode()) {
@@ -251,6 +397,9 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     for (const clip of props.audioClips) {
       counts.set(clip.layer_id, (counts.get(clip.layer_id) ?? 0) + 1);
     }
+    for (const clip of props.videoClips) {
+      counts.set(clip.layer_id, (counts.get(clip.layer_id) ?? 0) + 1);
+    }
     return counts;
   });
   const timelineSuperSceneEmptyHintCount = createMemo(() =>
@@ -259,6 +408,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     && props.lightingAutomationCount === 0
     && props.videoAutomationCount === 0
     && props.audioClips.length === 0
+    && props.videoClips.length === 0
       ? props.superSceneCueCount
       : 0);
   const pendingRemoveLayer = () => {
@@ -446,6 +596,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   });
   return (
     <>
+      <Show when={props.embeddedControls}>
+      <>
       <div class="panelHeader">
         <div class="timelineTitleGroup">
           <h2>Timeline</h2>
@@ -485,6 +637,20 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           </span>
         </div>
       </div>
+      <Show when={props.childTimelineLabel === null && props.timelineBank.length > 0}>
+        <TimelineBankPanel
+          timelines={props.timelineBank}
+          activeTimelineId={props.activeTimelineId}
+          bpm={props.bpm}
+          followRuntime={props.followRuntime}
+          onCreate={props.onCreateTimeline}
+          onDuplicate={props.onDuplicateTimeline}
+          onRemove={props.onRemoveTimeline}
+          onReorder={props.onReorderTimelines}
+          onSelect={props.onSelectTimeline}
+          onSetFollow={props.onSetFollow}
+        />
+      </Show>
       <div class="timelineToolStrip" role="toolbar" aria-label="Timeline tools">
       <div class="timelineTransport" role="group" aria-label="Timeline transport">
         <button
@@ -540,6 +706,54 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
             {`${Math.ceil(props.countInRemainingMs / Math.max(1, 60_000 / props.bpm))}`}
           </output>
         </Show>
+        <button
+          type="button"
+          classList={{ active: props.guideEnabled }}
+          aria-pressed={props.guideEnabled}
+          data-timeline-guide
+          title="Announce phases and loop transitions"
+          onClick={() => void props.onSetGuideEnabled(!props.guideEnabled)}
+        >
+          Guide
+        </button>
+      </div>
+      <div class="timelineLoopControls" role="group" aria-label="Timeline A-B loop controls">
+        <button type="button" title="Set loop A at playhead" onClick={setLoopAAtPlayhead}>A</button>
+        <button type="button" title="Set loop B at playhead" onClick={setLoopBAtPlayhead}>B</button>
+        <button
+          type="button"
+          classList={{ active: loopRuntimeEnabled() }}
+          aria-pressed={loopRuntimeEnabled()}
+          disabled={props.loopRegion === null}
+          title={loopRuntimeEnabled() ? "Disable loop (Break)" : "Enable or arm loop"}
+          data-timeline-loop-toggle
+          onClick={() => void props.onSetLoopEnabled(!loopRuntimeEnabled())}
+        >
+          Loop
+        </button>
+        <button
+          type="button"
+          title="Halve loop length"
+          disabled={props.loopRegion === null}
+          onClick={() => void props.onScaleLoop("half")}
+        >
+          1/2
+        </button>
+        <button
+          type="button"
+          title="Double loop length"
+          disabled={props.loopRegion === null}
+          onClick={() => void props.onScaleLoop("double")}
+        >
+          ×2
+        </button>
+        <output class={`timelineLoopState ${props.loopRuntime.status}`} aria-live="polite" data-no-localize>
+          {props.loopRuntime.status === "armed"
+            ? "ARMED"
+            : props.loopRuntime.status === "looping"
+              ? `LOOP ×${props.loopRuntime.wrap_count}`
+              : "OFF"}
+        </output>
       </div>
       <input
         class="timelineScrubber"
@@ -707,11 +921,102 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         </Show>
       </div>
       </div>
+      <details class="timelinePhaseEditor" data-timeline-phase-editor>
+        <summary>
+          <span>Phases</span>
+          <strong class="tabularNums" data-no-localize>{props.phases.length}</strong>
+        </summary>
+        <div class="timelinePhaseEditorBody">
+          <div class="timelinePhaseRail" aria-label="Timeline phases">
+            <For each={props.phases.filter((phase) => (
+              phase.end_ms > props.visibleWindow.start_ms && phase.start_ms < props.visibleWindow.end_ms
+            ))}>
+              {(phase) => {
+                const span = Math.max(1, timelineVisibleWindowSpanMs(props.visibleWindow));
+                const left = Math.max(0, phase.start_ms - props.visibleWindow.start_ms) / span * 100;
+                const right = Math.min(props.visibleWindow.end_ms, phase.end_ms) - props.visibleWindow.start_ms;
+                const width = Math.max(0.5, right / span * 100 - left);
+                return (
+                  <button
+                    type="button"
+                    class={`timelinePhaseBand ${phase.role}`}
+                    style={{ left: `${left}%`, width: `${width}%` }}
+                    title={`${phase.label}: ${formatTimelineHeaderTime(phase.start_ms)}–${formatTimelineHeaderTime(phase.end_ms)}`}
+                    onClick={() => void props.onSeek(phase.start_ms)}
+                  >
+                    <span data-no-localize>{phase.label}</span>
+                  </button>
+                );
+              }}
+            </For>
+          </div>
+          <div class="timelinePhaseRows">
+            <For each={props.phases}>
+              {(phase) => (
+                <div class="timelinePhaseRow" data-phase-id={phase.id}>
+                  <input
+                    aria-label="Phase label"
+                    value={phase.label}
+                    maxlength="64"
+                    onChange={(event) => updatePhase(phase.id, { label: event.currentTarget.value.trim() || phase.label })}
+                  />
+                  <select
+                    aria-label="Phase role"
+                    value={phase.role}
+                    onChange={(event) => updatePhase(phase.id, { role: event.currentTarget.value as TimelinePhaseRole })}
+                  >
+                    <option value="intro">Intro</option>
+                    <option value="verse">Verse</option>
+                    <option value="pre_chorus">Pre-Chorus</option>
+                    <option value="chorus">Chorus</option>
+                    <option value="bridge">Bridge</option>
+                    <option value="outro">Outro</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  <label>
+                    <span>Start</span>
+                    <input
+                      class="tabularNums"
+                      type="number"
+                      min="0"
+                      value={phase.start_ms}
+                      onChange={(event) => updatePhase(phase.id, { start_ms: Math.max(0, Number(event.currentTarget.value)) })}
+                    />
+                  </label>
+                  <label>
+                    <span>End</span>
+                    <input
+                      class="tabularNums"
+                      type="number"
+                      min={phase.start_ms + 1}
+                      value={phase.end_ms}
+                      onChange={(event) => updatePhase(phase.id, { end_ms: Math.max(phase.start_ms + 1, Number(event.currentTarget.value)) })}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    class="danger ghost"
+                    aria-label={`Remove phase ${phase.label}`}
+                    onClick={() => void props.onSetPhases(props.phases.filter((candidate) => candidate.id !== phase.id))}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+            </For>
+          </div>
+          <button type="button" class="secondary" onClick={addPhase}>Add Phase at Playhead</button>
+        </div>
+      </details>
+      </>
+      </Show>
       <TimelineOverview
         events={props.overviewEvents}
         layerItemCounts={timelineLayerItemCounts()}
         cueIdentities={props.cueIdentities}
         audioClips={props.audioClips}
+        videoClips={props.videoClips}
+        mediaAssets={props.mediaAssets}
         audioAnalysis={props.audioAnalysis}
         layers={props.timelineLayers}
         legacyMode={false}
@@ -725,6 +1030,9 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         selectedRangeId={props.selectedAutomationRangeId}
         selectedEventId={props.selectedEventId}
         selectedAudioClipId={selectedAudioClipId()}
+        selectedVideoClipId={selectedVideoClipId()}
+        selectedAudioClipIds={selectedAudioClipIds()}
+        selectedVideoClipIds={selectedVideoClipIds()}
         playheadX={props.overviewPlayheadX}
         visibleWindow={props.visibleWindow}
         bpm={props.bpm}
@@ -742,11 +1050,14 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           }
         }}
         onOpenSuperScene={props.onOpenSuperScene}
-        onSelectAudioClip={setSelectedAudioClipId}
+        onSelectAudioClip={selectAudioClip}
+        onSelectVideoClip={selectVideoClip}
+        onOpenItemContextMenu={setItemContextMenu}
         onInspectOverlapCluster={inspectOverlapCluster}
         onUpdateLayer={(layer) => void props.onUpdateTimelineLayer(layer)}
         onAddAudioClip={(layerId) => void props.onAddAudioClip(layerId)}
         onUpdateAudioClip={(clip) => void props.onUpdateAudioClip(clip)}
+        onUpdateVideoClip={(clip) => void props.onUpdateVideoClip(clip)}
         onStatus={props.onTimelineStatus}
         onMoveEventPlacement={(eventId, timeMs, layerId, snapEnabled) =>
           void props.onMoveEventPlacement(eventId, timeMs, layerId, snapEnabled)
@@ -769,6 +1080,42 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         }
         onOpenLayerMenu={openLayerMenu}
       />
+      <Show when={itemContextMenu()}>
+        {(menu) => (
+          <div
+            class="timelineItemContextMenu"
+            role="menu"
+            aria-label="Timeline item group actions"
+            style={{ left: `${menu().x}px`, top: `${menu().y}px` }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              disabled={selectedTimelineItemRefs().length < 2 || itemGroupForSelection() !== null}
+              onClick={() => {
+                void props.onGroupItems(selectedTimelineItemRefs());
+                setItemContextMenu(null);
+              }}
+            >
+              Group selected
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={itemGroupForSelection() === null}
+              onClick={() => {
+                const item = selectedTimelineItemRefs()[0];
+                if (item) void props.onUngroupItem(item);
+                setItemContextMenu(null);
+              }}
+            >
+              Ungroup
+            </button>
+            <button type="button" role="menuitem" onClick={() => setItemContextMenu(null)}>Close</button>
+          </div>
+        )}
+      </Show>
       <Show when={menuLayer()}>
         {(layer) => (
           <div
@@ -1279,6 +1626,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
                 audioClipRemoveDialog?.close();
                 void props.onRemoveAudioClip(clipId);
                 setSelectedAudioClipId(null);
+                setSelectedTimelineItems((items) => items.filter((item) =>
+                  !(item.kind === "audio_clip" && item.clip_id === clipId)));
               }}
             >
               Remove Audio Clip

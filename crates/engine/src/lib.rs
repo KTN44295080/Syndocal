@@ -27,14 +27,16 @@ use io::{
 use protocol::StageObjectKind;
 use protocol::{
     normalize_legacy_video_clip_slots, normalize_legacy_video_effect_chains,
-    normalize_legacy_video_media_assets, set_video_output_mapping_field_value,
-    validate_engine_ready_video_clip_slots, validate_engine_ready_video_effect_chains,
-    validate_video_clip_runtime_against_authored_slots, ActiveFadeSummary, AttributeControl,
-    AttributeResolution, AttributeValueSummary, AudioAnalysisSummary, AudioReactiveCurve,
-    AudioReactiveFeature, AudioSpectrumBand, AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction,
-    AutoVjConfig, AutoVjMode, AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger,
-    AutomationId, AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection,
-    ChaserEffectRequest, ChaserFeature, ChildTimelineSummary, ChildTimelineTransportPathSegment,
+    normalize_legacy_video_media_assets, normalize_timeline_bank,
+    set_video_output_mapping_field_value, validate_engine_ready_video_clip_slots,
+    validate_engine_ready_video_effect_chains, validate_timeline_authoring, validate_timeline_bank,
+    validate_video_clip_runtime_against_authored_slots, validate_video_layer_transition_runtime,
+    ActiveFadeSummary, AttributeControl, AttributeResolution, AttributeValueSummary,
+    AudioAnalysisSummary, AudioReactiveCurve, AudioReactiveFeature, AudioSpectrumBand,
+    AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction, AutoVjConfig, AutoVjMode,
+    AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger, AutomationId,
+    AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection, ChaserEffectRequest,
+    ChaserFeature, ChildTimelineSummary, ChildTimelineTransportPathSegment,
     ChildTimelineTransportRootSummary, ChildTimelineTransportRuntimeSummary, ClockSnapshot,
     ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
     ColorEffectRequest, ColorEffectSpatialBounceItem, ColorEffectSpatialCoordinateFrame,
@@ -58,20 +60,28 @@ use protocol::{
     OutputOwnershipStatus, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
     PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
     RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
-    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
-    TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
-    TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
-    TimelineTrackKind, TimelineVideoAutomationSummary, TouchFeaturePresetTarget,
-    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
-    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBlendMode, VideoClipLaunchQuantization, VideoClipLayerRuntimeSummary, VideoClipLoopMode,
+    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAdvancedAuthoringSummary,
+    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
+    TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeSummary, TimelineFollowSummary,
+    TimelineGuideCueKind, TimelineGuideCueSummary, TimelineId, TimelineItemGroupId,
+    TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind, TimelineLayerSummary,
+    TimelineLoopRegionSummary, TimelineLoopRuntimeStatus, TimelineLoopRuntimeSummary,
+    TimelineLoopScale, TimelinePhaseId, TimelinePhaseSummary, TimelineSnapRequest,
+    TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary, TimelineVideoClipId,
+    TimelineVideoClipSummary, TouchFeaturePresetTarget, TouchSurfaceSummary, Transform2D,
+    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode,
+    VideoClipLaunchQuantization, VideoClipLayerRuntimeSummary, VideoClipLoopMode,
     VideoClipPendingLaunchSummary, VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary,
-    VideoColorAdjust, VideoCuePointSummary, VideoEffectChainId, VideoEffectChainSummary,
-    VideoEffectId, VideoEffectKind, VideoEffectPresetId, VideoEffectPresetSummary,
-    VideoEffectScope, VideoEffectStageId, VideoEffectStageSummary, VideoEffectTarget,
-    VideoFxAdjust, VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
-    VideoLayerGroupId, VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerSummary,
-    VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoClipTakeDuration, VideoClipTakeDurationUnit, VideoClipTakeKind,
+    VideoClipTakeTransitionSummary, VideoColorAdjust, VideoCuePointSummary, VideoEffectChainId,
+    VideoEffectChainSummary, VideoEffectId, VideoEffectKind, VideoEffectPresetId,
+    VideoEffectPresetSummary, VideoEffectScope, VideoEffectStageId, VideoEffectStageSummary,
+    VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind, VideoIsfEffectStageSummary,
+    VideoIsfEffectSummary, VideoLayerGroupId, VideoLayerGroupSummary, VideoLayerId,
+    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoLayerTransitionBusRuntimeSummary,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
+    VideoLayerTransitionTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
     VideoSnapshot, VideoSourceKind, VideoSourceSummary, VideoTransitionBusId,
     VideoTransitionEffectOwner, DEFAULT_CUE_LIST_ID, LIVE_AUDIO_FEATURE_BAND_CAPACITY,
@@ -82,6 +92,7 @@ use thiserror::Error;
 const ENGINE_QUEUE_CAPACITY: usize = 4096;
 /// Upper bound for one directly addressable layer clip bank.
 const MAX_VIDEO_CLIP_SLOTS_PER_LAYER: usize = 32;
+const MAX_VIDEO_CLIP_TAKE_DURATION_MS: u64 = 600_000;
 const COMMANDS_PER_TICK_LIMIT: usize = 512;
 const DMX_TICK_INTERVAL: Duration = Duration::from_micros(22_727);
 const LOW_LATENCY_DMX_TICK_THRESHOLD: Duration = Duration::from_micros(5_000);
@@ -94,9 +105,16 @@ const AUTO_VJ_ACTION_LOG_LIMIT: usize = 64;
 const AUTO_VJ_MAX_CANDIDATES: usize = 64;
 const AUTO_VJ_MAX_BEATS_PER_CHANGE: u16 = 256;
 const AUTO_VJ_MAX_TRANSITION_MS: u64 = 60_000;
+const TIMELINE_RUNTIME_GENERATION_MAX: u64 = 9_007_199_254_740_991;
 const AUDIO_REACTIVE_MAX_ENVELOPE_MS: u32 = 60_000;
 pub const GROUP_STROBE_MAX_HZ: f32 = 30.0;
 pub const VIDEO_ISF_PROJECT_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+fn next_timeline_runtime_generation(current: u64) -> u64 {
+    current
+        .saturating_add(1)
+        .clamp(1, TIMELINE_RUNTIME_GENERATION_MAX)
+}
 
 /// Supported real-time effect envelope: 64 simultaneous enabled effects over
 /// 200 fixtures at each effect family's validated parameter maxima, evaluated
@@ -2077,6 +2095,18 @@ pub enum EngineCommand {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    ApplyTimelineAdvancedAuthoringPublished {
+        candidate: TimelineAdvancedAuthoringSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    ApplyTimelineBankPublished {
+        timelines: Vec<TimelineSnapshot>,
+        active_timeline_id: TimelineId,
+        play: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     AddTimelineAutomation {
         automation_id: AutomationId,
         fixture_id: FixtureId,
@@ -2131,6 +2161,9 @@ pub enum EngineCommand {
     },
     SetTimelinePlaying(bool),
     SeekTimeline(u64),
+    SetTimelineLoopEnabled(bool),
+    ToggleTimelineLoop,
+    ScaleTimelineLoop(TimelineLoopScale),
     SetDirectChildTimelinePlaying {
         cue_id: CueId,
         playing: bool,
@@ -2312,6 +2345,8 @@ pub enum EngineCommand {
         /// When omitted, launch the currently queued slot. A queued launch is
         /// never inferred from list position.
         slot_id: Option<VideoClipSlotId>,
+        transition_kind: VideoClipTakeKind,
+        transition_duration: VideoClipTakeDuration,
         expires_at: Instant,
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
@@ -2319,6 +2354,23 @@ pub enum EngineCommand {
     SeekVideoClipSlotPublished {
         layer_id: VideoLayerId,
         position_ms: u64,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    LaunchVideoLayerTransitionBusPublished {
+        bus_id: VideoTransitionBusId,
+        from: VideoLayerTransitionTarget,
+        to: VideoLayerTransitionTarget,
+        kind: VideoClipTakeKind,
+        duration: VideoClipTakeDuration,
+        curve: VideoLayerTransitionCurve,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    ReleaseVideoLayerTransitionBusPublished {
+        bus_id: VideoTransitionBusId,
         expires_at: Instant,
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
@@ -2353,6 +2405,7 @@ pub enum EngineCommand {
         effect_chains: Vec<VideoEffectChainSummary>,
         effect_presets: Vec<VideoEffectPresetSummary>,
         layer_groups: Vec<VideoLayerGroupSummary>,
+        transition_buses: Vec<VideoLayerTransitionBusSummary>,
         expires_at: Instant,
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
@@ -2569,6 +2622,9 @@ impl EngineCommand {
                 | EngineCommand::ReportLiveAudioOnset { .. }
                 | EngineCommand::SetTimelinePlaying(_)
                 | EngineCommand::SeekTimeline(_)
+                | EngineCommand::SetTimelineLoopEnabled(_)
+                | EngineCommand::ToggleTimelineLoop
+                | EngineCommand::ScaleTimelineLoop(_)
                 | EngineCommand::SetDirectChildTimelinePlaying { .. }
                 | EngineCommand::SeekDirectChildTimeline { .. }
                 | EngineCommand::SeekTimelineBeat { .. }
@@ -2691,6 +2747,9 @@ impl EngineCommand {
                 | EngineCommand::RemoveCue(_)
                 | EngineCommand::RemoveCuePublished { .. }
                 | EngineCommand::SetTimelinePlaying(_)
+                | EngineCommand::SetTimelineLoopEnabled(_)
+                | EngineCommand::ToggleTimelineLoop
+                | EngineCommand::ScaleTimelineLoop(_)
                 | EngineCommand::SetTimelineMetronome { .. }
                 | EngineCommand::SetDirectChildTimelinePlaying { .. }
                 | EngineCommand::SetLiveAudioSpectrum(_)
@@ -2943,10 +3002,17 @@ impl EngineHandle {
         let queue = Arc::new(ArrayQueue::new(ENGINE_QUEUE_CAPACITY));
         let wake = Arc::new(EngineWake::new());
         let shared_telemetry = Arc::new(EngineSharedTelemetry::new());
-        let snapshot = Arc::new(RwLock::new(EngineSnapshot {
+        let initial_snapshot = EngineSnapshot {
             output: output.clone(),
             ..EngineSnapshot::default()
-        }));
+        };
+        let next_timeline_identity = initial_snapshot
+            .timeline
+            .id
+            .0
+            .checked_add(1)
+            .expect("the default Timeline ID must leave allocator capacity");
+        let snapshot = Arc::new(RwLock::new(initial_snapshot));
         let next_fixture_id = Arc::new(AtomicU64::new(1));
         let next_effect_id = Arc::new(AtomicU64::new(1));
         let next_cue_id = Arc::new(AtomicU64::new(1));
@@ -2955,7 +3021,7 @@ impl EngineHandle {
         let next_executor_id = Arc::new(AtomicU64::new(2));
         let next_timeline_event_id = Arc::new(AtomicU64::new(1));
         let next_timeline_layer_id = Arc::new(AtomicU32::new(2));
-        let next_timeline_audio_clip_id = Arc::new(AtomicU64::new(1));
+        let next_timeline_audio_clip_id = Arc::new(AtomicU64::new(next_timeline_identity));
         let next_automation_id = Arc::new(AtomicU64::new(1));
         let next_media_asset_id = Arc::new(AtomicU64::new(1));
         let next_video_layer_id = Arc::new(AtomicU64::new(1));
@@ -3093,6 +3159,25 @@ impl EngineHandle {
             &self.next_timeline_audio_clip_id,
             AllocatorDomain::TimelineAudioClips,
         )
+    }
+
+    pub fn allocate_timeline_id(&self) -> TimelineId {
+        TimelineId(self.allocate_timeline_audio_clip_id())
+    }
+
+    /// Advanced Timeline identities intentionally share one never-rewound
+    /// allocator. Their Rust/JSON newtypes remain distinct while batch A/V
+    /// insertion can reserve every linked identity without cross-domain reuse.
+    pub fn allocate_timeline_video_clip_id(&self) -> TimelineVideoClipId {
+        TimelineVideoClipId(self.allocate_timeline_audio_clip_id())
+    }
+
+    pub fn allocate_timeline_phase_id(&self) -> TimelinePhaseId {
+        TimelinePhaseId(self.allocate_timeline_audio_clip_id())
+    }
+
+    pub fn allocate_timeline_item_group_id(&self) -> TimelineItemGroupId {
+        TimelineItemGroupId(self.allocate_timeline_audio_clip_id())
     }
 
     pub fn allocate_automation_id(&self) -> AutomationId {
@@ -4524,6 +4609,44 @@ impl EngineHandle {
             .map_err(|error| format!("Timeline audio master acknowledgement failed: {error}"))?
     }
 
+    pub fn apply_timeline_advanced_authoring_published(
+        &self,
+        candidate: TimelineAdvancedAuthoringSummary,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::ApplyTimelineAdvancedAuthoringPublished {
+            candidate,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Timeline advanced authoring acknowledgement failed: {error}")
+            })?
+    }
+
+    pub fn apply_timeline_bank_published(
+        &self,
+        timelines: Vec<TimelineSnapshot>,
+        active_timeline_id: TimelineId,
+        play: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::ApplyTimelineBankPublished {
+            timelines,
+            active_timeline_id,
+            play,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Timeline bank acknowledgement failed: {error}"))?
+    }
+
     pub fn bootstrap_vj_show(
         &self,
         layers: Vec<(VideoLayerId, String, VideoSourceSummary)>,
@@ -4760,10 +4883,42 @@ impl EngineHandle {
         layer_id: VideoLayerId,
         slot_id: Option<VideoClipSlotId>,
     ) -> Result<(), String> {
+        self.launch_video_clip_slot_with_transition_published(
+            layer_id,
+            slot_id,
+            VideoClipTakeKind::Cut,
+            0,
+        )
+    }
+
+    pub fn launch_video_clip_slot_with_transition_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot_id: Option<VideoClipSlotId>,
+        transition_kind: VideoClipTakeKind,
+        transition_duration_ms: u64,
+    ) -> Result<(), String> {
+        self.launch_video_clip_slot_with_transition_timing_published(
+            layer_id,
+            slot_id,
+            transition_kind,
+            VideoClipTakeDuration::milliseconds(transition_duration_ms),
+        )
+    }
+
+    pub fn launch_video_clip_slot_with_transition_timing_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot_id: Option<VideoClipSlotId>,
+        transition_kind: VideoClipTakeKind,
+        transition_duration: VideoClipTakeDuration,
+    ) -> Result<(), String> {
         self.video_clip_slot_command_published(|expires_at, admission, ack| {
             EngineCommand::LaunchVideoClipSlotPublished {
                 layer_id,
                 slot_id,
+                transition_kind,
+                transition_duration,
                 expires_at,
                 admission,
                 ack,
@@ -4950,6 +5105,22 @@ impl EngineHandle {
         effect_presets: Vec<VideoEffectPresetSummary>,
         layer_groups: Vec<VideoLayerGroupSummary>,
     ) -> Result<(), String> {
+        let transition_buses = self.snapshot().video.transition_buses;
+        self.apply_video_effect_catalog_with_transition_buses(
+            effect_chains,
+            effect_presets,
+            layer_groups,
+            transition_buses,
+        )
+    }
+
+    pub fn apply_video_effect_catalog_with_transition_buses(
+        &self,
+        effect_chains: Vec<VideoEffectChainSummary>,
+        effect_presets: Vec<VideoEffectPresetSummary>,
+        layer_groups: Vec<VideoLayerGroupSummary>,
+        transition_buses: Vec<VideoLayerTransitionBusSummary>,
+    ) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(2);
         let admission = ProjectSnapshotLoadAdmission::new();
         let (ack, receiver) = mpsc::sync_channel(1);
@@ -4957,6 +5128,51 @@ impl EngineHandle {
             effect_chains,
             effect_presets,
             layer_groups,
+            transition_buses,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, Duration::from_secs(2))
+    }
+
+    pub fn launch_video_layer_transition_bus(
+        &self,
+        bus_id: VideoTransitionBusId,
+        from: VideoLayerTransitionTarget,
+        to: VideoLayerTransitionTarget,
+        kind: VideoClipTakeKind,
+        duration: VideoClipTakeDuration,
+        curve: VideoLayerTransitionCurve,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::LaunchVideoLayerTransitionBusPublished {
+            bus_id,
+            from,
+            to,
+            kind,
+            duration,
+            curve,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, Duration::from_secs(2))
+    }
+
+    pub fn release_video_layer_transition_bus(
+        &self,
+        bus_id: VideoTransitionBusId,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::ReleaseVideoLayerTransitionBusPublished {
+            bus_id,
             expires_at: deadline,
             admission: admission.clone(),
             ack,
@@ -5242,6 +5458,22 @@ impl EngineHandle {
         self.snapshot
             .read()
             .map(|snapshot| {
+                let resolve_audio_clip = |mut clip: TimelineAudioClipSummary| {
+                    if clip.path.trim().is_empty() {
+                        clip.path = clip
+                            .media_asset_id
+                            .and_then(|asset_id| {
+                                snapshot
+                                    .video
+                                    .media_assets
+                                    .iter()
+                                    .find(|asset| asset.id == asset_id)
+                            })
+                            .and_then(|asset| asset.source.path.clone())
+                            .unwrap_or_default();
+                    }
+                    clip
+                };
                 let direct_playing = snapshot
                     .direct_child_timeline_transports
                     .iter()
@@ -5250,6 +5482,85 @@ impl EngineHandle {
                     snapshot.timeline.audio_transport_revision,
                     |revision, transport| revision.wrapping_add(transport.generation),
                 );
+                let follow_transitioning = matches!(
+                    snapshot.timeline.follow_runtime.status,
+                    protocol::TimelineFollowRuntimeStatus::Transitioning
+                );
+                let follow_progress = video_transition_curve_progress(
+                    snapshot
+                        .timeline
+                        .follow
+                        .as_ref()
+                        .map(|follow| follow.curve)
+                        .unwrap_or(VideoLayerTransitionCurve::Linear),
+                    f32::from(snapshot.timeline.follow_runtime.progress_millis) / 1000.0,
+                );
+                let mut root_clips = snapshot
+                    .timeline
+                    .audio_clips
+                    .iter()
+                    .cloned()
+                    .map(&resolve_audio_clip)
+                    .collect::<Vec<_>>();
+                if follow_transitioning {
+                    for clip in &mut root_clips {
+                        clip.gain *= 1.0 - follow_progress;
+                    }
+                }
+                let mut child_clips = child_timeline_audio_runtime_clips(&snapshot)
+                    .into_iter()
+                    .map(|mut child| {
+                        child.clip = resolve_audio_clip(child.clip);
+                        child
+                    })
+                    .collect::<Vec<_>>();
+                let mut follow_target_muted = true;
+                if follow_transitioning {
+                    if let Some(target) = snapshot
+                        .timeline
+                        .follow_runtime
+                        .target_timeline_id
+                        .and_then(|target_id| {
+                            snapshot
+                                .timeline_bank
+                                .iter()
+                                .find(|timeline| timeline.id == target_id)
+                        })
+                    {
+                        follow_target_muted = target.audio_muted;
+                        let position_ms = snapshot.timeline.follow_runtime.elapsed_ms;
+                        child_clips.extend(target.audio_clips.iter().filter_map(|clip| {
+                            (clip.duration_ms > 0
+                                && position_ms >= clip.start_ms
+                                && position_ms
+                                    < clip.start_ms.saturating_add(clip.duration_ms))
+                            .then(|| {
+                                let mut clip = resolve_audio_clip(clip.clone());
+                                clip.gain *= follow_progress;
+                                ChildTimelineAudioRuntimeClip {
+                                    parent_event_id: 0,
+                                    parent_iteration: 0,
+                                    direct_parent_cue_id: Some(u64::MAX),
+                                    direct_generation: snapshot
+                                        .timeline
+                                        .follow_runtime
+                                        .generation,
+                                    path: Arc::from(Vec::<
+                                        ChildTimelineTransportPathSegment,
+                                    >::new()),
+                                    position_ms,
+                                    clip,
+                                }
+                            })
+                        }));
+                    }
+                }
+                let transport_revision = if follow_transitioning {
+                    transport_revision
+                        .wrapping_add(snapshot.timeline.follow_runtime.generation)
+                } else {
+                    transport_revision
+                };
                 let (metronome_enabled, count_in_beats, count_in_remaining_ms, metronome_transport) =
                     if snapshot.timeline.playing {
                         (
@@ -5281,17 +5592,23 @@ impl EngineHandle {
                     clip_slots: snapshot.video_clip_runtime.clone(),
                     auto_vj_status: snapshot.video.auto_vj.status.clone(),
                     timeline_audio: TimelineAudioRuntimeSnapshot {
-                        clips: snapshot.timeline.audio_clips.clone(),
-                        child_clips: child_timeline_audio_runtime_clips(&snapshot),
-                        playing: snapshot.timeline.playing || direct_playing.is_some(),
-                        position_ms: if snapshot.timeline.playing {
+                        clips: root_clips,
+                        child_clips,
+                        playing: snapshot.timeline.playing
+                            || direct_playing.is_some()
+                            || follow_transitioning,
+                        position_ms: if snapshot.timeline.playing || follow_transitioning {
                             snapshot.timeline.position_ms
                         } else {
                             direct_playing
                                 .map(|transport| transport.position_ms)
                                 .unwrap_or(0)
                         },
-                        muted: snapshot.timeline.audio_muted,
+                        muted: if follow_transitioning {
+                            snapshot.timeline.audio_muted && follow_target_muted
+                        } else {
+                            snapshot.timeline.audio_muted
+                        },
                         transport_revision,
                         bpm: snapshot.clock.bpm,
                         metronome_enabled,
@@ -5324,12 +5641,14 @@ impl EngineHandle {
                 effect_chains,
                 effect_presets,
                 layer_groups,
+                transition_buses,
                 ..
             } => observe_video_effect_catalog_allocator_sources(
                 &mut maxima,
                 effect_chains,
                 effect_presets,
                 layer_groups,
+                transition_buses,
             ),
             EngineCommand::SetVideoLayerIsfEffectWithAllocatedIds { ids, .. }
             | EngineCommand::SetVideoLayerIsfEffectPublishedWithAllocatedIds { ids, .. }
@@ -5464,6 +5783,25 @@ impl EngineHandle {
             EngineCommand::AddTimelineAudioClip { clip, .. }
             | EngineCommand::UpdateTimelineAudioClip { clip, .. } => {
                 maxima.observe_u64(AllocatorDomain::TimelineAudioClips, clip.id);
+            }
+            EngineCommand::ApplyTimelineAdvancedAuthoringPublished { candidate, .. } => {
+                for clip in &candidate.audio_clips {
+                    maxima.observe_u64(AllocatorDomain::TimelineAudioClips, clip.id);
+                }
+                for clip in &candidate.video_clips {
+                    maxima.observe_u64(AllocatorDomain::TimelineAudioClips, clip.id.0);
+                }
+                for phase in &candidate.phases {
+                    maxima.observe_u64(AllocatorDomain::TimelineAudioClips, phase.id.0);
+                }
+                for group in &candidate.item_groups {
+                    maxima.observe_u64(AllocatorDomain::TimelineAudioClips, group.id.0);
+                }
+            }
+            EngineCommand::ApplyTimelineBankPublished { timelines, .. } => {
+                for timeline in timelines {
+                    observe_timeline_snapshot_allocator_sources(&mut maxima, timeline)?;
+                }
             }
             EngineCommand::AddTimelineAutomation {
                 automation_id,
@@ -5776,6 +6114,9 @@ impl EngineHandle {
             | EngineCommand::ReportLiveAudioOnset { .. }
             | EngineCommand::SetTimelinePlaying(_)
             | EngineCommand::SeekTimeline(_)
+            | EngineCommand::SetTimelineLoopEnabled(_)
+            | EngineCommand::ToggleTimelineLoop
+            | EngineCommand::ScaleTimelineLoop(_)
             | EngineCommand::SetDirectChildTimelinePlaying { .. }
             | EngineCommand::SeekDirectChildTimeline { .. }
             | EngineCommand::SeekTimelineBeat { .. }
@@ -5786,6 +6127,8 @@ impl EngineHandle {
             | EngineCommand::SetAutoVjConfigPublished { .. }
             | EngineCommand::SetAutoVjArmedPublished { .. }
             | EngineCommand::SetAutoVjHoldPublished { .. }
+            | EngineCommand::LaunchVideoLayerTransitionBusPublished { .. }
+            | EngineCommand::ReleaseVideoLayerTransitionBusPublished { .. }
             | EngineCommand::RemoveVideoLayer(_)
             | EngineCommand::SetVideoLayerOrder(_)
             | EngineCommand::SetVideoLayerLabel { .. }
@@ -6235,6 +6578,7 @@ fn observe_video_allocator_sources(maxima: &mut AllocatorMaximums, video: &Video
         &video.effect_chains,
         &video.effect_presets,
         &video.layer_groups,
+        &video.transition_buses,
     );
 }
 
@@ -6243,6 +6587,7 @@ fn observe_video_effect_catalog_allocator_sources(
     effect_chains: &[VideoEffectChainSummary],
     effect_presets: &[VideoEffectPresetSummary],
     layer_groups: &[VideoLayerGroupSummary],
+    transition_buses: &[VideoLayerTransitionBusSummary],
 ) {
     for chain in effect_chains {
         maxima.observe_u64(AllocatorDomain::VideoEffectChains, chain.id.0);
@@ -6256,6 +6601,9 @@ fn observe_video_effect_catalog_allocator_sources(
     }
     for group in layer_groups {
         maxima.observe_u64(AllocatorDomain::VideoLayerGroups, group.id.0);
+    }
+    for bus in transition_buses {
+        maxima.observe_u64(AllocatorDomain::VideoTransitionBuses, bus.id.0);
     }
 }
 
@@ -6471,6 +6819,48 @@ fn observe_derived_legacy_audio_layer_allocator_source(
     Ok(())
 }
 
+fn observe_timeline_snapshot_allocator_sources(
+    maxima: &mut AllocatorMaximums,
+    timeline: &TimelineSnapshot,
+) -> Result<(), String> {
+    // Timeline, advanced media, Phase and Group identities deliberately share
+    // one never-rewound allocator domain.
+    maxima.observe_u64(AllocatorDomain::TimelineAudioClips, timeline.id.0);
+    for event in &timeline.events {
+        observe_timeline_event_allocator_sources(
+            maxima,
+            event.id,
+            event.cue_id,
+            event.jump_to_event_id,
+        );
+    }
+    for layer in &timeline.layers {
+        maxima.observe_u32(AllocatorDomain::TimelineLayers, layer.id);
+    }
+    for clip in &timeline.audio_clips {
+        maxima.observe_u64(AllocatorDomain::TimelineAudioClips, clip.id);
+    }
+    for clip in &timeline.video_clips {
+        maxima.observe_u64(AllocatorDomain::TimelineAudioClips, clip.id.0);
+        maxima.observe_u64(AllocatorDomain::MediaAssets, clip.media_asset_id);
+    }
+    for phase in &timeline.phases {
+        maxima.observe_u64(AllocatorDomain::TimelineAudioClips, phase.id.0);
+    }
+    for group in &timeline.item_groups {
+        maxima.observe_u64(AllocatorDomain::TimelineAudioClips, group.id.0);
+    }
+    for automation in &timeline.automations {
+        maxima.observe_u64(AllocatorDomain::Automations, automation.id);
+        maxima.observe_u64(AllocatorDomain::Fixtures, automation.fixture_id);
+    }
+    for automation in &timeline.video_automations {
+        maxima.observe_u64(AllocatorDomain::Automations, automation.id);
+        maxima.observe_u64(AllocatorDomain::VideoLayers, automation.layer_id);
+    }
+    Ok(())
+}
+
 fn observe_project_snapshot_allocator_sources(
     maxima: &mut AllocatorMaximums,
     snapshot: &EngineSnapshot,
@@ -6498,27 +6888,9 @@ fn observe_project_snapshot_allocator_sources(
             observe_child_timeline_allocator_sources(maxima, child_timeline);
         }
     }
-    for event in &snapshot.timeline.events {
-        observe_timeline_event_allocator_sources(
-            maxima,
-            event.id,
-            event.cue_id,
-            event.jump_to_event_id,
-        );
-    }
-    for layer in &snapshot.timeline.layers {
-        maxima.observe_u32(AllocatorDomain::TimelineLayers, layer.id);
-    }
-    for clip in &snapshot.timeline.audio_clips {
-        maxima.observe_u64(AllocatorDomain::TimelineAudioClips, clip.id);
-    }
-    for automation in &snapshot.timeline.automations {
-        maxima.observe_u64(AllocatorDomain::Automations, automation.id);
-        maxima.observe_u64(AllocatorDomain::Fixtures, automation.fixture_id);
-    }
-    for automation in &snapshot.timeline.video_automations {
-        maxima.observe_u64(AllocatorDomain::Automations, automation.id);
-        maxima.observe_u64(AllocatorDomain::VideoLayers, automation.layer_id);
+    observe_timeline_snapshot_allocator_sources(maxima, &snapshot.timeline)?;
+    for timeline in &snapshot.timeline_bank {
+        observe_timeline_snapshot_allocator_sources(maxima, timeline)?;
     }
     observe_video_allocator_sources(maxima, &snapshot.video);
     if let Some(authored_video) = &snapshot.authored_video {
@@ -12658,6 +13030,23 @@ enum RuntimeChildTransportId {
     Timeline(usize),
     Direct(usize),
     Nested(usize),
+    Follow,
+}
+
+#[derive(Clone)]
+struct RuntimeTimelineFollowTransition {
+    generation: u64,
+    source_timeline_id: TimelineId,
+    target: TimelineSnapshot,
+    started_at: Instant,
+    duration: Duration,
+    source_bpm: f32,
+    target_bpm: f32,
+    curve: VideoLayerTransitionCurve,
+    lighting_policy: protocol::TimelineFollowLightingPolicy,
+    last_trans_beat_ordinal: Option<u64>,
+    affected_video_layer_ids: HashSet<VideoLayerId>,
+    outgoing_dmx_frames: HashMap<u16, [u8; 512]>,
 }
 
 #[derive(Clone)]
@@ -12678,6 +13067,19 @@ struct RuntimeTimelineVideoAutomation {
     track: TimelineTrackKind,
     keyframes: Vec<VideoAutomationKeyframeSummary>,
     enabled: bool,
+}
+
+#[derive(Clone)]
+struct RuntimeTimelineVideoLayerRestore {
+    clip_id: TimelineVideoClipId,
+    source: VideoSourceSummary,
+    media_asset_id: MediaAssetId,
+    state: VideoLayerState,
+    active_clip_slot_id: Option<VideoClipSlotId>,
+    queued_clip_slot_id: Option<VideoClipSlotId>,
+    pending_clip_launch: Option<RuntimePendingClipLaunch>,
+    clip_direction: RuntimeClipDirection,
+    runtime_transport_dirty: bool,
 }
 
 #[derive(Clone)]
@@ -12703,6 +13105,7 @@ struct RuntimeVideoLayer {
     active_clip_slot_id: Option<VideoClipSlotId>,
     queued_clip_slot_id: Option<VideoClipSlotId>,
     pending_clip_launch: Option<RuntimePendingClipLaunch>,
+    clip_take_transition: Option<Box<RuntimeVideoClipTake>>,
     clip_direction: RuntimeClipDirection,
     runtime_transport_dirty: bool,
 }
@@ -12743,6 +13146,34 @@ enum RuntimeClipLaunchBoundary {
 struct RuntimePendingClipLaunch {
     slot_id: VideoClipSlotId,
     boundary: RuntimeClipLaunchBoundary,
+    transition_kind: VideoClipTakeKind,
+    transition_duration: VideoClipTakeDuration,
+    resolved_duration_ms: u64,
+}
+
+#[derive(Clone)]
+struct RuntimeVideoClipTake {
+    origin_slot_id: VideoClipSlotId,
+    outgoing_slot_id: VideoClipSlotId,
+    incoming_slot_id: VideoClipSlotId,
+    incoming: RuntimeVideoLayer,
+    kind: VideoClipTakeKind,
+    duration_intent: VideoClipTakeDuration,
+    elapsed: Duration,
+    duration: Duration,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeVideoLayerTransitionBus {
+    bus_id: VideoTransitionBusId,
+    origin_from: VideoLayerTransitionTarget,
+    from: VideoLayerTransitionTarget,
+    to: VideoLayerTransitionTarget,
+    kind: VideoClipTakeKind,
+    curve: VideoLayerTransitionCurve,
+    duration_intent: VideoClipTakeDuration,
+    elapsed: Duration,
+    duration: Duration,
 }
 
 /// A boundary target is captured once at Take time. We never derive a bar
@@ -12867,6 +13298,8 @@ enum PendingCommandRollback {
         effect_chains: Vec<VideoEffectChainSummary>,
         effect_presets: Vec<VideoEffectPresetSummary>,
         layer_groups: Vec<VideoLayerGroupSummary>,
+        transition_buses: Vec<VideoLayerTransitionBusSummary>,
+        active_transition_buses: Vec<RuntimeVideoLayerTransitionBus>,
         pending_video_isf_event_resets: Vec<PendingVideoIsfEventReset>,
         last_error: Option<String>,
     },
@@ -12902,8 +13335,14 @@ enum PendingCommandRollback {
         effect_chains: Vec<VideoEffectChainSummary>,
         effect_presets: Vec<VideoEffectPresetSummary>,
         layer_groups: Vec<VideoLayerGroupSummary>,
+        transition_buses: Vec<VideoLayerTransitionBusSummary>,
+        active_transition_buses: Vec<RuntimeVideoLayerTransitionBus>,
         video_layers: Vec<RuntimeVideoLayer>,
         pending_video_isf_event_resets: Vec<PendingVideoIsfEventReset>,
+        last_error: Option<String>,
+    },
+    RestoreVideoLayerTransitionRuntime {
+        active_transition_buses: Vec<RuntimeVideoLayerTransitionBus>,
         last_error: Option<String>,
     },
     RestoreVideoLayerIsfEffectAndCancelEventPulse {
@@ -12993,6 +13432,37 @@ enum PendingCommandRollback {
         timeline_position_ms: u64,
         last_error: Option<String>,
     },
+    RestoreTimelineAdvancedAuthoring {
+        timeline_events: Vec<RuntimeTimelineEvent>,
+        timeline_automations: Vec<RuntimeTimelineAutomation>,
+        timeline_video_automations: Vec<RuntimeTimelineVideoAutomation>,
+        video_clips: Vec<TimelineVideoClipSummary>,
+        audio_clips: Vec<TimelineAudioClipSummary>,
+        audio_clips_derived: bool,
+        phases: Vec<TimelinePhaseSummary>,
+        item_groups: Vec<TimelineItemGroupSummary>,
+        loop_region: Option<TimelineLoopRegionSummary>,
+        follow: Option<TimelineFollowSummary>,
+        guide_enabled: bool,
+        loop_runtime: TimelineLoopRuntimeSummary,
+        follow_runtime: TimelineFollowRuntimeSummary,
+        guide_cues: Vec<TimelineGuideCueSummary>,
+        last_announced_phase_id: Option<TimelinePhaseId>,
+        audio_duration_ms: u64,
+        audio_transport_revision: u64,
+        timeline_position_ms: u64,
+        timeline_playhead_boundary_armed: bool,
+        timeline_evaluated_boundary_position_ms: Option<u64>,
+        timeline_jump_landed_event_id: Option<TimelineEventId>,
+        last_error: Option<String>,
+    },
+    RestoreTimelineBank {
+        timelines: Vec<TimelineSnapshot>,
+        active: TimelineSnapshot,
+        playing: bool,
+        position_ms: u64,
+        last_error: Option<String>,
+    },
 }
 
 impl PendingCommandRollback {
@@ -13018,6 +13488,8 @@ impl PendingCommandRollback {
                 | Self::RestoreTimelineItems { .. }
                 | Self::RestoreTimelineLayers { .. }
                 | Self::RestoreTimelineAudioMaster { .. }
+                | Self::RestoreTimelineAdvancedAuthoring { .. }
+                | Self::RestoreTimelineBank { .. }
                 | Self::RestoreTouchSurface { .. }
         )
     }
@@ -13140,6 +13612,8 @@ struct EngineRuntime {
     direct_child_transports: Vec<RuntimeChildTransport>,
     direct_child_transport_by_cue: Vec<Option<usize>>,
     nested_child_transports: Vec<RuntimeChildTransport>,
+    timeline_follow_transport: Option<RuntimeChildTransport>,
+    timeline_follow_transition: Option<RuntimeTimelineFollowTransition>,
     node_graphs: Vec<RuntimeNodeGraph>,
     cues: Vec<RuntimeCue>,
     cue_lists: Vec<CueListSummary>,
@@ -13157,12 +13631,31 @@ struct EngineRuntime {
     palettes: Vec<ReferencePaletteSummary>,
     playback_executors: Vec<PlaybackExecutorSummary>,
     playback_master: f32,
+    timeline_id: TimelineId,
+    timeline_label: String,
+    /// Ordered authored Timeline bank. The active entry is projected from the
+    /// runtime at snapshot time so its transport-only state never leaks into
+    /// project persistence.
+    timeline_bank: Vec<TimelineSnapshot>,
     timeline_layers: Vec<TimelineLayerSummary>,
     timeline_events: Vec<RuntimeTimelineEvent>,
     timeline_automations: Vec<RuntimeTimelineAutomation>,
     timeline_video_automations: Vec<RuntimeTimelineVideoAutomation>,
     timeline_audio: Option<AudioAnalysisSummary>,
     timeline_audio_clips: Vec<TimelineAudioClipSummary>,
+    timeline_video_clips: Vec<TimelineVideoClipSummary>,
+    /// Runtime-only Timeline transport takeover. Each affected VJ layer is
+    /// restored exactly when its Timeline clip leaves the playhead.
+    timeline_video_layer_restores: HashMap<VideoLayerId, RuntimeTimelineVideoLayerRestore>,
+    timeline_phases: Vec<TimelinePhaseSummary>,
+    timeline_item_groups: Vec<TimelineItemGroupSummary>,
+    timeline_loop_region: Option<TimelineLoopRegionSummary>,
+    timeline_follow: Option<TimelineFollowSummary>,
+    timeline_guide_enabled: bool,
+    timeline_loop_runtime: TimelineLoopRuntimeSummary,
+    timeline_follow_runtime: TimelineFollowRuntimeSummary,
+    timeline_guide_cues: Vec<TimelineGuideCueSummary>,
+    timeline_last_announced_phase_id: Option<TimelinePhaseId>,
     timeline_audio_clips_derived: bool,
     timeline_audio_duration_ms: u64,
     timeline_audio_offset_ms: i64,
@@ -13198,6 +13691,8 @@ struct EngineRuntime {
     video_effect_chains: Vec<VideoEffectChainSummary>,
     video_effect_presets: Vec<VideoEffectPresetSummary>,
     video_layer_groups: Vec<VideoLayerGroupSummary>,
+    video_transition_buses: Vec<VideoLayerTransitionBusSummary>,
+    active_video_transition_buses: Vec<RuntimeVideoLayerTransitionBus>,
     video_layers: Vec<RuntimeVideoLayer>,
     clip_clock_tracker: RuntimeClipClockTracker,
     video_layer_fades: Vec<RuntimeVideoLayerFade>,
@@ -13367,6 +13862,35 @@ impl EngineRuntime {
         });
     }
 
+    fn apply_video_layer_transition_published(
+        &mut self,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+        mutate: impl FnOnce(&mut Self) -> Result<(), String>,
+    ) {
+        let rollback = PendingCommandRollback::RestoreVideoLayerTransitionRuntime {
+            active_transition_buses: self.active_video_transition_buses.clone(),
+            last_error: self.last_error.clone(),
+        };
+        let result = if admission.try_admit_before(expires_at) {
+            mutate(self)
+        } else {
+            Err(
+                "Video layer transition operation expired or was cancelled before engine admission"
+                    .to_string(),
+            )
+        };
+        self.last_error = result.as_ref().err().cloned();
+        self.pending_command_acks.push(PendingCommandAck {
+            ack,
+            result,
+            rollback,
+            publication_error:
+                "Engine snapshot was busy; video layer transition operation was rolled back",
+        });
+    }
+
     #[cfg(test)]
     fn new(output: DmxOutputConfig) -> Self {
         Self::new_with_shared_telemetry(output, Arc::new(EngineSharedTelemetry::new()))
@@ -13422,6 +13946,8 @@ impl EngineRuntime {
             direct_child_transports: Vec::new(),
             direct_child_transport_by_cue: Vec::new(),
             nested_child_transports: Vec::new(),
+            timeline_follow_transport: None,
+            timeline_follow_transition: None,
             node_graphs: Vec::new(),
             cues: Vec::new(),
             cue_lists: vec![CueListSummary::default()],
@@ -13434,12 +13960,26 @@ impl EngineRuntime {
             palettes: Vec::new(),
             playback_executors: vec![PlaybackExecutorSummary::default()],
             playback_master: 1.0,
+            timeline_id: TimelineId(1),
+            timeline_label: "Timeline 1".to_string(),
+            timeline_bank: Vec::new(),
             timeline_layers: Vec::new(),
             timeline_events: Vec::new(),
             timeline_automations: Vec::new(),
             timeline_video_automations: Vec::new(),
             timeline_audio: None,
             timeline_audio_clips: Vec::new(),
+            timeline_video_clips: Vec::new(),
+            timeline_video_layer_restores: HashMap::new(),
+            timeline_phases: Vec::new(),
+            timeline_item_groups: Vec::new(),
+            timeline_loop_region: None,
+            timeline_follow: None,
+            timeline_guide_enabled: false,
+            timeline_loop_runtime: TimelineLoopRuntimeSummary::default(),
+            timeline_follow_runtime: TimelineFollowRuntimeSummary::default(),
+            timeline_guide_cues: Vec::new(),
+            timeline_last_announced_phase_id: None,
             timeline_audio_clips_derived: false,
             timeline_audio_duration_ms: 0,
             timeline_audio_offset_ms: 0,
@@ -13473,6 +14013,8 @@ impl EngineRuntime {
             video_effect_chains: Vec::new(),
             video_effect_presets: Vec::new(),
             video_layer_groups: Vec::new(),
+            video_transition_buses: Vec::new(),
+            active_video_transition_buses: Vec::new(),
             video_layers: Vec::new(),
             clip_clock_tracker: RuntimeClipClockTracker::default(),
             video_layer_fades: Vec::new(),
@@ -13885,6 +14427,7 @@ impl EngineRuntime {
         mut snapshot: EngineSnapshot,
     ) -> Result<(), String> {
         snapshot = normalized_engine_snapshot_video_for_load(snapshot)?;
+        normalize_timeline_bank(&mut snapshot);
         validate_project_snapshot_allocator_capacity(&snapshot)?;
         if let Err(error) = normalize_and_validate_timeline_layers(
             &mut snapshot.timeline.layers,
@@ -13900,6 +14443,10 @@ impl EngineRuntime {
             self.last_error = Some(error.clone());
             return Err(error);
         }
+        validate_timeline_bank(&snapshot, &snapshot.video.media_assets).map_err(|error| {
+            self.last_error = Some(error.clone());
+            error
+        })?;
         // A legacy layer ISF is an exact renderer projection of its canonical
         // Layer chain, not a second authored shader allocation.  Count every
         // canonical entity and preset once, then use legacy data only for a
@@ -13928,6 +14475,8 @@ impl EngineRuntime {
         self.direct_child_transports.clear();
         self.direct_child_transport_by_cue.clear();
         self.nested_child_transports.clear();
+        self.timeline_follow_transport = None;
+        self.timeline_follow_transition = None;
         self.direct_child_count_in = None;
         // T17 reset rule: project load always returns every scene to its
         // authored live-modifier dial position.
@@ -14006,6 +14555,9 @@ impl EngineRuntime {
         } else {
             1.0
         };
+        self.timeline_id = snapshot.timeline.id;
+        self.timeline_label = snapshot.timeline.label.clone();
+        self.timeline_bank = snapshot.timeline_bank.clone();
         self.timeline_layers = snapshot.timeline.layers.clone();
         self.timeline_events = snapshot
             .timeline
@@ -14030,6 +14582,42 @@ impl EngineRuntime {
             .map(runtime_timeline_video_automation_from_summary)
             .collect();
         self.timeline_audio = snapshot.timeline.audio.clone();
+        self.timeline_video_clips = snapshot.timeline.video_clips.clone();
+        self.timeline_video_layer_restores.clear();
+        self.timeline_phases = snapshot.timeline.phases.clone();
+        self.timeline_item_groups = snapshot.timeline.item_groups.clone();
+        self.timeline_loop_region = snapshot.timeline.loop_region.clone();
+        self.timeline_follow = snapshot.timeline.follow.clone();
+        self.timeline_guide_enabled = snapshot.timeline.guide_enabled;
+        let timeline_generation =
+            next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+        self.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation: timeline_generation,
+            status: if self
+                .timeline_loop_region
+                .as_ref()
+                .is_some_and(|region| region.enabled)
+            {
+                TimelineLoopRuntimeStatus::Armed
+            } else {
+                TimelineLoopRuntimeStatus::Disabled
+            },
+            a_ms: self.timeline_loop_region.as_ref().map(|region| region.a_ms),
+            b_ms: self.timeline_loop_region.as_ref().map(|region| region.b_ms),
+            musical_length_millibeats: self.timeline_loop_region.as_ref().and_then(|region| {
+                region
+                    .musical_length_beats
+                    .map(|beats| (beats * 1_000.0).round().max(1.0) as u64)
+            }),
+            ..TimelineLoopRuntimeSummary::default()
+        };
+        self.refresh_timeline_loop_runtime_status();
+        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+            generation: timeline_generation,
+            ..TimelineFollowRuntimeSummary::default()
+        };
+        self.timeline_guide_cues.clear();
+        self.timeline_last_announced_phase_id = None;
         self.timeline_audio_offset_ms = snapshot.timeline.audio_offset_ms;
         self.timeline_audio_muted = snapshot.timeline.audio_muted;
         self.timeline_metronome_enabled = snapshot.timeline.metronome_enabled;
@@ -14068,6 +14656,8 @@ impl EngineRuntime {
         self.video_effect_chains = snapshot.video.effect_chains.clone();
         self.video_effect_presets = snapshot.video.effect_presets.clone();
         self.video_layer_groups = snapshot.video.layer_groups.clone();
+        self.video_transition_buses = snapshot.video.transition_buses.clone();
+        self.active_video_transition_buses.clear();
         self.video_layers = sanitize_loaded_video_layers(&snapshot.video.layers);
         self.video_compositions =
             sanitize_loaded_video_compositions(&snapshot.video.compositions, &self.video_layers);
@@ -14794,6 +15384,8 @@ impl EngineRuntime {
                     | EngineCommand::CancelQueuedVideoClipSlotPublished { .. }
                     | EngineCommand::LaunchVideoClipSlotPublished { .. }
                     | EngineCommand::SeekVideoClipSlotPublished { .. }
+                    | EngineCommand::LaunchVideoLayerTransitionBusPublished { .. }
+                    | EngineCommand::ReleaseVideoLayerTransitionBusPublished { .. }
                     | EngineCommand::LoadProjectSnapshotPublished { .. }
                     | EngineCommand::ApplyVideoEffectCatalogPublished { .. }
                     | EngineCommand::SetVideoLayerIsfEffectPublishedWithAllocatedIds { .. }
@@ -14834,6 +15426,8 @@ impl EngineRuntime {
                     | EngineCommand::SetCueDetailsPublished { .. }
                     | EngineCommand::SetCueChildTimeline { .. }
                     | EngineCommand::ReconformTimelineToBpm { .. }
+                    | EngineCommand::ApplyTimelineAdvancedAuthoringPublished { .. }
+                    | EngineCommand::ApplyTimelineBankPublished { .. }
             );
             if queued_command.command.requests_low_latency_dmx_tick() {
                 self.low_latency_dmx_tick_request_count =
@@ -18862,6 +19456,89 @@ impl EngineRuntime {
                         "Engine snapshot was busy; Timeline audio master update was rolled back",
                 });
             }
+            EngineCommand::ApplyTimelineAdvancedAuthoringPublished {
+                candidate,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreTimelineAdvancedAuthoring {
+                    timeline_events: self.timeline_events.clone(),
+                    timeline_automations: self.timeline_automations.clone(),
+                    timeline_video_automations: self.timeline_video_automations.clone(),
+                    video_clips: self.timeline_video_clips.clone(),
+                    audio_clips: self.timeline_audio_clips.clone(),
+                    audio_clips_derived: self.timeline_audio_clips_derived,
+                    phases: self.timeline_phases.clone(),
+                    item_groups: self.timeline_item_groups.clone(),
+                    loop_region: self.timeline_loop_region.clone(),
+                    follow: self.timeline_follow.clone(),
+                    guide_enabled: self.timeline_guide_enabled,
+                    loop_runtime: self.timeline_loop_runtime.clone(),
+                    follow_runtime: self.timeline_follow_runtime.clone(),
+                    guide_cues: self.timeline_guide_cues.clone(),
+                    last_announced_phase_id: self.timeline_last_announced_phase_id,
+                    audio_duration_ms: self.timeline_audio_duration_ms,
+                    audio_transport_revision: self.timeline_audio_transport_revision,
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Timeline advanced authoring expired before engine execution".to_string())
+                } else {
+                    self.apply_timeline_advanced_authoring_state(candidate)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Timeline advanced authoring was rolled back",
+                });
+            }
+            EngineCommand::ApplyTimelineBankPublished {
+                timelines,
+                active_timeline_id,
+                play,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let persistence_before = self.build_persistence_snapshot();
+                let rollback = PendingCommandRollback::RestoreTimelineBank {
+                    timelines: persistence_before.timeline_bank,
+                    active: persistence_before.timeline,
+                    playing: self.timeline_playing,
+                    position_ms: self.timeline_position_ms,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Timeline bank update expired before engine execution".to_string())
+                } else {
+                    self.apply_timeline_bank_state(timelines, active_timeline_id, play)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Timeline bank update was rolled back",
+                });
+            }
             EngineCommand::AddTimelineAutomation {
                 automation_id,
                 fixture_id,
@@ -19094,6 +19771,9 @@ impl EngineRuntime {
                 let was_playing = self.timeline_playing;
                 self.timeline_playing = playing;
                 let now = Instant::now();
+                if !playing && self.timeline_follow_transition.is_some() {
+                    self.abort_timeline_follow(now);
+                }
                 if playing {
                     // An explicit Play command hands the playhead back to the internal clock.
                     // Pause alone must not release external ownership while MTC/LTC/SPP frames
@@ -19101,6 +19781,8 @@ impl EngineRuntime {
                     self.timeline_external_sync_source = None;
                 }
                 if playing && !was_playing {
+                    self.timeline_last_announced_phase_id = None;
+                    self.refresh_timeline_loop_runtime_status();
                     if let Some(paused_at) = self.timeline_paused_at.take() {
                         self.shift_timeline_effect_clocks(paused_at, now);
                     }
@@ -19130,6 +19812,21 @@ impl EngineRuntime {
                     {
                         self.timeline_playhead_boundary_armed = true;
                     }
+                    if let Some(follow) = self
+                        .timeline_follow
+                        .as_ref()
+                        .filter(|follow| follow.enabled)
+                    {
+                        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+                            generation: next_timeline_runtime_generation(
+                                self.timeline_follow_runtime.generation,
+                            ),
+                            status: protocol::TimelineFollowRuntimeStatus::Pending,
+                            source_timeline_id: Some(self.timeline_id),
+                            target_timeline_id: Some(follow.next_timeline_id),
+                            ..TimelineFollowRuntimeSummary::default()
+                        };
+                    }
                 } else if !playing {
                     self.timeline_count_in_until = None;
                     self.timeline_jump_landed_event_id = None;
@@ -19143,6 +19840,62 @@ impl EngineRuntime {
                             self.set_active_fade_paused(true, now);
                         }
                     }
+                    if self.timeline_follow_transition.is_none() {
+                        self.timeline_follow_runtime.status =
+                            protocol::TimelineFollowRuntimeStatus::Idle;
+                    }
+                }
+            }
+            EngineCommand::SetTimelineLoopEnabled(enabled) => {
+                self.set_timeline_loop_enabled_state(enabled);
+            }
+            EngineCommand::ToggleTimelineLoop => {
+                let enabled = matches!(
+                    self.timeline_loop_runtime.status,
+                    TimelineLoopRuntimeStatus::Disabled
+                );
+                self.set_timeline_loop_enabled_state(enabled);
+            }
+            EngineCommand::ScaleTimelineLoop(scale) => {
+                if let (Some(a_ms), Some(b_ms)) = (
+                    self.timeline_loop_runtime.a_ms,
+                    self.timeline_loop_runtime.b_ms,
+                ) {
+                    let length_ms = b_ms.saturating_sub(a_ms).max(1);
+                    let next_millibeats = self.timeline_loop_runtime.musical_length_millibeats.map(
+                        |beats| match scale {
+                            TimelineLoopScale::Half => (beats / 2).max(1),
+                            TimelineLoopScale::Double => beats.saturating_mul(2),
+                        },
+                    );
+                    let next_length_ms = match next_millibeats {
+                        Some(millibeats) => ((millibeats as f64 / 1_000.0) * 60_000.0
+                            / f64::from(self.clock.bpm.max(1.0)))
+                        .round()
+                        .max(1.0) as u64,
+                        None => match scale {
+                            TimelineLoopScale::Half => (length_ms / 2).max(1),
+                            TimelineLoopScale::Double => length_ms.saturating_mul(2),
+                        },
+                    };
+                    let duration = self.timeline_duration_ms();
+                    let next_b_ms = a_ms.saturating_add(next_length_ms).min(duration);
+                    if next_b_ms > a_ms {
+                        self.timeline_loop_runtime.b_ms = Some(next_b_ms);
+                        if next_millibeats.is_some() {
+                            let actual_length_ms = next_b_ms - a_ms;
+                            self.timeline_loop_runtime.musical_length_millibeats = Some(
+                                ((actual_length_ms as f64 * f64::from(self.clock.bpm.max(1.0))
+                                    / 60_000.0)
+                                    * 1_000.0)
+                                    .round()
+                                    .max(1.0) as u64,
+                            );
+                        }
+                        self.timeline_loop_runtime.generation =
+                            next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+                        self.refresh_timeline_loop_runtime_status();
+                    }
                 }
             }
             EngineCommand::SeekTimeline(position_ms) => {
@@ -19153,6 +19906,9 @@ impl EngineRuntime {
                 self.timeline_jump_landed_event_id = None;
                 self.timeline_external_sync_source = None;
                 self.timeline_position_ms = position_ms.min(self.timeline_duration_ms());
+                self.timeline_last_announced_phase_id = None;
+                self.refresh_timeline_loop_runtime_status();
+                self.announce_timeline_phase_at(self.timeline_position_ms);
                 self.timeline_audio_transport_revision =
                     self.timeline_audio_transport_revision.wrapping_add(1);
                 self.timeline_evaluated_boundary_position_ms = None;
@@ -19176,6 +19932,9 @@ impl EngineRuntime {
                 self.deactivate_all_timeline_effect_activations();
                 self.deactivate_all_child_transports();
                 self.seek_timeline_adjacent_beat(direction);
+                self.timeline_last_announced_phase_id = None;
+                self.refresh_timeline_loop_runtime_status();
+                self.announce_timeline_phase_at(self.timeline_position_ms);
                 self.establish_child_transports_at_position(Instant::now());
                 self.apply_child_timeline_automations();
                 self.timeline_audio_transport_revision =
@@ -19197,6 +19956,9 @@ impl EngineRuntime {
                 }
                 self.timeline_external_sync_source = Some(source.clone());
                 self.sync_timeline_position(position_ms, source_changed, now);
+                self.timeline_last_announced_phase_id = None;
+                self.refresh_timeline_loop_runtime_status();
+                self.announce_timeline_phase_at(self.timeline_position_ms);
                 self.clock.mark_timecode_sync(source, now);
                 self.apply_timeline_automations();
                 self.apply_timeline_video_automations();
@@ -19369,6 +20131,8 @@ impl EngineRuntime {
                     effect_chains: self.video_effect_chains.clone(),
                     effect_presets: self.video_effect_presets.clone(),
                     layer_groups: self.video_layer_groups.clone(),
+                    transition_buses: self.video_transition_buses.clone(),
+                    active_transition_buses: self.active_video_transition_buses.clone(),
                     pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
                     last_error: self.last_error.clone(),
                 };
@@ -19571,11 +20335,18 @@ impl EngineRuntime {
             EngineCommand::LaunchVideoClipSlotPublished {
                 layer_id,
                 slot_id,
+                transition_kind,
+                transition_duration,
                 expires_at,
                 admission,
                 ack,
             } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
-                runtime.launch_video_clip_slot(layer_id, slot_id)
+                runtime.launch_video_clip_slot_with_transition_timing(
+                    layer_id,
+                    slot_id,
+                    transition_kind,
+                    transition_duration,
+                )
             }),
             EngineCommand::SeekVideoClipSlotPublished {
                 layer_id,
@@ -19586,6 +20357,32 @@ impl EngineRuntime {
             } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
                 runtime.seek_video_clip_slot(layer_id, position_ms)
             }),
+            EngineCommand::LaunchVideoLayerTransitionBusPublished {
+                bus_id,
+                from,
+                to,
+                kind,
+                duration,
+                curve,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                self.apply_video_layer_transition_published(expires_at, admission, ack, |runtime| {
+                    runtime
+                        .launch_video_layer_transition_bus(bus_id, from, to, kind, duration, curve)
+                })
+            }
+            EngineCommand::ReleaseVideoLayerTransitionBusPublished {
+                bus_id,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                self.apply_video_layer_transition_published(expires_at, admission, ack, |runtime| {
+                    runtime.release_video_layer_transition_bus(bus_id)
+                })
+            }
             EngineCommand::SetVideoLayerIsfEffect { layer_id, effect } => {
                 let result = self
                     .next_runtime_video_effect_legacy_adapter_ids(
@@ -19615,6 +20412,8 @@ impl EngineRuntime {
                     effect_chains: self.video_effect_chains.clone(),
                     effect_presets: self.video_effect_presets.clone(),
                     layer_groups: self.video_layer_groups.clone(),
+                    transition_buses: self.video_transition_buses.clone(),
+                    active_transition_buses: self.active_video_transition_buses.clone(),
                     video_layers: self.video_layers.clone(),
                     pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
                     last_error: self.last_error.clone(),
@@ -19646,6 +20445,8 @@ impl EngineRuntime {
                     effect_chains: self.video_effect_chains.clone(),
                     effect_presets: self.video_effect_presets.clone(),
                     layer_groups: self.video_layer_groups.clone(),
+                    transition_buses: self.video_transition_buses.clone(),
+                    active_transition_buses: self.active_video_transition_buses.clone(),
                     video_layers: self.video_layers.clone(),
                     pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
                     last_error: self.last_error.clone(),
@@ -19665,6 +20466,7 @@ impl EngineRuntime {
                 effect_chains,
                 effect_presets,
                 layer_groups,
+                transition_buses,
                 expires_at,
                 admission,
                 ack,
@@ -19673,6 +20475,8 @@ impl EngineRuntime {
                     effect_chains: self.video_effect_chains.clone(),
                     effect_presets: self.video_effect_presets.clone(),
                     layer_groups: self.video_layer_groups.clone(),
+                    transition_buses: self.video_transition_buses.clone(),
+                    active_transition_buses: self.active_video_transition_buses.clone(),
                     video_layers: self.video_layers.clone(),
                     pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
                     last_error: self.last_error.clone(),
@@ -19682,6 +20486,7 @@ impl EngineRuntime {
                         effect_chains,
                         effect_presets,
                         layer_groups,
+                        transition_buses,
                     )
                 } else {
                     Err("Video effect catalog operation expired or was cancelled before engine admission".to_string())
@@ -19704,6 +20509,8 @@ impl EngineRuntime {
                     effect_chains: self.video_effect_chains.clone(),
                     effect_presets: self.video_effect_presets.clone(),
                     layer_groups: self.video_layer_groups.clone(),
+                    transition_buses: self.video_transition_buses.clone(),
+                    active_transition_buses: self.active_video_transition_buses.clone(),
                     video_layers: self.video_layers.clone(),
                     pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
                     last_error: self.last_error.clone(),
@@ -19746,6 +20553,8 @@ impl EngineRuntime {
                     effect_chains: self.video_effect_chains.clone(),
                     effect_presets: self.video_effect_presets.clone(),
                     layer_groups: self.video_layer_groups.clone(),
+                    transition_buses: self.video_transition_buses.clone(),
+                    active_transition_buses: self.active_video_transition_buses.clone(),
                     video_layers: self.video_layers.clone(),
                     pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
                     last_error: self.last_error.clone(),
@@ -19771,6 +20580,8 @@ impl EngineRuntime {
                     effect_chains: self.video_effect_chains.clone(),
                     effect_presets: self.video_effect_presets.clone(),
                     layer_groups: self.video_layer_groups.clone(),
+                    transition_buses: self.video_transition_buses.clone(),
+                    active_transition_buses: self.active_video_transition_buses.clone(),
                     video_layers: self.video_layers.clone(),
                     pending_video_isf_event_resets: self.pending_video_isf_event_resets.clone(),
                     last_error: self.last_error.clone(),
@@ -20474,6 +21285,7 @@ impl EngineRuntime {
                         | PendingCommandRollback::RestoreVideoLayersAndCompositions { .. }
                         | PendingCommandRollback::RestoreVideoClipSlots { .. }
                         | PendingCommandRollback::RestoreVideoEffectCatalog { .. }
+                        | PendingCommandRollback::RestoreVideoLayerTransitionRuntime { .. }
                 )
         });
         #[cfg(test)]
@@ -20657,6 +21469,8 @@ impl EngineRuntime {
                 effect_chains,
                 effect_presets,
                 layer_groups,
+                transition_buses,
+                active_transition_buses,
                 pending_video_isf_event_resets,
                 last_error,
             } => {
@@ -20665,6 +21479,8 @@ impl EngineRuntime {
                 self.video_effect_chains = effect_chains;
                 self.video_effect_presets = effect_presets;
                 self.video_layer_groups = layer_groups;
+                self.video_transition_buses = transition_buses;
+                self.active_video_transition_buses = active_transition_buses;
                 self.pending_video_isf_event_resets = pending_video_isf_event_resets;
                 self.last_error = last_error;
             }
@@ -20718,6 +21534,8 @@ impl EngineRuntime {
                 effect_chains,
                 effect_presets,
                 layer_groups,
+                transition_buses,
+                active_transition_buses,
                 video_layers,
                 pending_video_isf_event_resets,
                 last_error,
@@ -20725,8 +21543,17 @@ impl EngineRuntime {
                 self.video_effect_chains = effect_chains;
                 self.video_effect_presets = effect_presets;
                 self.video_layer_groups = layer_groups;
+                self.video_transition_buses = transition_buses;
+                self.active_video_transition_buses = active_transition_buses;
                 self.video_layers = video_layers;
                 self.pending_video_isf_event_resets = pending_video_isf_event_resets;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreVideoLayerTransitionRuntime {
+                active_transition_buses,
+                last_error,
+            } => {
+                self.active_video_transition_buses = active_transition_buses;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreVideoLayerIsfEffectAndCancelEventPulse {
@@ -20909,6 +21736,67 @@ impl EngineRuntime {
                 self.timeline_audio_clips_derived = timeline_audio_clips_derived;
                 self.timeline_audio_duration_ms = timeline_audio_duration_ms;
                 self.timeline_position_ms = timeline_position_ms;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreTimelineAdvancedAuthoring {
+                timeline_events,
+                timeline_automations,
+                timeline_video_automations,
+                video_clips,
+                audio_clips,
+                audio_clips_derived,
+                phases,
+                item_groups,
+                loop_region,
+                follow,
+                guide_enabled,
+                loop_runtime,
+                follow_runtime,
+                guide_cues,
+                last_announced_phase_id,
+                audio_duration_ms,
+                audio_transport_revision,
+                timeline_position_ms,
+                timeline_playhead_boundary_armed,
+                timeline_evaluated_boundary_position_ms,
+                timeline_jump_landed_event_id,
+                last_error,
+            } => {
+                self.timeline_events = timeline_events;
+                self.timeline_automations = timeline_automations;
+                self.timeline_video_automations = timeline_video_automations;
+                self.timeline_video_clips = video_clips;
+                self.timeline_audio_clips = audio_clips;
+                self.timeline_audio_clips_derived = audio_clips_derived;
+                self.timeline_phases = phases;
+                self.timeline_item_groups = item_groups;
+                self.timeline_loop_region = loop_region;
+                self.timeline_follow = follow;
+                self.timeline_guide_enabled = guide_enabled;
+                self.timeline_loop_runtime = loop_runtime;
+                self.timeline_follow_runtime = follow_runtime;
+                self.timeline_guide_cues = guide_cues;
+                self.timeline_last_announced_phase_id = last_announced_phase_id;
+                self.timeline_audio_duration_ms = audio_duration_ms;
+                self.timeline_audio_transport_revision = audio_transport_revision;
+                self.timeline_position_ms = timeline_position_ms;
+                self.timeline_playhead_boundary_armed = timeline_playhead_boundary_armed;
+                self.timeline_evaluated_boundary_position_ms =
+                    timeline_evaluated_boundary_position_ms;
+                self.timeline_jump_landed_event_id = timeline_jump_landed_event_id;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreTimelineBank {
+                timelines,
+                active,
+                playing,
+                position_ms,
+                last_error,
+            } => {
+                if let Ok((active, runtime_events)) = self.prepare_timeline_bank_entry(active) {
+                    self.timeline_bank = timelines;
+                    self.install_timeline_bank_entry(active, runtime_events, playing, position_ms);
+                }
                 self.last_error = last_error;
             }
         }
@@ -21233,6 +22121,48 @@ impl EngineRuntime {
             .iter()
             .map(|group| group.id)
             .collect::<HashSet<_>>();
+        let groups_by_id = self
+            .video_layer_groups
+            .iter()
+            .map(|group| (group.id, group.clone()))
+            .collect::<HashMap<_, _>>();
+        self.video_transition_buses.retain(|bus| {
+            let composition_layers = if bus.composition_id == 1 {
+                self.video_layers
+                    .iter()
+                    .map(|layer| layer.id)
+                    .collect::<Vec<_>>()
+            } else if let Some(composition) = self
+                .video_compositions
+                .iter()
+                .find(|composition| composition.summary.id == bus.composition_id)
+            {
+                composition.summary.layer_ids.clone()
+            } else {
+                return false;
+            };
+            let target_exists = |target: &VideoLayerTransitionTarget| match target {
+                VideoLayerTransitionTarget::Layer { layer_id } => {
+                    layers.contains(layer_id) && composition_layers.contains(layer_id)
+                }
+                VideoLayerTransitionTarget::Group { group_id } => groups_by_id
+                    .get(group_id)
+                    .is_some_and(|group| group.composition_id == bus.composition_id),
+            };
+            bus.members.len() >= 2
+                && bus.members.iter().all(target_exists)
+                && bus.default_from != bus.default_to
+                && bus.members.contains(&bus.default_from)
+                && bus.members.contains(&bus.default_to)
+                && bus.matte_source.as_ref().is_none_or(target_exists)
+        });
+        let buses = self
+            .video_transition_buses
+            .iter()
+            .map(|bus| bus.id)
+            .collect::<HashSet<_>>();
+        self.active_video_transition_buses
+            .retain(|active| buses.contains(&active.bus_id));
         self.video_effect_chains.retain(|chain| match &chain.scope {
             VideoEffectScope::Clip { layer_id, slot_id } => self
                 .video_layers
@@ -21244,8 +22174,8 @@ impl EngineRuntime {
                 owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id },
             } => layers.contains(layer_id),
             VideoEffectScope::Transition {
-                owner: protocol::VideoTransitionEffectOwner::LayerBus { .. },
-            } => false,
+                owner: protocol::VideoTransitionEffectOwner::LayerBus { bus_id },
+            } => buses.contains(bus_id),
             VideoEffectScope::Composition { composition_id } => {
                 compositions.contains(composition_id)
             }
@@ -21966,7 +22896,9 @@ impl EngineRuntime {
         self.expire_live_audio_spectrum(now);
         self.advance_video_isf_event_resets(now);
         self.advance_timeline(now);
+        self.advance_timeline_follow(now);
         self.advance_pending_cue(now);
+        self.apply_timeline_video_clips();
         self.apply_timeline_automations();
         self.apply_timeline_video_automations();
         self.apply_child_timeline_automations();
@@ -21974,11 +22906,34 @@ impl EngineRuntime {
         self.apply_active_fade(now);
         self.update_audio_reactive_nodes(now);
         self.advance_video_layers(self.last_tick_interval);
+        self.advance_video_layer_transition_buses(self.last_tick_interval);
         self.advance_video_layer_fades(now);
         self.advance_video_output_fades(now);
         self.expire_effect_transitions(now);
 
         let mut frames_by_universe = self.render_dmx_preview_frames(now);
+        if let Some(transition) = &self.timeline_follow_transition {
+            let elapsed_ms = now
+                .saturating_duration_since(transition.started_at)
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64;
+            let duration_ms = transition.duration.as_millis().max(1) as u64;
+            let raw = elapsed_ms.min(duration_ms) as f32 / duration_ms as f32;
+            for (universe, frame) in &mut frames_by_universe {
+                let Some(outgoing) = transition.outgoing_dmx_frames.get(universe) else {
+                    continue;
+                };
+                for (value, from) in frame.iter_mut().zip(outgoing.iter()) {
+                    *value = timeline_follow_lighting_value(
+                        transition.lighting_policy,
+                        transition.curve,
+                        raw,
+                        *from,
+                        *value,
+                    );
+                }
+            }
+        }
         let frame = frames_by_universe
             .get(&self.output.universe)
             .copied()
@@ -23743,6 +24698,7 @@ impl EngineRuntime {
             RuntimeChildTransportId::Timeline(index) => self.child_transports.get(index),
             RuntimeChildTransportId::Direct(index) => self.direct_child_transports.get(index),
             RuntimeChildTransportId::Nested(index) => self.nested_child_transports.get(index),
+            RuntimeChildTransportId::Follow => self.timeline_follow_transport.as_ref(),
         }
     }
 
@@ -23754,6 +24710,7 @@ impl EngineRuntime {
             RuntimeChildTransportId::Timeline(index) => self.child_transports.get_mut(index),
             RuntimeChildTransportId::Direct(index) => self.direct_child_transports.get_mut(index),
             RuntimeChildTransportId::Nested(index) => self.nested_child_transports.get_mut(index),
+            RuntimeChildTransportId::Follow => self.timeline_follow_transport.as_mut(),
         }
     }
 
@@ -26564,6 +27521,369 @@ impl EngineRuntime {
         self.clamp_timeline_position_after_edit();
     }
 
+    fn prepare_timeline_bank_entry(
+        &self,
+        mut timeline: TimelineSnapshot,
+    ) -> Result<(TimelineSnapshot, Vec<RuntimeTimelineEvent>), String> {
+        normalize_and_validate_timeline_layers(&mut timeline.layers, &timeline.events)?;
+        normalize_and_validate_timeline_audio_clips(&timeline.layers, &mut timeline.audio_clips)?;
+        timeline.playing = false;
+        timeline.position_ms = 0;
+        timeline.count_in_remaining_ms = 0;
+        timeline.audio_transport_revision = 0;
+        timeline.active_child_transports.clear();
+        timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
+        timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
+        timeline.guide_cues.clear();
+        validate_timeline_authoring(&timeline, &self.media_assets)?;
+
+        let mut runtime_events = timeline
+            .events
+            .iter()
+            .map(runtime_timeline_event_from_summary)
+            .collect::<Vec<_>>();
+        let any_solo = timeline.layers.iter().any(|layer| layer.solo);
+        for event in &mut runtime_events {
+            let resolved = resolve_timeline_event_layer(&timeline.layers, event, any_solo)?;
+            event.resolved_layer_id = resolved.id;
+            event.layer_order = resolved.order;
+            event.layer_muted_effective = resolved.muted_effective;
+            event.track = timeline_track_for_layer_kind(resolved.kind)
+                .ok_or_else(|| "Timeline Scene Block cannot target an Audio layer".to_string())?;
+        }
+        runtime_events.sort_by_key(|event| (event.time_ms, event.layer_order, event.id));
+        Ok((timeline, runtime_events))
+    }
+
+    fn install_timeline_bank_entry(
+        &mut self,
+        timeline: TimelineSnapshot,
+        runtime_events: Vec<RuntimeTimelineEvent>,
+        playing: bool,
+        position_ms: u64,
+    ) {
+        // End every runtime object owned by the outgoing Timeline before its
+        // authored replacement is installed. Direct child transports remain
+        // independent and are deliberately not released here.
+        self.deactivate_all_timeline_effect_activations();
+        self.deactivate_all_child_transports();
+        if self.timeline_follow_transport.is_some() {
+            self.deactivate_child_transport_by_id(RuntimeChildTransportId::Follow);
+        }
+        self.timeline_follow_transport = None;
+        self.timeline_follow_transition = None;
+        self.timeline_video_clips.clear();
+        self.apply_timeline_video_clips();
+
+        self.timeline_id = timeline.id;
+        self.timeline_label = timeline.label;
+        self.timeline_layers = timeline.layers;
+        self.timeline_events = runtime_events;
+        self.timeline_automations = timeline
+            .automations
+            .iter()
+            .map(runtime_timeline_automation_from_summary)
+            .collect();
+        self.timeline_video_automations = timeline
+            .video_automations
+            .iter()
+            .map(runtime_timeline_video_automation_from_summary)
+            .collect();
+        self.timeline_audio = timeline.audio;
+        self.timeline_audio_clips = timeline.audio_clips;
+        self.timeline_audio_clips_derived = false;
+        if self.timeline_audio_clips.is_empty() && self.timeline_audio.is_some() {
+            self.rebuild_derived_timeline_audio_clip();
+        } else {
+            self.refresh_timeline_audio_duration();
+        }
+        self.timeline_video_clips = timeline.video_clips;
+        self.timeline_phases = timeline.phases;
+        self.timeline_item_groups = timeline.item_groups;
+        self.timeline_loop_region = timeline.loop_region;
+        self.timeline_follow = timeline.follow;
+        self.timeline_guide_enabled = timeline.guide_enabled;
+        self.timeline_audio_offset_ms = timeline.audio_offset_ms;
+        self.timeline_audio_muted = timeline.audio_muted;
+        self.timeline_metronome_enabled = timeline.metronome_enabled;
+        self.timeline_count_in_beats = timeline.count_in_beats.min(16);
+        self.timeline_position_ms = position_ms.min(self.timeline_duration_ms());
+        self.timeline_playing = playing;
+        self.timeline_count_in_until = None;
+        self.timeline_paused_at = (!playing).then_some(Instant::now());
+        self.timeline_playhead_boundary_armed = playing;
+        self.timeline_evaluated_boundary_position_ms = None;
+        self.timeline_jump_landed_event_id = None;
+        self.timeline_external_sync_source = None;
+        self.timeline_due_cues.clear();
+        self.timeline_last_announced_phase_id = None;
+        self.timeline_guide_cues.clear();
+        self.timeline_audio_transport_revision =
+            self.timeline_audio_transport_revision.wrapping_add(1);
+        let generation = next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+        self.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation,
+            status: if self
+                .timeline_loop_region
+                .as_ref()
+                .is_some_and(|region| region.enabled)
+            {
+                TimelineLoopRuntimeStatus::Armed
+            } else {
+                TimelineLoopRuntimeStatus::Disabled
+            },
+            a_ms: self.timeline_loop_region.as_ref().map(|region| region.a_ms),
+            b_ms: self.timeline_loop_region.as_ref().map(|region| region.b_ms),
+            musical_length_millibeats: self.timeline_loop_region.as_ref().and_then(|region| {
+                region
+                    .musical_length_beats
+                    .map(|beats| (beats * 1_000.0).round().max(1.0) as u64)
+            }),
+            wrap_count: 0,
+        };
+        self.refresh_timeline_loop_runtime_status();
+        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+            generation,
+            ..TimelineFollowRuntimeSummary::default()
+        };
+        self.apply_timeline_video_clips();
+        self.apply_timeline_automations();
+        self.apply_timeline_video_automations();
+    }
+
+    fn apply_timeline_bank_state(
+        &mut self,
+        timelines: Vec<TimelineSnapshot>,
+        active_timeline_id: TimelineId,
+        play: bool,
+    ) -> Result<(), String> {
+        if timelines.is_empty() {
+            return Err("Timeline bank requires at least one Timeline".to_string());
+        }
+        let mut prepared = Vec::with_capacity(timelines.len());
+        for timeline in timelines {
+            prepared.push(self.prepare_timeline_bank_entry(timeline)?);
+        }
+        let active_index = prepared
+            .iter()
+            .position(|(timeline, _)| timeline.id == active_timeline_id)
+            .ok_or_else(|| "Active Timeline must exist in the Timeline bank".to_string())?;
+        let active = prepared[active_index].0.clone();
+        let runtime_events = prepared[active_index].1.clone();
+        let mut validation = EngineSnapshot::default();
+        validation.timeline = active.clone();
+        validation.timeline_bank = prepared
+            .iter()
+            .map(|(timeline, _)| timeline.clone())
+            .collect();
+        validation.video.media_assets = self.media_assets.clone();
+        validate_timeline_bank(&validation, &self.media_assets)?;
+
+        self.timeline_bank = validation.timeline_bank;
+        self.install_timeline_bank_entry(active, runtime_events, play, 0);
+        Ok(())
+    }
+
+    fn apply_timeline_advanced_authoring_state(
+        &mut self,
+        candidate: TimelineAdvancedAuthoringSummary,
+    ) -> Result<(), String> {
+        let current_timeline = self.timeline_snapshot();
+        let mut timeline = current_timeline.clone();
+        timeline.video_clips = candidate.video_clips.clone();
+        timeline.audio_clips = candidate.audio_clips.clone();
+        timeline.phases = candidate.phases.clone();
+        timeline.item_groups = candidate.item_groups.clone();
+        timeline.loop_region = candidate.loop_region.clone();
+        timeline.follow = candidate.follow.clone();
+        timeline.guide_enabled = candidate.guide_enabled;
+        if let Some(request) = &candidate.snap_request {
+            for update in &request.event_placements {
+                let event = timeline
+                    .events
+                    .iter_mut()
+                    .find(|event| event.id == update.event_id)
+                    .ok_or_else(|| format!("Timeline event {} was not found", update.event_id))?;
+                event.time_ms = update.time_ms;
+                event.time_beats = update.time_beats;
+                event.track = update.track.clone();
+                event.layer_id = update.layer_id.or(event.layer_id);
+                event.duration_ms = update.duration_ms;
+                event.duration_beats = update.duration_beats;
+                event.conform_to_tempo = update.conform_to_tempo;
+                event.loop_fill = update.loop_fill;
+                event.fade_in_ms = update.fade_in_ms;
+                event.fade_out_ms = update.fade_out_ms;
+                event.loop_count = update.loop_count;
+                event.jump_to_event_id = update.jump_to_event_id;
+            }
+            for update in &request.lighting_automations {
+                let automation = timeline
+                    .automations
+                    .iter_mut()
+                    .find(|automation| automation.id == update.automation_id)
+                    .ok_or_else(|| {
+                        format!("Timeline automation {} was not found", update.automation_id)
+                    })?;
+                automation.keyframes = update.keyframes.clone();
+            }
+            for update in &request.video_automations {
+                let automation = timeline
+                    .video_automations
+                    .iter_mut()
+                    .find(|automation| automation.id == update.automation_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "Timeline video automation {} was not found",
+                            update.automation_id
+                        )
+                    })?;
+                automation.keyframes = update.keyframes.clone();
+            }
+        }
+        validate_timeline_authoring(&timeline, &self.media_assets)?;
+
+        let item_start_ms = |snapshot: &TimelineSnapshot, item: TimelineItemRef| match item {
+            TimelineItemRef::LightingEvent { event_id } => snapshot
+                .events
+                .iter()
+                .find(|event| event.id == event_id)
+                .map(|event| event.time_ms),
+            TimelineItemRef::VideoClip { clip_id } => snapshot
+                .video_clips
+                .iter()
+                .find(|clip| clip.id == clip_id)
+                .map(|clip| clip.start_ms),
+            TimelineItemRef::AudioClip { clip_id } => snapshot
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == clip_id)
+                .map(|clip| clip.start_ms),
+            TimelineItemRef::LightingAutomation { automation_id } => snapshot
+                .automations
+                .iter()
+                .find(|automation| automation.id == automation_id)
+                .and_then(|automation| automation.keyframes.first())
+                .map(|keyframe| keyframe.time_ms),
+            TimelineItemRef::VideoAutomation { automation_id } => snapshot
+                .video_automations
+                .iter()
+                .find(|automation| automation.id == automation_id)
+                .and_then(|automation| automation.keyframes.first())
+                .map(|keyframe| keyframe.time_ms),
+        };
+        for current_group in &current_timeline.item_groups {
+            let Some(next_group) = timeline
+                .item_groups
+                .iter()
+                .find(|group| group.id == current_group.id)
+            else {
+                continue;
+            };
+            if next_group.members != current_group.members {
+                return Err(format!(
+                    "Timeline item group {} membership is immutable; ungroup and create a new group",
+                    current_group.id.0
+                ));
+            }
+            let mut group_delta = None;
+            for member in &current_group.members {
+                let previous = item_start_ms(&current_timeline, *member)
+                    .ok_or_else(|| "Timeline item group previous member was missing".to_string())?;
+                let next = item_start_ms(&timeline, *member).ok_or_else(|| {
+                    "Timeline item group candidate member was missing".to_string()
+                })?;
+                let delta = i128::from(next) - i128::from(previous);
+                if group_delta
+                    .replace(delta)
+                    .is_some_and(|expected| expected != delta)
+                {
+                    return Err(format!(
+                        "Timeline item group {} must move every member by the same delta",
+                        current_group.id.0
+                    ));
+                }
+            }
+        }
+
+        let locked_layers = self
+            .timeline_layers
+            .iter()
+            .filter(|layer| layer.locked)
+            .map(|layer| layer.id)
+            .collect::<HashSet<_>>();
+        let locked_video_changed = self.timeline_video_clips.iter().any(|clip| {
+            locked_layers.contains(&clip.layer_id)
+                && !candidate.video_clips.iter().any(|next| next == clip)
+        }) || candidate.video_clips.iter().any(|clip| {
+            locked_layers.contains(&clip.layer_id)
+                && !self
+                    .timeline_video_clips
+                    .iter()
+                    .any(|current| current == clip)
+        });
+        let locked_audio_changed = self.timeline_audio_clips.iter().any(|clip| {
+            locked_layers.contains(&clip.layer_id)
+                && !candidate.audio_clips.iter().any(|next| next == clip)
+        }) || candidate.audio_clips.iter().any(|clip| {
+            locked_layers.contains(&clip.layer_id)
+                && !self
+                    .timeline_audio_clips
+                    .iter()
+                    .any(|current| current == clip)
+        });
+        if locked_video_changed || locked_audio_changed {
+            return Err("Timeline media on a locked lane cannot be changed".to_string());
+        }
+
+        if let Some(request) = candidate.snap_request.clone() {
+            self.snap_timeline_items_state(request)?;
+        }
+
+        self.timeline_video_clips = candidate.video_clips;
+        self.timeline_audio_clips = candidate.audio_clips;
+        self.timeline_audio_clips_derived = false;
+        self.timeline_phases = candidate.phases;
+        self.timeline_item_groups = candidate.item_groups;
+        self.timeline_loop_region = candidate.loop_region;
+        self.timeline_follow = candidate.follow;
+        self.timeline_guide_enabled = candidate.guide_enabled;
+        let generation = next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+        self.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation,
+            status: if self
+                .timeline_loop_region
+                .as_ref()
+                .is_some_and(|region| region.enabled)
+            {
+                TimelineLoopRuntimeStatus::Armed
+            } else {
+                TimelineLoopRuntimeStatus::Disabled
+            },
+            a_ms: self.timeline_loop_region.as_ref().map(|region| region.a_ms),
+            b_ms: self.timeline_loop_region.as_ref().map(|region| region.b_ms),
+            musical_length_millibeats: self.timeline_loop_region.as_ref().and_then(|region| {
+                region
+                    .musical_length_beats
+                    .map(|beats| (beats * 1_000.0).round().max(1.0) as u64)
+            }),
+            wrap_count: 0,
+        };
+        self.refresh_timeline_loop_runtime_status();
+        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+            generation,
+            ..TimelineFollowRuntimeSummary::default()
+        };
+        self.timeline_guide_cues.clear();
+        self.timeline_last_announced_phase_id = None;
+        self.refresh_timeline_audio_duration();
+        self.timeline_audio_transport_revision =
+            self.timeline_audio_transport_revision.wrapping_add(1);
+        self.clamp_timeline_position_after_edit();
+        self.apply_timeline_video_clips();
+        Ok(())
+    }
+
     fn timeline_has_conformed_events(&self) -> bool {
         self.timeline_events
             .iter()
@@ -28600,6 +29920,9 @@ impl EngineRuntime {
         } else {
             let mut failed_pending_launch = None;
             for layer in &mut self.video_layers {
+                if self.timeline_video_layer_restores.contains_key(&layer.id) {
+                    continue;
+                }
                 let Some(pending) = layer.pending_clip_launch else {
                     continue;
                 };
@@ -28618,9 +29941,14 @@ impl EngineRuntime {
                     // A queued target is immutable; a discontinuity can only
                     // hold it. It never recalculates this ordinal from the
                     // current phase or beat modulo.
-                    if let Err(error) =
-                        activate_runtime_video_clip_slot(layer, pending.slot_id, &self.media_assets)
-                    {
+                    if let Err(error) = start_runtime_video_clip_take(
+                        layer,
+                        pending.slot_id,
+                        pending.transition_kind,
+                        pending.transition_duration,
+                        pending.resolved_duration_ms,
+                        &self.media_assets,
+                    ) {
                         // An asset edit after admission can invalidate a
                         // formerly launchable pending slot. Keep the current
                         // program, but never leave an impossible action
@@ -28636,10 +29964,27 @@ impl EngineRuntime {
             }
         }
         for index in 0..self.video_layers.len() {
+            if self
+                .timeline_video_layer_restores
+                .contains_key(&self.video_layers[index].id)
+            {
+                continue;
+            }
+            let completed_take =
+                if let Some(take) = self.video_layers[index].clip_take_transition.as_mut() {
+                    advance_runtime_video_clip_slot(&mut take.incoming, delta);
+                    take.elapsed = take.elapsed.saturating_add(delta).min(take.duration);
+                    take.elapsed >= take.duration
+                } else {
+                    false
+                };
             if self.video_layers[index].active_clip_slot_id.is_some()
                 && self.video_layers[index].runtime_transport_dirty
             {
                 advance_runtime_video_clip_slot(&mut self.video_layers[index], delta);
+                if completed_take {
+                    complete_runtime_video_clip_take(&mut self.video_layers[index]);
+                }
                 continue;
             }
             let (mut effective_state, source_duration_ms) = {
@@ -28685,6 +30030,20 @@ impl EngineRuntime {
                 } else {
                     RuntimeClipDirection::Stopped
                 };
+            }
+            if completed_take {
+                complete_runtime_video_clip_take(layer);
+            }
+        }
+    }
+
+    fn advance_video_layer_transition_buses(&mut self, delta: Duration) {
+        for transition in &mut self.active_video_transition_buses {
+            if !matches!(transition.kind, VideoClipTakeKind::Cut) {
+                transition.elapsed = transition
+                    .elapsed
+                    .saturating_add(delta)
+                    .min(transition.duration);
             }
         }
     }
@@ -29899,6 +31258,10 @@ impl EngineRuntime {
             has_immediate_trigger |=
                 self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
         }
+        if self.timeline_follow_transport.is_some() {
+            has_immediate_trigger |=
+                self.advance_child_transport(RuntimeChildTransportId::Follow, now);
+        }
         if has_immediate_trigger {
             self.advance_pending_cue(now);
         }
@@ -29960,6 +31323,534 @@ impl EngineRuntime {
         apply_transport_domain!(child_transports);
         apply_transport_domain!(direct_child_transports);
         apply_transport_domain!(nested_child_transports);
+        if self
+            .timeline_follow_transport
+            .as_ref()
+            .is_some_and(|transport| transport.active)
+        {
+            let position_ms = self
+                .timeline_follow_transport
+                .as_ref()
+                .map(|transport| transport.position_ms)
+                .unwrap_or(0);
+            let lighting_updates = self
+                .timeline_follow_transport
+                .as_ref()
+                .into_iter()
+                .flat_map(|transport| transport.automations.iter())
+                .filter(|automation| {
+                    automation.enabled && matches!(automation.track, TimelineTrackKind::Lighting)
+                })
+                .filter_map(|automation| {
+                    evaluate_automation_keyframes(&automation.keyframes, position_ms)
+                        .map(|value| (automation.fixture_id, automation.attribute.clone(), value))
+                })
+                .collect::<Vec<_>>();
+            for (fixture_id, attribute, value) in lighting_updates {
+                self.values.insert((fixture_id, attribute), value);
+            }
+            let video_updates = self
+                .timeline_follow_transport
+                .as_ref()
+                .into_iter()
+                .flat_map(|transport| transport.video_automations.iter())
+                .filter(|automation| automation.enabled)
+                .filter_map(|automation| {
+                    evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
+                        .map(|value| (automation.layer_id, automation.param.clone(), value))
+                })
+                .collect::<Vec<_>>();
+            for (layer_id, param, value) in video_updates {
+                if let Some(layer) = self
+                    .video_layers
+                    .iter_mut()
+                    .find(|layer| layer.id == layer_id)
+                {
+                    apply_video_param(&mut layer.state, &param, value);
+                }
+            }
+        }
+    }
+
+    fn begin_timeline_follow(&mut self, now: Instant) -> Result<bool, String> {
+        if self.timeline_follow_transition.is_some() {
+            return Ok(true);
+        }
+        let Some(follow) = self.timeline_follow.clone().filter(|follow| follow.enabled) else {
+            return Ok(false);
+        };
+        let bank = self.timeline_bank_snapshot();
+        let source_index = bank
+            .iter()
+            .position(|timeline| timeline.id == self.timeline_id)
+            .ok_or_else(|| "Active Timeline is missing from the Timeline bank".to_string())?;
+        let target = bank
+            .get(source_index + 1)
+            .filter(|timeline| timeline.id == follow.next_timeline_id)
+            .cloned()
+            .ok_or_else(|| {
+                "Timeline Follow target is no longer the next Timeline in bank order".to_string()
+            })?;
+        let (target, runtime_events) = self.prepare_timeline_bank_entry(target)?;
+        let resolved_duration_ms = resolve_video_clip_take_duration_ms(
+            follow.video_kind,
+            follow.duration,
+            &self.clock.snapshot(now),
+        )?;
+        let generation = next_timeline_runtime_generation(self.timeline_follow_runtime.generation);
+        if resolved_duration_ms == 0 {
+            let source_id = self.timeline_id;
+            let target_id = target.id;
+            self.install_timeline_bank_entry(target, runtime_events, true, 0);
+            self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+                generation,
+                status: protocol::TimelineFollowRuntimeStatus::Idle,
+                source_timeline_id: Some(source_id),
+                target_timeline_id: Some(target_id),
+                progress_millis: 1000,
+                ..TimelineFollowRuntimeSummary::default()
+            };
+            self.announce_timeline_phase_at(0);
+            return Ok(true);
+        }
+
+        let child = ChildTimelineSummary {
+            layers: target.layers.clone(),
+            events: target.events.clone(),
+            automations: target.automations.clone(),
+            video_automations: target.video_automations.clone(),
+            audio: target.audio.clone(),
+            audio_clips: target.audio_clips.clone(),
+            tempo_driven: false,
+            metronome_enabled: target.metronome_enabled,
+            count_in_beats: target.count_in_beats,
+            duration_ms: target.duration_ms,
+        };
+        let cue_dispatch = self.build_cue_dispatch_index();
+        let mut transport = self.build_child_transport(
+            0,
+            child,
+            0,
+            0,
+            u64::MAX,
+            target.duration_ms.max(1),
+            1.0,
+            false,
+            0,
+            Some(u64::MAX),
+            None,
+            &cue_dispatch,
+        )?;
+        transport.active = true;
+        transport.boundary_armed = true;
+        transport.direct_started_at = Some(now);
+        transport.direct_generation = generation;
+        transport.activation_generation = generation;
+        self.timeline_follow_transport = Some(transport);
+        let mut first_error = None;
+        self.build_nested_child_transports_for_parent(
+            RuntimeChildTransportId::Follow,
+            &cue_dispatch,
+            &mut first_error,
+        );
+        self.rebuild_child_transport_effect_activation_ranges_at(
+            RuntimeChildTransportId::Follow,
+            now,
+            &mut first_error,
+        );
+        self.rebuild_child_transport_step_activation_ranges_at(RuntimeChildTransportId::Follow);
+        if let Some(error) = first_error {
+            self.timeline_follow_transport = None;
+            return Err(error);
+        }
+        let affected_video_layer_ids = self
+            .timeline_video_clips
+            .iter()
+            .map(|clip| VideoLayerId::from(clip.layer_id))
+            .chain(
+                target
+                    .video_clips
+                    .iter()
+                    .map(|clip| VideoLayerId::from(clip.layer_id)),
+            )
+            .collect::<HashSet<_>>();
+        let source_bpm = self.clock.bpm;
+        let target_bpm = follow
+            .destination_bpm
+            .map(|bpm| clamp_bpm(bpm as f32))
+            .unwrap_or(source_bpm);
+        self.timeline_follow_transition = Some(RuntimeTimelineFollowTransition {
+            generation,
+            source_timeline_id: self.timeline_id,
+            target: target.clone(),
+            started_at: now,
+            duration: Duration::from_millis(resolved_duration_ms),
+            source_bpm,
+            target_bpm,
+            curve: follow.curve,
+            lighting_policy: follow.lighting_policy,
+            last_trans_beat_ordinal: None,
+            affected_video_layer_ids,
+            outgoing_dmx_frames: self.last_frames_by_universe.clone(),
+        });
+        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+            generation,
+            status: protocol::TimelineFollowRuntimeStatus::Transitioning,
+            source_timeline_id: Some(self.timeline_id),
+            target_timeline_id: Some(target.id),
+            elapsed_ms: 0,
+            duration_ms: resolved_duration_ms,
+            progress_millis: 0,
+            fault: None,
+        };
+        Ok(true)
+    }
+
+    fn handle_timeline_follow_failure(&mut self, error: String, now: Instant) {
+        let policy = self
+            .timeline_follow
+            .as_ref()
+            .map(|follow| follow.fault_policy)
+            .unwrap_or(protocol::TimelineFollowFaultPolicy::Fault);
+        match policy {
+            protocol::TimelineFollowFaultPolicy::Cut => {
+                let target = self.timeline_follow.as_ref().and_then(|follow| {
+                    self.timeline_bank_snapshot()
+                        .into_iter()
+                        .find(|timeline| timeline.id == follow.next_timeline_id)
+                });
+                if let Some(target) = target {
+                    if let Ok((target, runtime_events)) = self.prepare_timeline_bank_entry(target) {
+                        self.install_timeline_bank_entry(target, runtime_events, true, 0);
+                        self.timeline_follow_runtime.status =
+                            protocol::TimelineFollowRuntimeStatus::Idle;
+                        self.announce_timeline_phase_at(0);
+                        return;
+                    }
+                }
+                self.timeline_follow_runtime.status = protocol::TimelineFollowRuntimeStatus::Fault;
+            }
+            protocol::TimelineFollowFaultPolicy::Hold => {
+                self.timeline_follow_runtime.status = protocol::TimelineFollowRuntimeStatus::Held;
+                self.timeline_paused_at = Some(now);
+            }
+            protocol::TimelineFollowFaultPolicy::Fault => {
+                self.timeline_follow_runtime.status = protocol::TimelineFollowRuntimeStatus::Fault;
+            }
+        }
+        self.timeline_follow_runtime.fault = Some(error.clone());
+        self.last_error = Some(error);
+    }
+
+    fn abort_timeline_follow(&mut self, now: Instant) {
+        let source_bpm = self
+            .timeline_follow_transition
+            .as_ref()
+            .map(|transition| transition.source_bpm);
+        if self.timeline_follow_transport.is_some() {
+            self.deactivate_child_transport_by_id(RuntimeChildTransportId::Follow);
+        }
+        self.timeline_follow_transport = None;
+        self.timeline_follow_transition = None;
+        if let Some(source_bpm) = source_bpm {
+            self.clock.set_bpm_preserving_beat_position(source_bpm, now);
+        }
+        self.timeline_audio_transport_revision =
+            self.timeline_audio_transport_revision.wrapping_add(1);
+        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+            generation: next_timeline_runtime_generation(self.timeline_follow_runtime.generation),
+            ..TimelineFollowRuntimeSummary::default()
+        };
+    }
+
+    fn advance_timeline_follow(&mut self, now: Instant) {
+        let Some((started_at, transition_duration, source_bpm, target_bpm)) =
+            self.timeline_follow_transition.as_ref().map(|transition| {
+                (
+                    transition.started_at,
+                    transition.duration,
+                    transition.source_bpm,
+                    transition.target_bpm,
+                )
+            })
+        else {
+            return;
+        };
+        let elapsed = now.saturating_duration_since(started_at);
+        let duration_ms = transition_duration.as_millis().max(1) as u64;
+        let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+        let progress = elapsed_ms.min(duration_ms) as f32 / duration_ms as f32;
+        let bpm = source_bpm + (target_bpm - source_bpm) * progress;
+        self.clock.set_bpm_preserving_beat_position(bpm, now);
+        self.timeline_follow_runtime.elapsed_ms = elapsed_ms.min(duration_ms);
+        self.timeline_follow_runtime.progress_millis =
+            (progress * 1000.0).round().clamp(0.0, 1000.0) as u16;
+
+        let cadence_beats = self
+            .timeline_follow
+            .as_ref()
+            .map(|follow| u64::from(follow.trans_cadence_bars.max(1)) * 4)
+            .unwrap_or(16);
+        let beat_ordinal = self.clock.snapshot(now).beat_counter / cadence_beats;
+        let should_announce = self
+            .timeline_follow_transition
+            .as_ref()
+            .is_some_and(|transition| transition.last_trans_beat_ordinal != Some(beat_ordinal));
+        if should_announce {
+            if let Some(transition) = self.timeline_follow_transition.as_mut() {
+                transition.last_trans_beat_ordinal = Some(beat_ordinal);
+            }
+            self.push_timeline_guide_cue(
+                self.timeline_position_ms,
+                "Trans".to_string(),
+                TimelineGuideCueKind::Trans,
+            );
+        }
+        if elapsed < transition_duration {
+            return;
+        }
+
+        let transition = self
+            .timeline_follow_transition
+            .take()
+            .expect("checked Timeline Follow transition");
+        let target_position_ms = self
+            .timeline_follow_transport
+            .as_ref()
+            .map(|transport| transport.position_ms)
+            .unwrap_or(duration_ms)
+            .min(transition.target.duration_ms);
+        self.deactivate_child_transport_by_id(RuntimeChildTransportId::Follow);
+        self.timeline_follow_transport = None;
+        let target_id = transition.target.id;
+        let source_id = transition.source_timeline_id;
+        if let Ok((target, runtime_events)) = self.prepare_timeline_bank_entry(transition.target) {
+            self.install_timeline_bank_entry(target, runtime_events, true, target_position_ms);
+            self.clock
+                .set_bpm_preserving_beat_position(transition.target_bpm, now);
+            self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+                generation: transition.generation,
+                status: protocol::TimelineFollowRuntimeStatus::Idle,
+                source_timeline_id: Some(source_id),
+                target_timeline_id: Some(target_id),
+                elapsed_ms: duration_ms,
+                duration_ms,
+                progress_millis: 1000,
+                fault: None,
+            };
+            self.timeline_last_announced_phase_id = None;
+            self.announce_timeline_phase_at(target_position_ms);
+        }
+    }
+
+    fn maybe_begin_timeline_follow_preroll(&mut self, previous_position_ms: u64, now: Instant) {
+        if self.timeline_follow_transition.is_some() {
+            return;
+        }
+        let duration_ms = self.timeline_duration_ms();
+        let Some(preroll_ms) = self
+            .timeline_follow
+            .as_ref()
+            .filter(|follow| follow.enabled && follow.preroll_ms > 0)
+            .map(|follow| follow.preroll_ms.min(duration_ms))
+        else {
+            return;
+        };
+        let admission_ms = duration_ms.saturating_sub(preroll_ms);
+        if previous_position_ms <= admission_ms && self.timeline_position_ms >= admission_ms {
+            if let Err(error) = self.begin_timeline_follow(now) {
+                self.handle_timeline_follow_failure(error, now);
+            }
+        }
+    }
+
+    fn push_timeline_guide_cue(&mut self, at_ms: u64, label: String, cue: TimelineGuideCueKind) {
+        if !self.timeline_guide_enabled {
+            return;
+        }
+        let sequence = self
+            .timeline_guide_cues
+            .last()
+            .map_or(1, |entry| entry.sequence.saturating_add(1));
+        self.timeline_guide_cues.push(TimelineGuideCueSummary {
+            generation: self.timeline_loop_runtime.generation,
+            sequence,
+            at_ms,
+            label,
+            cue,
+        });
+        if self.timeline_guide_cues.len() > 64 {
+            self.timeline_guide_cues.remove(0);
+        }
+    }
+
+    fn announce_timeline_phase_at(&mut self, position_ms: u64) {
+        let phase = self
+            .timeline_phases
+            .iter()
+            .find(|phase| phase.start_ms <= position_ms && position_ms < phase.end_ms)
+            .cloned();
+        let Some(phase) = phase else {
+            self.timeline_last_announced_phase_id = None;
+            return;
+        };
+        if self.timeline_last_announced_phase_id == Some(phase.id) {
+            return;
+        }
+        self.timeline_last_announced_phase_id = Some(phase.id);
+        self.push_timeline_guide_cue(
+            position_ms,
+            phase.label,
+            TimelineGuideCueKind::Phase { phase_id: phase.id },
+        );
+    }
+
+    fn announce_timeline_phases_between(&mut self, previous_ms: u64, current_ms: u64) {
+        let phases = self
+            .timeline_phases
+            .iter()
+            .filter(|phase| previous_ms < phase.start_ms && phase.start_ms <= current_ms)
+            .cloned()
+            .collect::<Vec<_>>();
+        for phase in phases {
+            self.timeline_last_announced_phase_id = Some(phase.id);
+            self.push_timeline_guide_cue(
+                phase.start_ms,
+                phase.label,
+                TimelineGuideCueKind::Phase { phase_id: phase.id },
+            );
+        }
+    }
+
+    fn refresh_timeline_loop_runtime_status(&mut self) {
+        if matches!(
+            self.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ) {
+            return;
+        }
+        let (Some(a_ms), Some(b_ms)) = (
+            self.timeline_loop_runtime.a_ms,
+            self.timeline_loop_runtime.b_ms,
+        ) else {
+            self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Disabled;
+            return;
+        };
+        self.timeline_loop_runtime.status =
+            if a_ms <= self.timeline_position_ms && self.timeline_position_ms < b_ms {
+                TimelineLoopRuntimeStatus::Looping
+            } else {
+                TimelineLoopRuntimeStatus::Armed
+            };
+    }
+
+    fn set_timeline_loop_enabled_state(&mut self, enabled: bool) {
+        let was_enabled = !matches!(
+            self.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        );
+        self.timeline_loop_runtime.generation =
+            next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+        if enabled
+            && self.timeline_loop_runtime.a_ms.is_some()
+            && self.timeline_loop_runtime.b_ms.is_some()
+        {
+            self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Armed;
+            self.refresh_timeline_loop_runtime_status();
+        } else {
+            self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Disabled;
+            if was_enabled {
+                self.push_timeline_guide_cue(
+                    self.timeline_position_ms,
+                    "Break".to_string(),
+                    TimelineGuideCueKind::Break,
+                );
+            }
+        }
+    }
+
+    /// Advance one monotonically increasing transport segment. Returns true
+    /// when a Scene Block jump changed the destination, in which case callers
+    /// must not continue an A-B wrap using the discarded linear remainder.
+    fn advance_timeline_segment(
+        &mut self,
+        previous_position: u64,
+        current_position: u64,
+        include_previous: bool,
+        include_current: bool,
+        now: Instant,
+    ) -> bool {
+        if let Some((jump_at_ms, _source_event_index, target_event_index, target)) =
+            self.first_timeline_jump_between(previous_position, current_position, include_previous)
+        {
+            self.timeline_position_ms = jump_at_ms;
+            self.trigger_timeline_events_between(
+                previous_position,
+                jump_at_ms,
+                include_previous,
+                false,
+                now,
+            );
+            self.announce_timeline_phases_between(previous_position, jump_at_ms);
+            for event_index in 0..self.timeline_events.len() {
+                let event = &self.timeline_events[event_index];
+                if event.duration_ms == 0 || timeline_event_end_ms(event) != jump_at_ms {
+                    continue;
+                }
+                let event_id = event.id;
+                let range = self
+                    .timeline_effect_activation_ranges
+                    .get(event_index)
+                    .copied()
+                    .unwrap_or_default();
+                let step_range = self
+                    .timeline_step_activation_ranges
+                    .get(event_index)
+                    .copied()
+                    .unwrap_or_default();
+                self.finish_timeline_block_fade_out(event_id);
+                self.deactivate_effect_range(range);
+                self.deactivate_step_range(step_range);
+                if let Some(transport_index) = self
+                    .child_transport_by_parent_event
+                    .get(event_index)
+                    .copied()
+                    .flatten()
+                {
+                    self.deactivate_child_transport(transport_index);
+                }
+                self.pending_cues.retain(|pending| {
+                    pending
+                        .timeline_effect_activation
+                        .is_none_or(|activation| activation.event_id != event_id)
+                });
+            }
+            self.timeline_position_ms = target.time_ms;
+            self.reconcile_timeline_effect_activations_at_position(target.time_ms, now);
+            if !target.layer_muted_effective {
+                self.activate_child_transport(target_event_index, 0);
+                self.request_timeline_event_at_index(target_event_index, now);
+            }
+            self.timeline_evaluated_boundary_position_ms = Some(target.time_ms);
+            self.timeline_jump_landed_event_id = Some(target.id);
+            self.timeline_last_announced_phase_id = None;
+            self.announce_timeline_phase_at(target.time_ms);
+            true
+        } else {
+            self.timeline_position_ms = current_position;
+            self.trigger_timeline_events_between(
+                previous_position,
+                current_position,
+                include_previous,
+                include_current,
+                now,
+            );
+            if include_previous {
+                self.announce_timeline_phase_at(previous_position);
+            }
+            self.announce_timeline_phases_between(previous_position, current_position);
+            false
+        }
     }
 
     fn advance_timeline(&mut self, now: Instant) {
@@ -30000,6 +31891,9 @@ impl EngineRuntime {
                 );
             }
             self.timeline_playing = false;
+            if let Err(error) = self.begin_timeline_follow(now) {
+                self.handle_timeline_follow_failure(error, now);
+            }
             return;
         }
 
@@ -30008,78 +31902,136 @@ impl EngineRuntime {
             .as_millis()
             .try_into()
             .unwrap_or(u64::MAX);
-        let current_position = previous_position.saturating_add(delta_ms).min(duration);
-        if let Some((jump_at_ms, _source_event_index, target_event_index, target)) =
-            self.first_timeline_jump_between(previous_position, current_position, include_previous)
-        {
-            self.timeline_position_ms = jump_at_ms;
-            self.trigger_timeline_events_between(
-                previous_position,
-                jump_at_ms,
-                include_previous,
+        let mut remaining_ms = delta_ms;
+        let mut segment_start = previous_position;
+        let mut segment_include_start = include_previous;
+        let mut jumped = false;
+        let loop_bounds = match self.timeline_loop_runtime.status {
+            TimelineLoopRuntimeStatus::Disabled => None,
+            TimelineLoopRuntimeStatus::Armed | TimelineLoopRuntimeStatus::Looping => self
+                .timeline_loop_runtime
+                .a_ms
+                .zip(self.timeline_loop_runtime.b_ms),
+        };
+
+        while remaining_ms > 0 && segment_start < duration {
+            let Some((a_ms, b_ms)) = loop_bounds else {
+                let end = segment_start.saturating_add(remaining_ms).min(duration);
+                jumped = self.advance_timeline_segment(
+                    segment_start,
+                    end,
+                    segment_include_start,
+                    true,
+                    now,
+                );
+                break;
+            };
+
+            if segment_start < a_ms {
+                let distance_to_a = a_ms - segment_start;
+                let consumed = remaining_ms.min(distance_to_a);
+                let end = segment_start + consumed;
+                jumped = self.advance_timeline_segment(
+                    segment_start,
+                    end,
+                    segment_include_start,
+                    true,
+                    now,
+                );
+                if jumped || consumed == remaining_ms {
+                    break;
+                }
+                remaining_ms -= consumed;
+                segment_start = a_ms;
+                segment_include_start = false;
+                self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Looping;
+                continue;
+            }
+
+            if segment_start >= b_ms {
+                self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Armed;
+                let end = segment_start.saturating_add(remaining_ms).min(duration);
+                jumped = self.advance_timeline_segment(
+                    segment_start,
+                    end,
+                    segment_include_start,
+                    true,
+                    now,
+                );
+                break;
+            }
+
+            self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Looping;
+            let distance_to_b = b_ms - segment_start;
+            if remaining_ms < distance_to_b {
+                let end = segment_start + remaining_ms;
+                jumped = self.advance_timeline_segment(
+                    segment_start,
+                    end,
+                    segment_include_start,
+                    true,
+                    now,
+                );
+                break;
+            }
+
+            jumped = self.advance_timeline_segment(
+                segment_start,
+                b_ms,
+                segment_include_start,
                 false,
                 now,
             );
-            for event_index in 0..self.timeline_events.len() {
-                let event = &self.timeline_events[event_index];
-                if event.duration_ms == 0 || timeline_event_end_ms(event) != jump_at_ms {
-                    continue;
-                }
-                let event_id = event.id;
-                let range = self
-                    .timeline_effect_activation_ranges
-                    .get(event_index)
-                    .copied()
-                    .unwrap_or_default();
-                let step_range = self
-                    .timeline_step_activation_ranges
-                    .get(event_index)
-                    .copied()
-                    .unwrap_or_default();
-                self.finish_timeline_block_fade_out(event_id);
-                self.deactivate_effect_range(range);
-                self.deactivate_step_range(step_range);
-                if let Some(transport_index) = self
-                    .child_transport_by_parent_event
-                    .get(event_index)
-                    .copied()
-                    .flatten()
-                {
-                    self.deactivate_child_transport(transport_index);
-                }
-                self.pending_cues.retain(|pending| {
-                    pending
-                        .timeline_effect_activation
-                        .is_none_or(|activation| activation.event_id != event_id)
-                });
+            if jumped {
+                break;
             }
-            self.timeline_position_ms = target.time_ms;
-            // A jump may skip another block's end occurrence. Keep only instances whose Scene
-            // Block genuinely spans the destination before starting the jump target.
-            self.reconcile_timeline_effect_activations_at_position(target.time_ms, now);
-            if !target.layer_muted_effective {
-                self.activate_child_transport(target_event_index, 0);
-                self.request_timeline_event_at_index(target_event_index, now);
+            remaining_ms -= distance_to_b;
+            self.timeline_position_ms = a_ms;
+            self.timeline_audio_transport_revision =
+                self.timeline_audio_transport_revision.wrapping_add(1);
+            self.reconcile_timeline_effect_activations_at_position(a_ms, now);
+            self.deactivate_all_child_transports();
+            self.establish_child_transports_at_position(now);
+            self.timeline_loop_runtime.wrap_count =
+                self.timeline_loop_runtime.wrap_count.saturating_add(1);
+            self.timeline_loop_runtime.generation =
+                next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+            self.push_timeline_guide_cue(
+                a_ms,
+                "Looping".to_string(),
+                TimelineGuideCueKind::Looping,
+            );
+            self.timeline_last_announced_phase_id = None;
+            self.announce_timeline_phase_at(a_ms);
+            segment_start = a_ms;
+            segment_include_start = true;
+            if remaining_ms == 0 {
+                break;
             }
-            self.timeline_evaluated_boundary_position_ms = Some(target.time_ms);
-            self.timeline_jump_landed_event_id = Some(target.id);
-        } else {
-            self.timeline_position_ms = current_position;
-            self.trigger_timeline_events_between(
+        }
+
+        if delta_ms == 0 {
+            self.advance_timeline_segment(
                 previous_position,
-                current_position,
+                previous_position,
                 include_previous,
                 true,
                 now,
             );
         }
 
+        if !jumped {
+            self.maybe_begin_timeline_follow_preroll(previous_position, now);
+        }
         self.advance_child_transports(now);
 
-        if self.timeline_position_ms >= duration {
+        if !jumped && self.timeline_position_ms >= duration {
             self.timeline_playing = false;
             self.timeline_paused_at = Some(now);
             self.timeline_playhead_boundary_armed = false;
+            if let Err(error) = self.begin_timeline_follow(now) {
+                self.handle_timeline_follow_failure(error, now);
+            }
         }
     }
 
@@ -30356,6 +32308,116 @@ impl EngineRuntime {
         }
     }
 
+    fn apply_timeline_video_clips(&mut self) {
+        let position_ms = self.timeline_position_ms;
+        let desired = self
+            .timeline_video_clips
+            .iter()
+            .filter(|clip| {
+                clip.start_ms <= position_ms
+                    && position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+            })
+            // A malformed overlap is rejected by authoring validation where
+            // possible. Keep runtime selection deterministic and topmost by
+            // latest start/id if an older compatible project contains one.
+            .fold(
+                BTreeMap::<VideoLayerId, TimelineVideoClipSummary>::new(),
+                |mut clips, clip| {
+                    let layer_id = VideoLayerId::from(clip.layer_id);
+                    match clips.get(&layer_id) {
+                        Some(current)
+                            if (current.start_ms, current.id.0) >= (clip.start_ms, clip.id.0) => {}
+                        _ => {
+                            clips.insert(layer_id, clip.clone());
+                        }
+                    }
+                    clips
+                },
+            );
+
+        let retired_layers = self
+            .timeline_video_layer_restores
+            .keys()
+            .copied()
+            .filter(|layer_id| !desired.contains_key(layer_id))
+            .collect::<Vec<_>>();
+        for layer_id in retired_layers {
+            let Some(restore) = self.timeline_video_layer_restores.remove(&layer_id) else {
+                continue;
+            };
+            if let Some(layer) = self
+                .video_layers
+                .iter_mut()
+                .find(|layer| layer.id == layer_id)
+            {
+                layer.source = restore.source;
+                layer.media_asset_id = restore.media_asset_id;
+                layer.state = restore.state;
+                layer.active_clip_slot_id = restore.active_clip_slot_id;
+                layer.queued_clip_slot_id = restore.queued_clip_slot_id;
+                layer.pending_clip_launch = restore.pending_clip_launch;
+                layer.clip_direction = restore.clip_direction;
+                layer.runtime_transport_dirty = restore.runtime_transport_dirty;
+            }
+        }
+
+        for (layer_id, clip) in desired {
+            let Some(asset) = self
+                .media_assets
+                .iter()
+                .find(|asset| asset.id == clip.media_asset_id)
+                .cloned()
+            else {
+                self.last_error = Some(format!(
+                    "Timeline video clip {} references missing Media Asset {}",
+                    clip.id.0, clip.media_asset_id
+                ));
+                continue;
+            };
+            let Some(layer) = self
+                .video_layers
+                .iter_mut()
+                .find(|layer| layer.id == layer_id)
+            else {
+                self.last_error = Some(format!(
+                    "Timeline video clip {} references missing Video layer {}",
+                    clip.id.0, layer_id
+                ));
+                continue;
+            };
+            self.timeline_video_layer_restores
+                .entry(layer_id)
+                .or_insert_with(|| RuntimeTimelineVideoLayerRestore {
+                    clip_id: clip.id,
+                    source: layer.source.clone(),
+                    media_asset_id: layer.media_asset_id,
+                    state: layer.state.clone(),
+                    active_clip_slot_id: layer.active_clip_slot_id,
+                    queued_clip_slot_id: layer.queued_clip_slot_id,
+                    pending_clip_launch: layer.pending_clip_launch,
+                    clip_direction: layer.clip_direction,
+                    runtime_transport_dirty: layer.runtime_transport_dirty,
+                })
+                .clip_id = clip.id;
+            layer.source = asset.source;
+            layer.media_asset_id = asset.id;
+            layer.active_clip_slot_id = None;
+            layer.queued_clip_slot_id = None;
+            layer.pending_clip_launch = None;
+            layer.clip_take_transition = None;
+            layer.runtime_transport_dirty = true;
+            layer.clip_direction = if self.timeline_playing {
+                RuntimeClipDirection::Forward
+            } else {
+                RuntimeClipDirection::Stopped
+            };
+            layer.state.position_ms = clip
+                .offset_ms
+                .saturating_add(position_ms.saturating_sub(clip.start_ms));
+            layer.state.playing = self.timeline_playing;
+        }
+    }
+
     fn relative_cue_id_for_list(&self, cue_list_id: CueListId, offset: isize) -> Option<CueId> {
         let cues = self
             .cues
@@ -30406,11 +32468,25 @@ impl EngineRuntime {
             .filter_map(|metadata| metadata.duration_ms)
             .max()
             .unwrap_or(0);
+        let timeline_video_clip_duration = self
+            .timeline_video_clips
+            .iter()
+            .map(|clip| clip.start_ms.saturating_add(clip.duration_ms))
+            .max()
+            .unwrap_or(0);
+        let phase_duration = self
+            .timeline_phases
+            .iter()
+            .map(|phase| phase.end_ms)
+            .max()
+            .unwrap_or(0);
         event_duration
             .max(automation_duration)
             .max(video_automation_duration)
             .max(self.timeline_audio_duration_ms)
             .max(video_source_duration)
+            .max(timeline_video_clip_duration)
+            .max(phase_duration)
     }
 
     fn seek_timeline_adjacent_beat(&mut self, direction: i32) {
@@ -30532,6 +32608,8 @@ impl EngineRuntime {
         }
         layers.sort_by_key(|layer| (layer.kind.display_section_rank(), layer.order, layer.id));
         TimelineSnapshot {
+            id: self.timeline_id,
+            label: self.timeline_label.clone(),
             layers,
             events: self
                 .timeline_events
@@ -30550,6 +32628,12 @@ impl EngineRuntime {
                 .collect(),
             audio: self.timeline_audio.clone(),
             audio_clips: self.timeline_audio_clips.clone(),
+            video_clips: self.timeline_video_clips.clone(),
+            phases: self.timeline_phases.clone(),
+            item_groups: self.timeline_item_groups.clone(),
+            loop_region: self.timeline_loop_region.clone(),
+            follow: self.timeline_follow.clone(),
+            guide_enabled: self.timeline_guide_enabled,
             audio_offset_ms: self.timeline_audio_offset_ms,
             audio_muted: self.timeline_audio_muted,
             metronome_enabled: self.timeline_metronome_enabled,
@@ -30560,10 +32644,40 @@ impl EngineRuntime {
                 .unwrap_or(0),
             audio_transport_revision: self.timeline_audio_transport_revision,
             active_child_transports: self.active_child_timeline_transport_summaries(),
+            loop_runtime: self.timeline_loop_runtime.clone(),
+            follow_runtime: self.timeline_follow_runtime.clone(),
+            guide_cues: self.timeline_guide_cues.clone(),
             playing: self.timeline_playing,
             position_ms: self.timeline_position_ms,
             duration_ms: self.timeline_duration_ms(),
         }
+    }
+
+    fn authored_timeline_snapshot(&self) -> TimelineSnapshot {
+        let mut timeline = self.timeline_snapshot();
+        timeline.playing = false;
+        timeline.position_ms = 0;
+        timeline.count_in_remaining_ms = 0;
+        timeline.audio_transport_revision = 0;
+        timeline.active_child_transports.clear();
+        timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
+        timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
+        timeline.guide_cues.clear();
+        if self.timeline_audio_clips_derived {
+            timeline.audio_clips.clear();
+        }
+        timeline
+    }
+
+    fn timeline_bank_snapshot(&self) -> Vec<TimelineSnapshot> {
+        let active = self.authored_timeline_snapshot();
+        let mut bank = self.timeline_bank.clone();
+        if let Some(entry) = bank.iter_mut().find(|entry| entry.id == self.timeline_id) {
+            *entry = active;
+        } else {
+            bank.push(active);
+        }
+        bank
     }
 
     fn video_snapshot(&self) -> VideoSnapshot {
@@ -30573,11 +32687,69 @@ impl EngineRuntime {
             .iter()
             .map(|output| output.summary.clone())
             .collect::<Vec<_>>();
-        let main_layer_ids = self
+        let mut layers = self
             .video_layers
             .iter()
-            .map(|layer| layer.id)
+            .map(|layer| self.video_layer_summary_with_effects(layer, now))
             .collect::<Vec<_>>();
+        if let Some(transition) = &self.timeline_follow_transition {
+            let duration_ms = transition.duration.as_millis().max(1) as u64;
+            let elapsed_ms = now
+                .saturating_duration_since(transition.started_at)
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64;
+            let raw = elapsed_ms.min(duration_ms) as f32 / duration_ms as f32;
+            let incoming_weight = video_transition_curve_progress(transition.curve, raw);
+            for layer in &mut layers {
+                if transition.affected_video_layer_ids.contains(&layer.id) {
+                    layer.state.opacity *= 1.0 - incoming_weight;
+                }
+            }
+            let mut desired = BTreeMap::<VideoLayerId, TimelineVideoClipSummary>::new();
+            for clip in transition.target.video_clips.iter().filter(|clip| {
+                clip.start_ms <= elapsed_ms
+                    && elapsed_ms < clip.start_ms.saturating_add(clip.duration_ms)
+            }) {
+                let layer_id = VideoLayerId::from(clip.layer_id);
+                match desired.get(&layer_id) {
+                    Some(current)
+                        if (current.start_ms, current.id.0) >= (clip.start_ms, clip.id.0) => {}
+                    _ => {
+                        desired.insert(layer_id, clip.clone());
+                    }
+                }
+            }
+            for (layer_id, clip) in desired {
+                let Some(mut incoming) = self
+                    .video_layers
+                    .iter()
+                    .find(|layer| layer.id == layer_id)
+                    .map(|layer| self.video_layer_summary_with_effects(layer, now))
+                else {
+                    continue;
+                };
+                let Some(asset) = self
+                    .media_assets
+                    .iter()
+                    .find(|asset| asset.id == clip.media_asset_id)
+                else {
+                    continue;
+                };
+                incoming.id = u64::MAX.saturating_sub(layer_id);
+                incoming.label = format!("{} · incoming", incoming.label);
+                incoming.source = asset.source.clone();
+                incoming.media_asset_id = Some(asset.id);
+                incoming.state.position_ms = clip
+                    .offset_ms
+                    .saturating_add(elapsed_ms.saturating_sub(clip.start_ms));
+                incoming.state.playing = true;
+                incoming.state.opacity *= incoming_weight;
+                incoming.clip_slots.clear();
+                incoming.default_clip_slot_id = None;
+                layers.push(incoming);
+            }
+        }
+        let main_layer_ids = layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
         let mut compositions = vec![CompositionSummary {
             id: 1,
             label: "Main".to_string(),
@@ -30591,15 +32763,12 @@ impl EngineRuntime {
             summary
         }));
         VideoSnapshot {
-            layers: self
-                .video_layers
-                .iter()
-                .map(|layer| self.video_layer_summary_with_effects(layer, now))
-                .collect(),
+            layers,
             media_assets: self.media_assets.clone(),
             effect_chains: self.video_effect_chains.clone(),
             effect_presets: self.video_effect_presets.clone(),
             layer_groups: self.video_layer_groups.clone(),
+            transition_buses: self.video_transition_buses.clone(),
             compositions,
             outputs,
             mapping_presets: self.video_output_mapping_presets.clone(),
@@ -30634,6 +32803,34 @@ impl EngineRuntime {
                             target_boundary_ordinal,
                             clock_generation,
                             held_for_clock_discontinuity,
+                            transition_kind: pending.transition_kind,
+                            duration: pending.transition_duration,
+                            resolved_duration_ms: pending.resolved_duration_ms,
+                        }
+                    }),
+                    transition: layer.clip_take_transition.as_ref().map(|take| {
+                        let elapsed_ms = take.elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+                        let duration_ms =
+                            take.duration.as_millis().min(u128::from(u64::MAX)) as u64;
+                        let progress_millis = if duration_ms == 0 {
+                            1000
+                        } else {
+                            elapsed_ms
+                                .saturating_mul(1000)
+                                .saturating_div(duration_ms)
+                                .min(1000) as u16
+                        };
+                        VideoClipTakeTransitionSummary {
+                            origin_slot_id: take.origin_slot_id,
+                            outgoing_slot_id: take.outgoing_slot_id,
+                            incoming_slot_id: take.incoming_slot_id,
+                            kind: take.kind,
+                            elapsed_ms,
+                            duration_ms,
+                            duration: take.duration_intent,
+                            progress_millis,
+                            incoming_playhead_ms: take.incoming.state.position_ms,
+                            incoming_playing: take.incoming.state.playing,
                         }
                     }),
                     // Protocol deliberately requires idle layers to publish
@@ -30659,7 +32856,16 @@ impl EngineRuntime {
             layers: self
                 .video_layers
                 .iter()
-                .map(|layer| authored_video_layer_summary(layer, &self.media_assets))
+                .map(|layer| {
+                    let mut summary = authored_video_layer_summary(layer, &self.media_assets);
+                    if layer.default_clip_slot_id.is_none() {
+                        if let Some(restore) = self.timeline_video_layer_restores.get(&layer.id) {
+                            summary.source = restore.source.clone();
+                            summary.media_asset_id = Some(restore.media_asset_id);
+                        }
+                    }
+                    summary
+                })
                 .collect(),
             media_assets: self.media_assets.clone(),
             ..VideoSnapshot::default()
@@ -30670,6 +32876,46 @@ impl EngineRuntime {
         // their candidate before committing B.
         validate_video_clip_runtime_against_authored_slots(&runtime, &authored)
             .expect("engine video clip runtime state must match authored slot banks");
+        runtime
+    }
+
+    fn video_layer_transition_runtime_snapshot(&self) -> VideoLayerTransitionRuntimeSnapshot {
+        let runtime = VideoLayerTransitionRuntimeSnapshot {
+            buses: self
+                .active_video_transition_buses
+                .iter()
+                .map(|transition| {
+                    let elapsed_ms =
+                        transition.elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+                    let duration_ms =
+                        transition.duration.as_millis().min(u128::from(u64::MAX)) as u64;
+                    let progress_millis =
+                        if matches!(transition.kind, VideoClipTakeKind::Cut) || duration_ms == 0 {
+                            1000
+                        } else {
+                            elapsed_ms
+                                .saturating_mul(1000)
+                                .saturating_div(duration_ms)
+                                .min(1000) as u16
+                        };
+                    VideoLayerTransitionBusRuntimeSummary {
+                        bus_id: transition.bus_id,
+                        origin_from: transition.origin_from.clone(),
+                        from: transition.from.clone(),
+                        to: transition.to.clone(),
+                        kind: transition.kind,
+                        curve: transition.curve,
+                        elapsed_ms,
+                        duration_ms,
+                        duration: transition.duration_intent,
+                        progress_millis,
+                    }
+                })
+                .collect(),
+        };
+        let authored = self.authored_video_snapshot_from_rendered(&self.video_snapshot());
+        validate_video_layer_transition_runtime(&runtime, &authored)
+            .expect("engine video layer transition runtime must match authored buses");
         runtime
     }
 
@@ -30731,6 +32977,21 @@ impl EngineRuntime {
     }
 
     fn authored_video_snapshot_from_rendered(&self, rendered: &VideoSnapshot) -> VideoSnapshot {
+        // `video_snapshot` may contain ephemeral dual-source layers while a
+        // Timeline Follow transition is rendering.  Persistence must describe
+        // only authored layers/compositions, never that transient projection.
+        let mut compositions = vec![CompositionSummary {
+            id: 1,
+            label: "Main".to_string(),
+            layer_ids: self.video_layers.iter().map(|layer| layer.id).collect(),
+            output_ids: output_ids_for_composition(&rendered.outputs, 1),
+        }];
+        compositions.extend(self.video_compositions.iter().map(|composition| {
+            let mut summary =
+                sanitize_video_composition(composition.summary.clone(), &self.video_layers);
+            summary.output_ids = output_ids_for_composition(&rendered.outputs, summary.id);
+            summary
+        }));
         VideoSnapshot {
             layers: self
                 .video_layers
@@ -30741,7 +33002,8 @@ impl EngineRuntime {
             effect_chains: self.video_effect_chains.clone(),
             effect_presets: self.video_effect_presets.clone(),
             layer_groups: self.video_layer_groups.clone(),
-            compositions: rendered.compositions.clone(),
+            transition_buses: self.video_transition_buses.clone(),
+            compositions,
             outputs: rendered.outputs.clone(),
             mapping_presets: rendered.mapping_presets.clone(),
             master_opacity: rendered.master_opacity,
@@ -31014,6 +33276,7 @@ impl EngineRuntime {
             active_clip_slot_id: None,
             queued_clip_slot_id: None,
             pending_clip_launch: None,
+            clip_take_transition: None,
             clip_direction: RuntimeClipDirection::Stopped,
             runtime_transport_dirty: false,
         };
@@ -31120,6 +33383,7 @@ impl EngineRuntime {
                     active_clip_slot_id: None,
                     queued_clip_slot_id: None,
                     pending_clip_launch: None,
+                    clip_take_transition: None,
                     clip_direction: RuntimeClipDirection::Stopped,
                     runtime_transport_dirty: false,
                 };
@@ -31611,6 +33875,11 @@ impl EngineRuntime {
         slot_id: VideoClipSlotId,
     ) -> Result<(), String> {
         let layer = runtime_video_layer_mut(&mut self.video_layers, layer_id)?;
+        if layer.clip_take_transition.is_some() {
+            return Err(format!(
+                "Video layer {layer_id} already has an active clip transition"
+            ));
+        }
         if !layer.clip_slots.iter().any(|slot| slot.id == slot_id) {
             return Err(format!(
                 "Video clip slot {} was not found on layer {}",
@@ -31624,6 +33893,11 @@ impl EngineRuntime {
 
     fn cancel_queued_video_clip_slot(&mut self, layer_id: VideoLayerId) -> Result<(), String> {
         let layer = runtime_video_layer_mut(&mut self.video_layers, layer_id)?;
+        if layer.clip_take_transition.is_some() {
+            return Err(format!(
+                "Video layer {layer_id} already has an active clip transition"
+            ));
+        }
         layer.queued_clip_slot_id = None;
         layer.pending_clip_launch = None;
         Ok(())
@@ -31634,7 +33908,82 @@ impl EngineRuntime {
         layer_id: VideoLayerId,
         requested_slot_id: Option<VideoClipSlotId>,
     ) -> Result<(), String> {
+        self.launch_video_clip_slot_with_transition(
+            layer_id,
+            requested_slot_id,
+            VideoClipTakeKind::Cut,
+            0,
+        )
+    }
+
+    fn launch_video_clip_slot_with_transition(
+        &mut self,
+        layer_id: VideoLayerId,
+        requested_slot_id: Option<VideoClipSlotId>,
+        transition_kind: VideoClipTakeKind,
+        transition_duration_ms: u64,
+    ) -> Result<(), String> {
+        self.launch_video_clip_slot_with_transition_timing(
+            layer_id,
+            requested_slot_id,
+            transition_kind,
+            VideoClipTakeDuration::milliseconds(transition_duration_ms),
+        )
+    }
+
+    fn launch_video_clip_slot_with_transition_timing(
+        &mut self,
+        layer_id: VideoLayerId,
+        requested_slot_id: Option<VideoClipSlotId>,
+        transition_kind: VideoClipTakeKind,
+        transition_duration: VideoClipTakeDuration,
+    ) -> Result<(), String> {
+        if self
+            .video_layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .is_some_and(|layer| layer.clip_take_transition.is_some())
+        {
+            let target_slot_id = {
+                let layer = self
+                    .video_layers
+                    .iter()
+                    .find(|layer| layer.id == layer_id)
+                    .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+                requested_slot_id
+                    .or(layer.queued_clip_slot_id)
+                    .ok_or_else(|| format!("Video layer {layer_id} has no Clip Take target"))?
+            };
+            let layer = runtime_video_layer_mut(&mut self.video_layers, layer_id)?;
+            if matches!(transition_kind, VideoClipTakeKind::Cut) {
+                resolve_video_clip_take_duration_ms(
+                    transition_kind,
+                    transition_duration,
+                    &ClockSnapshot::default(),
+                )?;
+                layer.clip_take_transition = None;
+                return activate_runtime_video_clip_slot(layer, target_slot_id, &self.media_assets);
+            }
+            let outgoing_slot_id = layer
+                .clip_take_transition
+                .as_ref()
+                .map(|take| take.outgoing_slot_id)
+                .expect("active Clip Take was checked");
+            if requested_slot_id == Some(outgoing_slot_id) {
+                return reverse_runtime_video_clip_take(
+                    layer,
+                    transition_kind,
+                    transition_duration,
+                );
+            }
+            return Err(format!(
+                "Video layer {layer_id} already has an active clip transition; request outgoing slot {} to reverse it or use Cut to interrupt",
+                outgoing_slot_id.0
+            ));
+        }
         let clock = self.clock.snapshot(self.last_tick);
+        let resolved_duration_ms =
+            resolve_video_clip_take_duration_ms(transition_kind, transition_duration, &clock)?;
         let (slot_id, launch_quantization) = {
             let layer = self
                 .video_layers
@@ -31689,11 +34038,29 @@ impl EngineRuntime {
             }),
         };
         let layer = runtime_video_layer_mut(&mut self.video_layers, layer_id)?;
-        layer.queued_clip_slot_id = Some(slot_id);
-        layer.pending_clip_launch =
-            boundary.map(|boundary| RuntimePendingClipLaunch { slot_id, boundary });
-        if boundary.is_none() {
-            activate_runtime_video_clip_slot(layer, slot_id, &self.media_assets)?;
+        if let Some(boundary) = boundary {
+            if layer.clip_take_transition.is_some() {
+                return Err(format!(
+                    "Video layer {layer_id} already has an active clip transition"
+                ));
+            }
+            layer.queued_clip_slot_id = Some(slot_id);
+            layer.pending_clip_launch = Some(RuntimePendingClipLaunch {
+                slot_id,
+                boundary,
+                transition_kind,
+                transition_duration,
+                resolved_duration_ms,
+            });
+        } else {
+            start_runtime_video_clip_take(
+                layer,
+                slot_id,
+                transition_kind,
+                transition_duration,
+                resolved_duration_ms,
+                &self.media_assets,
+            )?;
         }
         Ok(())
     }
@@ -31704,6 +34071,11 @@ impl EngineRuntime {
         position_ms: u64,
     ) -> Result<(), String> {
         let layer = runtime_video_layer_mut(&mut self.video_layers, layer_id)?;
+        if layer.clip_take_transition.is_some() {
+            return Err(format!(
+                "Video layer {layer_id} cannot seek during an active clip transition"
+            ));
+        }
         let slot_id = layer
             .active_clip_slot_id
             .ok_or_else(|| format!("Video layer {layer_id} has no active clip slot"))?;
@@ -31720,6 +34092,129 @@ impl EngineRuntime {
         layer.state.position_ms = clamp_clip_position(slot, &layer.source, position_ms);
         layer.runtime_transport_dirty = true;
         Ok(())
+    }
+
+    fn launch_video_layer_transition_bus(
+        &mut self,
+        bus_id: VideoTransitionBusId,
+        from: VideoLayerTransitionTarget,
+        to: VideoLayerTransitionTarget,
+        kind: VideoClipTakeKind,
+        duration_intent: VideoClipTakeDuration,
+        curve: VideoLayerTransitionCurve,
+    ) -> Result<(), String> {
+        let bus = self
+            .video_transition_buses
+            .iter()
+            .find(|bus| bus.id == bus_id)
+            .ok_or_else(|| format!("Video transition bus {} was not found", bus_id.0))?;
+        if !bus.enabled {
+            return Err(format!("Video transition bus {} is disabled", bus_id.0));
+        }
+        if from == to || !bus.members.contains(&from) || !bus.members.contains(&to) {
+            return Err(format!(
+                "Video transition bus {} from/to must be distinct authored members",
+                bus_id.0
+            ));
+        }
+
+        if let Some(existing_index) = self
+            .active_video_transition_buses
+            .iter()
+            .position(|active| active.bus_id == bus_id)
+        {
+            if matches!(kind, VideoClipTakeKind::Cut) {
+                resolve_video_clip_take_duration_ms(
+                    kind,
+                    duration_intent,
+                    &ClockSnapshot::default(),
+                )?;
+                self.active_video_transition_buses[existing_index] =
+                    RuntimeVideoLayerTransitionBus {
+                        bus_id,
+                        origin_from: from.clone(),
+                        from,
+                        to,
+                        kind,
+                        curve,
+                        duration_intent,
+                        elapsed: Duration::ZERO,
+                        duration: Duration::ZERO,
+                    };
+                return self.validate_video_layer_transition_runtime_state();
+            }
+            let active = &self.active_video_transition_buses[existing_index];
+            if from == active.to
+                && to == active.from
+                && kind == active.kind
+                && duration_intent == active.duration_intent
+                && curve == active.curve
+            {
+                let reversed = RuntimeVideoLayerTransitionBus {
+                    bus_id,
+                    origin_from: active.origin_from.clone(),
+                    from,
+                    to,
+                    kind,
+                    curve,
+                    duration_intent,
+                    elapsed: active.duration.saturating_sub(active.elapsed),
+                    duration: active.duration,
+                };
+                self.active_video_transition_buses[existing_index] = reversed;
+                return self.validate_video_layer_transition_runtime_state();
+            }
+            return Err(format!(
+                "Video transition bus {} is already engaged; reverse with the exact active identity, Cut, or release it first",
+                bus_id.0
+            ));
+        }
+
+        let clock = self.clock.snapshot(self.last_tick);
+        let resolved_duration_ms =
+            resolve_video_clip_take_duration_ms(kind, duration_intent, &clock)?;
+        self.active_video_transition_buses
+            .push(RuntimeVideoLayerTransitionBus {
+                bus_id,
+                origin_from: from.clone(),
+                from,
+                to,
+                kind,
+                curve,
+                duration_intent,
+                elapsed: Duration::ZERO,
+                duration: Duration::from_millis(resolved_duration_ms),
+            });
+        if let Err(error) = self.validate_video_layer_transition_runtime_state() {
+            self.active_video_transition_buses.pop();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn release_video_layer_transition_bus(
+        &mut self,
+        bus_id: VideoTransitionBusId,
+    ) -> Result<(), String> {
+        let before = self.active_video_transition_buses.len();
+        self.active_video_transition_buses
+            .retain(|active| active.bus_id != bus_id);
+        if self.active_video_transition_buses.len() == before {
+            return Err(format!("Video transition bus {} is not engaged", bus_id.0));
+        }
+        Ok(())
+    }
+
+    fn validate_video_layer_transition_runtime_state(&self) -> Result<(), String> {
+        let runtime = VideoLayerTransitionRuntimeSnapshot {
+            buses: self
+                .active_video_transition_buses
+                .iter()
+                .map(runtime_video_layer_transition_summary)
+                .collect(),
+        };
+        let authored = self.authored_video_snapshot_from_rendered(&self.video_snapshot());
+        validate_video_layer_transition_runtime(&runtime, &authored)
     }
 
     /// Direct runtime tests retain the legacy convenience form. Production
@@ -31839,6 +34334,7 @@ impl EngineRuntime {
         duplicate.active_clip_slot_id = None;
         duplicate.queued_clip_slot_id = None;
         duplicate.pending_clip_launch = None;
+        duplicate.clip_take_transition = None;
         duplicate.clip_direction = RuntimeClipDirection::Stopped;
         duplicate.runtime_transport_dirty = false;
         duplicate.state = duplicate.authored_state.clone();
@@ -31902,6 +34398,7 @@ impl EngineRuntime {
         self.video_layers.insert(source_index + 1, duplicate);
         self.video_effect_chains = candidate.effect_chains;
         self.video_layer_groups = candidate.layer_groups;
+        self.video_transition_buses = candidate.transition_buses;
 
         for composition in &mut self.video_compositions {
             if composition.summary.layer_ids.contains(&new_layer_id) {
@@ -32112,12 +34609,14 @@ impl EngineRuntime {
         effect_chains: Vec<VideoEffectChainSummary>,
         effect_presets: Vec<VideoEffectPresetSummary>,
         layer_groups: Vec<VideoLayerGroupSummary>,
+        transition_buses: Vec<VideoLayerTransitionBusSummary>,
     ) -> Result<(), String> {
         let rendered = self.video_snapshot();
         let mut candidate = self.authored_video_snapshot_from_rendered(&rendered);
         candidate.effect_chains = effect_chains;
         candidate.effect_presets = effect_presets;
         candidate.layer_groups = layer_groups;
+        candidate.transition_buses = transition_buses;
 
         // Event controls are pulses, never authored catalog state.  A caller
         // can have taken its replacement image from the live snapshot while a
@@ -32149,6 +34648,8 @@ impl EngineRuntime {
             reconcile_legacy_clip_overrides_against_layer_chain(layer, layer_chain.as_ref());
         }
         validate_engine_ready_video_effect_chains(&candidate)?;
+        let runtime = self.video_layer_transition_runtime_snapshot();
+        validate_video_layer_transition_runtime(&runtime, &candidate)?;
         validate_video_isf_project_source_budget(video_effect_project_source_bytes(&candidate)?)?;
 
         for layer in &mut self.video_layers {
@@ -32167,6 +34668,7 @@ impl EngineRuntime {
         self.video_effect_chains = candidate.effect_chains;
         self.video_effect_presets = candidate.effect_presets;
         self.video_layer_groups = candidate.layer_groups;
+        self.video_transition_buses = candidate.transition_buses;
         // Preserve a pulse only when its exact stable entity/control remains
         // in the accepted catalog. Reordering therefore retains the reset,
         // while a removed or replaced target is dropped. Complete-A rollback
@@ -32624,9 +35126,11 @@ impl EngineRuntime {
             active_fade: self.active_fade_summary(self.last_tick),
             programmer: self.programmer_snapshot(),
             timeline: self.timeline_snapshot(),
+            timeline_bank: self.timeline_bank_snapshot(),
             video: self.video_snapshot(),
             authored_video: None,
             video_clip_runtime: self.video_clip_runtime_snapshot(),
+            video_transition_runtime: self.video_layer_transition_runtime_snapshot(),
             effects: self.effects.iter().map(effect_summary).collect(),
             node_graphs: self
                 .node_graphs
@@ -32735,6 +35239,9 @@ impl EngineRuntime {
         snapshot.timeline.layers = self.timeline_layers.clone();
         snapshot.timeline.audio_transport_revision = 0;
         snapshot.timeline.active_child_transports.clear();
+        snapshot.timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
+        snapshot.timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
+        snapshot.timeline.guide_cues.clear();
         if self.timeline_audio_clips_derived {
             snapshot.timeline.audio_clips.clear();
         }
@@ -32746,6 +35253,29 @@ impl EngineRuntime {
         {
             summary.layer_id = event.layer_id;
             summary.track = event.track.clone();
+        }
+        // `build_snapshot` intentionally exposes the two implicit legacy
+        // layers, while persistence keeps an authored empty `layers` list.
+        // Keep the active bank entry byte-identical to that authored image;
+        // otherwise selecting a bank entry silently materializes display-only
+        // layers into history and `.sdc`.
+        let mut active_bank_timeline = snapshot.timeline.clone();
+        active_bank_timeline.playing = false;
+        active_bank_timeline.position_ms = 0;
+        active_bank_timeline.count_in_remaining_ms = 0;
+        active_bank_timeline.audio_transport_revision = 0;
+        active_bank_timeline.active_child_transports.clear();
+        active_bank_timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
+        active_bank_timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
+        active_bank_timeline.guide_cues.clear();
+        if let Some(active) = snapshot
+            .timeline_bank
+            .iter_mut()
+            .find(|timeline| timeline.id == active_bank_timeline.id)
+        {
+            *active = active_bank_timeline;
+        } else {
+            snapshot.timeline_bank.push(active_bank_timeline);
         }
         let mut authored_video = self.authored_video_snapshot_from_rendered(&snapshot.video);
         for layer in &mut authored_video.layers {
@@ -34138,7 +36668,9 @@ fn authored_video_layer_summary(
 fn active_default_without_pending(layer: &RuntimeVideoLayer) -> bool {
     layer.default_clip_slot_id.is_some()
         && layer.active_clip_slot_id == layer.default_clip_slot_id
+        && layer.queued_clip_slot_id.is_none()
         && layer.pending_clip_launch.is_none()
+        && layer.clip_take_transition.is_none()
 }
 
 /// Authored mutations of the current program slot are intentionally rejected.
@@ -34149,9 +36681,19 @@ fn reject_active_video_clip_slot_authored_mutation(
     layer: &RuntimeVideoLayer,
     slot_id: VideoClipSlotId,
 ) -> Result<(), String> {
-    if layer.active_clip_slot_id == Some(slot_id) {
+    let participates_in_transition = layer
+        .clip_take_transition
+        .as_ref()
+        .is_some_and(|take| take.outgoing_slot_id == slot_id || take.incoming_slot_id == slot_id);
+    if layer.active_clip_slot_id == Some(slot_id)
+        || layer.queued_clip_slot_id == Some(slot_id)
+        || layer
+            .pending_clip_launch
+            .is_some_and(|pending| pending.slot_id == slot_id)
+        || participates_in_transition
+    {
         return Err(format!(
-            "Video clip slot {} on layer {} is active; authored mutation is rejected while it is on program",
+            "Video clip slot {} on layer {} is active, queued, pending, or transitioning; authored mutation is rejected while it participates in live program state",
             slot_id.0, layer.id
         ));
     }
@@ -34608,6 +37150,178 @@ fn activate_runtime_video_clip_slot(
     Ok(())
 }
 
+fn start_runtime_video_clip_take(
+    layer: &mut RuntimeVideoLayer,
+    slot_id: VideoClipSlotId,
+    kind: VideoClipTakeKind,
+    duration_intent: VideoClipTakeDuration,
+    resolved_duration_ms: u64,
+    assets: &[MediaAssetSummary],
+) -> Result<(), String> {
+    if layer.clip_take_transition.is_some() {
+        return Err(format!(
+            "Video layer {} already has an active clip transition",
+            layer.id
+        ));
+    }
+    let outgoing_slot_id = layer.active_clip_slot_id;
+    if matches!(kind, VideoClipTakeKind::Cut)
+        || resolved_duration_ms == 0
+        || outgoing_slot_id.is_none()
+        || outgoing_slot_id == Some(slot_id)
+    {
+        return activate_runtime_video_clip_slot(layer, slot_id, assets);
+    }
+
+    let mut incoming = layer.clone();
+    incoming.clip_take_transition = None;
+    activate_runtime_video_clip_slot(&mut incoming, slot_id, assets)?;
+    layer.queued_clip_slot_id = Some(slot_id);
+    layer.pending_clip_launch = None;
+    layer.clip_take_transition = Some(Box::new(RuntimeVideoClipTake {
+        origin_slot_id: outgoing_slot_id.expect("active slot was checked"),
+        outgoing_slot_id: outgoing_slot_id.expect("active slot was checked"),
+        incoming_slot_id: slot_id,
+        incoming,
+        kind,
+        duration_intent,
+        elapsed: Duration::ZERO,
+        duration: Duration::from_millis(resolved_duration_ms),
+    }));
+    Ok(())
+}
+
+fn complete_runtime_video_clip_take(layer: &mut RuntimeVideoLayer) {
+    let Some(take) = layer.clip_take_transition.take() else {
+        return;
+    };
+    let incoming = take.incoming;
+    layer.source = incoming.source;
+    layer.media_asset_id = incoming.media_asset_id;
+    layer.state = incoming.state;
+    layer.active_clip_slot_id = incoming.active_clip_slot_id;
+    layer.queued_clip_slot_id = None;
+    layer.pending_clip_launch = None;
+    layer.clip_direction = incoming.clip_direction;
+    layer.runtime_transport_dirty = true;
+}
+
+fn reverse_runtime_video_clip_take(
+    layer: &mut RuntimeVideoLayer,
+    requested_kind: VideoClipTakeKind,
+    requested_duration_intent: VideoClipTakeDuration,
+) -> Result<(), String> {
+    if layer.clip_take_transition.as_ref().is_some_and(|take| {
+        take.kind != requested_kind || take.duration_intent != requested_duration_intent
+    }) {
+        return Err(format!(
+            "Video layer {} Clip Take reverse must retain the active transition duration",
+            layer.id
+        ));
+    }
+    let Some(take) = layer.clip_take_transition.take() else {
+        return Err(format!(
+            "Video layer {} has no active clip transition to reverse",
+            layer.id
+        ));
+    };
+    if take.elapsed.is_zero() {
+        layer.queued_clip_slot_id = None;
+        layer.pending_clip_launch = None;
+        return Ok(());
+    }
+    let mut reversed_incoming = layer.clone();
+    reversed_incoming.clip_take_transition = None;
+    reversed_incoming.queued_clip_slot_id = None;
+    reversed_incoming.pending_clip_launch = None;
+    let previous_incoming = take.incoming;
+    layer.source = previous_incoming.source;
+    layer.media_asset_id = previous_incoming.media_asset_id;
+    layer.state = previous_incoming.state;
+    layer.active_clip_slot_id = previous_incoming.active_clip_slot_id;
+    layer.clip_direction = previous_incoming.clip_direction;
+    layer.runtime_transport_dirty = true;
+    layer.queued_clip_slot_id = Some(take.outgoing_slot_id);
+    layer.pending_clip_launch = None;
+    layer.clip_take_transition = Some(Box::new(RuntimeVideoClipTake {
+        origin_slot_id: take.origin_slot_id,
+        outgoing_slot_id: take.incoming_slot_id,
+        incoming_slot_id: take.outgoing_slot_id,
+        incoming: reversed_incoming,
+        kind: take.kind,
+        duration_intent: take.duration_intent,
+        elapsed: take.duration.saturating_sub(take.elapsed),
+        duration: take.duration,
+    }));
+    Ok(())
+}
+
+fn resolve_video_clip_take_duration_ms(
+    kind: VideoClipTakeKind,
+    duration: VideoClipTakeDuration,
+    clock: &ClockSnapshot,
+) -> Result<u64, String> {
+    if matches!(kind, VideoClipTakeKind::Cut) {
+        if duration.value_milliunits == 0 {
+            return Ok(0);
+        }
+        return Err("Video clip Cut duration must be zero".to_string());
+    }
+    if duration.value_milliunits == 0 {
+        return Err("Video clip transition duration must be greater than zero".to_string());
+    }
+    let resolved = match duration.unit {
+        VideoClipTakeDurationUnit::Milliseconds => duration.value_milliunits,
+        VideoClipTakeDurationUnit::Beats | VideoClipTakeDurationUnit::Bars => {
+            if !clock.bpm.is_finite() || clock.bpm <= 0.0 {
+                return Err(
+                    "Video clip musical transition requires a finite positive ShowClock BPM"
+                        .to_string(),
+                );
+            }
+            let beats = if matches!(duration.unit, VideoClipTakeDurationUnit::Bars) {
+                duration.value_milliunits.saturating_mul(4)
+            } else {
+                duration.value_milliunits
+            };
+            ((beats as f64 * 60_000.0) / (f64::from(clock.bpm) * 1000.0)).round() as u64
+        }
+    };
+    if !(1..=MAX_VIDEO_CLIP_TAKE_DURATION_MS).contains(&resolved) {
+        return Err(format!(
+            "Video clip transition duration resolves to {resolved} ms; expected 1..={MAX_VIDEO_CLIP_TAKE_DURATION_MS} ms"
+        ));
+    }
+    Ok(resolved)
+}
+
+fn runtime_video_layer_transition_summary(
+    transition: &RuntimeVideoLayerTransitionBus,
+) -> VideoLayerTransitionBusRuntimeSummary {
+    let elapsed_ms = transition.elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+    let duration_ms = transition.duration.as_millis().min(u128::from(u64::MAX)) as u64;
+    let progress_millis = if matches!(transition.kind, VideoClipTakeKind::Cut) || duration_ms == 0 {
+        1000
+    } else {
+        elapsed_ms
+            .saturating_mul(1000)
+            .saturating_div(duration_ms)
+            .min(1000) as u16
+    };
+    VideoLayerTransitionBusRuntimeSummary {
+        bus_id: transition.bus_id,
+        origin_from: transition.origin_from.clone(),
+        from: transition.from.clone(),
+        to: transition.to.clone(),
+        kind: transition.kind,
+        curve: transition.curve,
+        elapsed_ms,
+        duration_ms,
+        duration: transition.duration_intent,
+        progress_millis,
+    }
+}
+
 fn advance_runtime_video_clip_slot(layer: &mut RuntimeVideoLayer, delta: Duration) {
     let Some(active_slot_id) = layer.active_clip_slot_id else {
         return;
@@ -34736,6 +37450,7 @@ fn runtime_video_layer_from_summary(layer: &VideoLayerSummary) -> RuntimeVideoLa
         active_clip_slot_id: None,
         queued_clip_slot_id: None,
         pending_clip_launch: None,
+        clip_take_transition: None,
         clip_direction: RuntimeClipDirection::Stopped,
         runtime_transport_dirty: false,
     };
@@ -34859,6 +37574,7 @@ fn legacy_timeline_audio_clip(
     TimelineAudioClipSummary {
         id: 0,
         layer_id,
+        media_asset_id: None,
         path: audio.path.clone(),
         start_ms,
         offset_ms,
@@ -35019,9 +37735,9 @@ fn normalize_and_validate_timeline_audio_clips(
             ));
         }
         clip.path = clip.path.trim().to_string();
-        if clip.path.is_empty() {
+        if clip.path.is_empty() && clip.media_asset_id.is_none() {
             return Err(format!(
-                "Timeline audio clip {} path must not be empty",
+                "Legacy Timeline audio clip {} path must not be empty",
                 clip.id
             ));
         }
@@ -45278,6 +47994,15 @@ impl BpmClock {
         self.last_external_sync = None;
     }
 
+    fn set_bpm_preserving_beat_position(&mut self, bpm: f32, now: Instant) {
+        let beat_position =
+            now.saturating_duration_since(self.anchor).as_secs_f64() * f64::from(self.bpm) / 60.0;
+        self.bpm = clamp_bpm(bpm);
+        let elapsed =
+            Duration::from_secs_f64((beat_position * 60.0 / f64::from(self.bpm)).max(0.0));
+        self.anchor = now.checked_sub(elapsed).unwrap_or(now);
+    }
+
     fn tap(&mut self, now: Instant) {
         self.last_external_sync = None;
         let previous = self.latest_tap();
@@ -45442,6 +48167,34 @@ fn clamp_bpm(bpm: f32) -> f32 {
     } else {
         120.0
     }
+}
+
+fn video_transition_curve_progress(curve: VideoLayerTransitionCurve, raw: f32) -> f32 {
+    let value = raw.clamp(0.0, 1.0);
+    match curve {
+        VideoLayerTransitionCurve::Linear => value,
+        VideoLayerTransitionCurve::EaseIn => value * value,
+        VideoLayerTransitionCurve::EaseOut => 1.0 - (1.0 - value) * (1.0 - value),
+        VideoLayerTransitionCurve::EaseInOut => value * value * (3.0 - 2.0 * value),
+    }
+}
+
+fn timeline_follow_lighting_value(
+    policy: protocol::TimelineFollowLightingPolicy,
+    curve: VideoLayerTransitionCurve,
+    raw: f32,
+    outgoing: u8,
+    incoming: u8,
+) -> u8 {
+    let progress = match policy {
+        protocol::TimelineFollowLightingPolicy::HoldThenCut => 0.0,
+        protocol::TimelineFollowLightingPolicy::LinearMerge => {
+            video_transition_curve_progress(curve, raw)
+        }
+    };
+    (f32::from(outgoing) + (f32::from(incoming) - f32::from(outgoing)) * progress)
+        .round()
+        .clamp(0.0, 255.0) as u8
 }
 
 fn timeline_count_in_duration(bpm: f32, beats: u8) -> Duration {
@@ -46202,6 +48955,26 @@ fn insert_duplicate_layer_into_candidate_topology(
             ));
         }
         group.layer_ids.insert(source_index + 1, new_layer_id);
+    }
+    for bus in &mut candidate.transition_buses {
+        let Some(source_index) = bus.members.iter().position(|target| {
+            *target
+                == VideoLayerTransitionTarget::Layer {
+                    layer_id: source_layer_id,
+                }
+        }) else {
+            continue;
+        };
+        let duplicate_target = VideoLayerTransitionTarget::Layer {
+            layer_id: new_layer_id,
+        };
+        if bus.members.contains(&duplicate_target) {
+            return Err(format!(
+                "Video duplicate layer {new_layer_id} already appears in transition bus {}",
+                bus.id.0
+            ));
+        }
+        bus.members.insert(source_index + 1, duplicate_target);
     }
     Ok(())
 }
@@ -47120,6 +49893,8 @@ mod tests {
         assert!(!EngineCommand::LaunchVideoClipSlotPublished {
             layer_id: 1,
             slot_id: Some(VideoClipSlotId(1)),
+            transition_kind: VideoClipTakeKind::Cut,
+            transition_duration: VideoClipTakeDuration::milliseconds(0),
             expires_at: Instant::now() + Duration::from_secs(1),
             admission: ProjectSnapshotLoadAdmission::new(),
             ack: launch_ack,
@@ -50565,6 +53340,7 @@ mod tests {
                 playing: false,
                 position_ms: 250,
                 duration_ms: 500,
+                ..TimelineSnapshot::default()
             },
             video: VideoSnapshot {
                 layers: vec![VideoLayerSummary {
@@ -50591,6 +53367,7 @@ mod tests {
                 effect_chains: Vec::new(),
                 effect_presets: Vec::new(),
                 layer_groups: Vec::new(),
+                transition_buses: Vec::new(),
                 compositions: vec![CompositionSummary {
                     id: 45,
                     label: "Loaded Comp".to_string(),
@@ -52084,6 +54861,7 @@ mod tests {
                 playing: false,
                 position_ms: 0,
                 duration_ms: 500,
+                ..TimelineSnapshot::default()
             },
             video: VideoSnapshot {
                 layers: vec![VideoLayerSummary {
@@ -55216,67 +57994,99 @@ mod tests {
                 "ApplyVideoEffectCatalogGroup",
                 AllocatorDomain::VideoLayerGroups,
             ),
+            (
+                "ApplyVideoEffectCatalogTransitionBus",
+                AllocatorDomain::VideoTransitionBuses,
+            ),
         ] {
             cases.push(AllocatorCommandCase {
                 name,
                 domain,
                 make: Box::new(move |id| {
-                    let (effect_chains, effect_presets, layer_groups) = match domain {
-                        AllocatorDomain::VideoEffectChains => (
-                            vec![allocator_c1_chain(
-                                VideoEffectChainId(id),
-                                VideoEffectStageId(1),
-                                VideoEffectId(1),
-                            )],
-                            Vec::new(),
-                            Vec::new(),
-                        ),
-                        AllocatorDomain::VideoEffectStages => (
-                            vec![allocator_c1_chain(
-                                VideoEffectChainId(1),
-                                VideoEffectStageId(id),
-                                VideoEffectId(1),
-                            )],
-                            Vec::new(),
-                            Vec::new(),
-                        ),
-                        AllocatorDomain::VideoEffects => (
-                            vec![allocator_c1_chain(
-                                VideoEffectChainId(1),
-                                VideoEffectStageId(1),
-                                VideoEffectId(id),
-                            )],
-                            Vec::new(),
-                            Vec::new(),
-                        ),
-                        AllocatorDomain::VideoEffectPresets => (
-                            Vec::new(),
-                            vec![VideoEffectPresetSummary {
-                                id: VideoEffectPresetId(id),
-                                label: "Allocator C1 preset".to_string(),
-                                payload: protocol::VideoEffectPresetPayload {
-                                    bypassed: false,
-                                    stages: Vec::new(),
-                                },
-                            }],
-                            Vec::new(),
-                        ),
-                        AllocatorDomain::VideoLayerGroups => (
-                            Vec::new(),
-                            Vec::new(),
-                            vec![VideoLayerGroupSummary {
-                                id: VideoLayerGroupId(id),
-                                label: "Allocator C1 group".to_string(),
-                                composition_id: 1,
-                                layer_ids: vec![1],
-                            }],
-                        ),
-                        _ => unreachable!("C1 allocator inventory domain"),
-                    };
+                    let (effect_chains, effect_presets, layer_groups, transition_buses) =
+                        match domain {
+                            AllocatorDomain::VideoEffectChains => (
+                                vec![allocator_c1_chain(
+                                    VideoEffectChainId(id),
+                                    VideoEffectStageId(1),
+                                    VideoEffectId(1),
+                                )],
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new(),
+                            ),
+                            AllocatorDomain::VideoEffectStages => (
+                                vec![allocator_c1_chain(
+                                    VideoEffectChainId(1),
+                                    VideoEffectStageId(id),
+                                    VideoEffectId(1),
+                                )],
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new(),
+                            ),
+                            AllocatorDomain::VideoEffects => (
+                                vec![allocator_c1_chain(
+                                    VideoEffectChainId(1),
+                                    VideoEffectStageId(1),
+                                    VideoEffectId(id),
+                                )],
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new(),
+                            ),
+                            AllocatorDomain::VideoEffectPresets => (
+                                Vec::new(),
+                                vec![VideoEffectPresetSummary {
+                                    id: VideoEffectPresetId(id),
+                                    label: "Allocator C1 preset".to_string(),
+                                    payload: protocol::VideoEffectPresetPayload {
+                                        bypassed: false,
+                                        stages: Vec::new(),
+                                    },
+                                }],
+                                Vec::new(),
+                                Vec::new(),
+                            ),
+                            AllocatorDomain::VideoLayerGroups => (
+                                Vec::new(),
+                                Vec::new(),
+                                vec![VideoLayerGroupSummary {
+                                    id: VideoLayerGroupId(id),
+                                    label: "Allocator C1 group".to_string(),
+                                    composition_id: 1,
+                                    layer_ids: vec![1],
+                                }],
+                                Vec::new(),
+                            ),
+                            AllocatorDomain::VideoTransitionBuses => (
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new(),
+                                vec![VideoLayerTransitionBusSummary {
+                                    id: VideoTransitionBusId(id),
+                                    label: "Allocator C3 bus".to_string(),
+                                    composition_id: 1,
+                                    enabled: true,
+                                    members: vec![
+                                        VideoLayerTransitionTarget::Layer { layer_id: 1 },
+                                        VideoLayerTransitionTarget::Layer { layer_id: 2 },
+                                    ],
+                                    default_from: VideoLayerTransitionTarget::Layer { layer_id: 1 },
+                                    default_to: VideoLayerTransitionTarget::Layer { layer_id: 2 },
+                                    default_kind: VideoClipTakeKind::Cut,
+                                    default_duration: VideoClipTakeDuration::default(),
+                                    default_curve: VideoLayerTransitionCurve::Linear,
+                                    matte_source: None,
+                                }],
+                            ),
+                            _ => unreachable!("C1 allocator inventory domain"),
+                        };
                     EngineCommand::ApplyVideoEffectCatalogPublished {
                         effect_chains,
                         effect_presets,
                         layer_groups,
+                        transition_buses,
                         expires_at: allocator_expiry(),
                         admission: ProjectSnapshotLoadAdmission::new(),
                         ack: allocator_ack(),
@@ -55399,11 +58209,8 @@ mod tests {
     #[test]
     fn allocator_command_inventory_covers_all_domains_and_is_exhaustively_routed() {
         let cases = allocator_command_cases();
-        assert_eq!(cases.len(), 91);
-        for domain in allocator_domains()
-            .into_iter()
-            .filter(|domain| *domain != AllocatorDomain::VideoTransitionBuses)
-        {
+        assert_eq!(cases.len(), 92);
+        for domain in allocator_domains() {
             assert!(
                 cases.iter().any(|case| case.domain == domain),
                 "allocator inventory omitted {domain:?}"
@@ -56242,7 +59049,7 @@ mod tests {
             label: "Over-budget ISF".to_string(),
             source: VideoSourceSummary {
                 kind: VideoSourceKind::StillImage,
-                path: None,
+                path: Some("memory://over-budget-isf.png".to_string()),
                 name: None,
                 codec: None,
                 metadata: None,
@@ -65393,7 +68200,10 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.contains("owned effect catalog changed"));
-        assert_eq!(runtime.build_persistence_snapshot(), before);
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video,
+            before.authored_video
+        );
     }
 
     #[test]
@@ -65582,6 +68392,103 @@ mod tests {
     }
 
     #[test]
+    fn video_transition_bus_c3_duplicate_layer_preserves_bus_topology_and_rollback() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let source_layer_id = engine.allocate_video_layer_id();
+        let peer_layer_id = engine.allocate_video_layer_id();
+        for layer_id in [source_layer_id, peer_layer_id] {
+            engine
+                .send(EngineCommand::AddVideoLayer {
+                    layer_id,
+                    label: format!("Transition duplicate layer {layer_id}"),
+                    source: VideoSourceSummary {
+                        kind: VideoSourceKind::StillImage,
+                        path: Some(format!("memory://transition-duplicate-{layer_id}.png")),
+                        name: None,
+                        codec: None,
+                        metadata: None,
+                    },
+                })
+                .unwrap();
+        }
+        engine.persistence_snapshot().unwrap();
+
+        let base = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        let source_target = VideoLayerTransitionTarget::Layer {
+            layer_id: source_layer_id,
+        };
+        let peer_target = VideoLayerTransitionTarget::Layer {
+            layer_id: peer_layer_id,
+        };
+        let bus = VideoLayerTransitionBusSummary {
+            id: engine.allocate_video_transition_bus_id(),
+            label: "Duplicate transition bus".to_string(),
+            composition_id: 1,
+            enabled: true,
+            members: vec![source_target.clone(), peer_target.clone()],
+            default_from: source_target.clone(),
+            default_to: peer_target,
+            default_kind: VideoClipTakeKind::Crossfade,
+            default_duration: VideoClipTakeDuration::milliseconds(400),
+            default_curve: VideoLayerTransitionCurve::EaseInOut,
+            matte_source: None,
+        };
+        engine
+            .apply_video_effect_catalog_with_transition_buses(
+                base.effect_chains,
+                base.effect_presets,
+                base.layer_groups,
+                vec![bus.clone()],
+            )
+            .unwrap();
+
+        let duplicate_layer_id = engine.allocate_video_layer_id();
+        engine
+            .duplicate_video_layer_published(
+                source_layer_id,
+                duplicate_layer_id,
+                "Transition duplicate".to_string(),
+            )
+            .unwrap();
+        let successful = engine.persistence_snapshot().unwrap();
+        let successful_video = successful.authored_video.as_ref().unwrap();
+        assert_eq!(
+            successful_video.transition_buses[0].members,
+            vec![
+                source_target,
+                VideoLayerTransitionTarget::Layer {
+                    layer_id: duplicate_layer_id,
+                },
+                VideoLayerTransitionTarget::Layer {
+                    layer_id: peer_layer_id,
+                },
+            ]
+        );
+        validate_engine_ready_video_effect_chains(successful_video).unwrap();
+
+        engine.force_next_pending_publication_failure_for_tests();
+        let failed_duplicate_layer_id = engine.allocate_video_layer_id();
+        assert!(engine
+            .duplicate_video_layer_published(
+                source_layer_id,
+                failed_duplicate_layer_id,
+                "Transition rollback duplicate".to_string(),
+            )
+            .is_err());
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().authored_video,
+            successful.authored_video
+        );
+    }
+
+    #[test]
     fn video_effect_chain_c1_lifecycle_removals_prune_all_dangling_scopes() {
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
@@ -65678,6 +68585,7 @@ mod tests {
                     composition_id: 2,
                     layer_ids: vec![1],
                 }],
+                Vec::new(),
             )
             .unwrap();
 
@@ -65766,6 +68674,7 @@ mod tests {
                     composition_id: 1,
                     layer_ids: vec![1],
                 }],
+                Vec::new(),
             )
             .unwrap();
         runtime
@@ -66189,6 +69098,7 @@ mod tests {
             effect_chains: vec![reordered.clone()],
             effect_presets: Vec::new(),
             layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             expires_at: Instant::now() + Duration::from_secs(1),
             admission: ProjectSnapshotLoadAdmission::new(),
             ack,
@@ -66198,7 +69108,12 @@ mod tests {
         assert_eq!(runtime.build_persistence_snapshot(), before);
 
         runtime
-            .apply_video_effect_catalog_state(vec![reordered.clone()], Vec::new(), Vec::new())
+            .apply_video_effect_catalog_state(
+                vec![reordered.clone()],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
             .unwrap();
         let expected_after_reorder = [(tail_id, 0), (middle_id, 1), (root_id, 2)]
             .into_iter()
@@ -66223,7 +69138,7 @@ mod tests {
         let mut removed = reordered;
         removed.stages.retain(|stage| stage.effect.id != middle_id);
         runtime
-            .apply_video_effect_catalog_state(vec![removed], Vec::new(), Vec::new())
+            .apply_video_effect_catalog_state(vec![removed], Vec::new(), Vec::new(), Vec::new())
             .unwrap();
         let expected_after_remove = [(tail_id, 0), (root_id, 1)]
             .into_iter()
@@ -66243,7 +69158,7 @@ mod tests {
         }
 
         runtime
-            .apply_video_effect_catalog_state(Vec::new(), Vec::new(), Vec::new())
+            .apply_video_effect_catalog_state(Vec::new(), Vec::new(), Vec::new(), Vec::new())
             .unwrap();
         assert!(runtime.video_layers[0].isf_effect.is_none());
         assert!(runtime.video_layers[0]
@@ -66814,6 +69729,7 @@ mod tests {
                 effect_chains: chains,
                 effect_presets: Vec::new(),
                 layer_groups: Vec::new(),
+                transition_buses: Vec::new(),
                 expires_at: Instant::now() + Duration::from_secs(1),
                 admission: ProjectSnapshotLoadAdmission::new(),
                 ack,
@@ -66996,8 +69912,8 @@ mod tests {
         assert!(first.replaced_resets.is_empty());
         assert_eq!(runtime.pending_video_isf_event_resets.len(), 1);
 
-        let busy_snapshot = RwLock::new(runtime.build_snapshot(0));
-        let read_guard = busy_snapshot.read().unwrap();
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.fail_next_pending_publication = true;
         let (ack, receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::PulseVideoLayerIsfEvent {
             layer_id: 1,
@@ -67012,8 +69928,7 @@ mod tests {
             first.pulse_id
         );
 
-        runtime.publish_pending_command_acks(0, &busy_snapshot);
-        drop(read_guard);
+        runtime.publish_pending_command_acks(0, &published);
 
         let error = receiver
             .recv_timeout(Duration::from_millis(100))
@@ -67075,7 +69990,7 @@ mod tests {
         // The replacement was intentionally captured from live state while
         // the pulse was high. Its stable target survives the reorder.
         runtime
-            .apply_video_effect_catalog_state(reordered, presets, groups)
+            .apply_video_effect_catalog_state(reordered, presets, groups, Vec::new())
             .unwrap();
         assert_eq!(runtime.pending_video_isf_event_resets.len(), 1);
         assert_eq!(
@@ -67118,7 +70033,7 @@ mod tests {
         let presets = removed_runtime.video_effect_presets.clone();
         let groups = removed_runtime.video_layer_groups.clone();
         removed_runtime
-            .apply_video_effect_catalog_state(removed, presets, groups)
+            .apply_video_effect_catalog_state(removed, presets, groups, Vec::new())
             .unwrap();
         assert!(removed_runtime.pending_video_isf_event_resets.is_empty());
         removed_runtime.advance_video_isf_event_resets(started_at + hold);
@@ -67213,6 +70128,9 @@ mod tests {
         let mut snapshot = runtime.build_snapshot(0);
         snapshot.video.layers[0].isf_effect.as_mut().unwrap().stack[0].controls[0].value =
             [1.0, 0.0, 0.0, 0.0];
+        let VideoEffectKind::Isf { effect } =
+            &mut snapshot.video.effect_chains[0].stages[1].effect.kind;
+        effect.controls[0].value = [1.0, 0.0, 0.0, 0.0];
         let mut loaded = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -68754,6 +71672,29 @@ mod tests {
         }
     }
 
+    fn media_asset_test_layer_with_default_slot(
+        id: VideoLayerId,
+        asset_id: MediaAssetId,
+        slot_id: u64,
+        label: &str,
+        source: VideoSourceSummary,
+    ) -> VideoLayerSummary {
+        let mut layer = media_asset_test_layer(id, asset_id, label, source);
+        layer.clip_slots = vec![VideoClipSlotSummary {
+            id: VideoClipSlotId(slot_id),
+            media_asset_id: asset_id,
+            in_point_ms: 0,
+            out_point_ms: None,
+            loop_mode: VideoClipLoopMode::Once,
+            speed: 1.0,
+            cue_points: Vec::new(),
+            launch_quantization: VideoClipLaunchQuantization::Immediate,
+            effect_overrides: Vec::new(),
+        }];
+        layer.default_clip_slot_id = Some(VideoClipSlotId(slot_id));
+        layer
+    }
+
     fn clip_slot_engine_test_source(name: &str, duration_ms: u64) -> VideoSourceSummary {
         VideoSourceSummary {
             kind: VideoSourceKind::File,
@@ -68849,6 +71790,321 @@ mod tests {
         let truth = runtime.video_clip_runtime_snapshot();
         assert_eq!(truth.layers[0].active_slot_id, Some(VideoClipSlotId(21)));
         assert!(truth.layers[0].ping_pong_reverse);
+    }
+
+    #[test]
+    fn video_clip_take_crossfade_keeps_dual_runtime_truth_until_atomic_completion() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let baseline = serde_json::to_vec(
+            runtime
+                .build_persistence_snapshot()
+                .authored_video
+                .as_ref()
+                .expect("Clip Take fixture has authored video"),
+        )
+        .unwrap();
+        runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(20)))
+            .unwrap();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime
+            .launch_video_clip_slot_with_transition(1, None, VideoClipTakeKind::Crossfade, 1_000)
+            .unwrap();
+
+        let start = runtime.video_clip_runtime_snapshot();
+        let start_layer = &start.layers[0];
+        assert_eq!(start_layer.active_slot_id, Some(VideoClipSlotId(20)));
+        assert_eq!(start_layer.queued_slot_id, Some(VideoClipSlotId(21)));
+        let transition = start_layer.transition.as_ref().unwrap();
+        assert_eq!(transition.outgoing_slot_id, VideoClipSlotId(20));
+        assert_eq!(transition.incoming_slot_id, VideoClipSlotId(21));
+        assert_eq!(transition.progress_millis, 0);
+        assert_eq!(
+            runtime.video_snapshot().layers[0].source.path.as_deref(),
+            Some("memory://clip-slot/first.mp4")
+        );
+
+        runtime.advance_video_layers(Duration::from_millis(250));
+        let quarter = runtime.video_clip_runtime_snapshot();
+        let transition = quarter.layers[0].transition.as_ref().unwrap();
+        assert_eq!(transition.progress_millis, 250);
+        assert_eq!(transition.incoming_playhead_ms, 749);
+        assert!(runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(20))
+            .unwrap_err()
+            .contains("active clip transition"));
+        assert!(runtime
+            .assign_video_clip_slot_asset(1, VideoClipSlotId(21), 10)
+            .unwrap_err()
+            .contains("transitioning"));
+        let mut edited_incoming = runtime.video_layers[0]
+            .clip_slots
+            .iter()
+            .find(|slot| slot.id == VideoClipSlotId(21))
+            .unwrap()
+            .clone();
+        edited_incoming.speed = 0.5;
+        assert!(runtime
+            .update_video_clip_slot(1, edited_incoming)
+            .unwrap_err()
+            .contains("transitioning"));
+        assert_eq!(
+            runtime.video_snapshot().layers[0].source.path.as_deref(),
+            Some("memory://clip-slot/first.mp4")
+        );
+
+        runtime.advance_video_layers(Duration::from_millis(750));
+        let completed = runtime.video_clip_runtime_snapshot();
+        assert_eq!(
+            completed.layers[0].active_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        assert_eq!(completed.layers[0].queued_slot_id, None);
+        assert_eq!(completed.layers[0].transition, None);
+        assert_eq!(
+            runtime.video_snapshot().layers[0].source.path.as_deref(),
+            Some("memory://clip-slot/second.mp4")
+        );
+        assert_eq!(
+            serde_json::to_vec(
+                runtime
+                    .build_persistence_snapshot()
+                    .authored_video
+                    .as_ref()
+                    .expect("Clip Take retains authored video"),
+            )
+            .unwrap(),
+            baseline,
+            "Clip Take remains runtime-only"
+        );
+
+        let before_invalid = runtime.video_clip_runtime_snapshot();
+        assert!(runtime
+            .launch_video_clip_slot_with_transition(
+                1,
+                Some(VideoClipSlotId(20)),
+                VideoClipTakeKind::Crossfade,
+                0,
+            )
+            .unwrap_err()
+            .contains("duration"));
+        assert_eq!(runtime.video_clip_runtime_snapshot(), before_invalid);
+        assert!(runtime
+            .launch_video_clip_slot_with_transition(
+                1,
+                Some(VideoClipSlotId(20)),
+                VideoClipTakeKind::Cut,
+                1,
+            )
+            .unwrap_err()
+            .contains("must be zero"));
+        assert_eq!(runtime.video_clip_runtime_snapshot(), before_invalid);
+    }
+
+    #[test]
+    fn video_clip_take_reverse_is_continuous_and_cut_interrupts_atomically() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let baseline = serde_json::to_vec(
+            runtime
+                .build_persistence_snapshot()
+                .authored_video
+                .as_ref()
+                .unwrap(),
+        )
+        .unwrap();
+        runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(20)))
+            .unwrap();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime
+            .launch_video_clip_slot_with_transition(1, None, VideoClipTakeKind::Crossfade, 1_000)
+            .unwrap();
+        runtime.advance_video_layers(Duration::from_millis(250));
+
+        let before_mismatched_reverse = runtime.video_clip_runtime_snapshot();
+        assert!(runtime
+            .launch_video_clip_slot_with_transition(
+                1,
+                Some(VideoClipSlotId(20)),
+                VideoClipTakeKind::Crossfade,
+                500,
+            )
+            .unwrap_err()
+            .contains("retain the active transition duration"));
+        assert_eq!(
+            runtime.video_clip_runtime_snapshot(),
+            before_mismatched_reverse
+        );
+        runtime
+            .launch_video_clip_slot_with_transition(
+                1,
+                Some(VideoClipSlotId(20)),
+                VideoClipTakeKind::Crossfade,
+                1_000,
+            )
+            .unwrap();
+        let reversed = runtime.video_clip_runtime_snapshot();
+        let reversed_layer = &reversed.layers[0];
+        assert_eq!(reversed_layer.active_slot_id, Some(VideoClipSlotId(21)));
+        assert_eq!(reversed_layer.queued_slot_id, Some(VideoClipSlotId(20)));
+        let transition = reversed_layer.transition.as_ref().unwrap();
+        assert_eq!(transition.outgoing_slot_id, VideoClipSlotId(21));
+        assert_eq!(transition.incoming_slot_id, VideoClipSlotId(20));
+        assert_eq!(transition.progress_millis, 750);
+        assert_eq!(
+            (250_u16, 750_u16),
+            (
+                1_000_u16.saturating_sub(transition.progress_millis),
+                transition.progress_millis
+            ),
+            "swapping sources and complementing progress preserves the current blend"
+        );
+        runtime.advance_video_layers(Duration::from_millis(250));
+        let completed_reverse = runtime.video_clip_runtime_snapshot();
+        assert_eq!(
+            completed_reverse.layers[0].active_slot_id,
+            Some(VideoClipSlotId(20))
+        );
+        assert!(completed_reverse.layers[0].transition.is_none());
+
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime
+            .launch_video_clip_slot_with_transition(1, None, VideoClipTakeKind::Crossfade, 1_000)
+            .unwrap();
+        runtime.advance_video_layers(Duration::from_millis(100));
+        runtime
+            .launch_video_clip_slot_with_transition(
+                1,
+                Some(VideoClipSlotId(21)),
+                VideoClipTakeKind::Cut,
+                0,
+            )
+            .unwrap();
+        let cut = runtime.video_clip_runtime_snapshot();
+        assert_eq!(cut.layers[0].active_slot_id, Some(VideoClipSlotId(21)));
+        assert_eq!(cut.layers[0].queued_slot_id, None);
+        assert_eq!(cut.layers[0].transition, None);
+        assert_eq!(
+            serde_json::to_vec(
+                runtime
+                    .build_persistence_snapshot()
+                    .authored_video
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap(),
+            baseline
+        );
+    }
+
+    #[test]
+    fn video_clip_take_musical_duration_is_resolved_once_and_reverse_keeps_identity() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let now = runtime.last_tick;
+        runtime.clock = BpmClock::new(120.0, now);
+        runtime
+            .clip_clock_tracker
+            .reset(runtime.clock.snapshot(now));
+        runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(20)))
+            .unwrap();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        let two_beats = VideoClipTakeDuration {
+            unit: VideoClipTakeDurationUnit::Beats,
+            value_milliunits: 2_000,
+        };
+        runtime
+            .launch_video_clip_slot_with_transition_timing(
+                1,
+                None,
+                VideoClipTakeKind::Wipe,
+                two_beats,
+            )
+            .unwrap();
+        let started = runtime.video_clip_runtime_snapshot();
+        let transition = started.layers[0].transition.as_ref().unwrap();
+        assert_eq!(transition.kind, VideoClipTakeKind::Wipe);
+        assert_eq!(transition.duration, two_beats);
+        assert_eq!(transition.duration_ms, 1_000);
+
+        runtime.clock = BpmClock::new(60.0, now);
+        runtime.advance_video_layers(Duration::from_millis(250));
+        let after_bpm_change = runtime.video_clip_runtime_snapshot();
+        let transition = after_bpm_change.layers[0].transition.as_ref().unwrap();
+        assert_eq!(transition.duration_ms, 1_000);
+        assert_eq!(transition.progress_millis, 250);
+
+        runtime
+            .launch_video_clip_slot_with_transition_timing(
+                1,
+                Some(VideoClipSlotId(20)),
+                VideoClipTakeKind::Wipe,
+                two_beats,
+            )
+            .unwrap();
+        let reversed = runtime.video_clip_runtime_snapshot();
+        let transition = reversed.layers[0].transition.as_ref().unwrap();
+        assert_eq!(transition.duration, two_beats);
+        assert_eq!(transition.duration_ms, 1_000);
+        assert_eq!(transition.progress_millis, 750);
+        assert!(runtime
+            .launch_video_clip_slot_with_transition_timing(
+                1,
+                Some(VideoClipSlotId(21)),
+                VideoClipTakeKind::Luma,
+                two_beats,
+            )
+            .unwrap_err()
+            .contains("retain the active transition"));
+
+        let half_bar = VideoClipTakeDuration {
+            unit: VideoClipTakeDurationUnit::Bars,
+            value_milliunits: 500,
+        };
+        assert_eq!(
+            resolve_video_clip_take_duration_ms(
+                VideoClipTakeKind::Crossfade,
+                half_bar,
+                &ClockSnapshot {
+                    bpm: 120.0,
+                    ..ClockSnapshot::default()
+                },
+            )
+            .unwrap(),
+            1_000
+        );
+    }
+
+    #[test]
+    fn video_clip_take_legacy_visual_edits_preserve_both_live_transports() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(20)))
+            .unwrap();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime
+            .launch_video_clip_slot_with_transition(1, None, VideoClipTakeKind::Crossfade, 1_000)
+            .unwrap();
+        runtime.advance_video_layers(Duration::from_millis(250));
+        let before = runtime.video_clip_runtime_snapshot();
+        let mut authored_visual_edit = runtime.video_layers[0].authored_state.clone();
+        authored_visual_edit.opacity = 0.5;
+        authored_visual_edit.position_ms = 999;
+        apply_legacy_authored_video_state(&mut runtime.video_layers[0], authored_visual_edit);
+        let after = runtime.video_clip_runtime_snapshot();
+        assert_eq!(after.layers[0].playhead_ms, before.layers[0].playhead_ms);
+        assert_eq!(after.layers[0].transition, before.layers[0].transition);
+        assert_eq!(runtime.video_layers[0].state.opacity, 0.5);
     }
 
     #[test]
@@ -69256,6 +72512,8 @@ mod tests {
         runtime.apply_command(EngineCommand::LaunchVideoClipSlotPublished {
             layer_id: 1,
             slot_id: Some(VideoClipSlotId(21)),
+            transition_kind: VideoClipTakeKind::Cut,
+            transition_duration: VideoClipTakeDuration::milliseconds(0),
             expires_at: Instant::now() + Duration::from_secs(1),
             admission: ProjectSnapshotLoadAdmission::new(),
             ack,
@@ -70057,8 +73315,9 @@ mod tests {
                         "Retained",
                         retained_source.clone(),
                     )],
-                    layers: vec![media_asset_test_layer(
+                    layers: vec![media_asset_test_layer_with_default_slot(
                         1,
+                        10,
                         10,
                         "Retained layer",
                         retained_source,
@@ -70087,8 +73346,9 @@ mod tests {
                     "Replacement",
                     replacement_source.clone(),
                 )],
-                layers: vec![media_asset_test_layer(
+                layers: vec![media_asset_test_layer_with_default_slot(
                     2,
+                    11,
                     11,
                     "Replacement layer",
                     replacement_source,
@@ -70321,8 +73581,20 @@ mod tests {
                         original_source.clone(),
                     )],
                     layers: vec![
-                        media_asset_test_layer(1, 20, "Shared one", original_source.clone(),),
-                        media_asset_test_layer(2, 20, "Shared two", original_source),
+                        media_asset_test_layer_with_default_slot(
+                            1,
+                            20,
+                            20,
+                            "Shared one",
+                            original_source.clone(),
+                        ),
+                        media_asset_test_layer_with_default_slot(
+                            2,
+                            20,
+                            21,
+                            "Shared two",
+                            original_source,
+                        ),
                     ],
                 }),
                 Instant::now() + Duration::from_secs(1),
@@ -70364,7 +73636,9 @@ mod tests {
             .apply_media_asset_transaction(MediaAssetTransaction::Import(
                 MediaAssetImportCandidate {
                     assets: vec![media_asset_test_summary(30, "Duplicate", source.clone())],
-                    layers: vec![media_asset_test_layer(1, 30, "Original", source)],
+                    layers: vec![media_asset_test_layer_with_default_slot(
+                        1, 30, 31, "Original", source,
+                    )],
                 },
             ))
             .unwrap();
@@ -91403,6 +94677,688 @@ mod tests {
     }
 
     #[test]
+    fn timeline_phase_guide_and_runtime_loop_are_boundary_exact_and_history_free() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_phases = vec![
+            TimelinePhaseSummary {
+                id: TimelinePhaseId(1),
+                label: "Intro".to_string(),
+                role: protocol::TimelinePhaseRole::Intro,
+                start_ms: 0,
+                end_ms: 150,
+            },
+            TimelinePhaseSummary {
+                id: TimelinePhaseId(2),
+                label: "Verse".to_string(),
+                role: protocol::TimelinePhaseRole::Verse,
+                start_ms: 150,
+                end_ms: 300,
+            },
+            TimelinePhaseSummary {
+                id: TimelinePhaseId(3),
+                label: "Chorus".to_string(),
+                role: protocol::TimelinePhaseRole::Chorus,
+                start_ms: 300,
+                end_ms: 400,
+            },
+        ];
+        runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation: 1,
+            status: TimelineLoopRuntimeStatus::Armed,
+            a_ms: Some(100),
+            b_ms: Some(200),
+            musical_length_millibeats: None,
+            wrap_count: 0,
+        };
+        runtime.last_tick_interval = Duration::from_millis(60);
+
+        runtime.apply_command(EngineCommand::SetTimelinePlaying(true));
+        let started = Instant::now();
+        runtime.advance_timeline(started);
+        assert_eq!(runtime.timeline_position_ms, 60);
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Armed
+        ));
+        assert_eq!(runtime.timeline_guide_cues[0].label, "Intro");
+
+        runtime.advance_timeline(started + Duration::from_millis(60));
+        assert_eq!(runtime.timeline_position_ms, 120);
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Looping
+        ));
+
+        runtime.last_tick_interval = Duration::from_millis(100);
+        runtime.advance_timeline(started + Duration::from_millis(160));
+        assert_eq!(runtime.timeline_position_ms, 120);
+        assert_eq!(runtime.timeline_loop_runtime.wrap_count, 1);
+        assert_eq!(
+            runtime
+                .timeline_guide_cues
+                .iter()
+                .filter(|cue| matches!(cue.cue, TimelineGuideCueKind::Looping))
+                .count(),
+            1
+        );
+        assert_eq!(
+            runtime
+                .timeline_guide_cues
+                .iter()
+                .map(|cue| cue.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Intro", "Verse", "Looping", "Intro"]
+        );
+
+        runtime.apply_command(EngineCommand::ScaleTimelineLoop(TimelineLoopScale::Half));
+        assert_eq!(runtime.timeline_loop_runtime.b_ms, Some(150));
+        runtime.apply_command(EngineCommand::ScaleTimelineLoop(TimelineLoopScale::Double));
+        assert_eq!(runtime.timeline_loop_runtime.b_ms, Some(200));
+        runtime.apply_command(EngineCommand::SetTimelineLoopEnabled(false));
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ));
+        assert!(matches!(
+            runtime.timeline_guide_cues.last().unwrap().cue,
+            TimelineGuideCueKind::Break
+        ));
+
+        let persisted = runtime.build_persistence_snapshot();
+        assert!(persisted
+            .timeline
+            .loop_runtime
+            .eq(&TimelineLoopRuntimeSummary::default()));
+        assert!(persisted.timeline.guide_cues.is_empty());
+    }
+
+    #[test]
+    fn timeline_loop_armed_beyond_b_does_not_retroactively_wrap() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_phases = vec![TimelinePhaseSummary {
+            id: TimelinePhaseId(1),
+            label: "Outro".to_string(),
+            role: protocol::TimelinePhaseRole::Outro,
+            start_ms: 0,
+            end_ms: 400,
+        }];
+        runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation: 1,
+            status: TimelineLoopRuntimeStatus::Disabled,
+            a_ms: Some(100),
+            b_ms: Some(200),
+            musical_length_millibeats: None,
+            wrap_count: 0,
+        };
+        runtime.apply_command(EngineCommand::SeekTimeline(250));
+        runtime.apply_command(EngineCommand::SetTimelineLoopEnabled(true));
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Armed
+        ));
+        runtime.last_tick_interval = Duration::from_millis(100);
+        runtime.apply_command(EngineCommand::SetTimelinePlaying(true));
+        runtime.advance_timeline(Instant::now());
+        assert_eq!(runtime.timeline_position_ms, 350);
+        assert_eq!(runtime.timeline_loop_runtime.wrap_count, 0);
+    }
+
+    #[test]
+    fn timeline_bank_switches_exact_active_entry_and_persists_runtime_free_order() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let mut first = runtime.authored_timeline_snapshot();
+        first.id = TimelineId(101);
+        first.label = "Intro".to_string();
+        first.duration_ms = 1_000;
+        first.follow = Some(TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: TimelineId(102),
+            duration: VideoClipTakeDuration {
+                unit: VideoClipTakeDurationUnit::Milliseconds,
+                value_milliunits: 500_000,
+            },
+            curve: VideoLayerTransitionCurve::Linear,
+            video_kind: VideoClipTakeKind::Crossfade,
+            lighting_policy: protocol::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: Some(128.0),
+            preroll_ms: 100,
+            trans_cadence_bars: 4,
+            fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
+        });
+        let mut second = TimelineSnapshot {
+            id: TimelineId(102),
+            label: "Verse".to_string(),
+            duration_ms: 2_000,
+            guide_enabled: true,
+            ..TimelineSnapshot::default()
+        };
+        second.phases.push(TimelinePhaseSummary {
+            id: TimelinePhaseId(103),
+            label: "Verse".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 0,
+            end_ms: 2_000,
+        });
+
+        runtime
+            .apply_timeline_bank_state(vec![first, second], TimelineId(102), true)
+            .unwrap();
+        assert_eq!(runtime.timeline_id, TimelineId(102));
+        assert_eq!(runtime.timeline_label, "Verse");
+        assert!(runtime.timeline_playing);
+        assert_eq!(runtime.timeline_bank.len(), 2);
+
+        runtime.timeline_position_ms = 750;
+        runtime.timeline_guide_cues.push(TimelineGuideCueSummary {
+            generation: 1,
+            sequence: 1,
+            at_ms: 0,
+            label: "Verse".to_string(),
+            cue: TimelineGuideCueKind::Phase {
+                phase_id: TimelinePhaseId(103),
+            },
+        });
+        let persisted = runtime.build_persistence_snapshot();
+        assert_eq!(persisted.timeline.id, TimelineId(102));
+        assert_eq!(persisted.timeline_bank.len(), 2);
+        assert_eq!(persisted.timeline_bank[0].id, TimelineId(101));
+        assert_eq!(persisted.timeline_bank[1].id, TimelineId(102));
+        assert_eq!(persisted.timeline_bank[1].position_ms, 0);
+        assert!(!persisted.timeline_bank[1].playing);
+        assert!(persisted.timeline_bank[1].guide_cues.is_empty());
+        validate_timeline_bank(&persisted, &[]).unwrap();
+    }
+
+    #[test]
+    fn timeline_bank_allocator_and_published_rollback_preserve_exact_authored_a() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let initial = engine.persistence_snapshot().unwrap();
+        assert_ne!(
+            engine.allocate_timeline_id(),
+            initial.timeline.id,
+            "the first bank allocation must not reuse the default Timeline ID"
+        );
+
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let before = runtime.build_persistence_snapshot();
+        let mut first = before.timeline.clone();
+        first.id = TimelineId(501);
+        first.label = "Intro".to_string();
+        let mut second = first.clone();
+        second.id = TimelineId(502);
+        second.label = "Verse".to_string();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ApplyTimelineBankPublished {
+            timelines: vec![first, second],
+            active_timeline_id: TimelineId(502),
+            play: true,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        assert_eq!(runtime.timeline_id, TimelineId(502));
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let guard = published.read().unwrap();
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        drop(guard);
+        assert_eq!(
+            runtime.build_persistence_snapshot(),
+            before,
+            "busy publication must restore the complete authored Timeline bank A"
+        );
+    }
+
+    #[test]
+    fn timeline_follow_captures_next_id_runs_dual_video_slews_bpm_and_completes_once() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let mut outgoing_source = clip_slot_engine_test_source("timeline-follow-out", 1_000);
+        outgoing_source.metadata.as_mut().unwrap().has_audio = true;
+        let mut incoming_source = clip_slot_engine_test_source("timeline-follow-in", 2_000);
+        incoming_source.metadata.as_mut().unwrap().has_audio = true;
+        runtime.media_assets = vec![
+            media_asset_test_summary(201, "Outgoing", outgoing_source.clone()),
+            media_asset_test_summary(202, "Incoming", incoming_source.clone()),
+        ];
+        runtime.video_layers =
+            sanitize_loaded_video_layers(&[media_asset_test_layer_with_default_slot(
+                10,
+                201,
+                301,
+                "Program",
+                outgoing_source,
+            )]);
+        runtime.clock.bpm = 100.0;
+
+        let layers = vec![
+            TimelineLayerSummary {
+                id: 10,
+                label: "Video".to_string(),
+                order: 0,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: true,
+                kind: TimelineLayerKind::Video,
+            },
+            TimelineLayerSummary {
+                id: 11,
+                label: "Audio".to_string(),
+                order: 1,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: true,
+                kind: TimelineLayerKind::Audio,
+            },
+        ];
+        let mut outgoing = TimelineSnapshot {
+            id: TimelineId(401),
+            label: "Intro".to_string(),
+            layers: layers.clone(),
+            audio_clips: vec![TimelineAudioClipSummary {
+                id: 501,
+                layer_id: 11,
+                media_asset_id: Some(201),
+                path: String::new(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 1_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            video_clips: vec![TimelineVideoClipSummary {
+                id: TimelineVideoClipId(502),
+                layer_id: 10,
+                media_asset_id: 201,
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 1_000,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            guide_enabled: true,
+            duration_ms: 1_000,
+            ..TimelineSnapshot::default()
+        };
+        outgoing.follow = Some(TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: TimelineId(402),
+            duration: VideoClipTakeDuration {
+                unit: VideoClipTakeDurationUnit::Milliseconds,
+                value_milliunits: 100,
+            },
+            curve: VideoLayerTransitionCurve::Linear,
+            video_kind: VideoClipTakeKind::Crossfade,
+            lighting_policy: protocol::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: Some(120.0),
+            preroll_ms: 100,
+            trans_cadence_bars: 4,
+            fault_policy: protocol::TimelineFollowFaultPolicy::Fault,
+        });
+        let incoming = TimelineSnapshot {
+            id: TimelineId(402),
+            label: "Verse".to_string(),
+            layers,
+            audio_clips: vec![TimelineAudioClipSummary {
+                id: 503,
+                layer_id: 11,
+                media_asset_id: Some(202),
+                path: String::new(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            video_clips: vec![TimelineVideoClipSummary {
+                id: TimelineVideoClipId(504),
+                layer_id: 10,
+                media_asset_id: 202,
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            phases: vec![TimelinePhaseSummary {
+                id: TimelinePhaseId(505),
+                label: "Verse".to_string(),
+                role: protocol::TimelinePhaseRole::Verse,
+                start_ms: 0,
+                end_ms: 2_000,
+            }],
+            guide_enabled: true,
+            duration_ms: 2_000,
+            ..TimelineSnapshot::default()
+        };
+        runtime
+            .apply_timeline_bank_state(vec![outgoing, incoming], TimelineId(401), true)
+            .unwrap();
+        runtime.timeline_position_ms = 800;
+        runtime.last_tick_interval = Duration::from_millis(100);
+        let admitted_at = Instant::now();
+        runtime.advance_timeline(admitted_at);
+        assert_eq!(runtime.timeline_position_ms, 900);
+        assert!(runtime.timeline_playing);
+        assert!(runtime.timeline_follow_transport.is_some());
+        assert!(matches!(
+            runtime.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Transitioning
+        ));
+        assert_eq!(
+            runtime.timeline_follow_runtime.target_timeline_id,
+            Some(TimelineId(402))
+        );
+
+        runtime.last_tick_interval = Duration::from_millis(50);
+        runtime.advance_timeline(admitted_at + Duration::from_millis(50));
+        runtime.advance_timeline_follow(admitted_at + Duration::from_millis(50));
+        runtime.last_tick = admitted_at + Duration::from_millis(50);
+        assert!((runtime.clock.bpm - 110.0).abs() < 0.01);
+        assert_eq!(runtime.timeline_follow_runtime.progress_millis, 500);
+        assert!(runtime
+            .timeline_guide_cues
+            .iter()
+            .any(|cue| matches!(cue.cue, TimelineGuideCueKind::Trans)));
+        let video = runtime.video_snapshot();
+        assert_eq!(video.layers.len(), 2);
+        let outgoing_layer = video.layers.iter().find(|layer| layer.id == 10).unwrap();
+        let incoming_layer = video
+            .layers
+            .iter()
+            .find(|layer| layer.id == u64::MAX - 10)
+            .unwrap();
+        assert!((outgoing_layer.state.opacity - 0.5).abs() < 0.01);
+        assert!((incoming_layer.state.opacity - 0.5).abs() < 0.01);
+        assert_eq!(incoming_layer.media_asset_id, Some(202));
+        let persisted_mid_transition = runtime.build_persistence_snapshot();
+        let authored_video = persisted_mid_transition.authored_video.unwrap();
+        assert_eq!(authored_video.layers.len(), 1);
+        assert_eq!(authored_video.layers[0].id, 10);
+        assert_eq!(authored_video.layers[0].state.opacity, 1.0);
+        assert_eq!(authored_video.compositions[0].layer_ids, vec![10]);
+
+        runtime.advance_timeline(admitted_at + Duration::from_millis(100));
+        runtime.advance_timeline_follow(admitted_at + Duration::from_millis(100));
+        assert_eq!(runtime.timeline_id, TimelineId(402));
+        assert!(runtime.timeline_playing);
+        assert_eq!(runtime.timeline_position_ms, 100);
+        assert!(runtime.timeline_follow_transport.is_none());
+        assert!(runtime.timeline_follow_transition.is_none());
+        assert!((runtime.clock.bpm - 120.0).abs() < 0.01);
+        assert_eq!(runtime.timeline_guide_cues.last().unwrap().label, "Verse");
+    }
+
+    #[test]
+    fn timeline_follow_audio_snapshot_uses_the_same_curved_crossfade_progress() {
+        assert_eq!(
+            timeline_follow_lighting_value(
+                protocol::TimelineFollowLightingPolicy::LinearMerge,
+                VideoLayerTransitionCurve::EaseIn,
+                0.5,
+                0,
+                200,
+            ),
+            50,
+            "lighting must use the same EaseIn progress as audio and video"
+        );
+        assert_eq!(
+            timeline_follow_lighting_value(
+                protocol::TimelineFollowLightingPolicy::HoldThenCut,
+                VideoLayerTransitionCurve::EaseIn,
+                0.75,
+                10,
+                240,
+            ),
+            10,
+            "HoldThenCut must retain outgoing DMX until the transition completes"
+        );
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let outgoing_clip = TimelineAudioClipSummary {
+            id: 601,
+            layer_id: 11,
+            media_asset_id: None,
+            path: "outgoing.wav".to_string(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 2_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        };
+        let incoming_clip = TimelineAudioClipSummary {
+            id: 602,
+            path: "incoming.wav".to_string(),
+            ..outgoing_clip.clone()
+        };
+        let mut target = TimelineSnapshot {
+            id: TimelineId(702),
+            label: "Verse".to_string(),
+            audio_clips: vec![incoming_clip],
+            duration_ms: 2_000,
+            ..TimelineSnapshot::default()
+        };
+        target.playing = false;
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.timeline.id = TimelineId(701);
+        snapshot.timeline.audio_clips = vec![outgoing_clip];
+        snapshot.timeline.playing = true;
+        snapshot.timeline.follow = Some(TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: target.id,
+            duration: VideoClipTakeDuration {
+                unit: VideoClipTakeDurationUnit::Milliseconds,
+                value_milliunits: 1_000,
+            },
+            curve: VideoLayerTransitionCurve::EaseIn,
+            video_kind: VideoClipTakeKind::Crossfade,
+            lighting_policy: protocol::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: None,
+            preroll_ms: 1_000,
+            trans_cadence_bars: 4,
+            fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
+        });
+        snapshot.timeline.follow_runtime = TimelineFollowRuntimeSummary {
+            generation: 9,
+            status: protocol::TimelineFollowRuntimeStatus::Transitioning,
+            source_timeline_id: Some(snapshot.timeline.id),
+            target_timeline_id: Some(target.id),
+            elapsed_ms: 500,
+            duration_ms: 1_000,
+            progress_millis: 500,
+            fault: None,
+        };
+        snapshot.timeline_bank = vec![snapshot.timeline.clone(), target];
+        *engine.snapshot.write().unwrap() = snapshot;
+
+        let audio = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(audio.clips.len(), 1);
+        assert!((audio.clips[0].gain - 0.75).abs() < 0.001);
+        let incoming = audio
+            .child_clips
+            .iter()
+            .find(|child| child.direct_parent_cue_id == Some(u64::MAX))
+            .expect("the Follow target must be present on the incoming audio lane");
+        assert!((incoming.clip.gain - 0.25).abs() < 0.001);
+        assert_eq!(incoming.position_ms, 500);
+    }
+
+    #[test]
+    fn timeline_advanced_authoring_keeps_linked_av_media_atomic() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_layers = vec![
+            TimelineLayerSummary {
+                id: 10,
+                label: "Video".to_string(),
+                order: 0,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: true,
+                kind: TimelineLayerKind::Video,
+            },
+            TimelineLayerSummary {
+                id: 11,
+                label: "Audio".to_string(),
+                order: 1,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: true,
+                kind: TimelineLayerKind::Audio,
+            },
+        ];
+        runtime.media_assets = vec![MediaAssetSummary {
+            id: 40,
+            label: "Song.mov".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("C:/show/Song.mov".to_string()),
+                name: Some("Song.mov".to_string()),
+                codec: Some("h264".to_string()),
+                metadata: Some(protocol::VideoMediaMetadata {
+                    duration_ms: Some(1_000),
+                    width: Some(1920),
+                    height: Some(1080),
+                    frame_rate: Some(30.0),
+                    has_audio: true,
+                }),
+            },
+            content_hash: None,
+            byte_size: None,
+        }];
+        let base = TimelineAdvancedAuthoringSummary {
+            video_clips: vec![TimelineVideoClipSummary {
+                id: TimelineVideoClipId(101),
+                layer_id: 10,
+                media_asset_id: 40,
+                start_ms: 100,
+                offset_ms: 0,
+                duration_ms: 1_000,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            audio_clips: vec![TimelineAudioClipSummary {
+                id: 102,
+                layer_id: 11,
+                media_asset_id: Some(40),
+                path: String::new(),
+                start_ms: 100,
+                offset_ms: 0,
+                duration_ms: 1_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            item_groups: vec![TimelineItemGroupSummary {
+                id: TimelineItemGroupId(103),
+                members: vec![
+                    TimelineItemRef::VideoClip {
+                        clip_id: TimelineVideoClipId(101),
+                    },
+                    TimelineItemRef::AudioClip { clip_id: 102 },
+                ],
+            }],
+            ..TimelineAdvancedAuthoringSummary::default()
+        };
+        runtime
+            .apply_timeline_advanced_authoring_state(base.clone())
+            .unwrap();
+        assert_eq!(runtime.timeline_video_clips[0].start_ms, 100);
+        assert_eq!(runtime.timeline_audio_clips[0].start_ms, 100);
+
+        let before = runtime.build_persistence_snapshot();
+        let mut torn = base.clone();
+        torn.video_clips[0].start_ms = 250;
+        assert!(runtime
+            .apply_timeline_advanced_authoring_state(torn)
+            .unwrap_err()
+            .contains("same delta"));
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+
+        let mut moved = base;
+        moved.video_clips[0].start_ms = 250;
+        moved.audio_clips[0].start_ms = 250;
+        runtime
+            .apply_timeline_advanced_authoring_state(moved)
+            .unwrap();
+        assert_eq!(runtime.timeline_video_clips[0].start_ms, 250);
+        assert_eq!(runtime.timeline_audio_clips[0].start_ms, 250);
+    }
+
+    #[test]
+    fn timeline_video_clip_projects_exact_playhead_and_restores_vj_layer_without_persisting_takeover(
+    ) {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let original_source = clip_slot_engine_test_source("vj-original", 5_000);
+        let timeline_source = clip_slot_engine_test_source("timeline-media", 2_000);
+        runtime.media_assets = vec![
+            media_asset_test_summary(40, "VJ original", original_source.clone()),
+            media_asset_test_summary(41, "Timeline media", timeline_source.clone()),
+        ];
+        let mut original_layer = media_asset_test_layer_with_default_slot(
+            10,
+            40,
+            400,
+            "Program",
+            original_source.clone(),
+        );
+        original_layer.state.opacity = 0.72;
+        original_layer.state.position_ms = 321;
+        original_layer.state.playing = true;
+        runtime.video_layers = vec![runtime_video_layer_from_summary(&original_layer)];
+        runtime.timeline_video_clips = vec![TimelineVideoClipSummary {
+            id: TimelineVideoClipId(101),
+            layer_id: 10,
+            media_asset_id: 41,
+            start_ms: 100,
+            offset_ms: 250,
+            duration_ms: 1_000,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        }];
+
+        runtime.timeline_position_ms = 350;
+        runtime.timeline_playing = true;
+        runtime.apply_timeline_video_clips();
+        let layer = &runtime.video_layers[0];
+        assert_eq!(layer.source, timeline_source);
+        assert_eq!(layer.media_asset_id, 41);
+        assert_eq!(layer.state.position_ms, 500);
+        assert!(layer.state.playing);
+        assert!(runtime.timeline_video_layer_restores.contains_key(&10));
+
+        let persisted_during_takeover = runtime.build_persistence_snapshot();
+        let authored = persisted_during_takeover.authored_video.unwrap();
+        assert_eq!(authored.layers[0].source, original_source);
+        assert_eq!(authored.layers[0].media_asset_id, Some(40));
+        assert_eq!(authored.layers[0].state.position_ms, 321);
+
+        runtime.timeline_position_ms = 1_100;
+        runtime.apply_timeline_video_clips();
+        let restored = &runtime.video_layers[0];
+        assert_eq!(restored.source, original_source);
+        assert_eq!(restored.media_asset_id, 40);
+        assert_eq!(restored.state.opacity, 0.72);
+        assert_eq!(restored.state.position_ms, 321);
+        assert!(restored.state.playing);
+        assert!(runtime.timeline_video_layer_restores.is_empty());
+    }
+
+    #[test]
     fn timeline_play_arms_zero_and_nonzero_boundaries_exactly_once() {
         let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
         create_effect_only_cue(
@@ -95676,6 +99632,7 @@ mod tests {
         TimelineAudioClipSummary {
             id,
             layer_id,
+            media_asset_id: None,
             path: format!("C:/media/clip-{id}.wav"),
             start_ms: 250,
             offset_ms: 100,
@@ -96312,6 +100269,11 @@ mod tests {
 
         let persistence = runtime.build_persistence_snapshot();
         assert!(persistence.timeline.layers.is_empty());
+        assert!(persistence
+            .timeline_bank
+            .iter()
+            .find(|timeline| timeline.id == persistence.timeline.id)
+            .is_some_and(|timeline| timeline.layers.is_empty()));
         assert_eq!(
             persistence
                 .timeline
@@ -98787,5 +102749,167 @@ mod tests {
             "super-scene budget: timeline_transports=16 direct_transports=1 child_events_each=200 transport_tick_reallocations={reallocation_count}"
         );
         assert_eq!(reallocation_count, 0);
+    }
+
+    #[test]
+    fn video_transition_bus_c3_is_typed_reversible_conflict_safe_and_published() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let first = clip_slot_engine_test_source("bus-first", 2_000);
+        let second = clip_slot_engine_test_source("bus-second", 2_000);
+        runtime.load_project_snapshot(EngineSnapshot {
+            video: VideoSnapshot {
+                layers: vec![
+                    media_asset_test_layer_with_default_slot(1, 10, 20, "Bus first", first.clone()),
+                    media_asset_test_layer_with_default_slot(
+                        2,
+                        11,
+                        21,
+                        "Bus second",
+                        second.clone(),
+                    ),
+                ],
+                media_assets: vec![
+                    media_asset_test_summary(10, "Bus first", first),
+                    media_asset_test_summary(11, "Bus second", second),
+                ],
+                ..VideoSnapshot::default()
+            },
+            ..EngineSnapshot::default()
+        });
+        assert!(runtime.last_error.is_none());
+        let first_target = VideoLayerTransitionTarget::Layer { layer_id: 1 };
+        let second_target = VideoLayerTransitionTarget::Layer { layer_id: 2 };
+        let bus = |id| VideoLayerTransitionBusSummary {
+            id: VideoTransitionBusId(id),
+            label: format!("Bus {id}"),
+            composition_id: 1,
+            enabled: true,
+            members: vec![first_target.clone(), second_target.clone()],
+            default_from: first_target.clone(),
+            default_to: second_target.clone(),
+            default_kind: VideoClipTakeKind::Wipe,
+            default_duration: VideoClipTakeDuration {
+                unit: VideoClipTakeDurationUnit::Beats,
+                value_milliunits: 1_000,
+            },
+            default_curve: VideoLayerTransitionCurve::EaseInOut,
+            matte_source: None,
+        };
+        runtime
+            .apply_video_effect_catalog_state(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![bus(1), bus(2)],
+            )
+            .unwrap();
+        assert_eq!(
+            runtime
+                .build_persistence_snapshot()
+                .authored_video
+                .as_ref()
+                .unwrap()
+                .transition_buses
+                .len(),
+            2
+        );
+
+        let duration = VideoClipTakeDuration {
+            unit: VideoClipTakeDurationUnit::Beats,
+            value_milliunits: 1_000,
+        };
+        runtime.clock.bpm = 120.0;
+        let before = runtime.build_persistence_snapshot();
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.fail_next_pending_publication = true;
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::LaunchVideoLayerTransitionBusPublished {
+            bus_id: VideoTransitionBusId(1),
+            from: first_target.clone(),
+            to: second_target.clone(),
+            kind: VideoClipTakeKind::Wipe,
+            duration,
+            curve: VideoLayerTransitionCurve::EaseInOut,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert!(runtime.active_video_transition_buses.is_empty());
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video,
+            before.authored_video
+        );
+
+        runtime
+            .launch_video_layer_transition_bus(
+                VideoTransitionBusId(1),
+                first_target.clone(),
+                second_target.clone(),
+                VideoClipTakeKind::Wipe,
+                duration,
+                VideoLayerTransitionCurve::EaseInOut,
+            )
+            .unwrap();
+        let start = runtime.video_layer_transition_runtime_snapshot();
+        assert_eq!(start.buses[0].duration_ms, 500);
+        assert_eq!(start.buses[0].progress_millis, 0);
+        runtime.clock.bpm = 60.0;
+        runtime.advance_video_layer_transition_buses(Duration::from_millis(125));
+        assert_eq!(
+            runtime.video_layer_transition_runtime_snapshot().buses[0].progress_millis,
+            250
+        );
+        runtime
+            .launch_video_layer_transition_bus(
+                VideoTransitionBusId(1),
+                second_target.clone(),
+                first_target.clone(),
+                VideoClipTakeKind::Wipe,
+                duration,
+                VideoLayerTransitionCurve::EaseInOut,
+            )
+            .unwrap();
+        let reversed = runtime.video_layer_transition_runtime_snapshot();
+        assert_eq!(reversed.buses[0].duration_ms, 500);
+        assert_eq!(reversed.buses[0].progress_millis, 750);
+        assert_eq!(reversed.buses[0].origin_from, first_target);
+
+        let conflict = runtime
+            .launch_video_layer_transition_bus(
+                VideoTransitionBusId(2),
+                VideoLayerTransitionTarget::Layer { layer_id: 1 },
+                VideoLayerTransitionTarget::Layer { layer_id: 2 },
+                VideoClipTakeKind::Crossfade,
+                VideoClipTakeDuration::milliseconds(250),
+                VideoLayerTransitionCurve::Linear,
+            )
+            .unwrap_err();
+        assert!(conflict.contains("conflict"));
+
+        runtime
+            .launch_video_layer_transition_bus(
+                VideoTransitionBusId(1),
+                VideoLayerTransitionTarget::Layer { layer_id: 1 },
+                VideoLayerTransitionTarget::Layer { layer_id: 2 },
+                VideoClipTakeKind::Cut,
+                VideoClipTakeDuration::default(),
+                VideoLayerTransitionCurve::Linear,
+            )
+            .unwrap();
+        let cut = runtime.video_layer_transition_runtime_snapshot();
+        assert_eq!(cut.buses[0].progress_millis, 1000);
+        assert_eq!(cut.buses[0].duration_ms, 0);
+        runtime
+            .release_video_layer_transition_bus(VideoTransitionBusId(1))
+            .unwrap();
+        assert!(runtime
+            .video_layer_transition_runtime_snapshot()
+            .buses
+            .is_empty());
     }
 }

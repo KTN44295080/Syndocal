@@ -8,11 +8,15 @@ use std::{
 };
 
 use protocol::{
-    ClockSnapshot, CompositionId, CompositionSummary, Transform2D, VideoBackendState,
-    VideoBackendStatus, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoFxAdjust,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoMediaMetadata,
-    VideoOutputAspectMode, VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputSummary,
-    VideoRuntimeStatus, VideoSnapshot, VideoSourceKind, VideoSourceSummary,
+    validate_video_layer_transition_runtime, ClockSnapshot, CompositionId, CompositionSummary,
+    MachineOutputRole, Transform2D, VideoBackendState, VideoBackendStatus, VideoBlendMode,
+    VideoClipRuntimeSnapshot, VideoClipSlotId, VideoColorAdjust, VideoCuePointSummary,
+    VideoEffectChainId, VideoEffectChainSummary, VideoEffectId, VideoEffectKind, VideoEffectScope,
+    VideoEffectStageId, VideoFxAdjust, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
+    VideoLayerTransitionTarget, VideoMediaMetadata, VideoOutputAspectMode, VideoOutputId,
+    VideoOutputKind, VideoOutputMapping, VideoOutputSummary, VideoRuntimeStatus, VideoSnapshot,
+    VideoSourceKind, VideoSourceSummary, VideoTransitionEffectOwner, VIDEO_EFFECT_CHAIN_MAX_STAGES,
     VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION, VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY,
 };
 use serde::{Deserialize, Serialize};
@@ -64,6 +68,7 @@ pub struct VideoRenderInput {
     pub key: protocol::VideoRenderInputKey,
     pub request: VideoFrameRequest,
     pub isf_effect: Option<VideoIsfEffectSummary>,
+    pub clip_slot_id: Option<VideoClipSlotId>,
 }
 
 impl VideoRenderInput {
@@ -72,6 +77,7 @@ impl VideoRenderInput {
             key,
             request,
             isf_effect: None,
+            clip_slot_id: None,
         }
     }
 
@@ -86,6 +92,11 @@ impl VideoRenderInput {
 
     pub fn with_isf_effect(mut self, effect: Option<VideoIsfEffectSummary>) -> Self {
         self.isf_effect = effect;
+        self
+    }
+
+    pub fn with_clip_slot_id(mut self, clip_slot_id: Option<VideoClipSlotId>) -> Self {
+        self.clip_slot_id = clip_slot_id;
         self
     }
 }
@@ -118,6 +129,69 @@ pub struct VideoIsfStageError {
     pub stage_index: Option<usize>,
     pub stage_label: Option<String>,
     pub message: String,
+}
+
+/// Stable C1 identity for a renderer-local effect fault. Authored IDs remain
+/// separate from `VideoRenderInputKey`; legacy-only snapshots deliberately use
+/// `None` because they do not contain stable C1 entities to report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoEffectStageFault {
+    pub scope: VideoEffectScope,
+    pub chain_id: Option<VideoEffectChainId>,
+    pub stage_id: Option<VideoEffectStageId>,
+    pub effect_id: Option<VideoEffectId>,
+    pub render_input_key: Option<protocol::VideoRenderInputKey>,
+    pub stage_index: Option<usize>,
+    pub stage_label: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedVideoEffectStage {
+    pub stage_id: Option<VideoEffectStageId>,
+    pub effect_id: Option<VideoEffectId>,
+    pub enabled: bool,
+    pub label: String,
+    pub effect: VideoIsfEffectSummary,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedVideoEffectChain {
+    pub chain_id: Option<VideoEffectChainId>,
+    pub scope: VideoEffectScope,
+    pub bypassed: bool,
+    pub stages: Vec<ResolvedVideoEffectStage>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VideoEffectRenderContext<'a> {
+    pub clip_runtime: &'a VideoClipRuntimeSnapshot,
+    pub project_render_epoch: u64,
+}
+
+#[derive(Debug, Clone)]
+struct CachedIsfShader {
+    value: Result<Arc<PreparedIsfShader>, IsfPrepareError>,
+    last_used: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VideoOutputLastValidKey {
+    project_render_epoch: u64,
+    output_id: VideoOutputId,
+    width: u32,
+    height: u32,
+    composition_id: CompositionId,
+    kind: VideoOutputKind,
+    fullscreen: bool,
+    monitor_id: Option<u32>,
+    endpoint_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct VideoOutputLastValidFrame {
+    key: VideoOutputLastValidKey,
+    frame: VideoFrame,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -426,8 +500,17 @@ pub enum VideoRuntimeError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoPreviewError {
     InvalidSize,
+    InvalidLayerTransition(String),
     MissingLayer {
         layer_id: VideoLayerId,
+    },
+    MissingTransitionSlot {
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+    },
+    MissingTransitionAsset {
+        layer_id: VideoLayerId,
+        asset_id: protocol::MediaAssetId,
     },
     Output(VideoOutputRenderError),
     MissingStillImagePath {
@@ -1205,15 +1288,19 @@ pub struct DecoderBackedFrameProvider<D = NullVideoDecoder> {
 pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
     runtime: VideoRuntime,
     frame_provider: P,
-    isf_shader_cache: HashMap<Arc<str>, Result<Arc<PreparedIsfShader>, IsfPrepareError>>,
+    isf_shader_cache: HashMap<Arc<str>, CachedIsfShader>,
+    isf_shader_cache_clock: u64,
     isf_runtime: Option<Result<IsfGpuRuntime, IsfRuntimeError>>,
     last_isf_error: Option<String>,
     last_isf_stage_errors: Vec<VideoIsfStageError>,
     last_render_input_isf_stage_errors: Vec<VideoRenderInputIsfStageError>,
+    last_effect_stage_faults: Vec<VideoEffectStageFault>,
+    output_last_valid_frames: Vec<VideoOutputLastValidFrame>,
+    last_output_render_error: Option<String>,
 }
 
 const ISF_SHADER_CACHE_CAPACITY: usize = 64;
-pub const VIDEO_ISF_EFFECT_STACK_MAX_STAGES: usize = 8;
+pub const VIDEO_ISF_EFFECT_STACK_MAX_STAGES: usize = VIDEO_EFFECT_CHAIN_MAX_STAGES;
 const FFMPEG_CLI_FRAME_CACHE_CAPACITY: usize = 8;
 
 fn format_video_isf_stage_error(error: &VideoIsfStageError, layer_label: Option<&str>) -> String {
@@ -1230,6 +1317,248 @@ fn format_video_isf_stage_error(error: &VideoIsfStageError, layer_label: Option<
         ),
         _ => format!("{} FX stack: {}", layer, error.message),
     }
+}
+
+fn video_effect_fault(
+    scope: VideoEffectScope,
+    chain_id: Option<VideoEffectChainId>,
+    stage_id: Option<VideoEffectStageId>,
+    effect_id: Option<VideoEffectId>,
+    render_input_key: Option<protocol::VideoRenderInputKey>,
+    stage_index: Option<usize>,
+    stage_label: Option<String>,
+    message: impl Into<String>,
+) -> VideoEffectStageFault {
+    VideoEffectStageFault {
+        scope,
+        chain_id,
+        stage_id,
+        effect_id,
+        render_input_key,
+        stage_index,
+        stage_label,
+        message: message.into(),
+    }
+}
+
+fn legacy_isf_stages(effect: &VideoIsfEffectSummary) -> Vec<VideoIsfEffectSummary> {
+    let mut root = effect.clone();
+    root.stack.clear();
+    std::iter::once(root)
+        .chain(effect.stack.iter().map(|stage| VideoIsfEffectSummary {
+            enabled: stage.enabled,
+            label: stage.label.clone(),
+            source: Arc::clone(&stage.source),
+            source_path: stage.source_path.clone(),
+            description: stage.description.clone(),
+            categories: stage.categories.clone(),
+            controls: stage.controls.clone(),
+            stack: Vec::new(),
+        }))
+        .collect()
+}
+
+fn resolved_legacy_layer_chain(
+    layer_id: VideoLayerId,
+    effect: &VideoIsfEffectSummary,
+) -> Result<ResolvedVideoEffectChain, VideoEffectStageFault> {
+    let scope = VideoEffectScope::Layer { layer_id };
+    let legacy_stages = legacy_isf_stages(effect);
+    if legacy_stages.len() > VIDEO_EFFECT_CHAIN_MAX_STAGES {
+        return Err(video_effect_fault(
+            scope,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            format!(
+                "legacy ISF stack has {} stages; the limit is {}",
+                legacy_stages.len(),
+                VIDEO_EFFECT_CHAIN_MAX_STAGES
+            ),
+        ));
+    }
+    Ok(ResolvedVideoEffectChain {
+        chain_id: None,
+        scope,
+        bypassed: false,
+        stages: legacy_stages
+            .into_iter()
+            .enumerate()
+            .map(|(index, effect)| ResolvedVideoEffectStage {
+                stage_id: None,
+                effect_id: None,
+                enabled: effect.enabled,
+                label: if effect.label.is_empty() {
+                    format!("Legacy FX {}", index + 1)
+                } else {
+                    effect.label.clone()
+                },
+                effect,
+            })
+            .collect(),
+    })
+}
+
+fn resolved_chain_from_canonical(
+    chain: &VideoEffectChainSummary,
+) -> Result<ResolvedVideoEffectChain, VideoEffectStageFault> {
+    if chain.stages.len() > VIDEO_EFFECT_CHAIN_MAX_STAGES {
+        return Err(video_effect_fault(
+            chain.scope.clone(),
+            Some(chain.id),
+            None,
+            None,
+            None,
+            None,
+            None,
+            format!(
+                "effect chain has {} stages; the limit is {}",
+                chain.stages.len(),
+                VIDEO_EFFECT_CHAIN_MAX_STAGES
+            ),
+        ));
+    }
+    let stages = chain
+        .stages
+        .iter()
+        .map(|stage| {
+            let VideoEffectKind::Isf { effect } = &stage.effect.kind;
+            let mut effect = effect.clone();
+            effect.stack.clear();
+            ResolvedVideoEffectStage {
+                stage_id: Some(stage.id),
+                effect_id: Some(stage.effect.id),
+                enabled: stage.enabled,
+                label: stage.label.clone(),
+                effect,
+            }
+        })
+        .collect();
+    Ok(ResolvedVideoEffectChain {
+        chain_id: Some(chain.id),
+        scope: chain.scope.clone(),
+        bypassed: chain.bypassed,
+        stages,
+    })
+}
+
+fn resolve_effective_layer_chain(
+    snapshot: &VideoSnapshot,
+    layer: &VideoLayerSummary,
+) -> Result<Option<ResolvedVideoEffectChain>, VideoEffectStageFault> {
+    let scope = VideoEffectScope::Layer { layer_id: layer.id };
+    let canonical = snapshot
+        .effect_chains
+        .iter()
+        .find(|chain| chain.scope == scope);
+    let Some(canonical) = canonical else {
+        let Some(legacy) = layer.isf_effect.as_ref() else {
+            return Ok(None);
+        };
+        return resolved_legacy_layer_chain(layer.id, legacy).map(Some);
+    };
+
+    let mut resolved = resolved_chain_from_canonical(canonical)?;
+    if resolved.stages.is_empty() {
+        if layer.isf_effect.is_some() {
+            return Err(video_effect_fault(
+                scope,
+                Some(canonical.id),
+                None,
+                None,
+                None,
+                None,
+                None,
+                "empty canonical Layer chain has a legacy ISF projection",
+            ));
+        }
+        return Ok(Some(resolved));
+    }
+    let Some(legacy) = layer.isf_effect.as_ref() else {
+        return Err(video_effect_fault(
+            scope,
+            Some(canonical.id),
+            None,
+            None,
+            None,
+            None,
+            None,
+            "canonical Layer chain is missing its rendered legacy projection",
+        ));
+    };
+    let effective = legacy_isf_stages(legacy);
+    if effective.len() != resolved.stages.len() {
+        return Err(video_effect_fault(
+            scope,
+            Some(canonical.id),
+            None,
+            None,
+            None,
+            None,
+            None,
+            format!(
+                "canonical Layer chain has {} stages but its rendered projection has {}",
+                resolved.stages.len(),
+                effective.len()
+            ),
+        ));
+    }
+    for (index, (stage, effective)) in resolved
+        .stages
+        .iter_mut()
+        .zip(effective.into_iter())
+        .enumerate()
+    {
+        if stage.effect.label != effective.label || stage.effect.source != effective.source {
+            return Err(video_effect_fault(
+                scope,
+                resolved.chain_id,
+                stage.stage_id,
+                stage.effect_id,
+                None,
+                Some(index),
+                Some(stage.label.clone()),
+                "canonical Layer stage diverges from its rendered legacy projection",
+            ));
+        }
+        stage.enabled = effective.enabled;
+        stage.effect = effective;
+    }
+    Ok(Some(resolved))
+}
+
+pub fn resolve_video_effect_chain(
+    snapshot: &VideoSnapshot,
+    scope: &VideoEffectScope,
+) -> Result<Option<ResolvedVideoEffectChain>, VideoEffectStageFault> {
+    if let VideoEffectScope::Layer { layer_id } = scope {
+        let Some(layer) = snapshot.layers.iter().find(|layer| layer.id == *layer_id) else {
+            return Err(video_effect_fault(
+                scope.clone(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                format!("effect scope references missing layer {layer_id}"),
+            ));
+        };
+        return resolve_effective_layer_chain(snapshot, layer);
+    }
+    snapshot
+        .effect_chains
+        .iter()
+        .find(|chain| &chain.scope == scope)
+        .map(resolved_chain_from_canonical)
+        .transpose()
+}
+
+fn resolved_chain_executes(chain: &ResolvedVideoEffectChain) -> bool {
+    !chain.bypassed && chain.stages.iter().any(|stage| stage.enabled)
 }
 
 #[derive(Default)]
@@ -2598,10 +2927,14 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             runtime: VideoRuntime::new(config),
             frame_provider,
             isf_shader_cache: HashMap::new(),
+            isf_shader_cache_clock: 0,
             isf_runtime: None,
             last_isf_error: None,
             last_isf_stage_errors: Vec::new(),
             last_render_input_isf_stage_errors: Vec::new(),
+            last_effect_stage_faults: Vec::new(),
+            output_last_valid_frames: Vec::new(),
+            last_output_render_error: None,
         }
     }
 
@@ -2703,6 +3036,127 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .map_err(VideoPreviewError::Runtime)
     }
 
+    /// C1 counterpart to `render_input_mix`. Runtime ownership remains the C0
+    /// key, while authored Clip and Layer effects retain their independent
+    /// stable identities in any reported fault.
+    pub fn render_input_mix_with_effects(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        inputs: &[VideoRenderInput],
+        mix: &CompositionInputMix,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        validate_unique_render_input_keys(inputs.iter().map(|input| &input.key))
+            .map_err(VideoRuntimeError::from)
+            .map_err(VideoPreviewError::Runtime)?;
+        self.frame_provider.retain_inputs(inputs);
+        self.runtime.sync_inputs(inputs);
+        self.reset_isf_stack_metrics();
+        let mut faults = Vec::new();
+
+        for input in inputs {
+            let frame = self
+                .frame_provider
+                .frame_for_input(input)
+                .map_err(|error| VideoPreviewError::RenderInput {
+                    key: input.key,
+                    error,
+                })?;
+            let active_slot_id = context
+                .clip_runtime
+                .layers
+                .iter()
+                .find(|runtime| runtime.layer_id == input.layer_id())
+                .and_then(|runtime| runtime.active_slot_id);
+            let executes_active_clip = active_slot_id.is_some()
+                && input
+                    .clip_slot_id
+                    .map(|slot_id| Some(slot_id) == active_slot_id)
+                    .unwrap_or(true);
+            let (frame, clip_faults) = if executes_active_clip {
+                let scope = VideoEffectScope::Clip {
+                    layer_id: input.layer_id(),
+                    slot_id: active_slot_id.expect("active Clip slot was checked"),
+                };
+                match resolve_video_effect_chain(snapshot, &scope) {
+                    Ok(Some(chain)) => {
+                        self.apply_resolved_effect_chain_to_frame(&chain, frame, Some(input.key))
+                    }
+                    Ok(None) => (frame, Vec::new()),
+                    Err(fault) => (
+                        frame,
+                        vec![VideoEffectStageFault {
+                            render_input_key: Some(input.key),
+                            ..fault
+                        }],
+                    ),
+                }
+            } else {
+                (frame, Vec::new())
+            };
+            faults.extend(clip_faults);
+
+            let layer = snapshot
+                .layers
+                .iter()
+                .find(|layer| layer.id == input.layer_id());
+            let layer_chain = match layer {
+                Some(layer) => resolve_effective_layer_chain(snapshot, layer),
+                None => input
+                    .isf_effect
+                    .as_ref()
+                    .map(|effect| resolved_legacy_layer_chain(input.layer_id(), effect))
+                    .transpose(),
+            };
+            let (frame, layer_faults) = match layer_chain {
+                Ok(Some(chain)) => {
+                    self.apply_resolved_effect_chain_to_frame(&chain, frame, Some(input.key))
+                }
+                Ok(None) => (frame, Vec::new()),
+                Err(fault) => (
+                    frame,
+                    vec![VideoEffectStageFault {
+                        render_input_key: Some(input.key),
+                        ..fault
+                    }],
+                ),
+            };
+            faults.extend(layer_faults);
+            self.runtime.push_input_frame(input, frame);
+        }
+
+        let keyed_isf_errors = faults
+            .iter()
+            .filter_map(|fault| {
+                let key = fault.render_input_key?;
+                let layer_id = match fault.scope {
+                    VideoEffectScope::Clip { layer_id, .. }
+                    | VideoEffectScope::Layer { layer_id } => layer_id,
+                    _ => return None,
+                };
+                Some(VideoRenderInputIsfStageError {
+                    key,
+                    error: VideoIsfStageError {
+                        layer_id,
+                        stage_index: fault.stage_index,
+                        stage_label: fault.stage_label.clone(),
+                        message: fault.message.clone(),
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        self.record_effect_faults(faults, snapshot);
+        self.last_render_input_isf_stage_errors = keyed_isf_errors;
+        self.runtime
+            .compose_input_mix(mix, width, height)
+            .map_err(VideoPreviewError::Runtime)
+    }
+
     /// Renders one layer independently from its live enable, opacity, solo, master, and
     /// blackout state. This is intended for media-bin and clip-grid thumbnails, where an
     /// operator must be able to identify a source before taking it live.
@@ -2776,6 +3230,540 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         self.render_output_plan(snapshot, &plan, width, height)
     }
 
+    /// C1 CPU correctness path. Existing callers remain source-compatible;
+    /// production owners can opt into Clip scope by passing runtime slot truth.
+    pub fn render_output_with_effects(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        output_id: VideoOutputId,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        let plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        self.render_output_plan_with_effects(
+            snapshot,
+            context,
+            None,
+            &plan,
+            plan.width,
+            plan.height,
+        )
+    }
+
+    pub fn render_output_with_effects_and_transitions(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
+        output_id: VideoOutputId,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        let mut plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
+        self.render_output_plan_with_effects(
+            snapshot,
+            context,
+            Some(transition_runtime),
+            &plan,
+            plan.width,
+            plan.height,
+        )
+    }
+
+    /// C1 counterpart to `render_output_preview`. The complete scoped artistic
+    /// chain and output mapping are evaluated at the requested presentation
+    /// size while cache identity remains fenced by the caller's project epoch.
+    pub fn render_output_preview_with_effects(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        let plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        self.render_output_plan_with_effects(snapshot, context, None, &plan, width, height)
+    }
+
+    pub fn render_output_preview_with_effects_and_transitions(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        let mut plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
+        self.render_output_plan_with_effects(
+            snapshot,
+            context,
+            Some(transition_runtime),
+            &plan,
+            width,
+            height,
+        )
+    }
+
+    fn render_output_plan_with_effects(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: Option<&VideoLayerTransitionRuntimeSnapshot>,
+        plan: &VideoOutputRenderPlan,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        if plan.output_blackout || plan.output_opacity <= f32::EPSILON || plan.composition.blackout
+        {
+            return Ok(self.blackout_output_artistic_frame(
+                snapshot,
+                plan.output_id,
+                width,
+                height,
+            ));
+        }
+        let key = VideoOutputLastValidKey {
+            project_render_epoch: context.project_render_epoch,
+            output_id: plan.output_id,
+            width,
+            height,
+            composition_id: plan.composition.composition_id,
+            kind: plan.kind.clone(),
+            fullscreen: plan.fullscreen,
+            monitor_id: plan.monitor_id,
+            endpoint_name: plan.endpoint_name.clone(),
+        };
+        self.output_last_valid_frames.retain(|entry| {
+            entry.key.project_render_epoch == context.project_render_epoch
+                && (entry.key.output_id != plan.output_id || entry.key == key)
+        });
+        match self.prepare_output_artistic_frame_with_effects_impl(
+            snapshot,
+            context,
+            transition_runtime,
+            plan,
+            width,
+            height,
+        ) {
+            Ok(frame) => {
+                self.last_output_render_error = None;
+                if let Some(entry) = self
+                    .output_last_valid_frames
+                    .iter_mut()
+                    .find(|entry| entry.key == key)
+                {
+                    entry.frame = frame.clone();
+                } else {
+                    self.output_last_valid_frames
+                        .push(VideoOutputLastValidFrame {
+                            key,
+                            frame: frame.clone(),
+                        });
+                }
+                Ok(apply_video_output_mapping(frame, &plan.mapping))
+            }
+            Err(error) => {
+                self.last_output_render_error = Some(format!("{error:?}"));
+                let fallback = self
+                    .output_last_valid_frames
+                    .iter()
+                    .find(|entry| entry.key == key)
+                    .map(|entry| entry.frame.clone())
+                    .unwrap_or_else(|| video_output_transparent_black_frame(width, height));
+                Ok(apply_video_output_mapping(fallback, &plan.mapping))
+            }
+        }
+    }
+
+    /// Produces the artistic post-chain/pre-mapping frame consumed by the C1
+    /// last-valid cache. Native GPU presentation can adopt this additive seam
+    /// without changing its mapping pass.
+    pub fn prepare_output_artistic_frame_with_effects(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        plan: &VideoOutputRenderPlan,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        self.prepare_output_artistic_frame_with_effects_impl(
+            snapshot, context, None, plan, width, height,
+        )
+    }
+
+    pub fn prepare_output_artistic_frame_with_effects_and_transitions(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
+        plan: &VideoOutputRenderPlan,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        let mut plan = plan.clone();
+        apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
+        self.prepare_output_artistic_frame_with_effects_impl(
+            snapshot,
+            context,
+            Some(transition_runtime),
+            &plan,
+            width,
+            height,
+        )
+    }
+
+    fn prepare_output_artistic_frame_with_effects_impl(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: Option<&VideoLayerTransitionRuntimeSnapshot>,
+        plan: &VideoOutputRenderPlan,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        if plan.output_blackout || plan.output_opacity <= f32::EPSILON || plan.composition.blackout
+        {
+            return Ok(self.blackout_output_artistic_frame(
+                snapshot,
+                plan.output_id,
+                width,
+                height,
+            ));
+        }
+        // Every valid invocation replaces diagnostics, including a fatal
+        // decode/composite error.
+        self.clear_full_output_effect_diagnostics(snapshot);
+        let layer_ids = plan
+            .composition
+            .layers
+            .iter()
+            .map(|layer| layer.layer_id)
+            .collect::<Vec<_>>();
+        let mut faults = self.prepare_frames_with_effects(
+            snapshot,
+            context.clip_runtime,
+            context.project_render_epoch,
+            &layer_ids,
+            width,
+            height,
+        )?;
+        let (mut frame, composition_faults) = self
+            .compose_scoped_plan(
+                snapshot,
+                transition_runtime,
+                &plan.composition,
+                width,
+                height,
+            )
+            .map_err(VideoPreviewError::Runtime)?;
+        faults.extend(composition_faults);
+        let output_scope = VideoEffectScope::Output {
+            output_id: plan.output_id,
+        };
+        match resolve_video_effect_chain(snapshot, &output_scope) {
+            Ok(Some(chain)) => {
+                let (rendered, output_faults) =
+                    self.apply_resolved_effect_chain_to_frame(&chain, frame, None);
+                frame = rendered;
+                faults.extend(output_faults);
+            }
+            Ok(None) => {}
+            Err(fault) => faults.push(fault),
+        }
+        let mut ordered_faults = Vec::with_capacity(faults.len());
+        for fault in faults {
+            if !ordered_faults.contains(&fault) {
+                ordered_faults.push(fault);
+            }
+        }
+        self.record_effect_faults(ordered_faults, snapshot);
+        Ok(frame)
+    }
+
+    fn blackout_output_artistic_frame(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+    ) -> VideoFrame {
+        // A blackout is a hard artistic fence. Discard the previous image so
+        // a failed first frame after recovery cannot leak pre-blackout content
+        // through the last-valid fallback. Keep both public rendering seams
+        // behaviorally identical.
+        self.output_last_valid_frames
+            .retain(|entry| entry.key.output_id != output_id);
+        self.last_output_render_error = None;
+        self.clear_full_output_effect_diagnostics(snapshot);
+        video_output_black_frame(width, height)
+    }
+
+    fn compose_scoped_plan(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        transition_runtime: Option<&VideoLayerTransitionRuntimeSnapshot>,
+        plan: &CompositionPlan,
+        width: u32,
+        height: u32,
+    ) -> Result<(VideoFrame, Vec<VideoEffectStageFault>), VideoRuntimeError> {
+        let frames = self.runtime.select_frames_for_plan(plan);
+        let mut output = vec![0u8; width as usize * height as usize * 4];
+        let mut faults = Vec::new();
+        let active_buses = transition_runtime
+            .into_iter()
+            .flat_map(|runtime| runtime.buses.iter())
+            .filter_map(|active| {
+                snapshot
+                    .transition_buses
+                    .iter()
+                    .find(|bus| {
+                        bus.id == active.bus_id && bus.composition_id == plan.composition_id
+                    })
+                    .map(|bus| {
+                        let member_ids = bus
+                            .members
+                            .iter()
+                            .flat_map(|target| {
+                                video_layer_transition_target_ids(snapshot, target)
+                                    .expect("validated transition target must resolve")
+                            })
+                            .collect::<Vec<_>>();
+                        (active, member_ids)
+                    })
+            })
+            .collect::<Vec<_>>();
+        let mut active_groups = Vec::new();
+        for group in snapshot
+            .layer_groups
+            .iter()
+            .filter(|group| group.composition_id == plan.composition_id)
+        {
+            let scope = VideoEffectScope::Group { group_id: group.id };
+            match resolve_video_effect_chain(snapshot, &scope) {
+                Ok(Some(chain)) if resolved_chain_executes(&chain) => {
+                    active_groups.push((group.layer_ids.clone(), chain));
+                }
+                Ok(_) => {}
+                Err(fault) => faults.push(fault),
+            }
+        }
+
+        for layer in &plan.layers {
+            if let Some((active, member_ids)) = active_buses
+                .iter()
+                .find(|(_, member_ids)| member_ids.contains(&layer.layer_id))
+            {
+                let first_visible_member = plan
+                    .layers
+                    .iter()
+                    .find(|candidate| member_ids.contains(&candidate.layer_id))
+                    .map(|candidate| candidate.layer_id);
+                if first_visible_member != Some(layer.layer_id) {
+                    continue;
+                }
+                let bus_layers = plan
+                    .layers
+                    .iter()
+                    .filter(|candidate| member_ids.contains(&candidate.layer_id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let bus_plan = CompositionPlan {
+                    composition_id: plan.composition_id,
+                    label: format!("{} Transition Bus {}", plan.label, active.bus_id.0),
+                    output_ids: Vec::new(),
+                    master_opacity: plan.master_opacity,
+                    blackout: plan.blackout,
+                    layers: bus_layers,
+                };
+                let (bus_data, bus_group_faults) = self
+                    .compose_plan_layers_with_groups(snapshot, &bus_plan, &frames, width, height)?;
+                faults.extend(bus_group_faults);
+                let bus_frame = VideoFrame {
+                    layer_id: 0,
+                    width,
+                    height,
+                    pts_ms: frames.iter().map(|frame| frame.pts_ms).max().unwrap_or(0),
+                    duration_ms: 0,
+                    format: VideoPixelFormat::Rgba8,
+                    data: bus_data,
+                };
+                let scope = VideoEffectScope::Transition {
+                    owner: VideoTransitionEffectOwner::LayerBus {
+                        bus_id: active.bus_id,
+                    },
+                };
+                let bus_frame = match resolve_video_effect_chain(snapshot, &scope) {
+                    Ok(Some(chain)) => {
+                        let (rendered, bus_faults) =
+                            self.apply_resolved_effect_chain_to_frame(&chain, bus_frame, None);
+                        faults.extend(bus_faults);
+                        rendered
+                    }
+                    Ok(None) => bus_frame,
+                    Err(fault) => {
+                        faults.push(fault);
+                        bus_frame
+                    }
+                };
+                for (destination, source) in output
+                    .chunks_exact_mut(4)
+                    .zip(bus_frame.data.chunks_exact(4))
+                {
+                    blend_pixel(destination, source, 1.0, &VideoBlendMode::Normal);
+                }
+                continue;
+            }
+            let group = active_groups
+                .iter()
+                .find(|(member_ids, _)| member_ids.contains(&layer.layer_id));
+            let Some((member_ids, chain)) = group else {
+                blend_composition_layer_onto(&mut output, layer, &frames, width, height)?;
+                continue;
+            };
+            let first_visible_member = plan
+                .layers
+                .iter()
+                .find(|candidate| member_ids.contains(&candidate.layer_id))
+                .map(|candidate| candidate.layer_id);
+            if first_visible_member != Some(layer.layer_id) {
+                continue;
+            }
+            let group_layers = plan
+                .layers
+                .iter()
+                .filter(|candidate| member_ids.contains(&candidate.layer_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            let group_plan = CompositionPlan {
+                composition_id: plan.composition_id,
+                label: format!("{} Group", plan.label),
+                output_ids: Vec::new(),
+                master_opacity: plan.master_opacity,
+                blackout: plan.blackout,
+                layers: group_layers,
+            };
+            let group_frame = composite_rgba8(&group_plan, &frames, width, height)?;
+            let (group_frame, group_faults) =
+                self.apply_resolved_effect_chain_to_frame(chain, group_frame, None);
+            faults.extend(group_faults);
+            for (destination, source) in output
+                .chunks_exact_mut(4)
+                .zip(group_frame.data.chunks_exact(4))
+            {
+                blend_pixel(destination, source, 1.0, &VideoBlendMode::Normal);
+            }
+        }
+
+        let mut frame = VideoFrame {
+            layer_id: 0,
+            width,
+            height,
+            pts_ms: frames.iter().map(|frame| frame.pts_ms).max().unwrap_or(0),
+            duration_ms: 0,
+            format: VideoPixelFormat::Rgba8,
+            data: output,
+        };
+        let scope = VideoEffectScope::Composition {
+            composition_id: plan.composition_id,
+        };
+        match resolve_video_effect_chain(snapshot, &scope) {
+            Ok(Some(chain)) => {
+                let (rendered, composition_faults) =
+                    self.apply_resolved_effect_chain_to_frame(&chain, frame, None);
+                frame = rendered;
+                faults.extend(composition_faults);
+            }
+            Ok(None) => {}
+            Err(fault) => faults.push(fault),
+        }
+        Ok((frame, faults))
+    }
+
+    fn compose_plan_layers_with_groups(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        plan: &CompositionPlan,
+        frames: &[VideoFrame],
+        width: u32,
+        height: u32,
+    ) -> Result<(Vec<u8>, Vec<VideoEffectStageFault>), VideoRuntimeError> {
+        let mut output = vec![0u8; width as usize * height as usize * 4];
+        let mut faults = Vec::new();
+        let mut active_groups = Vec::new();
+        for group in snapshot
+            .layer_groups
+            .iter()
+            .filter(|group| group.composition_id == plan.composition_id)
+        {
+            let scope = VideoEffectScope::Group { group_id: group.id };
+            match resolve_video_effect_chain(snapshot, &scope) {
+                Ok(Some(chain)) if resolved_chain_executes(&chain) => {
+                    active_groups.push((group.layer_ids.clone(), chain));
+                }
+                Ok(_) => {}
+                Err(fault) => faults.push(fault),
+            }
+        }
+        for layer in &plan.layers {
+            let group = active_groups
+                .iter()
+                .find(|(member_ids, _)| member_ids.contains(&layer.layer_id));
+            let Some((member_ids, chain)) = group else {
+                blend_composition_layer_onto(&mut output, layer, frames, width, height)?;
+                continue;
+            };
+            let first_visible_member = plan
+                .layers
+                .iter()
+                .find(|candidate| member_ids.contains(&candidate.layer_id))
+                .map(|candidate| candidate.layer_id);
+            if first_visible_member != Some(layer.layer_id) {
+                continue;
+            }
+            let group_layers = plan
+                .layers
+                .iter()
+                .filter(|candidate| member_ids.contains(&candidate.layer_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            let group_plan = CompositionPlan {
+                composition_id: plan.composition_id,
+                label: format!("{} Group", plan.label),
+                output_ids: Vec::new(),
+                master_opacity: plan.master_opacity,
+                blackout: plan.blackout,
+                layers: group_layers,
+            };
+            let group_frame = composite_rgba8(&group_plan, frames, width, height)?;
+            let (group_frame, group_faults) =
+                self.apply_resolved_effect_chain_to_frame(chain, group_frame, None);
+            faults.extend(group_faults);
+            for (destination, source) in output
+                .chunks_exact_mut(4)
+                .zip(group_frame.data.chunks_exact(4))
+            {
+                blend_pixel(destination, source, 1.0, &VideoBlendMode::Normal);
+            }
+        }
+        Ok((output, faults))
+    }
+
     pub fn prepare_output_frames(
         &mut self,
         snapshot: &VideoSnapshot,
@@ -2842,18 +3830,178 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<(), VideoPreviewError> {
+        let clip_runtime = VideoClipRuntimeSnapshot::default();
+        let faults = self.prepare_frames_with_effects(
+            snapshot,
+            &clip_runtime,
+            0,
+            requested_layer_ids,
+            width,
+            height,
+        )?;
+        self.record_effect_faults(faults, snapshot);
+        Ok(())
+    }
+
+    fn prepare_frames_with_effects(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        clip_runtime: &VideoClipRuntimeSnapshot,
+        project_render_epoch: u64,
+        requested_layer_ids: &[VideoLayerId],
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<VideoEffectStageFault>, VideoPreviewError> {
         let layer_ids = snapshot
             .layers
             .iter()
             .map(|layer| layer.id)
             .collect::<Vec<_>>();
-        self.frame_provider.retain_layers(&layer_ids);
+        let mut retained_inputs = Vec::new();
+        for layer in &snapshot.layers {
+            if !requested_layer_ids.contains(&layer.id) {
+                continue;
+            }
+            let runtime_layer = clip_runtime
+                .layers
+                .iter()
+                .find(|runtime| runtime.layer_id == layer.id);
+            if let Some(transition) = runtime_layer.and_then(|runtime| runtime.transition.as_ref())
+            {
+                for (slot_id, position_ms) in [
+                    (
+                        transition.outgoing_slot_id,
+                        runtime_layer
+                            .map(|runtime| runtime.playhead_ms)
+                            .unwrap_or(0),
+                    ),
+                    (transition.incoming_slot_id, transition.incoming_playhead_ms),
+                ] {
+                    retained_inputs.push(video_render_input_for_clip_slot(
+                        snapshot,
+                        layer,
+                        slot_id,
+                        position_ms,
+                        project_render_epoch,
+                        width,
+                        height,
+                    )?);
+                }
+            } else {
+                retained_inputs.push(VideoRenderInput::legacy(VideoFrameRequest {
+                    layer_id: layer.id,
+                    label: layer.label.clone(),
+                    source: layer.source.clone(),
+                    position_ms: layer.state.position_ms,
+                    width,
+                    height,
+                }));
+            }
+        }
+        self.frame_provider.retain_inputs(&retained_inputs);
         self.runtime.sync_layers(&layer_ids);
         self.reset_isf_stack_metrics();
-        let mut isf_stage_errors = Vec::new();
+        let mut effect_faults = Vec::new();
 
         for layer in &snapshot.layers {
             if !requested_layer_ids.contains(&layer.id) {
+                continue;
+            }
+            let runtime_layer = clip_runtime
+                .layers
+                .iter()
+                .find(|runtime| runtime.layer_id == layer.id);
+            if let Some(transition) = runtime_layer.and_then(|runtime| runtime.transition.as_ref())
+            {
+                let outgoing = video_render_input_for_clip_slot(
+                    snapshot,
+                    layer,
+                    transition.outgoing_slot_id,
+                    runtime_layer
+                        .map(|runtime| runtime.playhead_ms)
+                        .unwrap_or(0),
+                    project_render_epoch,
+                    width,
+                    height,
+                )?;
+                let incoming = video_render_input_for_clip_slot(
+                    snapshot,
+                    layer,
+                    transition.incoming_slot_id,
+                    transition.incoming_playhead_ms,
+                    project_render_epoch,
+                    width,
+                    height,
+                )?;
+                let outgoing_frame =
+                    self.frame_provider
+                        .frame_for_input(&outgoing)
+                        .map_err(|error| VideoPreviewError::RenderInput {
+                            key: outgoing.key,
+                            error,
+                        })?;
+                let incoming_frame =
+                    self.frame_provider
+                        .frame_for_input(&incoming)
+                        .map_err(|error| VideoPreviewError::RenderInput {
+                            key: incoming.key,
+                            error,
+                        })?;
+                let (outgoing_frame, outgoing_faults) = self.apply_clip_chain_to_frame(
+                    snapshot,
+                    layer.id,
+                    transition.outgoing_slot_id,
+                    outgoing_frame,
+                    Some(outgoing.key),
+                );
+                let (incoming_frame, incoming_faults) = self.apply_clip_chain_to_frame(
+                    snapshot,
+                    layer.id,
+                    transition.incoming_slot_id,
+                    incoming_frame,
+                    Some(incoming.key),
+                );
+                effect_faults.extend(outgoing_faults);
+                effect_faults.extend(incoming_faults);
+                let (base_outgoing, base_incoming, base_progress) =
+                    if transition.origin_slot_id == transition.outgoing_slot_id {
+                        (&outgoing_frame, &incoming_frame, transition.progress_millis)
+                    } else {
+                        (
+                            &incoming_frame,
+                            &outgoing_frame,
+                            1000u16.saturating_sub(transition.progress_millis),
+                        )
+                    };
+                let frame = transition_video_frames_rgba8(
+                    base_outgoing,
+                    base_incoming,
+                    transition.kind,
+                    base_progress,
+                )
+                .map_err(VideoRuntimeError::from)
+                .map_err(VideoPreviewError::Runtime)?;
+                let transition_scope = VideoEffectScope::Transition {
+                    owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id: layer.id },
+                };
+                let (frame, transition_faults) =
+                    match resolve_video_effect_chain(snapshot, &transition_scope) {
+                        Ok(Some(chain)) => {
+                            self.apply_resolved_effect_chain_to_frame(&chain, frame, None)
+                        }
+                        Ok(None) => (frame, Vec::new()),
+                        Err(fault) => (frame, vec![fault]),
+                    };
+                effect_faults.extend(transition_faults);
+                let (frame, layer_faults) = match resolve_effective_layer_chain(snapshot, layer) {
+                    Ok(Some(chain)) => {
+                        self.apply_resolved_effect_chain_to_frame(&chain, frame, None)
+                    }
+                    Ok(None) => (frame, Vec::new()),
+                    Err(fault) => (frame, vec![fault]),
+                };
+                effect_faults.extend(layer_faults);
+                self.runtime.push_frame(frame);
                 continue;
             }
             let frames = self
@@ -2861,32 +4009,188 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 .frames_for_layer(layer, width, height)
                 .map_err(VideoPreviewError::from)?;
             for frame in frames {
-                let (frame, frame_errors) = self.apply_isf_effect_to_frame(layer, frame);
-                for error in frame_errors {
-                    if !isf_stage_errors.contains(&error) {
-                        isf_stage_errors.push(error);
+                let active_slot_id = clip_runtime
+                    .layers
+                    .iter()
+                    .find(|runtime| runtime.layer_id == layer.id)
+                    .and_then(|runtime| runtime.active_slot_id);
+                let (frame, clip_faults) = match active_slot_id {
+                    Some(slot_id) => {
+                        let scope = VideoEffectScope::Clip {
+                            layer_id: layer.id,
+                            slot_id,
+                        };
+                        match resolve_video_effect_chain(snapshot, &scope) {
+                            Ok(Some(chain)) => {
+                                self.apply_resolved_effect_chain_to_frame(&chain, frame, None)
+                            }
+                            Ok(None) => (frame, Vec::new()),
+                            Err(fault) => (frame, vec![fault]),
+                        }
+                    }
+                    None => (frame, Vec::new()),
+                };
+                for fault in clip_faults {
+                    if !effect_faults.contains(&fault) {
+                        effect_faults.push(fault);
+                    }
+                }
+                let (frame, layer_faults) = match resolve_effective_layer_chain(snapshot, layer) {
+                    Ok(Some(chain)) => {
+                        self.apply_resolved_effect_chain_to_frame(&chain, frame, None)
+                    }
+                    Ok(None) => (frame, Vec::new()),
+                    Err(fault) => (frame, vec![fault]),
+                };
+                for fault in layer_faults {
+                    if !effect_faults.contains(&fault) {
+                        effect_faults.push(fault);
                     }
                 }
                 self.runtime.push_frame(frame);
             }
         }
-        self.last_isf_error = (!isf_stage_errors.is_empty()).then(|| {
-            isf_stage_errors
-                .iter()
-                .map(|error| {
-                    let layer_label = snapshot
-                        .layers
-                        .iter()
-                        .find(|layer| layer.id == error.layer_id)
-                        .map(|layer| layer.label.as_str());
-                    format_video_isf_stage_error(error, layer_label)
-                })
-                .collect::<Vec<_>>()
-                .join("; ")
-        });
-        self.last_isf_stage_errors = isf_stage_errors;
         self.last_render_input_isf_stage_errors.clear();
-        Ok(())
+        Ok(effect_faults)
+    }
+
+    fn apply_clip_chain_to_frame(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+        frame: VideoFrame,
+        key: Option<protocol::VideoRenderInputKey>,
+    ) -> (VideoFrame, Vec<VideoEffectStageFault>) {
+        let scope = VideoEffectScope::Clip { layer_id, slot_id };
+        match resolve_video_effect_chain(snapshot, &scope) {
+            Ok(Some(chain)) => self.apply_resolved_effect_chain_to_frame(&chain, frame, key),
+            Ok(None) => (frame, Vec::new()),
+            Err(fault) => (
+                frame,
+                vec![VideoEffectStageFault {
+                    render_input_key: key,
+                    ..fault
+                }],
+            ),
+        }
+    }
+
+    fn cached_isf_shader(
+        &mut self,
+        source: &Arc<str>,
+    ) -> Result<Arc<PreparedIsfShader>, IsfPrepareError> {
+        self.isf_shader_cache_clock = self.isf_shader_cache_clock.wrapping_add(1);
+        let last_used = self.isf_shader_cache_clock;
+        if let Some(entry) = self.isf_shader_cache.get_mut(source.as_ref()) {
+            entry.last_used = last_used;
+            return entry.value.clone();
+        }
+        if self.isf_shader_cache.len() >= ISF_SHADER_CACHE_CAPACITY {
+            if let Some(oldest) = self
+                .isf_shader_cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(source, _)| Arc::clone(source))
+            {
+                self.isf_shader_cache.remove(oldest.as_ref());
+            }
+        }
+        let value = prepare_isf_shader(source.as_ref()).map(Arc::new);
+        self.isf_shader_cache.insert(
+            Arc::clone(source),
+            CachedIsfShader {
+                value: value.clone(),
+                last_used,
+            },
+        );
+        value
+    }
+
+    fn apply_resolved_effect_chain_to_frame(
+        &mut self,
+        chain: &ResolvedVideoEffectChain,
+        frame: VideoFrame,
+        render_input_key: Option<protocol::VideoRenderInputKey>,
+    ) -> (VideoFrame, Vec<VideoEffectStageFault>) {
+        if !resolved_chain_executes(chain) {
+            return (frame, Vec::new());
+        }
+        let mut prepared_stages = Vec::new();
+        let mut faults = Vec::new();
+        for (stage_index, stage) in chain.stages.iter().enumerate() {
+            if !stage.enabled {
+                continue;
+            }
+            match self.cached_isf_shader(&stage.effect.source) {
+                Ok(shader) => {
+                    let controls =
+                        resolved_isf_control_values_from_controls(&shader, &stage.effect.controls);
+                    prepared_stages.push((stage_index, shader, controls));
+                }
+                Err(error) => faults.push(video_effect_fault(
+                    chain.scope.clone(),
+                    chain.chain_id,
+                    stage.stage_id,
+                    stage.effect_id,
+                    render_input_key,
+                    Some(stage_index),
+                    Some(stage.label.clone()),
+                    error.to_string(),
+                )),
+            }
+        }
+        if self.isf_runtime.is_none() {
+            self.isf_runtime = Some(IsfGpuRuntime::new());
+        }
+        let runtime = match self.isf_runtime.as_mut().expect("ISF runtime initialized") {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                for (stage_index, _, _) in &prepared_stages {
+                    let stage = &chain.stages[*stage_index];
+                    faults.push(video_effect_fault(
+                        chain.scope.clone(),
+                        chain.chain_id,
+                        stage.stage_id,
+                        stage.effect_id,
+                        render_input_key,
+                        Some(*stage_index),
+                        Some(stage.label.clone()),
+                        error.to_string(),
+                    ));
+                }
+                return (frame, faults);
+            }
+        };
+        if prepared_stages.is_empty() {
+            runtime.advance_stage_local_chain_without_prepared_stages();
+            return (frame, faults);
+        }
+        let stage_refs = prepared_stages
+            .iter()
+            .map(|(_, shader, controls)| (shader.as_ref(), controls.as_slice()))
+            .collect::<Vec<_>>();
+        let (rendered, runtime_failures) = runtime.apply_stack_stage_local(
+            &frame,
+            &stage_refs,
+            frame.pts_ms as f32 / 1_000.0,
+            frame.duration_ms as f32 / 1_000.0,
+        );
+        for (prepared_index, error) in runtime_failures {
+            let stage_index = prepared_stages[prepared_index].0;
+            let stage = &chain.stages[stage_index];
+            faults.push(video_effect_fault(
+                chain.scope.clone(),
+                chain.chain_id,
+                stage.stage_id,
+                stage.effect_id,
+                render_input_key,
+                Some(stage_index),
+                Some(stage.label.clone()),
+                error.to_string(),
+            ));
+        }
+        (rendered, faults)
     }
 
     fn apply_isf_effect_to_frame(
@@ -2897,112 +4201,94 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         let Some(effect) = layer.isf_effect.as_ref() else {
             return (frame, Vec::new());
         };
-        if 1 + effect.stack.len() > VIDEO_ISF_EFFECT_STACK_MAX_STAGES {
-            return (
-                frame,
-                vec![VideoIsfStageError {
-                    layer_id: layer.id,
-                    stage_index: None,
-                    stage_label: None,
-                    message: format!(
-                        "ISF stack has {} stages; the limit is {}",
-                        1 + effect.stack.len(),
-                        VIDEO_ISF_EFFECT_STACK_MAX_STAGES
-                    ),
-                }],
-            );
-        }
-        let stages = std::iter::once((
-            0_usize,
-            effect.enabled,
-            effect.label.as_str(),
-            &effect.source,
-            effect.controls.as_slice(),
-        ))
-        .chain(effect.stack.iter().enumerate().map(|(index, stage)| {
-            (
-                index + 1,
-                stage.enabled,
-                stage.label.as_str(),
-                &stage.source,
-                stage.controls.as_slice(),
-            )
-        }))
-        .filter(|(_, enabled, _, _, _)| *enabled)
-        .collect::<Vec<_>>();
-        if stages.is_empty() {
-            return (frame, Vec::new());
-        }
-
-        let mut prepared_stages = Vec::with_capacity(stages.len());
-        let mut stage_errors = Vec::new();
-        for (index, _, label, source, controls) in stages {
-            if !self.isf_shader_cache.contains_key(source.as_ref()) {
-                if self.isf_shader_cache.len() >= ISF_SHADER_CACHE_CAPACITY {
-                    self.isf_shader_cache.clear();
-                }
-                self.isf_shader_cache.insert(
-                    Arc::clone(source),
-                    prepare_isf_shader(source.as_ref()).map(Arc::new),
-                );
-            }
-            match self
-                .isf_shader_cache
-                .get(source.as_ref())
-                .expect("ISF shader cache entry inserted")
-                .clone()
-            {
-                Ok(shader) => {
-                    let values = resolved_isf_control_values_from_controls(&shader, controls);
-                    prepared_stages.push((shader, values));
-                }
-                Err(error) => stage_errors.push(VideoIsfStageError {
-                    layer_id: layer.id,
-                    stage_index: Some(index),
-                    stage_label: Some(label.to_string()),
-                    message: error.to_string(),
-                }),
-            }
-        }
-        if prepared_stages.is_empty() {
-            return (frame, stage_errors);
-        }
-        if self.isf_runtime.is_none() {
-            self.isf_runtime = Some(IsfGpuRuntime::new());
-        }
-        let runtime = match self.isf_runtime.as_mut().expect("ISF runtime initialized") {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                stage_errors.push(VideoIsfStageError {
-                    layer_id: layer.id,
-                    stage_index: None,
-                    stage_label: None,
-                    message: error.to_string(),
-                });
-                return (frame, stage_errors);
-            }
+        let scope = VideoEffectScope::Layer { layer_id: layer.id };
+        let chain = ResolvedVideoEffectChain {
+            chain_id: None,
+            scope,
+            bypassed: false,
+            stages: legacy_isf_stages(effect)
+                .into_iter()
+                .map(|effect| ResolvedVideoEffectStage {
+                    stage_id: None,
+                    effect_id: None,
+                    enabled: effect.enabled,
+                    label: effect.label.clone(),
+                    effect,
+                })
+                .collect(),
         };
-        let stage_refs = prepared_stages
+        let (frame, faults) = self.apply_resolved_effect_chain_to_frame(&chain, frame, None);
+        let errors = faults
+            .into_iter()
+            .map(|fault| VideoIsfStageError {
+                layer_id: layer.id,
+                stage_index: fault.stage_index,
+                stage_label: fault.stage_label,
+                message: fault.message,
+            })
+            .collect();
+        (frame, errors)
+    }
+
+    fn record_effect_faults(
+        &mut self,
+        faults: Vec<VideoEffectStageFault>,
+        snapshot: &VideoSnapshot,
+    ) {
+        self.last_isf_stage_errors = faults
             .iter()
-            .map(|(shader, controls)| (shader.as_ref(), controls.as_slice()))
-            .collect::<Vec<_>>();
-        match runtime.apply_stack(
-            &frame,
-            &stage_refs,
-            frame.pts_ms as f32 / 1_000.0,
-            frame.duration_ms as f32 / 1_000.0,
-        ) {
-            Ok(frame) => (frame, stage_errors),
-            Err(error) => {
-                stage_errors.push(VideoIsfStageError {
-                    layer_id: layer.id,
-                    stage_index: None,
-                    stage_label: None,
-                    message: error.to_string(),
-                });
-                (frame, stage_errors)
-            }
-        }
+            .filter_map(|fault| {
+                let layer_id = match fault.scope {
+                    VideoEffectScope::Layer { layer_id }
+                    | VideoEffectScope::Clip { layer_id, .. } => layer_id,
+                    _ => return None,
+                };
+                Some(VideoIsfStageError {
+                    layer_id,
+                    stage_index: fault.stage_index,
+                    stage_label: fault.stage_label.clone(),
+                    message: fault.message.clone(),
+                })
+            })
+            .collect();
+        self.last_isf_error = (!faults.is_empty()).then(|| {
+            faults
+                .iter()
+                .map(|fault| {
+                    let owner = match fault.scope {
+                        VideoEffectScope::Layer { layer_id }
+                        | VideoEffectScope::Clip { layer_id, .. } => snapshot
+                            .layers
+                            .iter()
+                            .find(|layer| layer.id == layer_id)
+                            .map(|layer| layer.label.as_str()),
+                        _ => None,
+                    };
+                    let legacy = VideoIsfStageError {
+                        layer_id: match fault.scope {
+                            VideoEffectScope::Layer { layer_id }
+                            | VideoEffectScope::Clip { layer_id, .. } => layer_id,
+                            _ => 0,
+                        },
+                        stage_index: fault.stage_index,
+                        stage_label: fault.stage_label.clone(),
+                        message: fault.message.clone(),
+                    };
+                    if owner.is_some() {
+                        format_video_isf_stage_error(&legacy, owner)
+                    } else {
+                        format!("{:?}: {}", fault.scope, fault.message)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        });
+        self.last_effect_stage_faults = faults;
+    }
+
+    fn clear_full_output_effect_diagnostics(&mut self, snapshot: &VideoSnapshot) {
+        self.last_render_input_isf_stage_errors.clear();
+        self.record_effect_faults(Vec::new(), snapshot);
     }
 
     pub fn isf_pipeline_count(&self) -> usize {
@@ -3051,6 +4337,14 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         &self.last_render_input_isf_stage_errors
     }
 
+    pub fn last_effect_stage_faults(&self) -> &[VideoEffectStageFault] {
+        &self.last_effect_stage_faults
+    }
+
+    pub fn last_output_render_error(&self) -> Option<&str> {
+        self.last_output_render_error.as_deref()
+    }
+
     pub fn queue_count(&self) -> usize {
         self.runtime.queue_count()
     }
@@ -3070,6 +4364,307 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
     pub fn frame_provider_mut(&mut self) -> &mut P {
         &mut self.frame_provider
     }
+}
+
+fn video_render_input_for_clip_slot(
+    snapshot: &VideoSnapshot,
+    layer: &VideoLayerSummary,
+    slot_id: VideoClipSlotId,
+    position_ms: u64,
+    project_render_epoch: u64,
+    width: u32,
+    height: u32,
+) -> Result<VideoRenderInput, VideoPreviewError> {
+    let slot = layer
+        .clip_slots
+        .iter()
+        .find(|slot| slot.id == slot_id)
+        .ok_or(VideoPreviewError::MissingTransitionSlot {
+            layer_id: layer.id,
+            slot_id,
+        })?;
+    let asset = snapshot
+        .media_assets
+        .iter()
+        .find(|asset| asset.id == slot.media_asset_id)
+        .ok_or(VideoPreviewError::MissingTransitionAsset {
+            layer_id: layer.id,
+            asset_id: slot.media_asset_id,
+        })?;
+    Ok(VideoRenderInput::new(
+        protocol::VideoRenderInputKey {
+            project_render_epoch,
+            input_id: protocol::VideoRenderInputId(slot_id.0),
+        },
+        VideoFrameRequest {
+            layer_id: layer.id,
+            label: asset.label.clone(),
+            source: asset.source.clone(),
+            position_ms,
+            width,
+            height,
+        },
+    )
+    .with_clip_slot_id(Some(slot_id)))
+}
+
+fn crossfade_video_frames_rgba8(
+    outgoing: &VideoFrame,
+    incoming: &VideoFrame,
+    progress_millis: u16,
+) -> Result<VideoFrame, CpuCompositeError> {
+    let outgoing = convert_frame_to_rgba8(outgoing)?;
+    let incoming = convert_frame_to_rgba8(incoming)?;
+    if outgoing.width != incoming.width
+        || outgoing.height != incoming.height
+        || outgoing.data.len() != incoming.data.len()
+    {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: outgoing.layer_id,
+        });
+    }
+    let incoming_weight = u32::from(progress_millis.min(1000));
+    let outgoing_weight = 1000 - incoming_weight;
+    let data = outgoing
+        .data
+        .iter()
+        .zip(&incoming.data)
+        .map(|(outgoing, incoming)| {
+            ((u32::from(*outgoing) * outgoing_weight
+                + u32::from(*incoming) * incoming_weight
+                + 500)
+                / 1000) as u8
+        })
+        .collect();
+    Ok(VideoFrame {
+        layer_id: outgoing.layer_id,
+        width: outgoing.width,
+        height: outgoing.height,
+        pts_ms: outgoing.pts_ms.max(incoming.pts_ms),
+        duration_ms: outgoing.duration_ms.min(incoming.duration_ms),
+        format: VideoPixelFormat::Rgba8,
+        data,
+    })
+}
+
+fn transition_video_frames_rgba8(
+    outgoing: &VideoFrame,
+    incoming: &VideoFrame,
+    kind: protocol::VideoClipTakeKind,
+    progress_millis: u16,
+) -> Result<VideoFrame, CpuCompositeError> {
+    match kind {
+        protocol::VideoClipTakeKind::Cut => Ok(convert_frame_to_rgba8(incoming)?),
+        protocol::VideoClipTakeKind::Crossfade | protocol::VideoClipTakeKind::Custom => {
+            crossfade_video_frames_rgba8(outgoing, incoming, progress_millis)
+        }
+        protocol::VideoClipTakeKind::Dip => {
+            dip_video_frames_rgba8(outgoing, incoming, progress_millis)
+        }
+        protocol::VideoClipTakeKind::Wipe => {
+            wipe_video_frames_rgba8(outgoing, incoming, progress_millis, false)
+        }
+        protocol::VideoClipTakeKind::Luma => {
+            wipe_video_frames_rgba8(outgoing, incoming, progress_millis, true)
+        }
+        protocol::VideoClipTakeKind::Displacement => {
+            displaced_video_frames_rgba8(outgoing, incoming, progress_millis)
+        }
+        protocol::VideoClipTakeKind::Blur => {
+            blurred_video_frames_rgba8(outgoing, incoming, progress_millis)
+        }
+        protocol::VideoClipTakeKind::Glitch => {
+            glitch_video_frames_rgba8(outgoing, incoming, progress_millis)
+        }
+    }
+}
+
+fn compatible_rgba8_transition_frames(
+    outgoing: &VideoFrame,
+    incoming: &VideoFrame,
+) -> Result<(VideoFrame, VideoFrame), CpuCompositeError> {
+    let outgoing = convert_frame_to_rgba8(outgoing)?;
+    let incoming = convert_frame_to_rgba8(incoming)?;
+    if outgoing.width != incoming.width
+        || outgoing.height != incoming.height
+        || outgoing.data.len() != incoming.data.len()
+    {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: outgoing.layer_id,
+        });
+    }
+    Ok((outgoing, incoming))
+}
+
+fn transition_frame_like(
+    outgoing: &VideoFrame,
+    incoming: &VideoFrame,
+    data: Vec<u8>,
+) -> VideoFrame {
+    VideoFrame {
+        layer_id: outgoing.layer_id,
+        width: outgoing.width,
+        height: outgoing.height,
+        pts_ms: outgoing.pts_ms.max(incoming.pts_ms),
+        duration_ms: outgoing.duration_ms.min(incoming.duration_ms),
+        format: VideoPixelFormat::Rgba8,
+        data,
+    }
+}
+
+fn dip_video_frames_rgba8(
+    outgoing: &VideoFrame,
+    incoming: &VideoFrame,
+    progress_millis: u16,
+) -> Result<VideoFrame, CpuCompositeError> {
+    let (outgoing, incoming) = compatible_rgba8_transition_frames(outgoing, incoming)?;
+    let progress = u32::from(progress_millis.min(1000));
+    let (source, weight) = if progress < 500 {
+        (&outgoing, 1000 - progress * 2)
+    } else {
+        (&incoming, (progress - 500) * 2)
+    };
+    let data = source
+        .data
+        .chunks_exact(4)
+        .flat_map(|pixel| {
+            [
+                ((u32::from(pixel[0]) * weight + 500) / 1000) as u8,
+                ((u32::from(pixel[1]) * weight + 500) / 1000) as u8,
+                ((u32::from(pixel[2]) * weight + 500) / 1000) as u8,
+                pixel[3],
+            ]
+        })
+        .collect();
+    Ok(transition_frame_like(&outgoing, &incoming, data))
+}
+
+fn wipe_video_frames_rgba8(
+    outgoing: &VideoFrame,
+    incoming: &VideoFrame,
+    progress_millis: u16,
+    luminance_ordered: bool,
+) -> Result<VideoFrame, CpuCompositeError> {
+    let (outgoing, incoming) = compatible_rgba8_transition_frames(outgoing, incoming)?;
+    let progress = u32::from(progress_millis.min(1000));
+    if progress == 0 {
+        return Ok(outgoing);
+    }
+    if progress == 1000 {
+        return Ok(incoming);
+    }
+    let width = outgoing.width.max(1);
+    let data = outgoing
+        .data
+        .chunks_exact(4)
+        .zip(incoming.data.chunks_exact(4))
+        .enumerate()
+        .flat_map(|(index, (out_pixel, in_pixel))| {
+            let threshold = if luminance_ordered {
+                (u32::from(in_pixel[0]) * 2126
+                    + u32::from(in_pixel[1]) * 7152
+                    + u32::from(in_pixel[2]) * 722)
+                    / 2550
+            } else {
+                ((index as u32 % width) + 1) * 1000 / width
+            };
+            let selected = if threshold <= progress {
+                in_pixel
+            } else {
+                out_pixel
+            };
+            [selected[0], selected[1], selected[2], selected[3]]
+        })
+        .collect();
+    Ok(transition_frame_like(&outgoing, &incoming, data))
+}
+
+fn shifted_frame_data(frame: &VideoFrame, shift: i32) -> Vec<u8> {
+    let width = frame.width.max(1) as i32;
+    let height = frame.height as usize;
+    let mut data = vec![0; frame.data.len()];
+    for y in 0..height {
+        for x in 0..width as usize {
+            let source_x = (x as i32 - shift).rem_euclid(width) as usize;
+            let from = (y * width as usize + source_x) * 4;
+            let to = (y * width as usize + x) * 4;
+            data[to..to + 4].copy_from_slice(&frame.data[from..from + 4]);
+        }
+    }
+    data
+}
+
+fn displaced_video_frames_rgba8(
+    outgoing: &VideoFrame,
+    incoming: &VideoFrame,
+    progress_millis: u16,
+) -> Result<VideoFrame, CpuCompositeError> {
+    let (mut outgoing, mut incoming) = compatible_rgba8_transition_frames(outgoing, incoming)?;
+    let progress = i32::from(progress_millis.min(1000));
+    let span = outgoing.width.min(64) as i32;
+    outgoing.data = shifted_frame_data(&outgoing, -(span * progress / 1000));
+    incoming.data = shifted_frame_data(&incoming, span * (1000 - progress) / 1000);
+    crossfade_video_frames_rgba8(&outgoing, &incoming, progress_millis)
+}
+
+fn box_blur_rgba8(frame: &VideoFrame, radius: usize) -> Vec<u8> {
+    if radius == 0 || frame.width == 0 || frame.height == 0 {
+        return frame.data.clone();
+    }
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+    let mut data = vec![0; frame.data.len()];
+    for y in 0..height {
+        for x in 0..width {
+            for channel in 0..4 {
+                let mut sum = 0u32;
+                let mut count = 0u32;
+                for sample_x in x.saturating_sub(radius)..=(x + radius).min(width - 1) {
+                    sum += u32::from(frame.data[(y * width + sample_x) * 4 + channel]);
+                    count += 1;
+                }
+                data[(y * width + x) * 4 + channel] = (sum / count) as u8;
+            }
+        }
+    }
+    data
+}
+
+fn blurred_video_frames_rgba8(
+    outgoing: &VideoFrame,
+    incoming: &VideoFrame,
+    progress_millis: u16,
+) -> Result<VideoFrame, CpuCompositeError> {
+    let (mut outgoing, mut incoming) = compatible_rgba8_transition_frames(outgoing, incoming)?;
+    let progress = u32::from(progress_millis.min(1000));
+    outgoing.data = box_blur_rgba8(&outgoing, (progress * 6 / 1000) as usize);
+    incoming.data = box_blur_rgba8(&incoming, ((1000 - progress) * 6 / 1000) as usize);
+    crossfade_video_frames_rgba8(&outgoing, &incoming, progress_millis)
+}
+
+fn glitch_video_frames_rgba8(
+    outgoing: &VideoFrame,
+    incoming: &VideoFrame,
+    progress_millis: u16,
+) -> Result<VideoFrame, CpuCompositeError> {
+    let (outgoing, mut incoming) = compatible_rgba8_transition_frames(outgoing, incoming)?;
+    let progress = u32::from(progress_millis.min(1000));
+    let width = incoming.width.max(1) as usize;
+    let height = incoming.height as usize;
+    let mut data = incoming.data.clone();
+    for y in 0..height {
+        let band = ((y as u32 * 17 + progress / 25) % 7) as i32 - 3;
+        let shift =
+            band * ((1000 - (progress as i32 - 500).unsigned_abs() * 2) as i32).max(0) / 250;
+        for x in 0..width {
+            let source_x = (x as i32 - shift).rem_euclid(width as i32) as usize;
+            let from = (y * width + source_x) * 4;
+            let to = (y * width + x) * 4;
+            data[to..to + 4].copy_from_slice(&incoming.data[from..from + 4]);
+        }
+    }
+    incoming.data = data;
+    crossfade_video_frames_rgba8(&outgoing, &incoming, progress_millis)
 }
 
 impl StillImageFrameCache {
@@ -3181,6 +4776,18 @@ fn video_output_black_frame(width: u32, height: u32) -> VideoFrame {
     }
 }
 
+fn video_output_transparent_black_frame(width: u32, height: u32) -> VideoFrame {
+    VideoFrame {
+        layer_id: 0,
+        width,
+        height,
+        pts_ms: 0,
+        duration_ms: 0,
+        format: VideoPixelFormat::Rgba8,
+        data: [0, 0, 0, 0].repeat(width as usize * height as usize),
+    }
+}
+
 pub fn composite_rgba8(
     plan: &CompositionPlan,
     frames: &[VideoFrame],
@@ -3193,32 +4800,7 @@ pub fn composite_rgba8(
     let mut output = vec![0u8; width as usize * height as usize * 4];
 
     for layer in &plan.layers {
-        let frame = frames
-            .iter()
-            .filter(|frame| frame.layer_id == layer.layer_id)
-            .max_by_key(|frame| frame.pts_ms)
-            .ok_or(CpuCompositeError::MissingFrame {
-                layer_id: layer.layer_id,
-            })?;
-        let normalized_frame;
-        let frame = if frame.format == VideoPixelFormat::Rgba8 {
-            validate_rgba_frame_size(frame)?;
-            frame
-        } else {
-            normalized_frame = convert_frame_to_rgba8(frame)?;
-            &normalized_frame
-        };
-        blend_transformed_rgba8(
-            &mut output,
-            frame,
-            width,
-            height,
-            layer.opacity.clamp(0.0, 1.0),
-            &layer.blend_mode,
-            &layer.transform,
-            &layer.color,
-            &layer.fx,
-        );
+        blend_composition_layer_onto(&mut output, layer, frames, width, height)?;
     }
 
     Ok(VideoFrame {
@@ -3241,6 +4823,42 @@ pub fn composite_rgba8(
         format: VideoPixelFormat::Rgba8,
         data: output,
     })
+}
+
+fn blend_composition_layer_onto(
+    output: &mut [u8],
+    layer: &CompositionLayerPlan,
+    frames: &[VideoFrame],
+    width: u32,
+    height: u32,
+) -> Result<(), CpuCompositeError> {
+    let frame = frames
+        .iter()
+        .filter(|frame| frame.layer_id == layer.layer_id)
+        .max_by_key(|frame| frame.pts_ms)
+        .ok_or(CpuCompositeError::MissingFrame {
+            layer_id: layer.layer_id,
+        })?;
+    let normalized_frame;
+    let frame = if frame.format == VideoPixelFormat::Rgba8 {
+        validate_rgba_frame_size(frame)?;
+        frame
+    } else {
+        normalized_frame = convert_frame_to_rgba8(frame)?;
+        &normalized_frame
+    };
+    blend_transformed_rgba8(
+        output,
+        frame,
+        width,
+        height,
+        layer.opacity.clamp(0.0, 1.0),
+        &layer.blend_mode,
+        &layer.transform,
+        &layer.color,
+        &layer.fx,
+    );
+    Ok(())
 }
 
 /// Mixes explicitly keyed runtime inputs. A repeated `layer_id` is valid: the
@@ -4113,6 +5731,33 @@ impl ExternalVideoTransportRuntime {
         plans: &ExternalVideoIoRoutePlans,
         driver: &mut D,
     ) -> ExternalVideoTransportSyncReport {
+        self.sync_routes_with_driver_and_role(plans, driver, MachineOutputRole::Both)
+    }
+
+    pub fn sync_routes_with_driver_and_role<D: ExternalVideoTransportDriver>(
+        &mut self,
+        plans: &ExternalVideoIoRoutePlans,
+        driver: &mut D,
+        role: MachineOutputRole,
+    ) -> ExternalVideoTransportSyncReport {
+        self.sync_routes_with_driver_and_role_with_start_admission(plans, driver, role, |_| Ok(()))
+    }
+
+    /// Synchronize routes while allowing the owner to re-admit external
+    /// resource creation after every stop phase. The callback is deliberately
+    /// between stop and start: a route replacement must never create a new
+    /// sender/window using an activation token that a teardown transition has
+    /// already invalidated.
+    pub fn sync_routes_with_driver_and_role_with_start_admission<
+        D: ExternalVideoTransportDriver,
+        F: FnMut(&mut D) -> Result<(), String>,
+    >(
+        &mut self,
+        plans: &ExternalVideoIoRoutePlans,
+        driver: &mut D,
+        role: MachineOutputRole,
+        mut admit_start: F,
+    ) -> ExternalVideoTransportSyncReport {
         let mut desired = Vec::new();
         let mut blocked = Vec::new();
         let mut idle = Vec::new();
@@ -4136,7 +5781,12 @@ impl ExternalVideoTransportRuntime {
 
         for output in &plans.outputs {
             let route = external_video_output_transport_route(output);
-            if output.ready && output.live {
+            if !role.video_allowed() {
+                blocked.push(ExternalVideoTransportBlockedRoute {
+                    route,
+                    issue: "External video output blocked by machine output role".to_string(),
+                });
+            } else if output.ready && output.live {
                 push_unique_transport_route(&mut desired, route);
             } else if !output.ready {
                 blocked.push(ExternalVideoTransportBlockedRoute {
@@ -4186,16 +5836,37 @@ impl ExternalVideoTransportRuntime {
                 }
             }
         }
-        for route in &started {
-            match driver.start_route(route) {
-                Ok(()) => {
-                    push_unique_transport_route(&mut active_routes, route.clone());
-                    started_ok.push(route.clone());
+        if stop_failed.is_empty() {
+            if let Err(error) = admit_start(driver) {
+                for route in &started {
+                    start_failed.push(ExternalVideoTransportFailedRoute {
+                        route: route.clone(),
+                        issue: format!(
+                            "External video start admission was denied after route stop: {error}"
+                        ),
+                    });
                 }
-                Err(error) => start_failed.push(ExternalVideoTransportFailedRoute {
+            } else {
+                for route in &started {
+                    match driver.start_route(route) {
+                        Ok(()) => {
+                            push_unique_transport_route(&mut active_routes, route.clone());
+                            started_ok.push(route.clone());
+                        }
+                        Err(error) => start_failed.push(ExternalVideoTransportFailedRoute {
+                            route: route.clone(),
+                            issue: error.message,
+                        }),
+                    }
+                }
+            }
+        } else {
+            for route in &started {
+                start_failed.push(ExternalVideoTransportFailedRoute {
                     route: route.clone(),
-                    issue: error.message,
-                }),
+                    issue: "External video start was withheld because route teardown failed"
+                        .to_string(),
+                });
             }
         }
 
@@ -4324,6 +5995,79 @@ pub fn render_video_output_test_pattern(
         video_output_test_pattern(width, height, output_id),
         &plan.mapping,
     ))
+}
+
+fn video_layer_transition_target_ids(
+    snapshot: &VideoSnapshot,
+    target: &VideoLayerTransitionTarget,
+) -> Result<Vec<VideoLayerId>, VideoPreviewError> {
+    match target {
+        VideoLayerTransitionTarget::Layer { layer_id } => Ok(vec![*layer_id]),
+        VideoLayerTransitionTarget::Group { group_id } => snapshot
+            .layer_groups
+            .iter()
+            .find(|group| group.id == *group_id)
+            .map(|group| group.layer_ids.clone())
+            .ok_or_else(|| {
+                VideoPreviewError::InvalidLayerTransition(format!(
+                    "Video transition references missing group {}",
+                    group_id.0
+                ))
+            }),
+    }
+}
+
+fn video_layer_transition_curve_progress(
+    curve: VideoLayerTransitionCurve,
+    progress_millis: u16,
+) -> f32 {
+    let p = f32::from(progress_millis.min(1000)) / 1000.0;
+    match curve {
+        VideoLayerTransitionCurve::Linear => p,
+        VideoLayerTransitionCurve::EaseIn => p * p,
+        VideoLayerTransitionCurve::EaseOut => 1.0 - (1.0 - p) * (1.0 - p),
+        VideoLayerTransitionCurve::EaseInOut => p * p * (3.0 - 2.0 * p),
+    }
+}
+
+fn apply_video_layer_transition_weights(
+    snapshot: &VideoSnapshot,
+    runtime: &VideoLayerTransitionRuntimeSnapshot,
+    plan: &mut CompositionPlan,
+) -> Result<(), VideoPreviewError> {
+    validate_video_layer_transition_runtime(runtime, snapshot)
+        .map_err(VideoPreviewError::InvalidLayerTransition)?;
+    for active in &runtime.buses {
+        let Some(bus) = snapshot
+            .transition_buses
+            .iter()
+            .find(|bus| bus.id == active.bus_id && bus.composition_id == plan.composition_id)
+        else {
+            continue;
+        };
+        let from_ids = video_layer_transition_target_ids(snapshot, &active.from)?;
+        let to_ids = video_layer_transition_target_ids(snapshot, &active.to)?;
+        let mut member_ids = Vec::new();
+        for member in &bus.members {
+            member_ids.extend(video_layer_transition_target_ids(snapshot, member)?);
+        }
+        let progress = video_layer_transition_curve_progress(active.curve, active.progress_millis);
+        for layer in &mut plan.layers {
+            if !member_ids.contains(&layer.layer_id) {
+                continue;
+            }
+            let weight = if from_ids.contains(&layer.layer_id) {
+                1.0 - progress
+            } else if to_ids.contains(&layer.layer_id) {
+                progress
+            } else {
+                0.0
+            };
+            layer.opacity = (layer.opacity * weight).clamp(0.0, 1.0);
+        }
+    }
+    plan.layers.retain(|layer| layer.opacity > 0.0);
+    Ok(())
 }
 
 fn build_composition_plan(
@@ -6006,6 +7750,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6052,6 +7800,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6101,6 +7853,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6170,6 +7926,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6254,6 +8014,10 @@ mod tests {
                 isf_effect: Some(effect),
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6371,6 +8135,10 @@ mod tests {
                 }),
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6440,6 +8208,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6517,6 +8289,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6611,6 +8387,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6708,6 +8488,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -6986,6 +8770,10 @@ mod tests {
                 },
             ],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 7,
                 label: "Program".to_string(),
@@ -7329,6 +9117,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -7873,6 +9665,10 @@ mod tests {
                 },
             ],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: vec![
                 VideoOutputSummary {
@@ -7995,6 +9791,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: vec![VideoOutputSummary {
                 id: 11,
@@ -8114,6 +9914,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: vec![VideoOutputSummary {
                 id: 11,
@@ -8202,6 +10006,62 @@ mod tests {
                 "stop:Output:spout:Syndocal Stage".to_string()
             ]
         );
+
+        snapshot.outputs[0].blackout = false;
+        let rearmed_plans = build_external_video_io_route_plans(&snapshot, &status);
+        let rearmed = runtime.sync_routes_with_driver_and_role_with_start_admission(
+            &rearmed_plans,
+            &mut driver,
+            MachineOutputRole::Both,
+            |driver| {
+                driver.events.push("admit".to_string());
+                Ok(())
+            },
+        );
+        assert_eq!(rearmed.started.len(), 1);
+        assert_eq!(
+            driver.events,
+            vec![
+                "start:Output:spout:Syndocal Stage".to_string(),
+                "stop:Output:spout:Syndocal Stage".to_string(),
+                "admit".to_string(),
+                "start:Output:spout:Syndocal Stage".to_string(),
+            ]
+        );
+
+        snapshot.outputs[0].endpoint_name = Some("Syndocal Stage B".to_string());
+        let replacement_plans = build_external_video_io_route_plans(&snapshot, &status);
+        let replacement = runtime.sync_routes_with_driver_and_role_with_start_admission(
+            &replacement_plans,
+            &mut driver,
+            MachineOutputRole::Both,
+            |driver| {
+                driver.events.push("ack-old-teardown".to_string());
+                Ok(())
+            },
+        );
+        assert_eq!(replacement.stopped.len(), 1);
+        assert_eq!(replacement.started.len(), 1);
+        assert_eq!(
+            &driver.events[4..],
+            &[
+                "stop:Output:spout:Syndocal Stage".to_string(),
+                "ack-old-teardown".to_string(),
+                "start:Output:spout:Syndocal Stage B".to_string(),
+            ]
+        );
+        let lighting_only = runtime.sync_routes_with_driver_and_role(
+            &replacement_plans,
+            &mut driver,
+            MachineOutputRole::Lighting,
+        );
+        assert!(lighting_only.started.is_empty());
+        assert_eq!(lighting_only.stopped, replacement.started);
+        assert!(lighting_only
+            .blocked
+            .iter()
+            .any(|route| route.route.direction == ExternalVideoTransportDirection::Output));
+        assert!(runtime.active_routes().is_empty());
     }
 
     #[test]
@@ -8242,6 +10102,10 @@ mod tests {
         let mut snapshot = VideoSnapshot {
             layers: Vec::new(),
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: vec![VideoOutputSummary {
                 id: 11,
@@ -8311,6 +10175,26 @@ mod tests {
         assert!(stop_failed.stop_failed[0].issue.contains("cannot stop"));
         assert_eq!(stop_failed.active_count, 1);
         assert_eq!(runtime.active_routes().len(), 1);
+
+        snapshot.outputs[0].blackout = false;
+        snapshot.outputs[0].endpoint_name = Some("Syndocal Stage B".to_string());
+        let replacement_plans = build_external_video_io_route_plans(&snapshot, &status);
+        let withheld_start = runtime.sync_routes_with_driver_and_role_with_start_admission(
+            &replacement_plans,
+            &mut FailableTransportDriver {
+                fail_start: false,
+                fail_stop: true,
+            },
+            MachineOutputRole::Both,
+            |_| panic!("start admission must not run after a failed stop"),
+        );
+        assert!(withheld_start.started.is_empty());
+        assert_eq!(withheld_start.stop_failed.len(), 1);
+        assert_eq!(withheld_start.start_failed.len(), 1);
+        assert!(withheld_start.start_failed[0]
+            .issue
+            .contains("withheld because route teardown failed"));
+        assert_eq!(runtime.active_routes().len(), 1);
     }
 
     #[test]
@@ -8361,6 +10245,10 @@ mod tests {
                 },
             ],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 5,
                 label: "Output A".to_string(),
@@ -8407,6 +10295,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -8470,6 +10362,10 @@ mod tests {
                 },
             ],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -8555,6 +10451,10 @@ mod tests {
                 },
             ],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -8601,6 +10501,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 1,
                 label: "Main".to_string(),
@@ -8665,6 +10569,10 @@ mod tests {
         let snapshot = VideoSnapshot {
             layers: vec![layer(1, "Back"), layer(2, "Middle"), layer(3, "Front")],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: vec![
                 CompositionSummary {
                     id: 1,
@@ -8763,6 +10671,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 1,
                 label: "Main".to_string(),
@@ -8853,6 +10765,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -8930,6 +10846,10 @@ mod tests {
         let mut snapshot = VideoSnapshot {
             layers: vec![layer(1), layer(2)],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 8,
                 label: "Screen".to_string(),
@@ -8973,10 +10893,7 @@ mod tests {
 
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![2, 0, 0, 255, 2, 0, 0, 255]);
-        assert_eq!(
-            renderer.frame_provider().retained,
-            vec![vec![1, 2], vec![1, 2]]
-        );
+        assert_eq!(renderer.frame_provider().retained, vec![vec![2], vec![2]]);
         assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
 
         snapshot.outputs[0].blackout = true;
@@ -8985,20 +10902,14 @@ mod tests {
         assert!(prepared.frames.is_empty());
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
-        assert_eq!(
-            renderer.frame_provider().retained,
-            vec![vec![1, 2], vec![1, 2]]
-        );
+        assert_eq!(renderer.frame_provider().retained, vec![vec![2], vec![2]]);
         assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
 
         snapshot.outputs[0].blackout = false;
         snapshot.outputs[0].enabled = false;
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
-        assert_eq!(
-            renderer.frame_provider().retained,
-            vec![vec![1, 2], vec![1, 2]]
-        );
+        assert_eq!(renderer.frame_provider().retained, vec![vec![2], vec![2]]);
         assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
     }
 
@@ -9051,6 +10962,10 @@ mod tests {
                 isf_effect: None,
             }],
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 1,
                 label: "Main".to_string(),
@@ -9251,6 +11166,10 @@ mod tests {
         let mut snapshot = VideoSnapshot {
             layers: Vec::new(),
             media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
             compositions: Vec::new(),
             outputs: vec![VideoOutputSummary {
                 id: 9,
@@ -10019,5 +11938,1767 @@ mod tests {
         );
         decoder.retain_inputs(&[second]);
         assert_eq!(decoder.cache_len(), 1);
+    }
+
+    #[derive(Default)]
+    struct C1SolidFrameProvider {
+        pixels: HashMap<VideoLayerId, [u8; 4]>,
+        fail: bool,
+    }
+
+    impl VideoFrameProvider for C1SolidFrameProvider {
+        fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+        fn frame_for_layer(
+            &mut self,
+            layer: &VideoLayerSummary,
+            width: u32,
+            height: u32,
+        ) -> Result<VideoFrame, VideoFrameProviderError> {
+            if self.fail {
+                return Err(VideoFrameProviderError::Decode {
+                    layer_id: layer.id,
+                    label: layer.label.clone(),
+                    error: VideoDecodeError::Decode {
+                        layer_id: layer.id,
+                        label: layer.label.clone(),
+                        message: "injected C1 decode failure".to_string(),
+                    },
+                });
+            }
+            let pixel = self
+                .pixels
+                .get(&layer.id)
+                .copied()
+                .unwrap_or([0, 0, 0, 255]);
+            Ok(VideoFrame {
+                layer_id: layer.id,
+                width,
+                height,
+                pts_ms: layer.state.position_ms,
+                duration_ms: 16,
+                format: VideoPixelFormat::Rgba8,
+                data: pixel.repeat(width as usize * height as usize),
+            })
+        }
+    }
+
+    fn c1_test_layer(id: VideoLayerId, blend_mode: VideoBlendMode) -> VideoLayerSummary {
+        VideoLayerSummary {
+            id,
+            label: format!("Layer {id}"),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some(format!("layer-{id}.mp4")),
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            media_asset_id: None,
+            blend_mode,
+            state: VideoLayerState::default(),
+            isf_effect: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
+        }
+    }
+
+    fn c1_test_snapshot(layers: Vec<VideoLayerSummary>) -> VideoSnapshot {
+        let layer_ids = layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
+        VideoSnapshot {
+            layers,
+            media_assets: Vec::new(),
+            effect_chains: Vec::new(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: Vec::new(),
+            compositions: vec![CompositionSummary {
+                id: 70,
+                label: "C1 Composition".to_string(),
+                layer_ids,
+                output_ids: vec![80],
+            }],
+            outputs: vec![VideoOutputSummary {
+                id: 80,
+                label: "C1 Output".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: true,
+                composition_id: 70,
+                fullscreen: false,
+                monitor_id: Some(0),
+                width: 1,
+                height: 1,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: VideoOutputMapping::default(),
+            }],
+            mapping_presets: Vec::new(),
+            auto_vj: AutoVjSnapshot::default(),
+            master_opacity: 1.0,
+            blackout: false,
+        }
+    }
+
+    fn c1_chain(
+        chain_id: u64,
+        scope: VideoEffectScope,
+        bypassed: bool,
+        effects: Vec<VideoIsfEffectSummary>,
+    ) -> VideoEffectChainSummary {
+        VideoEffectChainSummary {
+            id: VideoEffectChainId(chain_id),
+            scope,
+            bypassed,
+            stages: effects
+                .into_iter()
+                .enumerate()
+                .map(|(index, effect)| protocol::VideoEffectStageSummary {
+                    id: VideoEffectStageId(chain_id * 100 + index as u64 + 1),
+                    enabled: effect.enabled,
+                    label: effect.label.clone(),
+                    effect: protocol::VideoEffectSummary {
+                        id: VideoEffectId(chain_id * 1_000 + index as u64 + 1),
+                        kind: VideoEffectKind::Isf { effect },
+                    },
+                })
+                .collect(),
+        }
+    }
+
+    fn c1_invalid_effect(label: &str) -> VideoIsfEffectSummary {
+        VideoIsfEffectSummary {
+            enabled: true,
+            label: label.to_string(),
+            source: Arc::<str>::from(format!("invalid ISF source for {label}")),
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: Vec::new(),
+            stack: Vec::new(),
+        }
+    }
+
+    fn c1_disabled_legacy_stack(stage_count: usize) -> VideoIsfEffectSummary {
+        assert!(stage_count > 0);
+        let mut root = c1_invalid_effect("disabled legacy root");
+        root.enabled = false;
+        root.stack = (1..stage_count)
+            .map(|index| protocol::VideoIsfEffectStageSummary {
+                enabled: false,
+                label: format!("disabled legacy stage {index}"),
+                source: Arc::clone(&root.source),
+                source_path: None,
+                description: None,
+                categories: Vec::new(),
+                controls: Vec::new(),
+            })
+            .collect();
+        root
+    }
+
+    #[test]
+    fn c1_layer_resolution_keeps_canonical_ids_and_uses_legacy_projection_once() {
+        let effect = builtin_isf_effect("invert").unwrap().unwrap();
+        let mut layer = c1_test_layer(4, VideoBlendMode::Normal);
+        layer.isf_effect = Some(effect.clone());
+        let mut snapshot = c1_test_snapshot(vec![layer]);
+        snapshot.effect_chains.push(c1_chain(
+            9,
+            VideoEffectScope::Layer { layer_id: 4 },
+            false,
+            vec![effect],
+        ));
+
+        let resolved =
+            resolve_video_effect_chain(&snapshot, &VideoEffectScope::Layer { layer_id: 4 })
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(resolved.chain_id, Some(VideoEffectChainId(9)));
+        assert_eq!(resolved.stages.len(), 1);
+        assert_eq!(resolved.stages[0].stage_id, Some(VideoEffectStageId(901)));
+        assert_eq!(resolved.stages[0].effect_id, Some(VideoEffectId(9_001)));
+        assert_eq!(
+            resolved.stages[0].effect.source,
+            snapshot.layers[0].isf_effect.as_ref().unwrap().source
+        );
+    }
+
+    #[test]
+    fn c1_resolver_fails_closed_above_the_protocol_stage_limit() {
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(4, VideoBlendMode::Normal)]);
+        snapshot.effect_chains.push(c1_chain(
+            10,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            (0..=VIDEO_EFFECT_CHAIN_MAX_STAGES)
+                .map(|index| c1_invalid_effect(&format!("stage-{index}")))
+                .collect(),
+        ));
+
+        let fault =
+            resolve_video_effect_chain(&snapshot, &VideoEffectScope::Output { output_id: 80 })
+                .unwrap_err();
+
+        assert_eq!(fault.chain_id, Some(VideoEffectChainId(10)));
+        assert!(fault.message.contains("limit is 32"));
+    }
+
+    #[test]
+    fn c1_shader_source_cache_is_bounded_lru_including_failures() {
+        let mut renderer = VideoPreviewRenderer::new(VideoRuntimeConfig::default());
+        for index in 0..ISF_SHADER_CACHE_CAPACITY {
+            let source = Arc::<str>::from(format!("invalid shader {index}"));
+            assert!(renderer.cached_isf_shader(&source).is_err());
+        }
+        let newest = Arc::<str>::from("invalid shader 0");
+        assert!(renderer.cached_isf_shader(&newest).is_err());
+        let overflow = Arc::<str>::from("invalid shader overflow");
+        assert!(renderer.cached_isf_shader(&overflow).is_err());
+
+        assert_eq!(renderer.isf_shader_cache.len(), ISF_SHADER_CACHE_CAPACITY);
+        assert!(renderer.isf_shader_cache.contains_key("invalid shader 0"));
+        assert!(!renderer.isf_shader_cache.contains_key("invalid shader 1"));
+        assert!(renderer
+            .isf_shader_cache
+            .contains_key("invalid shader overflow"));
+    }
+
+    #[test]
+    fn c1_bypassed_group_chain_is_pixel_identical_to_legacy_flat_composition() {
+        let mut snapshot = c1_test_snapshot(vec![
+            c1_test_layer(1, VideoBlendMode::Normal),
+            c1_test_layer(2, VideoBlendMode::Add),
+        ]);
+        snapshot
+            .layer_groups
+            .push(protocol::VideoLayerGroupSummary {
+                id: protocol::VideoLayerGroupId(7),
+                label: "Group".to_string(),
+                composition_id: 70,
+                layer_ids: vec![1, 2],
+            });
+        snapshot.effect_chains.push(c1_chain(
+            11,
+            VideoEffectScope::Group {
+                group_id: protocol::VideoLayerGroupId(7),
+            },
+            true,
+            vec![c1_invalid_effect("must remain dormant")],
+        ));
+        let provider = C1SolidFrameProvider {
+            pixels: HashMap::from([(1, [100, 10, 0, 255]), (2, [0, 90, 20, 255])]),
+            fail: false,
+        };
+        let mut legacy = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: provider.pixels.clone(),
+                fail: false,
+            },
+        );
+        let mut scoped =
+            VideoPreviewRenderer::with_frame_provider(VideoRuntimeConfig::default(), provider);
+
+        let legacy_frame = legacy.render_output(&snapshot, 80).unwrap();
+        let scoped_frame = scoped
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &VideoClipRuntimeSnapshot::default(),
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+
+        assert_eq!(scoped_frame.data, legacy_frame.data);
+        assert!(scoped.last_effect_stage_faults().is_empty());
+    }
+
+    #[test]
+    fn c1_output_failure_reuses_only_matching_epoch_last_valid_artistic_frame() {
+        let snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [12, 34, 56, 255])]),
+                fail: false,
+            },
+        );
+        let runtime = VideoClipRuntimeSnapshot::default();
+        let first = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 41,
+                },
+                80,
+            )
+            .unwrap();
+        renderer.frame_provider_mut().fail = true;
+        let last_valid = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 41,
+                },
+                80,
+            )
+            .unwrap();
+        let new_epoch = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 42,
+                },
+                80,
+            )
+            .unwrap();
+
+        assert_eq!(first.data, vec![12, 34, 56, 255]);
+        assert_eq!(last_valid.data, first.data);
+        assert_eq!(new_epoch.data, vec![0, 0, 0, 0]);
+        assert!(renderer.last_output_render_error().is_some());
+    }
+
+    #[test]
+    fn c1_output_last_valid_invalidates_dimensions_route_and_composition_identity() {
+        let base = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        let mut resized = base.clone();
+        resized.outputs[0].width = 2;
+        let mut rerouted = base.clone();
+        rerouted.outputs[0].fullscreen = true;
+        let mut recomposed = base.clone();
+        recomposed.compositions.push(CompositionSummary {
+            id: 71,
+            label: "Replacement Composition".to_string(),
+            layer_ids: vec![1],
+            output_ids: vec![80],
+        });
+        recomposed.outputs[0].composition_id = 71;
+
+        for (changed, transparent_bytes) in [
+            (resized, vec![0; 8]),
+            (rerouted, vec![0; 4]),
+            (recomposed, vec![0; 4]),
+        ] {
+            let runtime = VideoClipRuntimeSnapshot::default();
+            let mut renderer = VideoPreviewRenderer::with_frame_provider(
+                VideoRuntimeConfig::default(),
+                C1SolidFrameProvider {
+                    pixels: HashMap::from([(1, [12, 34, 56, 255])]),
+                    fail: false,
+                },
+            );
+            renderer
+                .render_output_with_effects(
+                    &base,
+                    VideoEffectRenderContext {
+                        clip_runtime: &runtime,
+                        project_render_epoch: 1,
+                    },
+                    80,
+                )
+                .unwrap();
+            renderer.frame_provider_mut().fail = true;
+
+            let fallback = renderer
+                .render_output_with_effects(
+                    &changed,
+                    VideoEffectRenderContext {
+                        clip_runtime: &runtime,
+                        project_render_epoch: 1,
+                    },
+                    80,
+                )
+                .unwrap();
+
+            assert_eq!(fallback.data, transparent_bytes);
+        }
+    }
+
+    #[test]
+    fn c1_output_last_valid_is_cached_before_mapping_and_remapped_on_fallback() {
+        let base = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        let mut remapped = base.clone();
+        remapped.outputs[0].mapping.black_level = 0.2;
+        let runtime = VideoClipRuntimeSnapshot::default();
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [0, 0, 0, 255])]),
+                fail: false,
+            },
+        );
+        let first = renderer
+            .render_output_with_effects(
+                &base,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+        renderer.frame_provider_mut().fail = true;
+
+        let fallback = renderer
+            .render_output_with_effects(
+                &remapped,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+
+        assert_eq!(first.data, vec![0, 0, 0, 255]);
+        assert_eq!(fallback.data, vec![51, 51, 51, 255]);
+    }
+
+    #[test]
+    fn c1_output_preview_preserves_mapping_fault_blackout_and_size_fenced_last_valid() {
+        IsfGpuRuntime::new().expect("C1 output-preview test requires a GPU adapter");
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        snapshot.outputs[0].mapping.black_level = 0.2;
+        snapshot.effect_chains.push(c1_chain(
+            104,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            vec![c1_invalid_effect("preview output fault")],
+        ));
+        let runtime = VideoClipRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &runtime,
+            project_render_epoch: 71,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [10, 20, 30, 255])]),
+                fail: false,
+            },
+        );
+
+        let seeded = renderer
+            .render_output_preview_with_effects(&snapshot, context, 80, 2, 1)
+            .unwrap();
+        assert_eq!((seeded.width, seeded.height), (2, 1));
+        assert_eq!(seeded.data, vec![59, 67, 75, 255, 59, 67, 75, 255]);
+        assert_eq!(renderer.last_effect_stage_faults().len(), 1);
+        assert_eq!(
+            renderer.last_effect_stage_faults()[0].chain_id,
+            Some(VideoEffectChainId(104))
+        );
+
+        renderer.frame_provider_mut().fail = true;
+        let same_size_fallback = renderer
+            .render_output_preview_with_effects(&snapshot, context, 80, 2, 1)
+            .unwrap();
+        assert_eq!(same_size_fallback, seeded);
+        assert!(renderer.last_output_render_error().is_some());
+
+        let resized_failure = renderer
+            .render_output_preview_with_effects(&snapshot, context, 80, 1, 1)
+            .unwrap();
+        assert_eq!(resized_failure.data, vec![51, 51, 51, 0]);
+
+        snapshot.blackout = true;
+        let blackout = renderer
+            .render_output_preview_with_effects(&snapshot, context, 80, 2, 1)
+            .unwrap();
+        assert_eq!(blackout.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
+        assert!(renderer.output_last_valid_frames.is_empty());
+        assert_eq!(renderer.last_output_render_error(), None);
+        assert!(renderer.last_effect_stage_faults().is_empty());
+    }
+
+    #[test]
+    fn c1_successful_empty_composition_replaces_an_older_output_last_valid_frame() {
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        let runtime = VideoClipRuntimeSnapshot::default();
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [80, 90, 100, 255])]),
+                fail: false,
+            },
+        );
+        let visible = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+        snapshot.layers[0].state.enabled = false;
+        let hidden = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+        snapshot.layers[0].state.enabled = true;
+        renderer.frame_provider_mut().fail = true;
+        let fallback = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+
+        assert_eq!(visible.data, vec![80, 90, 100, 255]);
+        assert_eq!(hidden.data, vec![0, 0, 0, 0]);
+        assert_eq!(fallback.data, hidden.data);
+    }
+
+    #[test]
+    fn c1_calibration_test_pattern_bypasses_artistic_effect_chains() {
+        let mut snapshot = c1_test_snapshot(Vec::new());
+        let without_effects = render_video_output_test_pattern(&snapshot, 80, 8, 8).unwrap();
+        snapshot.effect_chains.extend([
+            c1_chain(
+                91,
+                VideoEffectScope::Composition { composition_id: 70 },
+                false,
+                vec![c1_invalid_effect("calibration must bypass Composition")],
+            ),
+            c1_chain(
+                92,
+                VideoEffectScope::Output { output_id: 80 },
+                false,
+                vec![c1_invalid_effect("calibration must bypass Output")],
+            ),
+        ]);
+
+        let with_effects = render_video_output_test_pattern(&snapshot, 80, 8, 8).unwrap();
+
+        assert_eq!(with_effects, without_effects);
+        assert!(with_effects
+            .data
+            .chunks_exact(4)
+            .any(|pixel| pixel != [0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn c1_transition_scope_remains_dormant_and_fail_closed_for_rendering() {
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        snapshot.effect_chains.push(c1_chain(
+            12,
+            VideoEffectScope::Transition {
+                owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id: 1 },
+            },
+            false,
+            vec![c1_invalid_effect("dormant transition")],
+        ));
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [20, 40, 60, 255])]),
+                fail: false,
+            },
+        );
+
+        let frame = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &VideoClipRuntimeSnapshot::default(),
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+
+        assert_eq!(frame.data, vec![20, 40, 60, 255]);
+        assert!(renderer.last_effect_stage_faults().is_empty());
+    }
+
+    #[test]
+    fn c1_empty_hidden_and_master_zero_compositions_still_run_artistic_scopes_in_order() {
+        let mut empty = c1_test_snapshot(Vec::new());
+        let mut hidden_layer = c1_test_layer(1, VideoBlendMode::Normal);
+        hidden_layer.state.enabled = false;
+        let mut hidden = c1_test_snapshot(vec![hidden_layer]);
+        let mut master_zero = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        master_zero.master_opacity = 0.0;
+
+        for snapshot in [&mut empty, &mut hidden, &mut master_zero] {
+            snapshot.effect_chains.extend([
+                c1_chain(
+                    90,
+                    VideoEffectScope::Composition { composition_id: 70 },
+                    false,
+                    vec![c1_invalid_effect("empty Composition stage")],
+                ),
+                c1_chain(
+                    2,
+                    VideoEffectScope::Output { output_id: 80 },
+                    false,
+                    vec![c1_invalid_effect("empty Output stage")],
+                ),
+            ]);
+            let mut renderer = VideoPreviewRenderer::with_frame_provider(
+                VideoRuntimeConfig::default(),
+                C1SolidFrameProvider::default(),
+            );
+
+            let frame = renderer
+                .render_output_with_effects(
+                    snapshot,
+                    VideoEffectRenderContext {
+                        clip_runtime: &VideoClipRuntimeSnapshot::default(),
+                        project_render_epoch: 1,
+                    },
+                    80,
+                )
+                .unwrap();
+
+            assert_eq!(frame.data, vec![0, 0, 0, 0]);
+            assert_eq!(renderer.last_effect_stage_faults().len(), 2);
+            assert_eq!(
+                renderer.last_effect_stage_faults()[0].scope,
+                VideoEffectScope::Composition { composition_id: 70 }
+            );
+            assert_eq!(
+                renderer.last_effect_stage_faults()[1].scope,
+                VideoEffectScope::Output { output_id: 80 }
+            );
+
+            for chain in &mut snapshot.effect_chains {
+                chain.bypassed = true;
+            }
+            renderer
+                .render_output_with_effects(
+                    snapshot,
+                    VideoEffectRenderContext {
+                        clip_runtime: &VideoClipRuntimeSnapshot::default(),
+                        project_render_epoch: 1,
+                    },
+                    80,
+                )
+                .unwrap();
+            assert!(renderer.last_effect_stage_faults().is_empty());
+            assert_eq!(renderer.last_isf_error(), None);
+        }
+    }
+
+    #[test]
+    fn c1_valid_composition_and_output_chains_transform_an_empty_base_in_order() {
+        IsfGpuRuntime::new().expect("C1 empty artistic-chain test requires a GPU adapter");
+        const SOLID_RED: &str = r#"/*{
+          "INPUTS": [{"NAME":"inputImage","TYPE":"image"}]
+        }*/
+        void main() {
+          gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        }"#;
+        let prepared = prepare_isf_shader(SOLID_RED).unwrap();
+        let solid_red = isf_effect_from_prepared(
+            "Solid Red".to_string(),
+            SOLID_RED.to_string(),
+            None,
+            &prepared,
+        );
+        let mut snapshot = c1_test_snapshot(Vec::new());
+        snapshot.effect_chains.extend([
+            c1_chain(
+                93,
+                VideoEffectScope::Composition { composition_id: 70 },
+                false,
+                vec![solid_red],
+            ),
+            c1_chain(
+                94,
+                VideoEffectScope::Output { output_id: 80 },
+                false,
+                vec![builtin_isf_effect("invert").unwrap().unwrap()],
+            ),
+        ]);
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider::default(),
+        );
+
+        let frame = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &VideoClipRuntimeSnapshot::default(),
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+
+        assert_eq!(frame.data, vec![0, 255, 255, 255]);
+        assert!(renderer.last_effect_stage_faults().is_empty());
+    }
+
+    #[test]
+    fn c1_master_blackout_fences_artistic_generators_faults_and_last_valid() {
+        IsfGpuRuntime::new().expect("C1 master-blackout test requires a GPU adapter");
+        const SOLID_RED: &str = r#"/*{
+          "INPUTS": [{"NAME":"inputImage","TYPE":"image"}]
+        }*/
+        void main() {
+          gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        }"#;
+        let prepared = prepare_isf_shader(SOLID_RED).unwrap();
+        let solid_red = isf_effect_from_prepared(
+            "Solid Red".to_string(),
+            SOLID_RED.to_string(),
+            None,
+            &prepared,
+        );
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        snapshot.effect_chains.extend([
+            c1_chain(
+                95,
+                VideoEffectScope::Composition { composition_id: 70 },
+                false,
+                vec![c1_invalid_effect("blocked Composition fault"), solid_red],
+            ),
+            c1_chain(
+                96,
+                VideoEffectScope::Output { output_id: 80 },
+                false,
+                vec![
+                    c1_invalid_effect("blocked Output fault"),
+                    builtin_isf_effect("invert").unwrap().unwrap(),
+                ],
+            ),
+        ]);
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [10, 20, 30, 255])]),
+                fail: false,
+            },
+        );
+        let runtime = VideoClipRuntimeSnapshot::default();
+
+        let before_blackout = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+        assert_eq!(before_blackout.data, vec![0, 255, 255, 255]);
+        assert_eq!(renderer.last_effect_stage_faults().len(), 2);
+
+        snapshot.blackout = true;
+        let blackout = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+        assert_eq!(blackout.data, vec![0, 0, 0, 255]);
+        assert!(renderer.last_effect_stage_faults().is_empty());
+        assert_eq!(renderer.last_isf_error(), None);
+
+        snapshot.blackout = false;
+        let recovered = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+        assert_eq!(recovered.data, vec![0, 255, 255, 255]);
+        assert_eq!(renderer.last_effect_stage_faults().len(), 2);
+
+        snapshot.blackout = true;
+        renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+        snapshot.blackout = false;
+        renderer.frame_provider_mut().fail = true;
+        let failed_recovery = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+
+        assert_eq!(failed_recovery.data, vec![0, 0, 0, 0]);
+        assert!(renderer.last_effect_stage_faults().is_empty());
+        assert!(renderer.last_output_render_error().is_some());
+    }
+
+    #[test]
+    fn c1_direct_artistic_blackout_clears_cache_error_and_diagnostics() {
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        snapshot.effect_chains.push(c1_chain(
+            97,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            vec![c1_invalid_effect("direct seam diagnostic")],
+        ));
+        let runtime = VideoClipRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &runtime,
+            project_render_epoch: 1,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [30, 60, 90, 255])]),
+                fail: false,
+            },
+        );
+
+        let seeded = renderer
+            .render_output_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(seeded.data, vec![30, 60, 90, 255]);
+        assert_eq!(renderer.output_last_valid_frames.len(), 1);
+        assert_eq!(renderer.last_effect_stage_faults().len(), 1);
+
+        renderer.frame_provider_mut().fail = true;
+        let last_valid = renderer
+            .render_output_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(last_valid.data, seeded.data);
+        assert_eq!(renderer.output_last_valid_frames.len(), 1);
+        assert!(renderer.last_output_render_error().is_some());
+
+        snapshot.blackout = true;
+        let blackout_plan = build_video_output_render_plan(&snapshot, 80).unwrap();
+        let blackout = renderer
+            .prepare_output_artistic_frame_with_effects(
+                &snapshot,
+                context,
+                &blackout_plan,
+                blackout_plan.width,
+                blackout_plan.height,
+            )
+            .unwrap();
+        assert_eq!(blackout.data, vec![0, 0, 0, 255]);
+        assert!(renderer.output_last_valid_frames.is_empty());
+        assert_eq!(renderer.last_output_render_error(), None);
+        assert!(renderer.last_effect_stage_faults().is_empty());
+        assert_eq!(renderer.last_isf_error(), None);
+
+        snapshot.blackout = false;
+        let failed_recovery = renderer
+            .render_output_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(failed_recovery.data, vec![0, 0, 0, 0]);
+        assert!(renderer.last_output_render_error().is_some());
+    }
+
+    #[test]
+    fn c1_wrapper_and_direct_blackout_clear_keyed_input_diagnostics() {
+        let invalid = c1_invalid_effect("keyed fault before blackout");
+        let mut layer = c1_test_layer(7, VideoBlendMode::Normal);
+        layer.isf_effect = Some(invalid.clone());
+        let mut snapshot = c1_test_snapshot(vec![layer]);
+        snapshot.effect_chains.push(c1_chain(
+            98,
+            VideoEffectScope::Layer { layer_id: 7 },
+            false,
+            vec![invalid],
+        ));
+        let runtime = VideoClipRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &runtime,
+            project_render_epoch: 1,
+        };
+        let keyed_input = |input_id| {
+            let key = protocol::VideoRenderInputKey {
+                project_render_epoch: 1,
+                input_id: protocol::VideoRenderInputId(input_id),
+            };
+            (
+                key,
+                VideoRenderInput::new(key, decode_request(7, 0)),
+                CompositionInputMix {
+                    inputs: vec![CompositionRenderInput {
+                        key,
+                        layer: layer_plan(7, VideoBlendMode::Normal, 1.0),
+                    }],
+                },
+            )
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(7, [20, 40, 60, 255])]),
+                fail: false,
+            },
+        );
+
+        let (first_key, first_input, first_mix) = keyed_input(1);
+        renderer
+            .render_input_mix_with_effects(&snapshot, context, &[first_input], &first_mix, 1, 1)
+            .unwrap();
+        assert_eq!(renderer.last_render_input_isf_stage_errors().len(), 1);
+        assert_eq!(
+            renderer.last_render_input_isf_stage_errors()[0].key,
+            first_key
+        );
+
+        snapshot.blackout = true;
+        renderer
+            .render_output_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert!(renderer.last_render_input_isf_stage_errors().is_empty());
+
+        snapshot.blackout = false;
+        let (second_key, second_input, second_mix) = keyed_input(2);
+        renderer
+            .render_input_mix_with_effects(&snapshot, context, &[second_input], &second_mix, 1, 1)
+            .unwrap();
+        assert_eq!(renderer.last_render_input_isf_stage_errors().len(), 1);
+        assert_eq!(
+            renderer.last_render_input_isf_stage_errors()[0].key,
+            second_key
+        );
+
+        snapshot.blackout = true;
+        let blackout_plan = build_video_output_render_plan(&snapshot, 80).unwrap();
+        renderer
+            .prepare_output_artistic_frame_with_effects(
+                &snapshot,
+                context,
+                &blackout_plan,
+                blackout_plan.width,
+                blackout_plan.height,
+            )
+            .unwrap();
+        assert!(renderer.last_render_input_isf_stage_errors().is_empty());
+
+        snapshot.blackout = false;
+        let (third_key, third_input, third_mix) = keyed_input(3);
+        renderer
+            .render_input_mix_with_effects(&snapshot, context, &[third_input], &third_mix, 1, 1)
+            .unwrap();
+        assert_eq!(renderer.last_render_input_isf_stage_errors().len(), 1);
+        assert_eq!(
+            renderer.last_render_input_isf_stage_errors()[0].key,
+            third_key
+        );
+    }
+
+    #[test]
+    fn c1_keyed_input_fault_keeps_authored_and_runtime_identity_separate() {
+        let invalid = c1_invalid_effect("keyed broken layer stage");
+        let mut layer = c1_test_layer(7, VideoBlendMode::Normal);
+        layer.isf_effect = Some(invalid.clone());
+        let mut snapshot = c1_test_snapshot(vec![layer]);
+        snapshot.effect_chains.push(c1_chain(
+            14,
+            VideoEffectScope::Layer { layer_id: 7 },
+            false,
+            vec![invalid],
+        ));
+        let key = protocol::VideoRenderInputKey {
+            project_render_epoch: 91,
+            input_id: protocol::VideoRenderInputId(5),
+        };
+        let input = VideoRenderInput::new(key, decode_request(7, 0));
+        let mix = CompositionInputMix {
+            inputs: vec![CompositionRenderInput {
+                key,
+                layer: layer_plan(7, VideoBlendMode::Normal, 1.0),
+            }],
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(7, [24, 96, 180, 255])]),
+                fail: false,
+            },
+        );
+
+        let output = renderer
+            .render_input_mix_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &VideoClipRuntimeSnapshot::default(),
+                    project_render_epoch: 91,
+                },
+                &[input],
+                &mix,
+                1,
+                1,
+            )
+            .unwrap();
+
+        assert_eq!(output.data, vec![24, 96, 180, 255]);
+        assert_eq!(renderer.last_render_input_isf_stage_errors().len(), 1);
+        assert_eq!(renderer.last_render_input_isf_stage_errors()[0].key, key);
+        let fault = &renderer.last_effect_stage_faults()[0];
+        assert_eq!(fault.render_input_key, Some(key));
+        assert_eq!(fault.chain_id, Some(VideoEffectChainId(14)));
+        assert_eq!(fault.stage_id, Some(VideoEffectStageId(1_401)));
+        assert_eq!(fault.effect_id, Some(VideoEffectId(14_001)));
+    }
+
+    #[test]
+    fn c1_keyed_missing_layer_legacy_fallback_enforces_the_32_stage_limit() {
+        let snapshot = c1_test_snapshot(Vec::new());
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(7, [11, 22, 33, 255])]),
+                fail: false,
+            },
+        );
+        let runtime = VideoClipRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &runtime,
+            project_render_epoch: 1,
+        };
+
+        for (input_id, stage_count, expects_limit_fault) in [(1, 32, false), (2, 33, true)] {
+            let key = protocol::VideoRenderInputKey {
+                project_render_epoch: 1,
+                input_id: protocol::VideoRenderInputId(input_id),
+            };
+            let input = VideoRenderInput::new(key, decode_request(7, 0))
+                .with_isf_effect(Some(c1_disabled_legacy_stack(stage_count)));
+            let mix = CompositionInputMix {
+                inputs: vec![CompositionRenderInput {
+                    key,
+                    layer: layer_plan(7, VideoBlendMode::Normal, 1.0),
+                }],
+            };
+
+            let frame = renderer
+                .render_input_mix_with_effects(&snapshot, context, &[input], &mix, 1, 1)
+                .unwrap();
+
+            assert_eq!(frame.data, vec![11, 22, 33, 255]);
+            if expects_limit_fault {
+                assert_eq!(renderer.last_effect_stage_faults().len(), 1);
+                let fault = &renderer.last_effect_stage_faults()[0];
+                assert_eq!(fault.scope, VideoEffectScope::Layer { layer_id: 7 });
+                assert_eq!(fault.render_input_key, Some(key));
+                assert_eq!(fault.chain_id, None);
+                assert!(fault.message.contains("33 stages; the limit is 32"));
+                assert_eq!(renderer.last_render_input_isf_stage_errors().len(), 1);
+                assert_eq!(renderer.last_render_input_isf_stage_errors()[0].key, key);
+            } else {
+                assert!(renderer.last_effect_stage_faults().is_empty());
+                assert!(renderer.last_render_input_isf_stage_errors().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn c1_active_clip_runs_before_effective_layer_chain() {
+        IsfGpuRuntime::new().expect("C1 Clip/Layer order test requires a GPU adapter");
+        let invert = builtin_isf_effect("invert").unwrap().unwrap();
+        let mut layer = c1_test_layer(1, VideoBlendMode::Normal);
+        layer.isf_effect = Some(invert.clone());
+        let mut snapshot = c1_test_snapshot(vec![layer]);
+        snapshot.effect_chains.extend([
+            c1_chain(
+                15,
+                VideoEffectScope::Clip {
+                    layer_id: 1,
+                    slot_id: VideoClipSlotId(2),
+                },
+                false,
+                vec![invert.clone()],
+            ),
+            c1_chain(
+                16,
+                VideoEffectScope::Layer { layer_id: 1 },
+                false,
+                vec![invert],
+            ),
+        ]);
+        let provider = C1SolidFrameProvider {
+            pixels: HashMap::from([(1, [10, 20, 30, 255])]),
+            fail: false,
+        };
+        let mut renderer =
+            VideoPreviewRenderer::with_frame_provider(VideoRuntimeConfig::default(), provider);
+        let active_runtime = VideoClipRuntimeSnapshot {
+            layers: vec![protocol::VideoClipLayerRuntimeSummary {
+                layer_id: 1,
+                active_slot_id: Some(VideoClipSlotId(2)),
+                ..protocol::VideoClipLayerRuntimeSummary::default()
+            }],
+        };
+
+        let active = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &active_runtime,
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+        let layer_only = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &VideoClipRuntimeSnapshot::default(),
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+
+        assert_eq!(active.data, vec![10, 20, 30, 255]);
+        assert_eq!(layer_only.data, vec![245, 235, 225, 255]);
+    }
+
+    #[test]
+    fn c2_clip_take_crossfade_decodes_distinct_slot_owners_and_blends_progress() {
+        struct ClipTakeFrameProvider;
+        impl VideoFrameProvider for ClipTakeFrameProvider {
+            fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+            fn frame_for_layer(
+                &mut self,
+                layer: &VideoLayerSummary,
+                width: u32,
+                height: u32,
+            ) -> Result<VideoFrame, VideoFrameProviderError> {
+                Ok(VideoFrame {
+                    layer_id: layer.id,
+                    width,
+                    height,
+                    pts_ms: layer.state.position_ms,
+                    duration_ms: 16,
+                    format: VideoPixelFormat::Rgba8,
+                    data: [255, 0, 0, 255].repeat(width as usize * height as usize),
+                })
+            }
+
+            fn frame_for_input(
+                &mut self,
+                input: &VideoRenderInput,
+            ) -> Result<VideoFrame, VideoFrameProviderError> {
+                assert_eq!(input.key.project_render_epoch, 77);
+                assert_eq!(input.key.input_id.0, input.clip_slot_id.unwrap().0);
+                let pixel = match input.clip_slot_id {
+                    Some(VideoClipSlotId(20)) => [255, 0, 0, 255],
+                    Some(VideoClipSlotId(21)) => [0, 0, 255, 255],
+                    other => panic!("unexpected Clip Take input {other:?}"),
+                };
+                Ok(VideoFrame {
+                    layer_id: input.layer_id(),
+                    width: input.request.width,
+                    height: input.request.height,
+                    pts_ms: input.request.position_ms,
+                    duration_ms: 16,
+                    format: VideoPixelFormat::Rgba8,
+                    data: pixel
+                        .repeat(input.request.width as usize * input.request.height as usize),
+                })
+            }
+        }
+
+        let outgoing_source = VideoSourceSummary {
+            kind: VideoSourceKind::File,
+            path: Some("outgoing.mp4".to_string()),
+            name: None,
+            codec: None,
+            metadata: None,
+        };
+        let incoming_source = VideoSourceSummary {
+            path: Some("incoming.mp4".to_string()),
+            ..outgoing_source.clone()
+        };
+        let mut layer = c1_test_layer(1, VideoBlendMode::Normal);
+        layer.source = outgoing_source.clone();
+        layer.media_asset_id = Some(100);
+        layer.clip_slots = vec![
+            protocol::VideoClipSlotSummary {
+                id: VideoClipSlotId(20),
+                media_asset_id: 100,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: protocol::VideoClipLoopMode::Once,
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: protocol::VideoClipLaunchQuantization::Immediate,
+                effect_overrides: Vec::new(),
+            },
+            protocol::VideoClipSlotSummary {
+                id: VideoClipSlotId(21),
+                media_asset_id: 101,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: protocol::VideoClipLoopMode::Once,
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: protocol::VideoClipLaunchQuantization::Immediate,
+                effect_overrides: Vec::new(),
+            },
+        ];
+        layer.default_clip_slot_id = Some(VideoClipSlotId(20));
+        let mut snapshot = c1_test_snapshot(vec![layer]);
+        snapshot.media_assets = vec![
+            protocol::MediaAssetSummary {
+                id: 100,
+                label: "Outgoing".to_string(),
+                source: outgoing_source,
+                content_hash: None,
+                byte_size: None,
+            },
+            protocol::MediaAssetSummary {
+                id: 101,
+                label: "Incoming".to_string(),
+                source: incoming_source,
+                content_hash: None,
+                byte_size: None,
+            },
+        ];
+        snapshot.effect_chains.push(c1_chain(
+            212,
+            VideoEffectScope::Transition {
+                owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id: 1 },
+            },
+            false,
+            vec![c1_invalid_effect(
+                "Clip Take transition executes after blend",
+            )],
+        ));
+        let runtime = VideoClipRuntimeSnapshot {
+            layers: vec![protocol::VideoClipLayerRuntimeSummary {
+                layer_id: 1,
+                active_slot_id: Some(VideoClipSlotId(20)),
+                queued_slot_id: Some(VideoClipSlotId(21)),
+                transition: Some(protocol::VideoClipTakeTransitionSummary {
+                    origin_slot_id: VideoClipSlotId(20),
+                    outgoing_slot_id: VideoClipSlotId(20),
+                    incoming_slot_id: VideoClipSlotId(21),
+                    kind: protocol::VideoClipTakeKind::Crossfade,
+                    elapsed_ms: 250,
+                    duration_ms: 1_000,
+                    duration: protocol::VideoClipTakeDuration::milliseconds(1_000),
+                    progress_millis: 250,
+                    incoming_playhead_ms: 600,
+                    incoming_playing: true,
+                }),
+                playhead_ms: 400,
+                playing: true,
+                ..protocol::VideoClipLayerRuntimeSummary::default()
+            }],
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            ClipTakeFrameProvider,
+        );
+        let frame = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 77,
+                },
+                80,
+            )
+            .unwrap();
+        assert_eq!(frame.data, vec![191, 0, 64, 255]);
+        assert_eq!(renderer.last_effect_stage_faults().len(), 1);
+        assert_eq!(
+            renderer.last_effect_stage_faults()[0].chain_id,
+            Some(VideoEffectChainId(212))
+        );
+        snapshot.media_assets.retain(|asset| asset.id != 101);
+        let fallback = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 77,
+                },
+                80,
+            )
+            .unwrap();
+        assert_eq!(
+            fallback, frame,
+            "missing incoming media keeps last valid program"
+        );
+        assert!(renderer.last_output_render_error().is_some_and(|error| {
+            error.contains("MissingTransitionAsset") && error.contains("asset_id: 101")
+        }));
+        let mut cold_renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            ClipTakeFrameProvider,
+        );
+        let cold_fallback = cold_renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 77,
+                },
+                80,
+            )
+            .unwrap();
+        assert_eq!(cold_fallback.data, vec![0, 0, 0, 0]);
+        let red = VideoFrame {
+            layer_id: 1,
+            width: 1,
+            height: 1,
+            pts_ms: 0,
+            duration_ms: 16,
+            format: VideoPixelFormat::Rgba8,
+            data: vec![255, 0, 0, 255],
+        };
+        let blue = VideoFrame {
+            data: vec![0, 0, 255, 255],
+            ..red.clone()
+        };
+        assert_eq!(
+            crossfade_video_frames_rgba8(&red, &blue, 250).unwrap().data,
+            crossfade_video_frames_rgba8(&blue, &red, 750).unwrap().data,
+            "reversing source roles and complementing progress is pixel-continuous"
+        );
+    }
+
+    #[test]
+    fn c2_clip_take_transition_modes_are_distinct_bounded_and_reverse_continuous() {
+        let outgoing = VideoFrame {
+            layer_id: 1,
+            width: 2,
+            height: 1,
+            pts_ms: 10,
+            duration_ms: 16,
+            format: VideoPixelFormat::Rgba8,
+            data: vec![255, 0, 0, 255, 0, 255, 0, 255],
+        };
+        let incoming = VideoFrame {
+            pts_ms: 20,
+            data: vec![0, 0, 255, 255, 255, 255, 255, 255],
+            ..outgoing.clone()
+        };
+        assert_eq!(
+            transition_video_frames_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Dip,
+                500,
+            )
+            .unwrap()
+            .data,
+            vec![0, 0, 0, 255, 0, 0, 0, 255]
+        );
+        assert_eq!(
+            transition_video_frames_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Wipe,
+                500,
+            )
+            .unwrap()
+            .data,
+            vec![0, 0, 255, 255, 0, 255, 0, 255]
+        );
+        assert_eq!(
+            transition_video_frames_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Luma,
+                500,
+            )
+            .unwrap()
+            .data,
+            vec![0, 0, 255, 255, 0, 255, 0, 255]
+        );
+        for kind in [
+            protocol::VideoClipTakeKind::Crossfade,
+            protocol::VideoClipTakeKind::Dip,
+            protocol::VideoClipTakeKind::Wipe,
+            protocol::VideoClipTakeKind::Luma,
+            protocol::VideoClipTakeKind::Displacement,
+            protocol::VideoClipTakeKind::Blur,
+            protocol::VideoClipTakeKind::Glitch,
+            protocol::VideoClipTakeKind::Custom,
+        ] {
+            let forward = transition_video_frames_rgba8(&outgoing, &incoming, kind, 250).unwrap();
+            // Runtime Reverse swaps the live source roles and complements the
+            // public progress. The stable origin reorients them back before
+            // evaluating the directional transition, preserving this frame.
+            let reversed = transition_video_frames_rgba8(
+                &outgoing,
+                &incoming,
+                kind,
+                1000u16.saturating_sub(750),
+            )
+            .unwrap();
+            assert_eq!(
+                forward.data, reversed.data,
+                "{kind:?} reverse discontinuity"
+            );
+            assert_eq!(
+                transition_video_frames_rgba8(&outgoing, &incoming, kind, 0)
+                    .unwrap()
+                    .data,
+                outgoing.data,
+                "{kind:?} must start at outgoing"
+            );
+            assert_eq!(
+                transition_video_frames_rgba8(&outgoing, &incoming, kind, 1000)
+                    .unwrap()
+                    .data,
+                incoming.data,
+                "{kind:?} must finish at incoming"
+            );
+        }
+    }
+
+    #[test]
+    fn c3_layer_transition_bus_weights_only_opted_in_members_and_resolves_bus_scope() {
+        let make_layer = |id, opacity| VideoLayerSummary {
+            id,
+            label: format!("Layer {id}"),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some(format!("memory://bus-{id}.mp4")),
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            media_asset_id: None,
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState {
+                opacity,
+                ..VideoLayerState::default()
+            },
+            isf_effect: None,
+            clip_slots: Vec::new(),
+            default_clip_slot_id: None,
+        };
+        let bus_id = protocol::VideoTransitionBusId(1);
+        let from = VideoLayerTransitionTarget::Layer { layer_id: 1 };
+        let to = VideoLayerTransitionTarget::Layer { layer_id: 2 };
+        let mut snapshot = VideoSnapshot {
+            layers: vec![make_layer(1, 0.8), make_layer(2, 0.6), make_layer(3, 0.4)],
+            transition_buses: vec![protocol::VideoLayerTransitionBusSummary {
+                id: bus_id,
+                label: "Program bus".to_string(),
+                composition_id: 1,
+                enabled: true,
+                members: vec![from.clone(), to.clone()],
+                default_from: from.clone(),
+                default_to: to.clone(),
+                default_kind: protocol::VideoClipTakeKind::Crossfade,
+                default_duration: protocol::VideoClipTakeDuration::milliseconds(1_000),
+                default_curve: VideoLayerTransitionCurve::Linear,
+                matte_source: None,
+            }],
+            compositions: vec![CompositionSummary {
+                id: 1,
+                label: "Main".to_string(),
+                layer_ids: vec![1, 2, 3],
+                output_ids: Vec::new(),
+            }],
+            ..VideoSnapshot::default()
+        };
+        snapshot.effect_chains.push(VideoEffectChainSummary {
+            id: VideoEffectChainId(1),
+            scope: VideoEffectScope::Transition {
+                owner: VideoTransitionEffectOwner::LayerBus { bus_id },
+            },
+            bypassed: false,
+            stages: Vec::new(),
+        });
+        let runtime = VideoLayerTransitionRuntimeSnapshot {
+            buses: vec![protocol::VideoLayerTransitionBusRuntimeSummary {
+                bus_id,
+                origin_from: from.clone(),
+                from: from.clone(),
+                to: to.clone(),
+                kind: protocol::VideoClipTakeKind::Crossfade,
+                curve: VideoLayerTransitionCurve::Linear,
+                elapsed_ms: 250,
+                duration_ms: 1_000,
+                duration: protocol::VideoClipTakeDuration::milliseconds(1_000),
+                progress_millis: 250,
+            }],
+        };
+        let mut plan = build_composition_plan(&snapshot, snapshot.compositions[0].clone());
+        apply_video_layer_transition_weights(&snapshot, &runtime, &mut plan).unwrap();
+        let opacity = |id| {
+            plan.layers
+                .iter()
+                .find(|layer| layer.layer_id == id)
+                .unwrap()
+                .opacity
+        };
+        assert!((opacity(1) - 0.6).abs() < f32::EPSILON);
+        assert!((opacity(2) - 0.15).abs() < f32::EPSILON);
+        assert!((opacity(3) - 0.4).abs() < f32::EPSILON);
+        assert!(resolve_video_effect_chain(
+            &snapshot,
+            &VideoEffectScope::Transition {
+                owner: VideoTransitionEffectOwner::LayerBus { bus_id },
+            },
+        )
+        .unwrap()
+        .is_some());
+
+        let reversed = VideoLayerTransitionRuntimeSnapshot {
+            buses: vec![protocol::VideoLayerTransitionBusRuntimeSummary {
+                from: to,
+                to: from,
+                elapsed_ms: 750,
+                progress_millis: 750,
+                ..runtime.buses[0].clone()
+            }],
+        };
+        let mut reversed_plan = build_composition_plan(&snapshot, snapshot.compositions[0].clone());
+        apply_video_layer_transition_weights(&snapshot, &reversed, &mut reversed_plan).unwrap();
+        assert_eq!(
+            plan.layers
+                .iter()
+                .map(|layer| (layer.layer_id, layer.opacity))
+                .collect::<Vec<_>>(),
+            reversed_plan
+                .layers
+                .iter()
+                .map(|layer| (layer.layer_id, layer.opacity))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn c1_enabled_group_chain_isolates_members_and_preserves_internal_blend_order() {
+        IsfGpuRuntime::new().expect("C1 Group isolation test requires a GPU adapter");
+        let mut snapshot = c1_test_snapshot(vec![
+            c1_test_layer(1, VideoBlendMode::Normal),
+            c1_test_layer(2, VideoBlendMode::Add),
+        ]);
+        snapshot
+            .layer_groups
+            .push(protocol::VideoLayerGroupSummary {
+                id: protocol::VideoLayerGroupId(8),
+                label: "Isolated".to_string(),
+                composition_id: 70,
+                layer_ids: vec![1, 2],
+            });
+        snapshot.effect_chains.push(c1_chain(
+            17,
+            VideoEffectScope::Group {
+                group_id: protocol::VideoLayerGroupId(8),
+            },
+            false,
+            vec![builtin_isf_effect("invert").unwrap().unwrap()],
+        ));
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [100, 0, 0, 255]), (2, [0, 100, 0, 255])]),
+                fail: false,
+            },
+        );
+
+        let output = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &VideoClipRuntimeSnapshot::default(),
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+
+        assert_eq!(output.data, vec![155, 155, 255, 255]);
+    }
+
+    #[test]
+    fn c1_stage_local_failure_keeps_later_stage_and_stable_fault_identity() {
+        IsfGpuRuntime::new().expect("C1 stage-local renderer test requires a GPU adapter");
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        snapshot.effect_chains.push(c1_chain(
+            13,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            vec![
+                c1_invalid_effect("broken stage"),
+                builtin_isf_effect("invert").unwrap().unwrap(),
+            ],
+        ));
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [10, 20, 30, 255])]),
+                fail: false,
+            },
+        );
+
+        let frame = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &VideoClipRuntimeSnapshot::default(),
+                    project_render_epoch: 1,
+                },
+                80,
+            )
+            .unwrap();
+
+        assert_eq!(frame.data, vec![245, 235, 225, 255]);
+        assert_eq!(renderer.last_effect_stage_faults().len(), 1);
+        let fault = &renderer.last_effect_stage_faults()[0];
+        assert_eq!(fault.chain_id, Some(VideoEffectChainId(13)));
+        assert_eq!(fault.stage_id, Some(VideoEffectStageId(1_301)));
+        assert_eq!(fault.effect_id, Some(VideoEffectId(13_001)));
+        assert_eq!(fault.stage_index, Some(0));
+    }
+
+    #[test]
+    fn c1_prepare_failure_topology_consumes_exactly_one_frame_index_per_chain() {
+        IsfGpuRuntime::new().expect("C1 prepare-failure FRAMEINDEX test requires a GPU adapter");
+        const WRITE_RED_INDEX: &str = r#"/*{
+          "INPUTS": [{"NAME":"inputImage","TYPE":"image"}]
+        }*/
+        void main() {
+          vec4 pixel = IMG_THIS_PIXEL(inputImage);
+          pixel.r = float(FRAMEINDEX) / 255.0;
+          gl_FragColor = pixel;
+        }"#;
+        const WRITE_GREEN_INDEX: &str = r#"/*{
+          "INPUTS": [{"NAME":"inputImage","TYPE":"image"}]
+        }*/
+        void main() {
+          vec4 pixel = IMG_THIS_PIXEL(inputImage);
+          pixel.g = float(FRAMEINDEX) / 255.0;
+          gl_FragColor = pixel;
+        }"#;
+        let write_red_prepared = prepare_isf_shader(WRITE_RED_INDEX).unwrap();
+        let write_green_prepared = prepare_isf_shader(WRITE_GREEN_INDEX).unwrap();
+        let write_red = isf_effect_from_prepared(
+            "Write red FRAMEINDEX".to_string(),
+            WRITE_RED_INDEX.to_string(),
+            None,
+            &write_red_prepared,
+        );
+        let write_green = isf_effect_from_prepared(
+            "Write green FRAMEINDEX".to_string(),
+            WRITE_GREEN_INDEX.to_string(),
+            None,
+            &write_green_prepared,
+        );
+        let empty = resolved_chain_from_canonical(&c1_chain(
+            99,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            Vec::new(),
+        ))
+        .unwrap();
+        let bypassed = resolved_chain_from_canonical(&c1_chain(
+            100,
+            VideoEffectScope::Output { output_id: 80 },
+            true,
+            vec![c1_invalid_effect("bypassed prepare failure")],
+        ))
+        .unwrap();
+        let all_prepare_fail = resolved_chain_from_canonical(&c1_chain(
+            101,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            vec![
+                c1_invalid_effect("prepare failure one"),
+                c1_invalid_effect("prepare failure two"),
+            ],
+        ))
+        .unwrap();
+        let mixed = resolved_chain_from_canonical(&c1_chain(
+            102,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            vec![
+                c1_invalid_effect("mixed prepare failure"),
+                write_red.clone(),
+                write_green.clone(),
+            ],
+        ))
+        .unwrap();
+        let all_valid = resolved_chain_from_canonical(&c1_chain(
+            103,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            vec![write_red, write_green],
+        ))
+        .unwrap();
+        let frame = VideoFrame {
+            layer_id: 0,
+            width: 1,
+            height: 1,
+            pts_ms: 0,
+            duration_ms: 16,
+            format: VideoPixelFormat::Rgba8,
+            data: vec![9, 19, 29, 255],
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider::default(),
+        );
+
+        for no_op in [&empty, &bypassed] {
+            let (unchanged, faults) =
+                renderer.apply_resolved_effect_chain_to_frame(no_op, frame.clone(), None);
+            assert_eq!(unchanged, frame);
+            assert!(faults.is_empty());
+        }
+
+        let (after_prepare_failures, faults) =
+            renderer.apply_resolved_effect_chain_to_frame(&all_prepare_fail, frame.clone(), None);
+        assert_eq!(after_prepare_failures, frame);
+        assert_eq!(faults.len(), 2);
+
+        let (after_mixed, faults) =
+            renderer.apply_resolved_effect_chain_to_frame(&mixed, frame.clone(), None);
+        assert_eq!(faults.len(), 1);
+        assert_eq!(faults[0].stage_index, Some(0));
+        assert_eq!(after_mixed.data, vec![1, 1, 29, 255]);
+
+        let (after_mixed_next, faults) =
+            renderer.apply_resolved_effect_chain_to_frame(&all_valid, frame, None);
+        assert!(faults.is_empty());
+        assert_eq!(after_mixed_next.data, vec![2, 2, 29, 255]);
     }
 }
