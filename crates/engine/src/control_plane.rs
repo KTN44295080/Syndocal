@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn exact_engine_command_inventory_is_generated_once_and_conservative() {
-        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 249;
+        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 250;
         let descriptors = control_plane_engine_command_descriptors();
         assert_eq!(
             engine_command_variant_count(),
