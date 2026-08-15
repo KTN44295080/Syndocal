@@ -5,15 +5,7 @@ on:
     branches:
       - codex/ai3-r4-blackout-release
     paths:
-      - .github/scripts/patch_blackout_release_receipt.py
-      - .github/scripts/patch_blackout_release_runtime_guards.py
-      - .github/scripts/patch_blackout_release_ui_guards.py
-      - .github/scripts/patch_blackout_release_full_lock_ui.py
-      - .github/scripts/patch_blackout_release_physical_device_binding.py
-      - .github/scripts/patch_blackout_release_consent_expiry.py
-      - .github/scripts/patch_blackout_release_reply_loss_test.py
-      - .github/scripts/patch_blackout_release_owner_retirement.py
-      - .github/scripts/patch_blackout_release_session_lock.py
+      - .github/scripts/patch_blackout_release_*.py
       - .github/workflows/close-ai3-blackout-release.yml
 
 permissions:
@@ -62,88 +54,23 @@ jobs:
           PY
           python3 "$patcher"
 
-      - name: Repair baseline portability guards and helper types
+      - name: Apply reviewed R4 source guardrails
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("app/src-tauri/src/main.rs")
-          source = path.read_text(encoding="utf-8")
-
-          guard = "    #[cfg(all(feature = \"spout\", target_os = \"windows\", target_arch = \"x86_64\"))]\n"
-          block = "    spout\n        .harvest_failed_workers(engine)\n        .map_err(|error| error.message)?;\n"
-          guarded = guard + block
-          guarded_count = source.count(guarded)
-          if guarded_count == 1:
-              pass
-          elif guarded_count == 0 and source.count(block) == 1:
-              source = source.replace(block, guarded, 1)
-          else:
-              raise SystemExit(
-                  f"unexpected Spout harvest shape: guarded={guarded_count}, block={source.count(block)}"
-              )
-
-          helper = "fn replace_prepared_project_snapshot(\n    state: &State<'_, AppState>,\n"
-          repaired = "fn replace_prepared_project_snapshot(\n    state: &AppState,\n"
-          helper_count = source.count(helper)
-          repaired_count = source.count(repaired)
-          if repaired_count == 1:
-              pass
-          elif repaired_count == 0 and helper_count == 1:
-              source = source.replace(helper, repaired, 1)
-          else:
-              raise SystemExit(
-                  f"unexpected prepared-project helper shape: repaired={repaired_count}, original={helper_count}"
-              )
-
-          standby_helper = (
-              "fn replace_prepared_project_snapshot_after_standby_stop(\n"
-              "    state: &State<'_, AppState>,\n"
-          )
-          standby_repaired = (
-              "fn replace_prepared_project_snapshot_after_standby_stop(\n"
-              "    state: &AppState,\n"
-          )
-          standby_helper_count = source.count(standby_helper)
-          standby_repaired_count = source.count(standby_repaired)
-          if standby_repaired_count == 1:
-              pass
-          elif standby_repaired_count == 0 and standby_helper_count == 1:
-              source = source.replace(standby_helper, standby_repaired, 1)
-          else:
-              raise SystemExit(
-                  "unexpected standby-stop helper shape: "
-                  f"repaired={standby_repaired_count}, original={standby_helper_count}"
-              )
-
-          path.write_text(source, encoding="utf-8")
-          PY
-          rm -f .github/workflows/diagnose-ai3-main.yml
-
-      - name: Apply terminal receipt and legacy-release guards
-        shell: bash
-        run: |
-          set -euo pipefail
+          python3 .github/scripts/patch_blackout_release_baseline_portability.py
           python3 .github/scripts/patch_blackout_release_runtime_guards.py
           python3 .github/scripts/patch_blackout_release_reply_loss_test.py
-
-      - name: Apply Release UI guardrails
-        shell: bash
-        run: |
-          set -euo pipefail
           python3 .github/scripts/patch_blackout_release_ui_guards.py
           python3 .github/scripts/patch_blackout_release_full_lock_ui.py
-
-      - name: Apply physical-consent lifecycle guardrails
-        shell: bash
-        run: |
-          set -euo pipefail
+          python3 .github/scripts/patch_blackout_release_all_blackout_s0.py
           python3 .github/scripts/patch_blackout_release_physical_device_binding.py
           python3 .github/scripts/patch_blackout_release_consent_expiry.py
           python3 .github/scripts/patch_blackout_release_owner_retirement.py
+          python3 .github/scripts/patch_blackout_release_project_invalidation.py
+          python3 .github/scripts/patch_blackout_release_output_authority_invalidation.py
           python3 .github/scripts/patch_blackout_release_session_lock.py
+          python3 .github/scripts/patch_blackout_release_harness_guards.py
 
       - name: Verify bounded R4 diff
         shell: bash
@@ -170,22 +97,14 @@ jobs:
             crates/protocol/src/control_plane_command.rs
           )
           for file in "${required[@]}"; do
-            found=false
-            for actual in "${changed[@]}"; do
-              if [[ "$actual" == "$file" ]]; then
-                found=true
-                break
-              fi
-            done
-            if [[ "$found" != true ]]; then
+            printf '%s\n' "${changed[@]}" | grep -Fxq "$file" || {
               echo "Required R4 patch file missing from diff: $file" >&2
               exit 1
-            fi
+            }
           done
           for file in "${changed[@]}"; do
             case "$file" in
-              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/Cargo.toml|app/src-tauri/src/control_plane.rs|app/src-tauri/src/control_plane_runtime.rs|app/src-tauri/src/control_plane_security.rs|app/src-tauri/src/main.rs|app/src/App.tsx|app/src/blackoutReleaseRuntimeController.ts|app/src/components/BlackoutReleaseControl.tsx|app/src/components/LightingRuntimeControlsPanel.tsx|app/src/components/WorkspaceChrome.tsx|app/src/tauri-invoke-manifest.json|app/src/tauriInvokeCommands.ts|crates/protocol/src/control_plane_command.rs)
-                ;;
+              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/Cargo.toml|app/src-tauri/src/control_plane.rs|app/src-tauri/src/control_plane_runtime.rs|app/src-tauri/src/control_plane_security.rs|app/src-tauri/src/main.rs|app/src/App.tsx|app/src/blackoutReleaseRuntimeController.ts|app/src/components/BlackoutReleaseControl.tsx|app/src/components/LightingRuntimeControlsPanel.tsx|app/src/components/WorkspaceChrome.tsx|app/src/tauri-invoke-manifest.json|app/src/tauriInvokeCommands.ts|crates/protocol/src/control_plane_command.rs) ;;
               *)
                 echo "Unexpected changed file in R4 generated patch: $file" >&2
                 exit 1
@@ -197,20 +116,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            libasound2-dev \
-            libayatana-appindicator3-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libclang-dev \
-            libssl-dev \
-            libswscale-dev \
-            libudev-dev \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            librsvg2-dev \
-            ffmpeg
+            build-essential libasound2-dev libayatana-appindicator3-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libclang-dev libssl-dev \
+            libswscale-dev libudev-dev libwebkit2gtk-4.1-dev libxdo-dev librsvg2-dev ffmpeg
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -230,11 +138,12 @@ jobs:
           cargo fmt --all -- --check
           git diff --check
 
-      - name: Test strict Release protocol wire
-        run: cargo test -p protocol --locked control_plane_command::tests::blackout_release_command_wire_is_release_only_and_exactly_bound -- --exact --test-threads=1
-
-      - name: Test R4 canonical policy
-        run: cargo test -p protocol --locked control_plane_registry_v2::tests::output_disruptive_release_requires_r4_physical_consent_receipt_rate_and_no_full_lock -- --exact --test-threads=1
+      - name: Test strict Release protocol and canonical policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p protocol --locked control_plane_command::tests::blackout_release_command_wire_is_release_only_and_exactly_bound -- --exact --test-threads=1
+          cargo test -p protocol --locked control_plane_registry_v2::tests::output_disruptive_release_requires_r4_physical_consent_receipt_rate_and_no_full_lock -- --exact --test-threads=1
 
       - name: Test exact control-plane inventories
         shell: bash
@@ -244,7 +153,7 @@ jobs:
           cargo test -p syndocal --bin syndocal --locked control_plane::tests::canonical_registry_derives_the_exact_current_source_inventory -- --exact --test-threads=1
           cargo test -p syndocal --bin syndocal --locked control_plane::tests::legacy_v1_registry_json_and_count_remain_inventory_honest -- --exact --test-threads=1
 
-      - name: Test physical single-use Release consent
+      - name: Test physical single-use Release consent lifecycle
         shell: bash
         run: |
           set -euo pipefail
@@ -252,6 +161,7 @@ jobs:
           cargo test -p syndocal --bin syndocal --locked control_plane_security::tests::prepared_consent_requires_one_enumerated_physical_device_for_the_whole_code -- --exact --test-threads=1
           cargo test -p syndocal --bin syndocal --locked control_plane_security::tests::prepared_consent_expiry_is_monotonic_typed_and_then_tombstoned -- --exact --test-threads=1
           cargo test -p syndocal --bin syndocal --locked control_plane_security::tests::renderer_principal_retirement_invalidates_ready_release_consent -- --exact --test-threads=1
+          cargo test -p syndocal --bin syndocal --locked control_plane_security::tests::project_authority_replacement_invalidates_ready_release_consent -- --exact --test-threads=1
           cargo test -p syndocal --bin syndocal --locked control_plane_security::tests::desktop_session_lock_invalidates_ready_release_consent -- --exact --test-threads=1
           cargo test -p syndocal --bin syndocal --locked control_plane_security::tests::prepared_consent_rejects_other_r4_operations -- --exact --test-threads=1
 
@@ -276,17 +186,14 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm --dir app install --frozen-lockfile
 
-      - name: Test Blackout Release renderer contract
-        run: pnpm --dir app run check:blackout-release-runtime
-
-      - name: Check frontend invoke inventory
-        run: pnpm --dir app run check:frontend-invokes
-
-      - name: Type-check frontend
-        run: pnpm --dir app exec tsc --noEmit
-
-      - name: Build frontend
-        run: pnpm --dir app build
+      - name: Verify renderer/UI R4 contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --dir app run check:blackout-release-runtime
+          pnpm --dir app run check:frontend-invokes
+          pnpm --dir app exec tsc --noEmit
+          pnpm --dir app build
 
       - name: Commit verified R4 source without racing another writer
         shell: bash
