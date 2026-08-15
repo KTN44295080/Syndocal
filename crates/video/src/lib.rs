@@ -9,14 +9,15 @@ use std::{
 
 use protocol::{
     validate_video_layer_transition_runtime, ClockSnapshot, CompositionId, CompositionSummary,
-    MachineOutputRole, Transform2D, VideoBackendState, VideoBackendStatus, VideoBlendMode,
-    VideoClipRuntimeSnapshot, VideoClipSlotId, VideoColorAdjust, VideoCuePointSummary,
-    VideoEffectChainId, VideoEffectChainSummary, VideoEffectId, VideoEffectKind, VideoEffectScope,
-    VideoEffectStageId, VideoFxAdjust, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
-    VideoLayerTransitionTarget, VideoMediaMetadata, VideoOutputAspectMode, VideoOutputId,
-    VideoOutputKind, VideoOutputMapping, VideoOutputSummary, VideoRuntimeStatus, VideoSnapshot,
-    VideoSourceKind, VideoSourceSummary, VideoTransitionEffectOwner, VIDEO_EFFECT_CHAIN_MAX_STAGES,
+    MachineOutputRole, TimelineId, Transform2D, VideoBackendState, VideoBackendStatus,
+    VideoBlendMode, VideoClipRuntimeSnapshot, VideoClipSlotId, VideoColorAdjust,
+    VideoCuePointSummary, VideoEffectChainId, VideoEffectChainSummary, VideoEffectId,
+    VideoEffectKind, VideoEffectScope, VideoEffectStageId, VideoFxAdjust, VideoIsfEffectSummary,
+    VideoLayerId, VideoLayerState, VideoLayerSummary, VideoLayerTransitionCurve,
+    VideoLayerTransitionRuntimeSnapshot, VideoLayerTransitionTarget, VideoMediaMetadata,
+    VideoOutputAspectMode, VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputSummary,
+    VideoRuntimeStatus, VideoSnapshot, VideoSourceKind, VideoSourceSummary,
+    VideoTransitionEffectOwner, VIDEO_EFFECT_CHAIN_MAX_STAGES,
     VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION, VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY,
 };
 use serde::{Deserialize, Serialize};
@@ -289,6 +290,65 @@ pub struct PreparedVideoOutput {
     pub frames: Vec<VideoFrame>,
 }
 
+/// Runtime evidence for one output render. This is intentionally separate
+/// from `VideoFrame`: a last-valid frame is safe for presentation but is not
+/// proof that a newly admitted Follow transition rendered successfully.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoOutputRenderFreshness {
+    Fresh,
+    LastValid,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoOutputRenderEvidence {
+    pub project_render_epoch: u64,
+    pub output_id: VideoOutputId,
+    pub freshness: VideoOutputRenderFreshness,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoOutputRenderResult {
+    pub frame: VideoFrame,
+    pub evidence: VideoOutputRenderEvidence,
+}
+
+/// The resolved Follow/output transition parameters for a single composed
+/// program frame. The curve is applied exactly once before the transition
+/// kind is dispatched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoFollowOutputTransitionEvidence {
+    pub kind: protocol::VideoClipTakeKind,
+    pub curve: VideoLayerTransitionCurve,
+    pub raw_progress_millis: u16,
+    pub curved_progress_millis: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoFollowOutputTransitionResult {
+    pub frame: VideoFrame,
+    pub evidence: VideoFollowOutputTransitionEvidence,
+}
+
+/// Render evidence for the Follow/output seam after its optional Transition
+/// effect chain has run. `LastValid` is only returned from an explicitly
+/// supplied fallback; a chain fault is always retained in `stage_faults` and
+/// therefore is never safe to acknowledge as a fresh transition settle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoFollowOutputTransitionRenderEvidence {
+    pub transition: VideoFollowOutputTransitionEvidence,
+    pub freshness: VideoOutputRenderFreshness,
+    pub error: Option<String>,
+    pub stage_faults: Vec<VideoEffectStageFault>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoFollowOutputTransitionRenderResult {
+    pub frame: VideoFrame,
+    pub evidence: VideoFollowOutputTransitionRenderEvidence,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExternalVideoInputPlan {
     pub layer_id: VideoLayerId,
@@ -448,6 +508,16 @@ pub enum CpuCompositeError {
     },
     FrameSizeMismatch {
         layer_id: VideoLayerId,
+    },
+    InvalidTransitionProgress {
+        progress_millis: u16,
+    },
+    InvalidTransitionEffectScope {
+        scope: VideoEffectScope,
+    },
+    InvalidFollowTransitionEffectOwner {
+        expected_source_timeline_id: TimelineId,
+        owner: VideoTransitionEffectOwner,
     },
     MissingFrame {
         layer_id: VideoLayerId,
@@ -3250,6 +3320,27 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         )
     }
 
+    /// Additive acknowledged-output seam. Unlike the legacy frame-only API,
+    /// callers can distinguish a fresh render from a matching last-valid
+    /// fallback before settling a Follow/output transition.
+    pub fn render_output_with_effects_evidenced(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        output_id: VideoOutputId,
+    ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        let plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        self.render_output_plan_with_effects_evidenced(
+            snapshot,
+            context,
+            None,
+            &plan,
+            plan.width,
+            plan.height,
+        )
+    }
+
     pub fn render_output_with_effects_and_transitions(
         &mut self,
         snapshot: &VideoSnapshot,
@@ -3261,6 +3352,27 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .map_err(VideoPreviewError::Output)?;
         apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
         self.render_output_plan_with_effects(
+            snapshot,
+            context,
+            Some(transition_runtime),
+            &plan,
+            plan.width,
+            plan.height,
+        )
+    }
+
+    /// Evidenced variant of the existing transition-bus output path.
+    pub fn render_output_with_effects_and_transitions_evidenced(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
+        output_id: VideoOutputId,
+    ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        let mut plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
+        self.render_output_plan_with_effects_evidenced(
             snapshot,
             context,
             Some(transition_runtime),
@@ -3289,6 +3401,26 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         self.render_output_plan_with_effects(snapshot, context, None, &plan, width, height)
     }
 
+    /// Evidenced preview rendering for recording/monitor owners that render
+    /// at an explicit presentation size.
+    pub fn render_output_preview_with_effects_evidenced(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        let plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        self.render_output_plan_with_effects_evidenced(
+            snapshot, context, None, &plan, width, height,
+        )
+    }
+
     pub fn render_output_preview_with_effects_and_transitions(
         &mut self,
         snapshot: &VideoSnapshot,
@@ -3314,6 +3446,126 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         )
     }
 
+    /// Evidenced preview counterpart of the existing transition-bus path.
+    pub fn render_output_preview_with_effects_and_transitions_evidenced(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        let mut plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
+        self.render_output_plan_with_effects_evidenced(
+            snapshot,
+            context,
+            Some(transition_runtime),
+            &plan,
+            width,
+            height,
+        )
+    }
+
+    /// Follow/output transition seam for a pair of already-composed program
+    /// frames. `source_timeline_id` binds an optional resolved chain to its
+    /// exact `TimelineFollow` owner. Every accepted chain runs once after the
+    /// canonical base combine, for every take kind; in particular `Custom`
+    /// means neutral crossfade followed by its Transition chain. A stage fault
+    /// is returned as non-fresh evidence, never a fresh-settlement ACK.
+    ///
+    /// `last_valid` is an optional caller-owned fallback. It is used only for
+    /// a chain fault and is structurally checked against the new combined
+    /// frame, so this seam cannot silently present a mismatched cache entry.
+    pub fn render_follow_output_transition_rgba8(
+        &mut self,
+        outgoing: &VideoFrame,
+        incoming: &VideoFrame,
+        kind: protocol::VideoClipTakeKind,
+        curve: VideoLayerTransitionCurve,
+        progress_millis: u16,
+        source_timeline_id: TimelineId,
+        transition_chain: Option<&ResolvedVideoEffectChain>,
+        last_valid: Option<&VideoFrame>,
+    ) -> Result<VideoFollowOutputTransitionRenderResult, CpuCompositeError> {
+        if let Some(chain) = transition_chain {
+            match &chain.scope {
+                VideoEffectScope::Transition { owner } => {
+                    let expected_owner =
+                        VideoTransitionEffectOwner::TimelineFollow { source_timeline_id };
+                    if *owner != expected_owner {
+                        return Err(CpuCompositeError::InvalidFollowTransitionEffectOwner {
+                            expected_source_timeline_id: source_timeline_id,
+                            owner: owner.clone(),
+                        });
+                    }
+                }
+                _ => {
+                    return Err(CpuCompositeError::InvalidTransitionEffectScope {
+                        scope: chain.scope.clone(),
+                    });
+                }
+            }
+        }
+        let base = combine_follow_output_transition_rgba8(
+            outgoing,
+            incoming,
+            kind,
+            curve,
+            progress_millis,
+        )?;
+        let fallback = last_valid
+            .map(validated_follow_output_transition_frame)
+            .transpose()?;
+        if let Some(fallback) = fallback.as_ref() {
+            if fallback.width != base.frame.width
+                || fallback.height != base.frame.height
+                || fallback.data.len() != base.frame.data.len()
+            {
+                return Err(CpuCompositeError::FrameSizeMismatch {
+                    layer_id: base.frame.layer_id,
+                });
+            }
+        }
+        let (rendered, stage_faults) = match transition_chain {
+            Some(chain) => {
+                self.apply_resolved_effect_chain_to_frame(chain, base.frame.clone(), None)
+            }
+            None => (base.frame.clone(), Vec::new()),
+        };
+        let error = (!stage_faults.is_empty()).then(|| {
+            stage_faults
+                .iter()
+                .map(|fault| match fault.stage_label.as_deref() {
+                    Some(label) => format!("{label}: {}", fault.message),
+                    None => fault.message.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        });
+        let (frame, freshness) = if error.is_none() {
+            (rendered, VideoOutputRenderFreshness::Fresh)
+        } else if let Some(fallback) = fallback {
+            (fallback, VideoOutputRenderFreshness::LastValid)
+        } else {
+            (rendered, VideoOutputRenderFreshness::Error)
+        };
+        Ok(VideoFollowOutputTransitionRenderResult {
+            frame,
+            evidence: VideoFollowOutputTransitionRenderEvidence {
+                transition: base.evidence,
+                freshness,
+                error,
+                stage_faults,
+            },
+        })
+    }
+
     fn render_output_plan_with_effects(
         &mut self,
         snapshot: &VideoSnapshot,
@@ -3323,17 +3575,41 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        Ok(self
+            .render_output_plan_with_effects_evidenced(
+                snapshot,
+                context,
+                transition_runtime,
+                plan,
+                width,
+                height,
+            )?
+            .frame)
+    }
+
+    fn render_output_plan_with_effects_evidenced(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: Option<&VideoLayerTransitionRuntimeSnapshot>,
+        plan: &VideoOutputRenderPlan,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
         if plan.output_blackout || plan.output_opacity <= f32::EPSILON || plan.composition.blackout
         {
-            return Ok(self.blackout_output_artistic_frame(
-                snapshot,
-                plan.output_id,
-                width,
-                height,
-            ));
+            return Ok(VideoOutputRenderResult {
+                frame: self.blackout_output_artistic_frame(snapshot, plan.output_id, width, height),
+                evidence: VideoOutputRenderEvidence {
+                    project_render_epoch: context.project_render_epoch,
+                    output_id: plan.output_id,
+                    freshness: VideoOutputRenderFreshness::Fresh,
+                    error: None,
+                },
+            });
         }
         let key = VideoOutputLastValidKey {
             project_render_epoch: context.project_render_epoch,
@@ -3373,17 +3649,40 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                             frame: frame.clone(),
                         });
                 }
-                Ok(apply_video_output_mapping(frame, &plan.mapping))
+                Ok(VideoOutputRenderResult {
+                    frame: apply_video_output_mapping(frame, &plan.mapping),
+                    evidence: VideoOutputRenderEvidence {
+                        project_render_epoch: context.project_render_epoch,
+                        output_id: plan.output_id,
+                        freshness: VideoOutputRenderFreshness::Fresh,
+                        error: None,
+                    },
+                })
             }
             Err(error) => {
-                self.last_output_render_error = Some(format!("{error:?}"));
+                let error = format!("{error:?}");
+                self.last_output_render_error = Some(error.clone());
                 let fallback = self
                     .output_last_valid_frames
                     .iter()
                     .find(|entry| entry.key == key)
-                    .map(|entry| entry.frame.clone())
-                    .unwrap_or_else(|| video_output_transparent_black_frame(width, height));
-                Ok(apply_video_output_mapping(fallback, &plan.mapping))
+                    .map(|entry| entry.frame.clone());
+                let freshness = if fallback.is_some() {
+                    VideoOutputRenderFreshness::LastValid
+                } else {
+                    VideoOutputRenderFreshness::Error
+                };
+                let frame =
+                    fallback.unwrap_or_else(|| video_output_transparent_black_frame(width, height));
+                Ok(VideoOutputRenderResult {
+                    frame: apply_video_output_mapping(frame, &plan.mapping),
+                    evidence: VideoOutputRenderEvidence {
+                        project_render_epoch: context.project_render_epoch,
+                        output_id: plan.output_id,
+                        freshness,
+                        error: Some(error),
+                    },
+                })
             }
         }
     }
@@ -4479,6 +4778,69 @@ fn transition_video_frames_rgba8(
     }
 }
 
+/// Returns the exact integer transition progress after applying the authored
+/// output curve once. This is public so the output owner can report the same
+/// evidence that the CPU transition dispatcher consumed.
+pub fn video_follow_output_transition_progress_millis(
+    curve: VideoLayerTransitionCurve,
+    progress_millis: u16,
+) -> u16 {
+    (video_layer_transition_curve_progress(curve, progress_millis) * 1000.0)
+        .round()
+        .clamp(0.0, 1000.0) as u16
+}
+
+/// Combine two fully composed program frames for Timeline Follow/output
+/// transition presentation. It validates both sources structurally before
+/// dispatch, including `Cut`, while preserving transparent program frames as
+/// normal source-only or target-only output. `Custom` deliberately uses the neutral
+/// crossfade base; scoped Transition effects remain the caller's next chain.
+pub fn combine_follow_output_transition_rgba8(
+    outgoing: &VideoFrame,
+    incoming: &VideoFrame,
+    kind: protocol::VideoClipTakeKind,
+    curve: VideoLayerTransitionCurve,
+    progress_millis: u16,
+) -> Result<VideoFollowOutputTransitionResult, CpuCompositeError> {
+    if progress_millis > 1000 {
+        return Err(CpuCompositeError::InvalidTransitionProgress { progress_millis });
+    }
+    let outgoing = validated_follow_output_transition_frame(outgoing)?;
+    let incoming = validated_follow_output_transition_frame(incoming)?;
+    if outgoing.width != incoming.width
+        || outgoing.height != incoming.height
+        || outgoing.data.len() != incoming.data.len()
+    {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: outgoing.layer_id,
+        });
+    }
+    let curved_progress_millis =
+        video_follow_output_transition_progress_millis(curve, progress_millis);
+    let frame = transition_video_frames_rgba8(&outgoing, &incoming, kind, curved_progress_millis)?;
+    Ok(VideoFollowOutputTransitionResult {
+        frame,
+        evidence: VideoFollowOutputTransitionEvidence {
+            kind,
+            curve,
+            raw_progress_millis: progress_millis,
+            curved_progress_millis,
+        },
+    })
+}
+
+fn validated_follow_output_transition_frame(
+    frame: &VideoFrame,
+) -> Result<VideoFrame, CpuCompositeError> {
+    let frame = convert_frame_to_rgba8(frame)?;
+    if frame.width == 0 || frame.height == 0 || frame.data.is_empty() {
+        return Err(CpuCompositeError::FrameSizeMismatch {
+            layer_id: frame.layer_id,
+        });
+    }
+    Ok(frame)
+}
+
 fn compatible_rgba8_transition_frames(
     outgoing: &VideoFrame,
     incoming: &VideoFrame,
@@ -4519,20 +4881,21 @@ fn dip_video_frames_rgba8(
 ) -> Result<VideoFrame, CpuCompositeError> {
     let (outgoing, incoming) = compatible_rgba8_transition_frames(outgoing, incoming)?;
     let progress = u32::from(progress_millis.min(1000));
-    let (source, weight) = if progress < 500 {
+    let (source, source_weight) = if progress <= 500 {
         (&outgoing, 1000 - progress * 2)
     } else {
         (&incoming, (progress - 500) * 2)
     };
+    let black_weight = 1000 - source_weight;
     let data = source
         .data
         .chunks_exact(4)
         .flat_map(|pixel| {
             [
-                ((u32::from(pixel[0]) * weight + 500) / 1000) as u8,
-                ((u32::from(pixel[1]) * weight + 500) / 1000) as u8,
-                ((u32::from(pixel[2]) * weight + 500) / 1000) as u8,
-                pixel[3],
+                ((u32::from(pixel[0]) * source_weight + 500) / 1000) as u8,
+                ((u32::from(pixel[1]) * source_weight + 500) / 1000) as u8,
+                ((u32::from(pixel[2]) * source_weight + 500) / 1000) as u8,
+                ((u32::from(pixel[3]) * source_weight + 255 * black_weight + 500) / 1000) as u8,
             ]
         })
         .collect();
@@ -13090,7 +13453,7 @@ mod tests {
     }
 
     #[test]
-    fn c2_clip_take_crossfade_decodes_distinct_slot_owners_and_blends_progress() {
+    fn c2_clip_take_custom_decodes_distinct_slot_owners_neutral_blend_then_transition_chain() {
         struct ClipTakeFrameProvider;
         impl VideoFrameProvider for ClipTakeFrameProvider {
             fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
@@ -13211,7 +13574,7 @@ mod tests {
                     origin_slot_id: VideoClipSlotId(20),
                     outgoing_slot_id: VideoClipSlotId(20),
                     incoming_slot_id: VideoClipSlotId(21),
-                    kind: protocol::VideoClipTakeKind::Crossfade,
+                    kind: protocol::VideoClipTakeKind::Custom,
                     elapsed_ms: 250,
                     duration_ms: 1_000,
                     duration: protocol::VideoClipTakeDuration::milliseconds(1_000),
@@ -13386,6 +13749,562 @@ mod tests {
                 "{kind:?} must finish at incoming"
             );
         }
+    }
+
+    #[test]
+    fn follow_output_transition_combiner_covers_kinds_curves_custom_and_fail_closed_inputs() {
+        let outgoing = VideoFrame {
+            layer_id: 71,
+            width: 2,
+            height: 1,
+            pts_ms: 10,
+            duration_ms: 16,
+            format: VideoPixelFormat::Rgba8,
+            data: vec![255, 0, 0, 255, 0, 255, 0, 255],
+        };
+        let incoming = VideoFrame {
+            layer_id: 72,
+            pts_ms: 20,
+            data: vec![0, 0, 255, 255, 255, 255, 255, 255],
+            ..outgoing.clone()
+        };
+        let kinds = [
+            protocol::VideoClipTakeKind::Cut,
+            protocol::VideoClipTakeKind::Crossfade,
+            protocol::VideoClipTakeKind::Dip,
+            protocol::VideoClipTakeKind::Wipe,
+            protocol::VideoClipTakeKind::Luma,
+            protocol::VideoClipTakeKind::Displacement,
+            protocol::VideoClipTakeKind::Blur,
+            protocol::VideoClipTakeKind::Glitch,
+            protocol::VideoClipTakeKind::Custom,
+        ];
+        for kind in kinds {
+            for raw_progress_millis in [0, 500, 1000] {
+                let result = combine_follow_output_transition_rgba8(
+                    &outgoing,
+                    &incoming,
+                    kind,
+                    VideoLayerTransitionCurve::Linear,
+                    raw_progress_millis,
+                )
+                .unwrap();
+                assert_eq!(result.evidence.kind, kind);
+                assert_eq!(result.evidence.raw_progress_millis, raw_progress_millis);
+                assert_eq!(result.evidence.curved_progress_millis, raw_progress_millis);
+                if matches!(kind, protocol::VideoClipTakeKind::Cut) {
+                    assert_eq!(result.frame.data, incoming.data, "Cut ignores progress");
+                } else if raw_progress_millis == 0 {
+                    assert_eq!(result.frame.data, outgoing.data, "{kind:?} start");
+                } else if raw_progress_millis == 1000 {
+                    assert_eq!(result.frame.data, incoming.data, "{kind:?} finish");
+                }
+            }
+        }
+
+        let crossfade = combine_follow_output_transition_rgba8(
+            &outgoing,
+            &incoming,
+            protocol::VideoClipTakeKind::Crossfade,
+            VideoLayerTransitionCurve::Linear,
+            500,
+        )
+        .unwrap();
+        let dip = combine_follow_output_transition_rgba8(
+            &outgoing,
+            &incoming,
+            protocol::VideoClipTakeKind::Dip,
+            VideoLayerTransitionCurve::Linear,
+            500,
+        )
+        .unwrap();
+        assert_ne!(
+            dip.frame.data, crossfade.frame.data,
+            "non-crossfade output must not collapse to opacity blending"
+        );
+        let custom = combine_follow_output_transition_rgba8(
+            &outgoing,
+            &incoming,
+            protocol::VideoClipTakeKind::Custom,
+            VideoLayerTransitionCurve::EaseInOut,
+            400,
+        )
+        .unwrap();
+        let neutral_crossfade = combine_follow_output_transition_rgba8(
+            &outgoing,
+            &incoming,
+            protocol::VideoClipTakeKind::Crossfade,
+            VideoLayerTransitionCurve::EaseInOut,
+            400,
+        )
+        .unwrap();
+        assert_eq!(
+            custom.frame, neutral_crossfade.frame,
+            "Custom supplies the neutral blend before the caller applies its Transition chain"
+        );
+        assert_eq!(
+            custom.evidence.curved_progress_millis,
+            neutral_crossfade.evidence.curved_progress_millis
+        );
+
+        for curve in [
+            VideoLayerTransitionCurve::Linear,
+            VideoLayerTransitionCurve::EaseIn,
+            VideoLayerTransitionCurve::EaseOut,
+            VideoLayerTransitionCurve::EaseInOut,
+        ] {
+            let mut previous = 0;
+            for raw_progress_millis in (0..=1000).step_by(10) {
+                let current =
+                    video_follow_output_transition_progress_millis(curve, raw_progress_millis);
+                assert!(current >= previous, "{curve:?} must be monotonic");
+                previous = current;
+            }
+            assert_eq!(video_follow_output_transition_progress_millis(curve, 0), 0);
+            assert_eq!(
+                video_follow_output_transition_progress_millis(curve, 1000),
+                1000
+            );
+        }
+
+        let mismatched = VideoFrame {
+            width: 1,
+            data: vec![1, 2, 3, 255],
+            ..incoming.clone()
+        };
+        assert_eq!(
+            combine_follow_output_transition_rgba8(
+                &outgoing,
+                &mismatched,
+                protocol::VideoClipTakeKind::Cut,
+                VideoLayerTransitionCurve::Linear,
+                0,
+            ),
+            Err(CpuCompositeError::FrameSizeMismatch {
+                layer_id: outgoing.layer_id
+            })
+        );
+        assert_eq!(
+            combine_follow_output_transition_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Crossfade,
+                VideoLayerTransitionCurve::Linear,
+                1001,
+            ),
+            Err(CpuCompositeError::InvalidTransitionProgress {
+                progress_millis: 1001
+            })
+        );
+        let transparent = VideoFrame {
+            data: vec![0, 0, 0, 0, 0, 0, 0, 0],
+            ..outgoing.clone()
+        };
+        for kind in [
+            protocol::VideoClipTakeKind::Cut,
+            protocol::VideoClipTakeKind::Dip,
+            protocol::VideoClipTakeKind::Wipe,
+            protocol::VideoClipTakeKind::Glitch,
+        ] {
+            let source_only = combine_follow_output_transition_rgba8(
+                &transparent,
+                &incoming,
+                kind,
+                VideoLayerTransitionCurve::Linear,
+                0,
+            )
+            .expect("transparent outgoing program frame is valid");
+            let target_only = combine_follow_output_transition_rgba8(
+                &outgoing,
+                &transparent,
+                kind,
+                VideoLayerTransitionCurve::Linear,
+                1000,
+            )
+            .expect("transparent incoming program frame is valid");
+            if matches!(kind, protocol::VideoClipTakeKind::Cut) {
+                assert_eq!(
+                    source_only.frame.data, incoming.data,
+                    "Cut always selects B"
+                );
+            } else {
+                assert_eq!(
+                    source_only.frame.data, transparent.data,
+                    "{kind:?} starts at A"
+                );
+            }
+            assert_eq!(
+                target_only.frame.data, transparent.data,
+                "{kind:?} finishes at B"
+            );
+        }
+    }
+
+    #[test]
+    fn dip_transition_uses_a_continuous_rgba_envelope_through_opaque_black() {
+        let transparent = VideoFrame {
+            layer_id: 73,
+            width: 1,
+            height: 1,
+            pts_ms: 0,
+            duration_ms: 16,
+            format: VideoPixelFormat::Rgba8,
+            data: vec![40, 80, 120, 0],
+        };
+        let opaque = VideoFrame {
+            layer_id: 74,
+            data: vec![10, 20, 30, 255],
+            ..transparent.clone()
+        };
+        for (outgoing, incoming, expected_alpha) in [
+            (&transparent, &opaque, [254_u8, 255, 255]),
+            (&opaque, &transparent, [255_u8, 255, 254]),
+        ] {
+            let neighbors = [499, 500, 501].map(|progress| {
+                transition_video_frames_rgba8(
+                    outgoing,
+                    incoming,
+                    protocol::VideoClipTakeKind::Dip,
+                    progress,
+                )
+                .unwrap()
+            });
+            assert_eq!(
+                [
+                    neighbors[0].data[3],
+                    neighbors[1].data[3],
+                    neighbors[2].data[3],
+                ],
+                expected_alpha,
+                "dip alpha must approach and leave opaque black without a switch jump"
+            );
+            assert_eq!(neighbors[1].data, vec![0, 0, 0, 255]);
+            assert!(i16::from(neighbors[1].data[3]).abs_diff(i16::from(neighbors[0].data[3])) <= 1);
+            assert!(i16::from(neighbors[2].data[3]).abs_diff(i16::from(neighbors[1].data[3])) <= 1);
+        }
+        assert_eq!(
+            transition_video_frames_rgba8(
+                &transparent,
+                &opaque,
+                protocol::VideoClipTakeKind::Dip,
+                0,
+            )
+            .unwrap()
+            .data,
+            transparent.data
+        );
+        assert_eq!(
+            transition_video_frames_rgba8(
+                &transparent,
+                &opaque,
+                protocol::VideoClipTakeKind::Dip,
+                1000,
+            )
+            .unwrap()
+            .data,
+            opaque.data
+        );
+    }
+
+    #[test]
+    fn follow_output_renderer_custom_runs_transition_chain_once_and_faults_are_not_fresh() {
+        IsfGpuRuntime::new().expect("Follow Custom transition-chain test requires a GPU adapter");
+        const SOLID_RED: &str = r#"/*{
+          "INPUTS": [{"NAME":"inputImage","TYPE":"image"}]
+        }*/
+        void main() {
+          gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        }"#;
+        let source_timeline_id = TimelineId(701);
+        let scope = VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::TimelineFollow { source_timeline_id },
+        };
+        let prepared_solid = prepare_isf_shader(SOLID_RED).unwrap();
+        let solid_red = isf_effect_from_prepared(
+            "Solid Red".to_string(),
+            SOLID_RED.to_string(),
+            None,
+            &prepared_solid,
+        );
+        let invert = builtin_isf_effect("invert").unwrap().unwrap();
+        let solid_then_invert = resolved_chain_from_canonical(&c1_chain(
+            713,
+            scope.clone(),
+            false,
+            vec![solid_red, invert.clone()],
+        ))
+        .unwrap();
+        let invert_only =
+            resolved_chain_from_canonical(&c1_chain(714, scope.clone(), false, vec![invert]))
+                .unwrap();
+        let failed_chain = resolved_chain_from_canonical(&c1_chain(
+            715,
+            scope.clone(),
+            false,
+            vec![c1_invalid_effect("Follow Transition fault")],
+        ))
+        .unwrap();
+        let wrong_timeline_owner = VideoTransitionEffectOwner::TimelineFollow {
+            source_timeline_id: TimelineId(702),
+        };
+        let wrong_timeline_chain = resolved_chain_from_canonical(&c1_chain(
+            716,
+            VideoEffectScope::Transition {
+                owner: wrong_timeline_owner.clone(),
+            },
+            false,
+            vec![builtin_isf_effect("invert").unwrap().unwrap()],
+        ))
+        .unwrap();
+        let clip_take_owner = VideoTransitionEffectOwner::ClipTake { layer_id: 71 };
+        let clip_take_chain = resolved_chain_from_canonical(&c1_chain(
+            717,
+            VideoEffectScope::Transition {
+                owner: clip_take_owner.clone(),
+            },
+            false,
+            vec![builtin_isf_effect("invert").unwrap().unwrap()],
+        ))
+        .unwrap();
+        let layer_bus_owner = VideoTransitionEffectOwner::LayerBus {
+            bus_id: protocol::VideoTransitionBusId(718),
+        };
+        let layer_bus_chain = resolved_chain_from_canonical(&c1_chain(
+            718,
+            VideoEffectScope::Transition {
+                owner: layer_bus_owner.clone(),
+            },
+            false,
+            vec![builtin_isf_effect("invert").unwrap().unwrap()],
+        ))
+        .unwrap();
+        let outgoing = VideoFrame {
+            layer_id: 71,
+            width: 1,
+            height: 1,
+            pts_ms: 1_000,
+            duration_ms: 16,
+            format: VideoPixelFormat::Rgba8,
+            data: vec![255, 0, 0, 255],
+        };
+        let incoming = VideoFrame {
+            layer_id: 72,
+            data: vec![0, 0, 255, 255],
+            ..outgoing.clone()
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider::default(),
+        );
+        let crossfade = renderer
+            .render_follow_output_transition_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Crossfade,
+                VideoLayerTransitionCurve::Linear,
+                500,
+                source_timeline_id,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(crossfade.frame.data, vec![128, 0, 128, 255]);
+        assert_eq!(
+            crossfade.evidence.freshness,
+            VideoOutputRenderFreshness::Fresh
+        );
+
+        let custom_ordered = renderer
+            .render_follow_output_transition_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Custom,
+                VideoLayerTransitionCurve::Linear,
+                500,
+                source_timeline_id,
+                Some(&solid_then_invert),
+                None,
+            )
+            .unwrap();
+        assert_eq!(custom_ordered.frame.data, vec![0, 255, 255, 255]);
+        assert_ne!(custom_ordered.frame, crossfade.frame);
+        assert_eq!(
+            custom_ordered.evidence.freshness,
+            VideoOutputRenderFreshness::Fresh
+        );
+        assert!(custom_ordered.evidence.stage_faults.is_empty());
+        assert_eq!(renderer.isf_last_stack_stage_count(), 2);
+
+        let custom_inverted_once = renderer
+            .render_follow_output_transition_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Custom,
+                VideoLayerTransitionCurve::Linear,
+                500,
+                source_timeline_id,
+                Some(&invert_only),
+                None,
+            )
+            .unwrap();
+        assert_eq!(custom_inverted_once.frame.data, vec![127, 255, 127, 255]);
+        assert_ne!(custom_inverted_once.frame, crossfade.frame);
+        assert_eq!(
+            custom_inverted_once.evidence.freshness,
+            VideoOutputRenderFreshness::Fresh
+        );
+        assert_eq!(renderer.isf_last_stack_stage_count(), 1);
+
+        let fault = renderer
+            .render_follow_output_transition_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Custom,
+                VideoLayerTransitionCurve::Linear,
+                500,
+                source_timeline_id,
+                Some(&failed_chain),
+                None,
+            )
+            .unwrap();
+        assert_eq!(fault.evidence.freshness, VideoOutputRenderFreshness::Error);
+        assert!(fault.evidence.error.is_some());
+        assert_eq!(fault.evidence.stage_faults.len(), 1);
+        assert_eq!(
+            fault.frame, crossfade.frame,
+            "faulted chain cannot make a fresh Custom frame"
+        );
+
+        let last_valid = renderer
+            .render_follow_output_transition_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Custom,
+                VideoLayerTransitionCurve::Linear,
+                500,
+                source_timeline_id,
+                Some(&failed_chain),
+                Some(&crossfade.frame),
+            )
+            .unwrap();
+        assert_eq!(
+            last_valid.evidence.freshness,
+            VideoOutputRenderFreshness::LastValid
+        );
+        assert!(last_valid.evidence.error.is_some());
+        assert_eq!(last_valid.evidence.stage_faults.len(), 1);
+        assert_eq!(last_valid.frame, crossfade.frame);
+
+        assert_eq!(renderer.isf_last_stack_stage_count(), 0);
+        assert_eq!(
+            renderer.render_follow_output_transition_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Custom,
+                VideoLayerTransitionCurve::Linear,
+                500,
+                source_timeline_id,
+                Some(&wrong_timeline_chain),
+                None,
+            ),
+            Err(CpuCompositeError::InvalidFollowTransitionEffectOwner {
+                expected_source_timeline_id: source_timeline_id,
+                owner: wrong_timeline_owner,
+            })
+        );
+        assert_eq!(
+            renderer.isf_last_stack_stage_count(),
+            0,
+            "mismatched TimelineFollow chain must not execute or produce fresh evidence"
+        );
+        assert_eq!(
+            renderer.render_follow_output_transition_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Custom,
+                VideoLayerTransitionCurve::Linear,
+                500,
+                source_timeline_id,
+                Some(&clip_take_chain),
+                None,
+            ),
+            Err(CpuCompositeError::InvalidFollowTransitionEffectOwner {
+                expected_source_timeline_id: source_timeline_id,
+                owner: clip_take_owner,
+            })
+        );
+        assert_eq!(
+            renderer.isf_last_stack_stage_count(),
+            0,
+            "ClipTake chain must not execute or produce fresh Follow evidence"
+        );
+        assert_eq!(
+            renderer.render_follow_output_transition_rgba8(
+                &outgoing,
+                &incoming,
+                protocol::VideoClipTakeKind::Custom,
+                VideoLayerTransitionCurve::Linear,
+                500,
+                source_timeline_id,
+                Some(&layer_bus_chain),
+                None,
+            ),
+            Err(CpuCompositeError::InvalidFollowTransitionEffectOwner {
+                expected_source_timeline_id: source_timeline_id,
+                owner: layer_bus_owner,
+            })
+        );
+        assert_eq!(
+            renderer.isf_last_stack_stage_count(),
+            0,
+            "LayerBus chain must not execute or produce fresh Follow evidence"
+        );
+    }
+
+    #[test]
+    fn follow_output_render_evidence_distinguishes_fresh_last_valid_and_error() {
+        let snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        let runtime = VideoClipRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &runtime,
+            project_render_epoch: 913,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [12, 34, 56, 255])]),
+                fail: false,
+            },
+        );
+        let fresh = renderer
+            .render_output_with_effects_evidenced(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(fresh.evidence.freshness, VideoOutputRenderFreshness::Fresh);
+        assert_eq!(fresh.evidence.error, None);
+        renderer.frame_provider_mut().fail = true;
+        let last_valid = renderer
+            .render_output_with_effects_evidenced(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(last_valid.frame, fresh.frame);
+        assert_eq!(
+            last_valid.evidence.freshness,
+            VideoOutputRenderFreshness::LastValid
+        );
+        assert!(last_valid.evidence.error.is_some());
+
+        let mut cold_renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::new(),
+                fail: true,
+            },
+        );
+        let error = cold_renderer
+            .render_output_with_effects_evidenced(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(error.frame.data, vec![0, 0, 0, 0]);
+        assert_eq!(error.evidence.freshness, VideoOutputRenderFreshness::Error);
+        assert!(error.evidence.error.is_some());
     }
 
     #[test]

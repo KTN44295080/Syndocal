@@ -30,13 +30,13 @@ use protocol::{
     normalize_legacy_video_media_assets, normalize_timeline_bank,
     set_video_output_mapping_field_value, validate_engine_ready_video_clip_slots,
     validate_engine_ready_video_effect_chains, validate_timeline_authoring, validate_timeline_bank,
-    validate_video_clip_runtime_against_authored_slots, validate_video_layer_transition_runtime,
-    ActiveFadeSummary, AttributeControl, AttributeResolution, AttributeValueSummary,
-    AudioAnalysisSummary, AudioReactiveCurve, AudioReactiveFeature, AudioSpectrumBand,
-    AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction, AutoVjConfig, AutoVjMode,
-    AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger, AutomationId,
-    AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection, ChaserEffectRequest,
-    ChaserFeature, ChildTimelineSummary, ChildTimelineTransportPathSegment,
+    validate_timeline_follow_settlement_ack, validate_video_clip_runtime_against_authored_slots,
+    validate_video_layer_transition_runtime, ActiveFadeSummary, AttributeControl,
+    AttributeResolution, AttributeValueSummary, AudioAnalysisSummary, AudioReactiveCurve,
+    AudioReactiveFeature, AudioSpectrumBand, AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction,
+    AutoVjConfig, AutoVjMode, AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger,
+    AutomationId, AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection,
+    ChaserEffectRequest, ChaserFeature, ChildTimelineSummary, ChildTimelineTransportPathSegment,
     ChildTimelineTransportRootSummary, ChildTimelineTransportRuntimeSummary, ClockSnapshot,
     ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
     ColorEffectRequest, ColorEffectSpatialBounceItem, ColorEffectSpatialCoordinateFrame,
@@ -63,30 +63,34 @@ use protocol::{
     StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAdvancedAuthoringSummary,
     TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
     TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatusSnapshot,
-    TimelineFollowRuntimeSummary, TimelineFollowSummary, TimelineGuideCueKind,
-    TimelineGuideCueSummary, TimelineId, TimelineItemGroupId, TimelineItemGroupSummary,
-    TimelineItemRef, TimelineLayerKind, TimelineLayerSummary, TimelineLoopRegionSummary,
-    TimelineLoopRuntimeStatus, TimelineLoopRuntimeSummary, TimelineLoopScale, TimelinePhaseId,
-    TimelinePhaseSummary, TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind,
-    TimelineVideoAutomationSummary, TimelineVideoClipId, TimelineVideoClipSummary,
-    TouchFeaturePresetTarget, TouchSurfaceSummary, Transform2D, ValueEffectDirection,
-    ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
-    VideoAutomationKeyframeSummary, VideoBlendMode, VideoClipLaunchQuantization,
-    VideoClipLayerRuntimeSummary, VideoClipLoopMode, VideoClipPendingLaunchSummary,
-    VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary, VideoClipTakeDuration,
-    VideoClipTakeDurationUnit, VideoClipTakeKind, VideoClipTakeTransitionSummary, VideoColorAdjust,
-    VideoCuePointSummary, VideoEffectChainId, VideoEffectChainSummary, VideoEffectId,
-    VideoEffectKind, VideoEffectPresetId, VideoEffectPresetSummary, VideoEffectScope,
-    VideoEffectStageId, VideoEffectStageSummary, VideoEffectTarget, VideoFxAdjust,
-    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerGroupId,
-    VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoLayerTarget,
-    VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionBusSummary,
-    VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot, VideoLayerTransitionTarget,
-    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetSummary,
-    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoSnapshot, VideoSourceKind,
-    VideoSourceSummary, VideoTransitionBusId, VideoTransitionEffectOwner, DEFAULT_CUE_LIST_ID,
-    LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
-    MIN_CUE_AUTHORED_BEATS,
+    TimelineFollowRuntimeSummary, TimelineFollowSettlementAck, TimelineFollowSettlementAckResult,
+    TimelineFollowSettlementConsumerId, TimelineFollowSettlementConsumerSummary,
+    TimelineFollowSettlementDomain, TimelineFollowSettlementDomainSummary,
+    TimelineFollowSettlementState, TimelineFollowSettlementSummary, TimelineFollowSummary,
+    TimelineGuideCueKind, TimelineGuideCueSummary, TimelineId, TimelineItemGroupId,
+    TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind, TimelineLayerSummary,
+    TimelineLoopRegionSummary, TimelineLoopRuntimeStatus, TimelineLoopRuntimeSummary,
+    TimelineLoopScale, TimelinePhaseId, TimelinePhaseSummary, TimelineSnapRequest,
+    TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary, TimelineVideoClipId,
+    TimelineVideoClipSummary, TouchFeaturePresetTarget, TouchSurfaceSummary, Transform2D,
+    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode,
+    VideoClipLaunchQuantization, VideoClipLayerRuntimeSummary, VideoClipLoopMode,
+    VideoClipPendingLaunchSummary, VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary,
+    VideoClipTakeDuration, VideoClipTakeDurationUnit, VideoClipTakeKind,
+    VideoClipTakeTransitionSummary, VideoColorAdjust, VideoCuePointSummary, VideoEffectChainId,
+    VideoEffectChainSummary, VideoEffectId, VideoEffectKind, VideoEffectPresetId,
+    VideoEffectPresetSummary, VideoEffectScope, VideoEffectStageId, VideoEffectStageSummary,
+    VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind, VideoIsfEffectStageSummary,
+    VideoIsfEffectSummary, VideoLayerGroupId, VideoLayerGroupSummary, VideoLayerId,
+    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoLayerTransitionBusRuntimeSummary,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
+    VideoLayerTransitionTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoSnapshot, VideoSourceKind, VideoSourceSummary, VideoTransitionBusId,
+    VideoTransitionEffectOwner, DEFAULT_CUE_LIST_ID, LIVE_AUDIO_FEATURE_BAND_CAPACITY,
+    MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS, MIN_CUE_AUTHORED_BEATS,
+    TIMELINE_FOLLOW_SETTLEMENT_TIMEOUT_MS,
 };
 use thiserror::Error;
 
@@ -2116,6 +2120,14 @@ pub enum EngineCommand {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Runtime-only settlement acknowledgement from one captured Follow
+    /// consumer. It is epoch/generation fenced and never dirties authored
+    /// Timeline state or project history.
+    AcknowledgeTimelineFollowSettlement {
+        settlement_ack: TimelineFollowSettlementAck,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     AddTimelineAutomation {
         automation_id: AutomationId,
         fixture_id: FixtureId,
@@ -2639,6 +2651,7 @@ impl EngineCommand {
                 | EngineCommand::SeekTimelineBeat { .. }
                 | EngineCommand::SyncTimelineTimecode { .. }
                 | EngineCommand::AbortTimelineFollow { .. }
+                | EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
                 | EngineCommand::PulseVideoLayerIsfEvent { .. }
         )
     }
@@ -2782,6 +2795,10 @@ pub struct EngineHandle {
     wake: Arc<EngineWake>,
     shared_telemetry: Arc<EngineSharedTelemetry>,
     snapshot: Arc<RwLock<EngineSnapshot>>,
+    /// Runtime-only unweighted source/target inputs for the Follow presenter.
+    /// Keeping this beside (rather than inside) `EngineSnapshot` prevents an
+    /// authored project save from ever observing a dual transport.
+    timeline_follow_video_render_snapshot: Arc<RwLock<Option<TimelineFollowVideoRenderSnapshot>>>,
     output_ownership_gate: OutputOwnershipGate,
     /// Serializes public ID allocation with candidate snapshot reservation.
     /// Reservation is a monotonic commit at command enqueue time, so a
@@ -2817,6 +2834,23 @@ pub struct EngineHandle {
     test_fail_next_pending_publication: Arc<AtomicBool>,
     #[cfg(test)]
     test_media_asset_publication_failed_after_b: Arc<AtomicBool>,
+}
+
+/// Engine-owned inputs for one active Timeline Follow presenter. The backend
+/// owns output capability and last-valid fencing; this object carries only
+/// exact runtime identity and unweighted video inputs.
+#[derive(Debug, Clone)]
+pub struct TimelineFollowVideoRenderSnapshot {
+    pub epoch: u64,
+    pub generation: u64,
+    pub source_timeline_id: TimelineId,
+    pub target_timeline_id: TimelineId,
+    pub kind: VideoClipTakeKind,
+    pub curve: VideoLayerTransitionCurve,
+    pub progress_millis: u16,
+    pub outgoing_video: VideoSnapshot,
+    pub incoming_video: VideoSnapshot,
+    pub transition_effect_chain: Option<VideoEffectChainSummary>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -3028,6 +3062,7 @@ impl EngineHandle {
             .checked_add(1)
             .expect("the default Timeline ID must leave allocator capacity");
         let snapshot = Arc::new(RwLock::new(initial_snapshot));
+        let timeline_follow_video_render_snapshot = Arc::new(RwLock::new(None));
         let next_fixture_id = Arc::new(AtomicU64::new(1));
         let next_effect_id = Arc::new(AtomicU64::new(1));
         let next_cue_id = Arc::new(AtomicU64::new(1));
@@ -3063,6 +3098,8 @@ impl EngineHandle {
         let runtime_shared_telemetry = Arc::clone(&shared_telemetry);
         let runtime_output_ownership_gate = output_ownership_gate.clone();
         let runtime_snapshot = Arc::clone(&snapshot);
+        let runtime_timeline_follow_video_render_snapshot =
+            Arc::clone(&timeline_follow_video_render_snapshot);
         let runtime_lifetime = Arc::downgrade(&lifetime);
         #[cfg(test)]
         let runtime_test_fail_next_pending_publication =
@@ -3083,6 +3120,8 @@ impl EngineHandle {
                     #[cfg(test)]
                     runtime_test_media_asset_publication_failed_after_b,
                 );
+                runtime.timeline_follow_video_render_snapshot =
+                    Some(runtime_timeline_follow_video_render_snapshot);
                 runtime.run(
                     runtime_queue,
                     runtime_wake,
@@ -3099,6 +3138,7 @@ impl EngineHandle {
             wake,
             shared_telemetry,
             snapshot,
+            timeline_follow_video_render_snapshot,
             output_ownership_gate,
             allocator_gate,
             next_fixture_id,
@@ -5313,6 +5353,18 @@ impl EngineHandle {
         self.snapshot().timeline.follow_runtime
     }
 
+    /// Return the active Follow's exact source/target render inputs. `None`
+    /// means no Follow presenter is active; callers must never synthesize a
+    /// transition from the legacy weighted `video_snapshot`.
+    pub fn timeline_follow_video_render_snapshot(
+        &self,
+    ) -> Option<TimelineFollowVideoRenderSnapshot> {
+        self.timeline_follow_video_render_snapshot
+            .read()
+            .ok()
+            .and_then(|snapshot| snapshot.clone())
+    }
+
     /// Request a definitive runtime-only Follow abort for exactly the observed
     /// generation. A stale generation is rejected; an exact idle generation is
     /// a no-op. Once admitted, acknowledgement reports shared-snapshot
@@ -5333,6 +5385,28 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Timeline Follow abort acknowledgement failed: {error}"))?
+    }
+
+    /// Definitively acknowledge one captured Follow settlement consumer. The
+    /// acknowledgement is runtime-only; accepted state becomes visible at the
+    /// same shared-snapshot publication barrier as the reply.
+    pub fn acknowledge_timeline_follow_settlement_published(
+        &self,
+        settlement_ack: TimelineFollowSettlementAck,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::AcknowledgeTimelineFollowSettlement {
+            settlement_ack,
+            expires_at,
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Timeline Follow settlement acknowledgement failed: {error}")
+            })?
     }
 
     pub fn output_ownership_status(&self) -> OutputOwnershipStatus {
@@ -5539,6 +5613,7 @@ impl EngineHandle {
                 let follow_transitioning = matches!(
                     snapshot.timeline.follow_runtime.status,
                     protocol::TimelineFollowRuntimeStatus::Transitioning
+                        | protocol::TimelineFollowRuntimeStatus::Settling
                 );
                 let follow_progress = video_transition_curve_progress(
                     snapshot
@@ -6178,6 +6253,7 @@ impl EngineHandle {
             | EngineCommand::SeekTimelineBeat { .. }
             | EngineCommand::SyncTimelineTimecode { .. }
             | EngineCommand::AbortTimelineFollow { .. }
+            | EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
             | EngineCommand::SetAutoVjConfig(_)
             | EngineCommand::SetAutoVjArmed(_)
             | EngineCommand::SetAutoVjHold(_)
@@ -6797,6 +6873,12 @@ fn reconcile_video_effect_hosts_for_load(video: &VideoSnapshot) -> VideoSnapshot
         // validator continues to reject the forward-only C3 seam explicitly.
         VideoEffectScope::Transition {
             owner: protocol::VideoTransitionEffectOwner::LayerBus { .. },
+        } => true,
+        // Timeline bank validation owns this host relationship. This legacy
+        // video graph reconciliation must not discard a valid Follow chain
+        // before the Timeline validator can report a genuinely dangling ID.
+        VideoEffectScope::Transition {
+            owner: protocol::VideoTransitionEffectOwner::TimelineFollow { .. },
         } => true,
         VideoEffectScope::Composition { composition_id } => {
             composition_ids.contains(composition_id)
@@ -13100,7 +13182,12 @@ struct RuntimeTimelineFollowTransition {
     duration: Duration,
     source_bpm: f32,
     target_bpm: f32,
+    video_kind: VideoClipTakeKind,
     curve: VideoLayerTransitionCurve,
+    /// Exact admission-time Transition owner binding. A later authored catalog
+    /// mutation must not change the executable Follow visual during a live
+    /// generation.
+    transition_effect_chain: Option<VideoEffectChainSummary>,
     lighting_policy: protocol::TimelineFollowLightingPolicy,
     fault_policy: protocol::TimelineFollowFaultPolicy,
     admission_reason: protocol::TimelineFollowAdmissionReason,
@@ -13110,6 +13197,47 @@ struct RuntimeTimelineFollowTransition {
     last_trans_beat_ordinal: Option<u64>,
     affected_video_layer_ids: HashSet<VideoLayerId>,
     outgoing_dmx_frames: HashMap<u16, [u8; 512]>,
+    /// Exact production route set which was enabled when this generation was
+    /// admitted. Later output configuration edits cannot grow, shrink, or
+    /// silently satisfy this quorum.
+    lighting_route_quorum: Vec<RuntimeTimelineFollowLightingRoute>,
+    /// Audio, Video and Lighting consumer identities are likewise frozen at
+    /// admission. Entering Settling copies this image verbatim.
+    settlement_domains: Vec<TimelineFollowSettlementDomainSummary>,
+    settlement_started_at: Option<Instant>,
+    settlement_deadline: Option<Instant>,
+    settlement_target_events: Option<Vec<RuntimeTimelineEvent>>,
+    settlement_target_position_ms: Option<u64>,
+    /// Every admitted terminal consumer acknowledgement for this captured
+    /// settlement quorum. This is bounded by `settlement_domains`, whose
+    /// consumers were frozen at admission; it is never persisted.
+    accepted_settlement_acknowledgements: Vec<TimelineFollowSettlementAck>,
+}
+
+/// Admission-time identity of one physical DMX route.  The serialized route
+/// position and universe are only diagnostic: a route can be disabled and
+/// re-enabled, or removed and recreated at the same slot.  Keep both the
+/// complete normalized configuration and the engine-owned monotonic
+/// configuration generation so stale telemetry can never satisfy a Follow
+/// settlement quorum after that ABA sequence.
+#[derive(Clone, Debug, PartialEq)]
+struct RuntimeTimelineFollowLightingRoute {
+    index: usize,
+    universe: u16,
+    configuration: DmxOutputConfig,
+    configuration_generation: u64,
+}
+
+/// One bounded terminal receipt for every accepted settlement consumer of a
+/// completed Follow generation. A physical consumer may have applied before
+/// its caller loses a reply, including before another consumer finishes the
+/// quorum. Retaining the captured per-consumer shapes lets every exact retry
+/// observe the same committed completion without replaying target install.
+#[derive(Clone, Debug)]
+struct TimelineFollowSettlementTerminalReceipt {
+    epoch: u64,
+    acknowledgements: Vec<TimelineFollowSettlementAck>,
+    runtime: TimelineFollowRuntimeSummary,
 }
 
 #[derive(Clone)]
@@ -13695,6 +13823,14 @@ struct EngineRuntime {
     nested_child_transports: Vec<RuntimeChildTransport>,
     timeline_follow_transport: Option<RuntimeChildTransport>,
     timeline_follow_transition: Option<RuntimeTimelineFollowTransition>,
+    /// Retains only the just-completed Follow settlement result. It is never
+    /// persisted and is cleared at each new Follow or successful project
+    /// replacement, so an older generation cannot be revived by a retry.
+    timeline_follow_terminal_settlement_receipt: Option<TimelineFollowSettlementTerminalReceipt>,
+    /// Shared only with `EngineHandle`; this is an additive runtime presenter
+    /// seam and never participates in authored snapshot persistence.
+    timeline_follow_video_render_snapshot:
+        Option<Arc<RwLock<Option<TimelineFollowVideoRenderSnapshot>>>>,
     /// The Follow child has already been retired. Keep the runtime status at
     /// `Aborting` through one tick before publishing the terminal Idle result;
     /// this is a generation fence, not a claim that an external worker ACKed.
@@ -13864,6 +14000,14 @@ struct EngineRuntime {
     last_dmx_send_success_count: usize,
     last_dmx_send_failure_count: usize,
     last_dmx_route_results: Vec<DmxOutputRouteTelemetry>,
+    /// The engine-owned incarnation of the configuration that produced
+    /// `last_dmx_route_results`.  Protocol telemetry remains a public,
+    /// configuration-agnostic DTO, so this is intentionally runtime-only.
+    last_dmx_route_configuration_generation: u64,
+    /// Bumped for every complete output-route configuration replacement.
+    /// Unlike `{index, universe}`, it never rewinds when a route is restored
+    /// with the same visible fields after an in-flight Follow was admitted.
+    dmx_route_configuration_generation: u64,
     total_dmx_send_success_count: u64,
     total_dmx_send_failure_count: u64,
     last_error: Option<String>,
@@ -14037,6 +14181,8 @@ impl EngineRuntime {
             nested_child_transports: Vec::new(),
             timeline_follow_transport: None,
             timeline_follow_transition: None,
+            timeline_follow_terminal_settlement_receipt: None,
+            timeline_follow_video_render_snapshot: None,
             timeline_follow_abort_ticks_remaining: 0,
             node_graphs: Vec::new(),
             cues: Vec::new(),
@@ -14188,6 +14334,8 @@ impl EngineRuntime {
             last_dmx_send_success_count: 0,
             last_dmx_send_failure_count: 0,
             last_dmx_route_results: Vec::new(),
+            last_dmx_route_configuration_generation: 1,
+            dmx_route_configuration_generation: 1,
             total_dmx_send_success_count: 0,
             total_dmx_send_failure_count: 0,
             last_error: last_error.clone(),
@@ -14216,6 +14364,17 @@ impl EngineRuntime {
             output.sender = None;
             output.recovery = DmxRouteRecovery::default();
         }
+    }
+
+    /// Output route configuration is a physical identity boundary for an
+    /// in-flight Follow.  Increment even when a caller restores byte-equal
+    /// config: an ABA disable/re-enable or remove/re-add must not let old
+    /// send telemetry acknowledge the new physical route.
+    fn bump_dmx_route_configuration_generation(&mut self) {
+        self.dmx_route_configuration_generation = self
+            .dmx_route_configuration_generation
+            .wrapping_add(1)
+            .max(1);
     }
 
     fn effective_lighting_allowed(&self) -> bool {
@@ -14555,6 +14714,10 @@ impl EngineRuntime {
         // Every load failure above ran only against the candidate/staged
         // image. Do not tear down an active Follow until all fallible work has
         // succeeded, otherwise a rejected project would mutate live runtime A.
+        // A successful project replacement is an epoch boundary for runtime
+        // Follow receipts. A delayed acknowledgement from the prior project
+        // must not be recoverable against a reused Timeline generation.
+        self.timeline_follow_terminal_settlement_receipt = None;
         if self.timeline_follow_is_abortable() {
             self.abort_timeline_follow(
                 protocol::TimelineFollowAbortReason::ProjectReplacement,
@@ -14577,6 +14740,7 @@ impl EngineRuntime {
         self.nested_child_transports.clear();
         self.timeline_follow_transport = None;
         self.timeline_follow_transition = None;
+        self.refresh_timeline_follow_video_render_snapshot();
         self.timeline_follow_abort_ticks_remaining = 0;
         self.timeline_follow_natural_boundary_armed = false;
         self.direct_child_count_in = None;
@@ -14835,6 +14999,7 @@ impl EngineRuntime {
             .into_iter()
             .map(|output| RuntimeDmxOutput::new_with_lighting_allowed(output, lighting_allowed))
             .collect();
+        self.bump_dmx_route_configuration_generation();
         self.dmx_input_frames.clear();
         self.lighting_master = if snapshot.lighting_master.is_finite() {
             snapshot.lighting_master.clamp(0.0, 1.0)
@@ -14985,6 +15150,7 @@ impl EngineRuntime {
         self.last_dmx_send_success_count = 0;
         self.last_dmx_send_failure_count = 0;
         self.last_dmx_route_results.clear();
+        self.last_dmx_route_configuration_generation = self.dmx_route_configuration_generation;
         self.total_dmx_send_success_count = 0;
         self.total_dmx_send_failure_count = 0;
         self.last_frame = dmx_preview_to_frame(&snapshot.dmx_preview);
@@ -15533,6 +15699,7 @@ impl EngineRuntime {
                     | EngineCommand::ApplyTimelineAdvancedAuthoringPublished { .. }
                     | EngineCommand::ApplyTimelineBankPublished { .. }
                     | EngineCommand::AbortTimelineFollow { .. }
+                    | EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
             );
             if queued_command.command.requests_low_latency_dmx_tick() {
                 self.low_latency_dmx_tick_request_count =
@@ -16525,6 +16692,7 @@ impl EngineRuntime {
             }
             EngineCommand::SetOutput(output) => {
                 self.output = output;
+                self.bump_dmx_route_configuration_generation();
                 self.dmx_sender_recovery = DmxRouteRecovery::default();
                 let lighting_permit = self
                     .output_ownership_gate
@@ -16584,6 +16752,7 @@ impl EngineRuntime {
                         runtime_output
                     })
                     .collect();
+                self.bump_dmx_route_configuration_generation();
                 self.last_error = first_error;
             }
             EngineCommand::SetDmxInputFrame {
@@ -19727,6 +19896,28 @@ impl EngineRuntime {
                         "Timeline Follow abort applied but could not publish its runtime status",
                 });
             }
+            EngineCommand::AcknowledgeTimelineFollowSettlement {
+                settlement_ack,
+                expires_at,
+                ack,
+            } => {
+                let result = if Instant::now() > expires_at {
+                    Err("Timeline Follow settlement acknowledgement expired before engine execution"
+                        .to_string())
+                } else {
+                    self.acknowledge_timeline_follow_settlement(settlement_ack, Instant::now())
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    // Consumer application is physical/runtime-only. A
+                    // publication miss must not re-open the settled target or
+                    // replay an already observed presenter acknowledgement.
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error:
+                        "Timeline Follow settlement acknowledgement applied but could not publish runtime status",
+                });
+            }
             EngineCommand::AddTimelineAutomation {
                 automation_id,
                 fixture_id,
@@ -21594,6 +21785,10 @@ impl EngineRuntime {
                     self.rollback_pending_command(pending.rollback.clone());
                 }
             }
+            // A restored Follow subtree must also restore the Handle-only
+            // presenter input. It is intentionally not serialized in the
+            // rollback image, so regenerate it from the exact restored A.
+            self.refresh_timeline_follow_video_render_snapshot();
             if !restores_last_error {
                 self.last_error = pending
                     .iter()
@@ -22456,6 +22651,9 @@ impl EngineRuntime {
             VideoEffectScope::Transition {
                 owner: protocol::VideoTransitionEffectOwner::LayerBus { bus_id },
             } => buses.contains(bus_id),
+            VideoEffectScope::Transition {
+                owner: protocol::VideoTransitionEffectOwner::TimelineFollow { .. },
+            } => true,
             VideoEffectScope::Composition { composition_id } => {
                 compositions.contains(composition_id)
             }
@@ -23226,6 +23424,10 @@ impl EngineRuntime {
         self.last_dmx_send_success_count = 0;
         self.last_dmx_send_failure_count = 0;
         self.last_dmx_route_results.clear();
+        // Route telemetry below is valid only for this exact configuration
+        // incarnation. Follow settlement compares this private stamp with its
+        // admission-time route identity before treating a send as Applied.
+        self.last_dmx_route_configuration_generation = self.dmx_route_configuration_generation;
         let lighting_permit = self
             .output_ownership_gate
             .acquire(OutputCapability::Lighting)
@@ -23297,6 +23499,9 @@ impl EngineRuntime {
                 self.record_dmx_output_tick(now);
             }
         }
+
+        self.acknowledge_timeline_follow_lighting_settlement(now);
+        self.refresh_timeline_follow_video_render_snapshot();
 
         if let Ok(mut guard) = snapshot.write() {
             // Touch layout is authored state, not 44 Hz render state. Reuse the already-published
@@ -23538,6 +23743,7 @@ impl EngineRuntime {
         self.last_dmx_send_success_count = 0;
         self.last_dmx_send_failure_count = 0;
         self.last_dmx_route_results.clear();
+        self.last_dmx_route_configuration_generation = self.dmx_route_configuration_generation;
         self.total_dmx_send_success_count = 0;
         self.total_dmx_send_failure_count = 0;
         self.last_error = None;
@@ -24992,6 +25198,27 @@ impl EngineRuntime {
             RuntimeChildTransportId::Nested(index) => self.nested_child_transports.get_mut(index),
             RuntimeChildTransportId::Follow => self.timeline_follow_transport.as_mut(),
         }
+    }
+
+    /// True when this transport belongs to the incoming Follow child, rather
+    /// than to the root Timeline or an unrelated direct child. Nested
+    /// transports retain only a parent transport identity, so walk that
+    /// bounded ancestry instead of assuming vector position or depth.
+    fn child_transport_is_follow_descendant(&self, transport_id: RuntimeChildTransportId) -> bool {
+        let mut current = Some(transport_id);
+        let max_depth = self.nested_child_transports.len().saturating_add(2);
+        for _ in 0..max_depth {
+            let Some(transport_id) = current else {
+                return false;
+            };
+            if matches!(transport_id, RuntimeChildTransportId::Follow) {
+                return true;
+            }
+            current = self
+                .child_transport(transport_id)
+                .and_then(|transport| transport.parent_transport_id);
+        }
+        false
     }
 
     fn rebuild_child_transport_effect_activation_ranges_at(
@@ -28005,7 +28232,15 @@ impl EngineRuntime {
         // independent and are deliberately not released here.
         self.deactivate_all_timeline_effect_activations();
         self.deactivate_all_child_transports();
-        if self.timeline_follow_transport.is_some() {
+        // At the terminal boundary the Follow child becomes the frozen target
+        // projection for settlement. Advancing it here would race a late
+        // Audio/Video acknowledgement and make the presenter non-repeatable.
+        if self.timeline_follow_transport.is_some()
+            && !matches!(
+                self.timeline_follow_runtime.status,
+                protocol::TimelineFollowRuntimeStatus::Settling
+            )
+        {
             self.deactivate_child_transport_by_id(RuntimeChildTransportId::Follow);
         }
         self.timeline_follow_transport = None;
@@ -28124,6 +28359,10 @@ impl EngineRuntime {
         validation.video.media_assets = self.media_assets.clone();
         validate_timeline_bank(&validation, &self.media_assets)?;
 
+        // Installing a new authored bank is a runtime identity boundary even
+        // when no transition is presently active. Do not allow a delayed ACK
+        // receipt from the replaced bank to be observed as current.
+        self.timeline_follow_terminal_settlement_receipt = None;
         if self.timeline_follow_is_abortable() {
             self.abort_timeline_follow(
                 protocol::TimelineFollowAbortReason::TimelineBankReplacement,
@@ -31734,11 +31973,14 @@ impl EngineRuntime {
 
     fn apply_child_timeline_automations(&mut self) {
         macro_rules! apply_transport_domain {
-            ($field:ident) => {
+            ($field:ident, $transport_variant:ident) => {
                 for transport_index in 0..self.$field.len() {
                     if !self.$field[transport_index].active {
                         continue;
                     }
+                    let follow_owned = self.child_transport_is_follow_descendant(
+                        RuntimeChildTransportId::$transport_variant(transport_index),
+                    );
                     let position_ms = self.$field[transport_index].position_ms;
                     for automation_index in 0..self.$field[transport_index].automations.len() {
                         let automation =
@@ -31764,6 +32006,14 @@ impl EngineRuntime {
                     }
                     for automation_index in 0..self.$field[transport_index].video_automations.len()
                     {
+                        // Follow owns a dual source/target projection. Every
+                        // nested descendant of its incoming child must stay
+                        // out of global root layers just like the Follow root
+                        // itself; it is applied to the incoming snapshot in
+                        // canonical parent-before-child order below.
+                        if follow_owned {
+                            continue;
+                        }
                         let automation =
                             &self.$field[transport_index].video_automations[automation_index];
                         if !automation.enabled {
@@ -31785,9 +32035,9 @@ impl EngineRuntime {
                 }
             };
         }
-        apply_transport_domain!(child_transports);
-        apply_transport_domain!(direct_child_transports);
-        apply_transport_domain!(nested_child_transports);
+        apply_transport_domain!(child_transports, Timeline);
+        apply_transport_domain!(direct_child_transports, Direct);
+        apply_transport_domain!(nested_child_transports, Nested);
         if self
             .timeline_follow_transport
             .as_ref()
@@ -31814,26 +32064,12 @@ impl EngineRuntime {
             for (fixture_id, attribute, value) in lighting_updates {
                 self.values.insert((fixture_id, attribute), value);
             }
-            let video_updates = self
-                .timeline_follow_transport
-                .as_ref()
-                .into_iter()
-                .flat_map(|transport| transport.video_automations.iter())
-                .filter(|automation| automation.enabled)
-                .filter_map(|automation| {
-                    evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
-                        .map(|value| (automation.layer_id, automation.param.clone(), value))
-                })
-                .collect::<Vec<_>>();
-            for (layer_id, param, value) in video_updates {
-                if let Some(layer) = self
-                    .video_layers
-                    .iter_mut()
-                    .find(|layer| layer.id == layer_id)
-                {
-                    apply_video_param(&mut layer.state, &param, value);
-                }
-            }
+            // The Follow child and every nested descendant are incoming-only.
+            // Their video automations must not mutate `self.video_layers`:
+            // those remain the outgoing/root projection while the presenter
+            // needs both sides alive. The recursive local projection in
+            // `timeline_follow_incoming_video_snapshot` evaluates the full
+            // captured subtree against a clone instead.
         }
     }
 
@@ -31863,34 +32099,13 @@ impl EngineRuntime {
             .ok_or_else(|| {
                 "Timeline Follow target is no longer the next Timeline in bank order".to_string()
             })?;
-        let (target, runtime_events) = self.prepare_timeline_bank_entry(target)?;
+        let (target, _runtime_events) = self.prepare_timeline_bank_entry(target)?;
         let resolved_duration_ms = resolve_video_clip_take_duration_ms(
             follow.video_kind,
             follow.duration,
             &self.clock.snapshot(now),
         )?;
         let generation = next_timeline_runtime_generation(self.timeline_follow_runtime.generation);
-        if resolved_duration_ms == 0 {
-            let source_id = self.timeline_id;
-            let target_id = target.id;
-            self.install_timeline_bank_entry(target, runtime_events, true, 0);
-            self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
-                generation,
-                status: protocol::TimelineFollowRuntimeStatus::Idle,
-                admission_reason: Some(admission_reason),
-                outcome: Some(protocol::TimelineFollowOutcome::Completed),
-                source_timeline_id: Some(source_id),
-                target_timeline_id: Some(target_id),
-                progress_millis: 1000,
-                ..TimelineFollowRuntimeSummary::default()
-            };
-            // `install_timeline_bank_entry` has established the target's own
-            // start-of-playback eligibility. Do not consume it on behalf of
-            // the source Cut: a target with Follow may chain naturally.
-            self.announce_timeline_phase_at(0);
-            return Ok(true);
-        }
-
         let child = ChildTimelineSummary {
             layers: target.layers.clone(),
             events: target.events.clone(),
@@ -31940,6 +32155,10 @@ impl EngineRuntime {
             self.timeline_follow_transport = None;
             return Err(error);
         }
+        // A new active generation fences the previous terminal receipt. Keep
+        // at most the completion which is currently recoverable; delayed ACKs
+        // from an older Follow become stale as soon as this transport exists.
+        self.timeline_follow_terminal_settlement_receipt = None;
         let affected_video_layer_ids = self
             .timeline_video_clips
             .iter()
@@ -31962,6 +32181,21 @@ impl EngineRuntime {
         self.timeline_audio_transport_revision =
             self.timeline_audio_transport_revision.wrapping_add(1);
         let guide_generation = self.timeline_audio_transport_revision;
+        let transition_effect_chain = self
+            .video_effect_chains
+            .iter()
+            .find(|chain| {
+                chain.scope
+                    == VideoEffectScope::Transition {
+                        owner: VideoTransitionEffectOwner::TimelineFollow {
+                            source_timeline_id: self.timeline_id,
+                        },
+                    }
+            })
+            .cloned();
+        let lighting_route_quorum = self.timeline_follow_enabled_dmx_routes();
+        let settlement_domains =
+            self.timeline_follow_settlement_domains(&target, &lighting_route_quorum);
         self.timeline_follow_transition = Some(RuntimeTimelineFollowTransition {
             generation,
             source_timeline_id: self.timeline_id,
@@ -31971,7 +32205,9 @@ impl EngineRuntime {
             duration: Duration::from_millis(resolved_duration_ms),
             source_bpm,
             target_bpm,
+            video_kind: follow.video_kind,
             curve: follow.curve,
+            transition_effect_chain,
             lighting_policy: follow.lighting_policy,
             fault_policy: follow.fault_policy,
             admission_reason,
@@ -31981,6 +32217,13 @@ impl EngineRuntime {
             last_trans_beat_ordinal: None,
             affected_video_layer_ids,
             outgoing_dmx_frames: self.last_frames_by_universe.clone(),
+            lighting_route_quorum,
+            settlement_domains,
+            settlement_started_at: None,
+            settlement_deadline: None,
+            settlement_target_events: None,
+            settlement_target_position_ms: None,
+            accepted_settlement_acknowledgements: Vec::new(),
         });
         self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
             generation,
@@ -31993,8 +32236,10 @@ impl EngineRuntime {
             duration_ms: resolved_duration_ms,
             progress_millis: 0,
             fault: None,
+            settlement: None,
         };
         self.timeline_follow_natural_boundary_armed = false;
+        self.refresh_timeline_follow_video_render_snapshot();
         Ok(true)
     }
 
@@ -32017,7 +32262,534 @@ impl EngineRuntime {
                 self.timeline_follow_runtime.status,
                 protocol::TimelineFollowRuntimeStatus::Armed
                     | protocol::TimelineFollowRuntimeStatus::Transitioning
+                    | protocol::TimelineFollowRuntimeStatus::Settling
             )
+    }
+
+    fn timeline_follow_settlement_domains(
+        &self,
+        target: &TimelineSnapshot,
+        lighting_route_quorum: &[RuntimeTimelineFollowLightingRoute],
+    ) -> Vec<TimelineFollowSettlementDomainSummary> {
+        // A Follow must settle Audio whenever either side has a real audio
+        // transport. Muted content remains relevant: the sink still has to
+        // apply the captured mute/unmute terminal state, including a
+        // source-only fade-to-silence or target-only fade-in.
+        let source_audio_projected =
+            !self.timeline_audio_clips.is_empty() || self.timeline_audio.is_some();
+        let target_audio_projected = !target.audio_clips.is_empty() || target.audio.is_some();
+        let audio_consumers = (source_audio_projected || target_audio_projected)
+            .then_some(TimelineFollowSettlementConsumerSummary {
+                consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                state: TimelineFollowSettlementState::Pending,
+                fault: None,
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        let video_consumers = self
+            .video_outputs
+            .iter()
+            .filter(|output| output.summary.enabled)
+            .map(|output| TimelineFollowSettlementConsumerSummary {
+                consumer_id: TimelineFollowSettlementConsumerId::VideoOutput {
+                    output_id: output.summary.id,
+                },
+                state: TimelineFollowSettlementState::Pending,
+                fault: None,
+            })
+            .collect::<Vec<_>>();
+        let lighting_consumers = (!lighting_route_quorum.is_empty())
+            .then_some(TimelineFollowSettlementConsumerSummary {
+                consumer_id: TimelineFollowSettlementConsumerId::Lighting,
+                state: TimelineFollowSettlementState::Pending,
+                fault: None,
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        [
+            (TimelineFollowSettlementDomain::Audio, audio_consumers),
+            (TimelineFollowSettlementDomain::Video, video_consumers),
+            (TimelineFollowSettlementDomain::Lighting, lighting_consumers),
+        ]
+        .into_iter()
+        .map(
+            |(domain, consumers)| TimelineFollowSettlementDomainSummary {
+                domain,
+                state: if consumers.is_empty() {
+                    TimelineFollowSettlementState::NotApplicable
+                } else {
+                    TimelineFollowSettlementState::Pending
+                },
+                fault: None,
+                consumers,
+            },
+        )
+        .collect()
+    }
+
+    fn timeline_follow_enabled_dmx_routes(&self) -> Vec<RuntimeTimelineFollowLightingRoute> {
+        if !self.effective_lighting_allowed() {
+            return Vec::new();
+        }
+        let mut routes = Vec::new();
+        if self.output.enabled {
+            routes.push(RuntimeTimelineFollowLightingRoute {
+                index: 0,
+                universe: self.output.universe,
+                configuration: self.output.clone(),
+                configuration_generation: self.dmx_route_configuration_generation,
+            });
+        }
+        routes.extend(
+            self.additional_dmx_outputs
+                .iter()
+                .enumerate()
+                .filter(|(_, output)| output.config.enabled)
+                .map(|(index, output)| RuntimeTimelineFollowLightingRoute {
+                    index: index + 1,
+                    universe: output.config.universe,
+                    configuration: output.config.clone(),
+                    configuration_generation: self.dmx_route_configuration_generation,
+                }),
+        );
+        routes
+    }
+
+    fn timeline_follow_captured_dmx_route_matches(
+        &self,
+        route: &RuntimeTimelineFollowLightingRoute,
+    ) -> bool {
+        if route.configuration_generation != self.dmx_route_configuration_generation {
+            return false;
+        }
+        let current = if route.index == 0 {
+            Some(&self.output)
+        } else {
+            self.additional_dmx_outputs
+                .get(route.index - 1)
+                .map(|output| &output.config)
+        };
+        current.is_some_and(|current| current.enabled && current == &route.configuration)
+    }
+
+    fn recompute_timeline_follow_settlement(settlement: &mut TimelineFollowSettlementSummary) {
+        for domain in &mut settlement.domains {
+            domain.fault = None;
+            domain.state = if domain.consumers.is_empty() {
+                TimelineFollowSettlementState::NotApplicable
+            } else if let Some(fault) = domain
+                .consumers
+                .iter()
+                .find(|consumer| consumer.state == TimelineFollowSettlementState::Fault)
+                .and_then(|consumer| consumer.fault.clone())
+            {
+                domain.fault = Some(fault);
+                TimelineFollowSettlementState::Fault
+            } else if domain
+                .consumers
+                .iter()
+                .any(|consumer| consumer.state == TimelineFollowSettlementState::TimedOut)
+            {
+                TimelineFollowSettlementState::TimedOut
+            } else if domain
+                .consumers
+                .iter()
+                .any(|consumer| consumer.state == TimelineFollowSettlementState::Pending)
+            {
+                TimelineFollowSettlementState::Pending
+            } else if domain
+                .consumers
+                .iter()
+                .all(|consumer| consumer.state == TimelineFollowSettlementState::NotApplicable)
+            {
+                TimelineFollowSettlementState::NotApplicable
+            } else {
+                TimelineFollowSettlementState::Applied
+            };
+        }
+        settlement.fault = settlement
+            .domains
+            .iter()
+            .find(|domain| domain.state == TimelineFollowSettlementState::Fault)
+            .and_then(|domain| domain.fault.clone());
+        settlement.state = if settlement
+            .domains
+            .iter()
+            .any(|domain| domain.state == TimelineFollowSettlementState::Fault)
+        {
+            TimelineFollowSettlementState::Fault
+        } else if settlement
+            .domains
+            .iter()
+            .any(|domain| domain.state == TimelineFollowSettlementState::TimedOut)
+        {
+            TimelineFollowSettlementState::TimedOut
+        } else if settlement
+            .domains
+            .iter()
+            .any(|domain| domain.state == TimelineFollowSettlementState::Pending)
+        {
+            TimelineFollowSettlementState::Pending
+        } else {
+            TimelineFollowSettlementState::Applied
+        };
+    }
+
+    fn enter_timeline_follow_settling(
+        &mut self,
+        transition: &RuntimeTimelineFollowTransition,
+        prepared_target: (TimelineSnapshot, Vec<RuntimeTimelineEvent>),
+        target_position_ms: u64,
+        now: Instant,
+    ) {
+        let timeout = Duration::from_millis(TIMELINE_FOLLOW_SETTLEMENT_TIMEOUT_MS);
+        let started_at_ms = self
+            .timeline_position_ms
+            .saturating_add(transition.duration.as_millis() as u64);
+        let mut settlement = TimelineFollowSettlementSummary {
+            started_at_ms,
+            deadline_ms: started_at_ms.saturating_add(timeout.as_millis() as u64),
+            state: TimelineFollowSettlementState::Pending,
+            progress_millis: 1_000,
+            fault_policy: transition.fault_policy,
+            fault: None,
+            domains: transition.settlement_domains.clone(),
+        };
+        Self::recompute_timeline_follow_settlement(&mut settlement);
+        let complete_immediately = settlement.state == TimelineFollowSettlementState::Applied;
+        if let Some(follow_transport) = self.timeline_follow_transport.as_mut() {
+            follow_transport.previous_position_ms = target_position_ms;
+            follow_transport.position_ms = target_position_ms;
+            follow_transport.direct_paused = true;
+            follow_transport.direct_paused_at = Some(now);
+        }
+        self.timeline_playing = false;
+        self.timeline_paused_at = Some(now);
+        if let Some(active) = self.timeline_follow_transition.as_mut() {
+            if active.generation != transition.generation {
+                return;
+            }
+            active.target = prepared_target.0;
+            active.settlement_target_events = Some(prepared_target.1);
+            active.settlement_target_position_ms = Some(target_position_ms);
+            active.settlement_started_at = Some(now);
+            active.settlement_deadline = Some(now + timeout);
+        }
+        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+            generation: transition.generation,
+            status: protocol::TimelineFollowRuntimeStatus::Settling,
+            admission_reason: Some(transition.admission_reason),
+            outcome: None,
+            source_timeline_id: Some(transition.source_timeline_id),
+            target_timeline_id: Some(transition.target_timeline_id),
+            elapsed_ms: transition.duration.as_millis().min(u64::MAX as u128) as u64,
+            duration_ms: transition.duration.as_millis().min(u64::MAX as u128) as u64,
+            progress_millis: 1_000,
+            fault: None,
+            settlement: Some(settlement),
+        };
+        self.refresh_timeline_follow_video_render_snapshot();
+        if complete_immediately {
+            // A Follow with no active production consumers has a complete
+            // all-N/A quorum. It still passed through the same state machine,
+            // but no external acknowledgement can legitimately be awaited.
+            let _ = self.complete_timeline_follow_settlement(now);
+        }
+    }
+
+    fn complete_timeline_follow_settlement(&mut self, now: Instant) -> Result<(), String> {
+        let transition = self
+            .timeline_follow_transition
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "Timeline Follow settlement has no active transition".to_string())?;
+        let runtime_events = transition
+            .settlement_target_events
+            .clone()
+            .ok_or_else(|| "Timeline Follow settlement target was not prepared".to_string())?;
+        let target_position_ms = transition.settlement_target_position_ms.unwrap_or(0);
+        self.retire_timeline_follow_transport(now, None);
+        self.install_timeline_bank_entry(
+            transition.target.clone(),
+            runtime_events,
+            true,
+            target_position_ms,
+        );
+        if !self.timeline_follow_bpm_is_externally_owned() {
+            self.clock
+                .set_bpm_preserving_beat_position(transition.target_bpm, now);
+        }
+        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+            generation: transition.generation,
+            status: protocol::TimelineFollowRuntimeStatus::Idle,
+            admission_reason: Some(transition.admission_reason),
+            outcome: Some(protocol::TimelineFollowOutcome::Completed),
+            source_timeline_id: Some(transition.source_timeline_id),
+            target_timeline_id: Some(transition.target_timeline_id),
+            elapsed_ms: transition.duration.as_millis().min(u64::MAX as u128) as u64,
+            duration_ms: transition.duration.as_millis().min(u64::MAX as u128) as u64,
+            progress_millis: 1_000,
+            fault: None,
+            settlement: None,
+        };
+        self.timeline_last_announced_phase_id = None;
+        self.announce_timeline_phase_at(target_position_ms);
+        self.refresh_timeline_follow_video_render_snapshot();
+        Ok(())
+    }
+
+    fn acknowledge_timeline_follow_settlement(
+        &mut self,
+        acknowledgement: TimelineFollowSettlementAck,
+        now: Instant,
+    ) -> Result<(), String> {
+        validate_timeline_follow_settlement_ack(&acknowledgement)?;
+        if acknowledgement.epoch != self.output_ownership_gate.status().epoch {
+            return Err("Timeline Follow settlement acknowledgement epoch is stale".to_string());
+        }
+        if let Some(receipt) = &self.timeline_follow_terminal_settlement_receipt {
+            if acknowledgement.epoch == receipt.epoch
+                && acknowledgement.generation == receipt.runtime.generation
+            {
+                let Some(receipted_acknowledgement) =
+                    receipt.acknowledgements.iter().find(|saved| {
+                        saved.domain == acknowledgement.domain
+                            && saved.consumer_id == acknowledgement.consumer_id
+                    })
+                else {
+                    return Err(
+                        "Timeline Follow settlement acknowledgement generation is stale"
+                            .to_string(),
+                    );
+                };
+                if acknowledgement.result != receipted_acknowledgement.result {
+                    return Err(
+                        "Timeline Follow terminal settlement receipt has a different result shape"
+                            .to_string(),
+                    );
+                }
+                if receipt.runtime.generation != acknowledgement.generation
+                    || receipt.runtime.outcome.is_none()
+                {
+                    return Err(
+                        "Timeline Follow terminal settlement receipt is no longer coherent"
+                            .to_string(),
+                    );
+                }
+                // The exact final acknowledgement was already committed. The
+                // caller may have lost its reply, so report the same success
+                // without changing runtime state or installing the target
+                // again. The command still crosses the normal publication
+                // barrier before its Handle reply.
+                return Ok(());
+            }
+        }
+        if !matches!(
+            self.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Settling
+        ) || self.timeline_follow_runtime.generation != acknowledgement.generation
+        {
+            return Err(
+                "Timeline Follow settlement acknowledgement generation is stale".to_string(),
+            );
+        }
+        let mut settlement = self
+            .timeline_follow_runtime
+            .settlement
+            .clone()
+            .ok_or_else(|| "Timeline Follow is missing settlement state".to_string())?;
+        let domain = settlement
+            .domains
+            .iter_mut()
+            .find(|domain| domain.domain == acknowledgement.domain)
+            .ok_or_else(|| "Timeline Follow settlement domain was not captured".to_string())?;
+        let consumer = domain
+            .consumers
+            .iter_mut()
+            .find(|consumer| consumer.consumer_id == acknowledgement.consumer_id)
+            .ok_or_else(|| "Timeline Follow settlement consumer was not captured".to_string())?;
+        let (state, fault) = match &acknowledgement.result {
+            TimelineFollowSettlementAckResult::Applied => {
+                (TimelineFollowSettlementState::Applied, None)
+            }
+            TimelineFollowSettlementAckResult::NotApplicable => {
+                (TimelineFollowSettlementState::NotApplicable, None)
+            }
+            TimelineFollowSettlementAckResult::Fault { fault } => {
+                (TimelineFollowSettlementState::Fault, Some(fault.clone()))
+            }
+        };
+        if consumer.state.is_terminal() {
+            if consumer.state == state && consumer.fault == fault {
+                return Ok(());
+            }
+            return Err(
+                "Timeline Follow settlement consumer already has a different terminal result"
+                    .to_string(),
+            );
+        }
+        consumer.state = state;
+        consumer.fault = fault;
+        Self::recompute_timeline_follow_settlement(&mut settlement);
+        let terminal_state = settlement.state;
+        let fault_text = settlement.fault.clone();
+        // Record the accepted physical acknowledgement before completion can
+        // retire the Follow child. The transition only admits captured
+        // consumers, so this per-generation vector is inherently bounded.
+        let accepted_acknowledgements = {
+            let transition = self.timeline_follow_transition.as_mut().ok_or_else(|| {
+                "Timeline Follow settlement acknowledgement has no active transition".to_string()
+            })?;
+            if transition.generation != acknowledgement.generation {
+                return Err(
+                    "Timeline Follow settlement acknowledgement generation is stale".to_string(),
+                );
+            }
+            if let Some(previous) =
+                transition
+                    .accepted_settlement_acknowledgements
+                    .iter()
+                    .find(|saved| {
+                        saved.domain == acknowledgement.domain
+                            && saved.consumer_id == acknowledgement.consumer_id
+                    })
+            {
+                if previous.result != acknowledgement.result {
+                    return Err(
+                        "Timeline Follow settlement consumer already has a different terminal result"
+                            .to_string(),
+                    );
+                }
+            } else {
+                transition
+                    .accepted_settlement_acknowledgements
+                    .push(acknowledgement.clone());
+            }
+            transition.accepted_settlement_acknowledgements.clone()
+        };
+        self.timeline_follow_runtime.settlement = Some(settlement);
+        let result = match terminal_state {
+            TimelineFollowSettlementState::Applied => self.complete_timeline_follow_settlement(now),
+            TimelineFollowSettlementState::Fault => {
+                let transition = self.timeline_follow_transition.clone().ok_or_else(|| {
+                    "Timeline Follow settlement fault has no active transition".to_string()
+                })?;
+                self.settle_timeline_follow_failure(
+                    fault_text.unwrap_or_else(|| "Timeline Follow settlement failed".to_string()),
+                    now,
+                    transition.generation,
+                    transition.source_timeline_id,
+                    Some(transition.target),
+                    Some(transition.source_bpm),
+                    transition.fault_policy,
+                    transition.admission_reason,
+                );
+                Ok(())
+            }
+            _ => Ok(()),
+        };
+        if result.is_ok()
+            && self.timeline_follow_transition.is_none()
+            && self.timeline_follow_runtime.generation == acknowledgement.generation
+            && self.timeline_follow_runtime.outcome.is_some()
+        {
+            self.timeline_follow_terminal_settlement_receipt =
+                Some(TimelineFollowSettlementTerminalReceipt {
+                    epoch: acknowledgement.epoch,
+                    acknowledgements: accepted_acknowledgements,
+                    runtime: self.timeline_follow_runtime.clone(),
+                });
+        }
+        result
+    }
+
+    /// Lighting is engine-owned: once every route captured at admission has
+    /// produced this terminal target frame, it contributes the aggregate
+    /// Lighting acknowledgement. Video and Audio remain backend-owned and
+    /// must call the public generation/epoch fenced command.
+    fn acknowledge_timeline_follow_lighting_settlement(&mut self, now: Instant) {
+        let Some(transition) = self.timeline_follow_transition.as_ref() else {
+            return;
+        };
+        let generation = transition.generation;
+        let captured_routes = transition.lighting_route_quorum.clone();
+        if !matches!(
+            self.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Settling
+        ) {
+            return;
+        }
+        let pending_lighting = self
+            .timeline_follow_runtime
+            .settlement
+            .as_ref()
+            .and_then(|settlement| {
+                settlement
+                    .domains
+                    .iter()
+                    .find(|domain| domain.domain == TimelineFollowSettlementDomain::Lighting)
+            })
+            .is_some_and(|domain| {
+                domain.consumers.iter().any(|consumer| {
+                    consumer.consumer_id == TimelineFollowSettlementConsumerId::Lighting
+                        && consumer.state == TimelineFollowSettlementState::Pending
+                })
+            });
+        if !pending_lighting {
+            return;
+        }
+        let result = captured_routes
+            .iter()
+            .find(|route| !self.timeline_follow_captured_dmx_route_matches(route))
+            .map(|route| TimelineFollowSettlementAckResult::Fault {
+                fault: format!(
+                    "Timeline Follow captured lighting route {} universe {} changed after admission",
+                    route.index, route.universe
+                ),
+            })
+            .or_else(|| {
+                captured_routes.iter().find_map(|route| {
+                    if self.last_dmx_route_configuration_generation
+                        != route.configuration_generation
+                    {
+                        return Some(TimelineFollowSettlementAckResult::Fault {
+                            fault: format!(
+                                "Timeline Follow lighting route {} universe {} telemetry belongs to a different configuration incarnation",
+                                route.index, route.universe
+                            ),
+                        });
+                    }
+                    let telemetry = self.last_dmx_route_results.iter().find(|telemetry| {
+                        telemetry.index == route.index && telemetry.universe == route.universe
+                    });
+                    match telemetry {
+                        Some(telemetry) if telemetry.success => None,
+                        Some(telemetry) => Some(TimelineFollowSettlementAckResult::Fault {
+                            fault: telemetry.error.clone().unwrap_or_else(|| {
+                                format!(
+                                    "Timeline Follow lighting route {} universe {} did not apply target",
+                                    route.index, route.universe
+                                )
+                            }),
+                        }),
+                        None => Some(TimelineFollowSettlementAckResult::Fault {
+                            fault: format!(
+                                "Timeline Follow captured lighting route {} universe {} is unavailable",
+                                route.index, route.universe
+                            ),
+                        }),
+                    }
+                })
+            })
+            .unwrap_or(TimelineFollowSettlementAckResult::Applied);
+        let acknowledgement = TimelineFollowSettlementAck {
+            epoch: self.output_ownership_gate.status().epoch,
+            generation,
+            domain: TimelineFollowSettlementDomain::Lighting,
+            consumer_id: TimelineFollowSettlementConsumerId::Lighting,
+            result,
+        };
+        let _ = self.acknowledge_timeline_follow_settlement(acknowledgement, now);
     }
 
     fn retire_timeline_follow_transport(&mut self, now: Instant, source_bpm: Option<f32>) {
@@ -32034,6 +32806,11 @@ impl EngineRuntime {
         self.timeline_audio_transport_revision =
             self.timeline_audio_transport_revision.wrapping_add(1);
         self.timeline_guide_cues.clear();
+        // Abort/fault/complete all retire the dual Follow transport. Clear
+        // the Handle-only presenter input at that same runtime boundary; a
+        // caller must never render an already-retired incoming child while
+        // waiting for the next 44 Hz tick.
+        self.refresh_timeline_follow_video_render_snapshot();
     }
 
     fn settle_timeline_follow_failure(
@@ -32110,6 +32887,10 @@ impl EngineRuntime {
         admission_reason: protocol::TimelineFollowAdmissionReason,
         now: Instant,
     ) {
+        // Even a failed new admission advances the observable Follow runtime
+        // generation below.  A receipt from a prior terminal generation must
+        // not remain replayable across that identity boundary.
+        self.timeline_follow_terminal_settlement_receipt = None;
         let follow = self.timeline_follow.clone();
         let target = follow.as_ref().and_then(|follow| {
             self.timeline_bank_snapshot()
@@ -32146,6 +32927,7 @@ impl EngineRuntime {
         if transition.is_none() && self.timeline_follow_transport.is_none() && !armed {
             return false;
         }
+        self.timeline_follow_terminal_settlement_receipt = None;
         let generation = next_timeline_runtime_generation(self.timeline_follow_runtime.generation);
         let source_timeline_id = transition
             .as_ref()
@@ -32193,20 +32975,60 @@ impl EngineRuntime {
             .as_ref()
             .cloned()
             .expect("checked Timeline Follow transition");
-        if transition.generation != self.timeline_follow_runtime.generation
-            || !matches!(
-                self.timeline_follow_runtime.status,
-                protocol::TimelineFollowRuntimeStatus::Transitioning
-            )
-        {
+        if transition.generation != self.timeline_follow_runtime.generation {
+            self.retire_timeline_follow_transport(now, Some(transition.source_bpm));
+            return;
+        }
+
+        if matches!(
+            self.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Settling
+        ) {
+            if transition
+                .settlement_deadline
+                .is_some_and(|deadline| now >= deadline)
+            {
+                let timeout = "Timeline Follow settlement timed out".to_string();
+                if let Some(settlement) = self.timeline_follow_runtime.settlement.as_mut() {
+                    for domain in &mut settlement.domains {
+                        for consumer in &mut domain.consumers {
+                            if consumer.state == TimelineFollowSettlementState::Pending {
+                                consumer.state = TimelineFollowSettlementState::TimedOut;
+                            }
+                        }
+                    }
+                    Self::recompute_timeline_follow_settlement(settlement);
+                    settlement.fault = Some(timeout.clone());
+                }
+                self.settle_timeline_follow_failure(
+                    timeout,
+                    now,
+                    transition.generation,
+                    transition.source_timeline_id,
+                    Some(transition.target),
+                    Some(transition.source_bpm),
+                    transition.fault_policy,
+                    transition.admission_reason,
+                );
+            }
+            return;
+        }
+        if !matches!(
+            self.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Transitioning
+        ) {
             self.retire_timeline_follow_transport(now, Some(transition.source_bpm));
             return;
         }
 
         let elapsed = now.saturating_duration_since(transition.started_at);
-        let duration_ms = transition.duration.as_millis().max(1) as u64;
+        let duration_ms = transition.duration.as_millis().min(u64::MAX as u128) as u64;
         let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
-        let progress = elapsed_ms.min(duration_ms) as f32 / duration_ms as f32;
+        let progress = if duration_ms == 0 {
+            1.0
+        } else {
+            elapsed_ms.min(duration_ms) as f32 / duration_ms as f32
+        };
         if !self.timeline_follow_bpm_is_externally_owned() {
             let bpm =
                 transition.source_bpm + (transition.target_bpm - transition.source_bpm) * progress;
@@ -32266,33 +33088,10 @@ impl EngineRuntime {
             .map(|transport| transport.position_ms)
             .unwrap_or(duration_ms)
             .min(transition.target.duration_ms);
-        let Some(active) = self.timeline_follow_transition.take() else {
-            return;
-        };
-        if active.generation != transition.generation {
-            return;
-        }
-        self.retire_timeline_follow_transport(now, None);
-        let (target, runtime_events) = prepared_target;
-        self.install_timeline_bank_entry(target, runtime_events, true, target_position_ms);
-        if !self.timeline_follow_bpm_is_externally_owned() {
-            self.clock
-                .set_bpm_preserving_beat_position(transition.target_bpm, now);
-        }
-        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
-            generation: transition.generation,
-            status: protocol::TimelineFollowRuntimeStatus::Idle,
-            admission_reason: Some(transition.admission_reason),
-            outcome: Some(protocol::TimelineFollowOutcome::Completed),
-            source_timeline_id: Some(transition.source_timeline_id),
-            target_timeline_id: Some(transition.target_timeline_id),
-            elapsed_ms: duration_ms,
-            duration_ms,
-            progress_millis: 1000,
-            fault: None,
-        };
-        self.timeline_last_announced_phase_id = None;
-        self.announce_timeline_phase_at(target_position_ms);
+        // Do not retire either transport at the visual terminal point. The
+        // captured quorum owns a short Settling phase so audio/video/lighting
+        // can all attest the same target generation before root replacement.
+        self.enter_timeline_follow_settling(&transition, prepared_target, target_position_ms, now);
     }
 
     fn maybe_begin_timeline_follow_preroll(&mut self, previous_position_ms: u64, now: Instant) {
@@ -33218,7 +34017,12 @@ impl EngineRuntime {
             .chain(&self.direct_child_transports)
             .chain(&self.nested_child_transports)
             .filter(|transport| transport.active)
-            .count();
+            .count()
+            .saturating_add(usize::from(
+                self.timeline_follow_transport
+                    .as_ref()
+                    .is_some_and(|transport| transport.active),
+            ));
         let mut summaries = Vec::with_capacity(active_count);
         for index in 0..self.child_transports.len() {
             if let Some(summary) = self
@@ -33241,6 +34045,11 @@ impl EngineRuntime {
                 summaries.push(summary);
             }
         }
+        if let Some(summary) =
+            self.child_timeline_transport_runtime_summary(RuntimeChildTransportId::Follow)
+        {
+            summaries.push(summary);
+        }
         summaries
     }
 
@@ -33260,7 +34069,13 @@ impl EngineRuntime {
             let current = self.child_transport(cursor)?;
             let Some(parent_transport_id) = current.parent_transport_id else {
                 path.reverse();
-                let root = if let Some(parent_cue_id) = current.direct_parent_cue_id {
+                let root = if matches!(cursor, RuntimeChildTransportId::Follow) {
+                    let transition = self.timeline_follow_transition.as_ref()?;
+                    ChildTimelineTransportRootSummary::Follow {
+                        source_timeline_id: transition.source_timeline_id,
+                        generation: transition.generation,
+                    }
+                } else if let Some(parent_cue_id) = current.direct_parent_cue_id {
                     ChildTimelineTransportRootSummary::Direct {
                         parent_cue_id,
                         generation: current.direct_generation,
@@ -33370,6 +34185,178 @@ impl EngineRuntime {
             bank.push(active);
         }
         bank
+    }
+
+    /// Authored/runtime video projection without the legacy Follow weighting
+    /// shim. New Follow presenters consume this for both inputs; the legacy
+    /// `video_snapshot` below deliberately keeps its synthetic incoming IDs
+    /// until the backend migration is complete.
+    fn video_snapshot_unweighted(&self) -> VideoSnapshot {
+        let now = self.last_tick;
+        let outputs = self
+            .video_outputs
+            .iter()
+            .map(|output| output.summary.clone())
+            .collect::<Vec<_>>();
+        let layers = self
+            .video_layers
+            .iter()
+            .map(|layer| self.video_layer_summary_with_effects(layer, now))
+            .collect::<Vec<_>>();
+        let main_layer_ids = layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
+        let mut compositions = vec![CompositionSummary {
+            id: 1,
+            label: "Main".to_string(),
+            layer_ids: main_layer_ids,
+            output_ids: output_ids_for_composition(&outputs, 1),
+        }];
+        compositions.extend(self.video_compositions.iter().map(|composition| {
+            let mut summary =
+                sanitize_video_composition(composition.summary.clone(), &self.video_layers);
+            summary.output_ids = output_ids_for_composition(&outputs, summary.id);
+            summary
+        }));
+        VideoSnapshot {
+            layers,
+            media_assets: self.media_assets.clone(),
+            effect_chains: self.video_effect_chains.clone(),
+            effect_presets: self.video_effect_presets.clone(),
+            layer_groups: self.video_layer_groups.clone(),
+            transition_buses: self.video_transition_buses.clone(),
+            compositions,
+            outputs,
+            mapping_presets: self.video_output_mapping_presets.clone(),
+            master_opacity: self.video_master_opacity,
+            blackout: self.video_blackout,
+            auto_vj: AutoVjSnapshot {
+                config: self.auto_vj.config.clone(),
+                status: self.auto_vj.status.clone(),
+            },
+        }
+    }
+
+    fn timeline_follow_incoming_video_snapshot(
+        &self,
+        transition: &RuntimeTimelineFollowTransition,
+    ) -> VideoSnapshot {
+        let mut snapshot = self.video_snapshot_unweighted();
+        let position_ms = transition
+            .settlement_target_position_ms
+            .or_else(|| {
+                self.timeline_follow_transport
+                    .as_ref()
+                    .map(|transport| transport.position_ms)
+            })
+            .unwrap_or_else(|| {
+                self.last_tick
+                    .saturating_duration_since(transition.started_at)
+                    .as_millis()
+                    .min(u64::MAX as u128) as u64
+            })
+            .min(transition.target.duration_ms);
+        let mut desired = BTreeMap::<VideoLayerId, TimelineVideoClipSummary>::new();
+        for clip in transition.target.video_clips.iter().filter(|clip| {
+            clip.start_ms <= position_ms
+                && position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+        }) {
+            let layer_id = VideoLayerId::from(clip.layer_id);
+            match desired.get(&layer_id) {
+                Some(current) if (current.start_ms, current.id.0) >= (clip.start_ms, clip.id.0) => {
+                }
+                _ => {
+                    desired.insert(layer_id, clip.clone());
+                }
+            }
+        }
+        for (layer_id, clip) in desired {
+            let Some(layer) = snapshot
+                .layers
+                .iter_mut()
+                .find(|layer| layer.id == layer_id)
+            else {
+                continue;
+            };
+            let Some(asset) = snapshot
+                .media_assets
+                .iter()
+                .find(|asset| asset.id == clip.media_asset_id)
+            else {
+                continue;
+            };
+            layer.source = asset.source.clone();
+            layer.media_asset_id = Some(asset.id);
+            layer.state.position_ms = clip
+                .offset_ms
+                .saturating_add(position_ms.saturating_sub(clip.start_ms));
+            layer.state.playing = true;
+            // The renderer, not this projection, owns all Follow weighting.
+            // In particular, do not create legacy u64::MAX synthetic IDs.
+            layer.clip_slots.clear();
+            layer.default_clip_slot_id = None;
+        }
+        self.apply_follow_video_automation_subtree_to_snapshot(
+            &mut snapshot,
+            RuntimeChildTransportId::Follow,
+        );
+        snapshot
+    }
+
+    /// Apply the incoming Follow tree to a private video projection. Children
+    /// are visited through each parent's serialized event order, which gives
+    /// a stable root-before-descendant composition order even when nested
+    /// transports are allocated interleaved with unrelated Timeline children.
+    fn apply_follow_video_automation_subtree_to_snapshot(
+        &self,
+        snapshot: &mut VideoSnapshot,
+        transport_id: RuntimeChildTransportId,
+    ) {
+        let Some((active, position_ms, automations, children)) =
+            self.child_transport(transport_id).map(|transport| {
+                (
+                    transport.active,
+                    transport.position_ms,
+                    transport.video_automations.clone(),
+                    transport
+                        .child_transport_by_parent_event
+                        .iter()
+                        .copied()
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                )
+            })
+        else {
+            return;
+        };
+        if !active {
+            return;
+        }
+        apply_runtime_video_automations_to_snapshot(snapshot, &automations, position_ms);
+        for child_id in children {
+            self.apply_follow_video_automation_subtree_to_snapshot(snapshot, child_id);
+        }
+    }
+
+    fn refresh_timeline_follow_video_render_snapshot(&self) {
+        let Some(shared) = &self.timeline_follow_video_render_snapshot else {
+            return;
+        };
+        let rendered = self.timeline_follow_transition.as_ref().map(|transition| {
+            TimelineFollowVideoRenderSnapshot {
+                epoch: self.output_ownership_gate.status().epoch,
+                generation: transition.generation,
+                source_timeline_id: transition.source_timeline_id,
+                target_timeline_id: transition.target_timeline_id,
+                kind: transition.video_kind,
+                curve: transition.curve,
+                progress_millis: self.timeline_follow_runtime.progress_millis,
+                outgoing_video: self.video_snapshot_unweighted(),
+                incoming_video: self.timeline_follow_incoming_video_snapshot(transition),
+                transition_effect_chain: transition.transition_effect_chain.clone(),
+            }
+        });
+        if let Ok(mut guard) = shared.write() {
+            *guard = rendered;
+        }
     }
 
     fn video_snapshot(&self) -> VideoSnapshot {
@@ -38719,6 +39706,9 @@ fn child_timeline_audio_runtime_clips(
                     parent_cue_id,
                     generation,
                 } => (0, 0, Some(parent_cue_id), generation),
+                ChildTimelineTransportRootSummary::Follow { generation, .. } => {
+                    (0, 0, None, generation)
+                }
             };
         append_child_timeline_audio_runtime_clips(
             &mut active,
@@ -39621,6 +40611,31 @@ fn automation_segment_progress(
 fn cubic_ease_in_out(progress: f32) -> f32 {
     let t = progress.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Apply an already-captured Timeline video-automation set to an isolated
+/// render projection. Follow uses this for its incoming child so an identical
+/// layer ID on the source Timeline cannot overwrite the outgoing image.
+fn apply_runtime_video_automations_to_snapshot(
+    snapshot: &mut VideoSnapshot,
+    automations: &[RuntimeTimelineVideoAutomation],
+    position_ms: u64,
+) {
+    for automation in automations.iter().filter(|automation| automation.enabled) {
+        let Some(value) = evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
+        else {
+            continue;
+        };
+        let Some(layer) = snapshot
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == automation.layer_id)
+        else {
+            continue;
+        };
+        apply_video_param(&mut layer.state, &automation.param, value);
+        layer.state = video::sanitize_layer_state(layer.state.clone());
+    }
 }
 
 fn apply_video_param(state: &mut VideoLayerState, param: &VideoParam, value: f32) {
@@ -49506,6 +50521,9 @@ fn video_effect_chain_is_owned_by_layer(
         VideoEffectScope::Transition {
             owner: VideoTransitionEffectOwner::LayerBus { .. },
         }
+        | VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::TimelineFollow { .. },
+        }
         | VideoEffectScope::Composition { .. }
         | VideoEffectScope::Group { .. }
         | VideoEffectScope::Output { .. } => false,
@@ -57314,6 +58332,7 @@ mod tests {
             wake,
             shared_telemetry,
             snapshot,
+            timeline_follow_video_render_snapshot: Arc::new(RwLock::new(None)),
             output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
             allocator_gate: Arc::new(Mutex::new(())),
             next_fixture_id: Arc::new(AtomicU64::new(1)),
@@ -66099,6 +67118,7 @@ mod tests {
             wake,
             shared_telemetry: Arc::clone(&shared_telemetry),
             snapshot: Arc::new(RwLock::new(EngineSnapshot::default())),
+            timeline_follow_video_render_snapshot: Arc::new(RwLock::new(None)),
             output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
             allocator_gate: Arc::new(Mutex::new(())),
             next_fixture_id: Arc::new(AtomicU64::new(1)),
@@ -95806,6 +96826,22 @@ mod tests {
 
         runtime.advance_timeline(admitted_at + Duration::from_millis(100));
         runtime.advance_timeline_follow(admitted_at + Duration::from_millis(100));
+        assert!(matches!(
+            runtime.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Settling
+        ));
+        runtime
+            .acknowledge_timeline_follow_settlement(
+                TimelineFollowSettlementAck {
+                    epoch: runtime.output_ownership_gate.status().epoch,
+                    generation: runtime.timeline_follow_runtime.generation,
+                    domain: TimelineFollowSettlementDomain::Audio,
+                    consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                    result: TimelineFollowSettlementAckResult::Applied,
+                },
+                admitted_at + Duration::from_millis(100),
+            )
+            .unwrap();
         assert_eq!(runtime.timeline_id, TimelineId(402));
         assert!(runtime.timeline_playing);
         assert_eq!(runtime.timeline_position_ms, 100);
@@ -95884,6 +96920,1133 @@ mod tests {
             .apply_timeline_bank_state(vec![source, target], TimelineId(8_101), true)
             .unwrap();
         runtime
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_render_snapshot_captures_all_kinds_and_exact_owner_chain() {
+        let kinds = [
+            VideoClipTakeKind::Cut,
+            VideoClipTakeKind::Crossfade,
+            VideoClipTakeKind::Dip,
+            VideoClipTakeKind::Wipe,
+            VideoClipTakeKind::Luma,
+            VideoClipTakeKind::Displacement,
+            VideoClipTakeKind::Blur,
+            VideoClipTakeKind::Glitch,
+            VideoClipTakeKind::Custom,
+        ];
+        for (index, kind) in kinds.into_iter().enumerate() {
+            let mut runtime =
+                timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+            runtime.timeline_bank[0].follow.as_mut().unwrap().video_kind = kind;
+            runtime.timeline_follow.as_mut().unwrap().video_kind = kind;
+            if matches!(kind, VideoClipTakeKind::Cut) {
+                runtime.timeline_bank[0].follow.as_mut().unwrap().duration =
+                    VideoClipTakeDuration::milliseconds(0);
+                runtime.timeline_follow.as_mut().unwrap().duration =
+                    VideoClipTakeDuration::milliseconds(0);
+            }
+            let chain = VideoEffectChainSummary {
+                id: VideoEffectChainId((index + 1) as u64),
+                scope: VideoEffectScope::Transition {
+                    owner: VideoTransitionEffectOwner::TimelineFollow {
+                        source_timeline_id: TimelineId(8_101),
+                    },
+                },
+                bypassed: false,
+                stages: Vec::new(),
+            };
+            runtime.video_effect_chains = vec![chain.clone()];
+            let shared = Arc::new(RwLock::new(None));
+            runtime.timeline_follow_video_render_snapshot = Some(Arc::clone(&shared));
+            runtime
+                .begin_timeline_follow(
+                    protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                    Instant::now(),
+                )
+                .unwrap();
+            let rendered = shared.read().unwrap().clone().unwrap();
+            assert_eq!(rendered.kind, kind);
+            assert_eq!(rendered.source_timeline_id, TimelineId(8_101));
+            assert_eq!(rendered.target_timeline_id, TimelineId(8_102));
+            assert_eq!(rendered.transition_effect_chain, Some(chain));
+        }
+
+        let mut wrong_owner =
+            timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        wrong_owner.video_effect_chains = vec![VideoEffectChainSummary {
+            id: VideoEffectChainId(99),
+            scope: VideoEffectScope::Transition {
+                owner: VideoTransitionEffectOwner::ClipTake { layer_id: 1 },
+            },
+            bypassed: false,
+            stages: Vec::new(),
+        }];
+        let shared = Arc::new(RwLock::new(None));
+        wrong_owner.timeline_follow_video_render_snapshot = Some(Arc::clone(&shared));
+        wrong_owner
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(shared
+            .read()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .transition_effect_chain
+            .is_none());
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_target_video_automations_are_isolated_from_outgoing_projection() {
+        let now = Instant::now();
+        let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        let layer_id = 8_151;
+        add_runtime_test_video_layer(&mut runtime, layer_id, VideoLayerState::default());
+        let source_automations = vec![
+            TimelineVideoAutomationSummary {
+                id: 8_152,
+                layer_id,
+                timeline_layer_id: None,
+                param: VideoParam::Opacity,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![VideoAutomationKeyframeSummary {
+                    time_ms: 50,
+                    value: 0.25,
+                    interpolation: AutomationInterpolation::Step,
+                }],
+                enabled: true,
+            },
+            TimelineVideoAutomationSummary {
+                id: 8_153,
+                layer_id,
+                timeline_layer_id: None,
+                param: VideoParam::TransformX,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![VideoAutomationKeyframeSummary {
+                    time_ms: 50,
+                    value: -0.5,
+                    interpolation: AutomationInterpolation::Step,
+                }],
+                enabled: true,
+            },
+        ];
+        let target_automations = vec![
+            TimelineVideoAutomationSummary {
+                id: 8_154,
+                layer_id,
+                timeline_layer_id: None,
+                param: VideoParam::Opacity,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![VideoAutomationKeyframeSummary {
+                    time_ms: 50,
+                    value: 0.75,
+                    interpolation: AutomationInterpolation::Step,
+                }],
+                enabled: true,
+            },
+            TimelineVideoAutomationSummary {
+                id: 8_155,
+                layer_id,
+                timeline_layer_id: None,
+                param: VideoParam::TransformX,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![VideoAutomationKeyframeSummary {
+                    time_ms: 50,
+                    value: 0.5,
+                    interpolation: AutomationInterpolation::Step,
+                }],
+                enabled: true,
+            },
+        ];
+        let nested_cue_id = 8_156;
+        create_effect_only_cue(&mut runtime, nested_cue_id, Vec::new());
+        let nested_automations = vec![
+            TimelineVideoAutomationSummary {
+                id: 8_157,
+                layer_id,
+                timeline_layer_id: None,
+                param: VideoParam::Opacity,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![VideoAutomationKeyframeSummary {
+                    time_ms: 50,
+                    value: 0.9,
+                    interpolation: AutomationInterpolation::Step,
+                }],
+                enabled: true,
+            },
+            TimelineVideoAutomationSummary {
+                id: 8_158,
+                layer_id,
+                timeline_layer_id: None,
+                param: VideoParam::TransformX,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![VideoAutomationKeyframeSummary {
+                    time_ms: 50,
+                    value: 0.75,
+                    interpolation: AutomationInterpolation::Step,
+                }],
+                enabled: true,
+            },
+        ];
+        runtime
+            .set_cue_child_timeline_state(
+                nested_cue_id,
+                Some(ChildTimelineSummary {
+                    video_automations: nested_automations,
+                    duration_ms: 1_000,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        runtime.timeline_position_ms = 50;
+        runtime.timeline_video_automations = source_automations
+            .iter()
+            .map(runtime_timeline_video_automation_from_summary)
+            .collect();
+        runtime.timeline_bank[1].video_automations = target_automations;
+        runtime.timeline_bank[1].events =
+            vec![direct_child_static_event(8_159, nested_cue_id, 0, 1_000)];
+        runtime.apply_timeline_video_automations();
+        let shared = Arc::new(RwLock::new(None));
+        runtime.timeline_follow_video_render_snapshot = Some(Arc::clone(&shared));
+        runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        // The nested Follow child is established from the target Timeline's
+        // Scene Block. Advance the real child graph so it owns a distinct
+        // transport position/generation before applying any automation.
+        runtime.advance_child_transports(now + Duration::from_millis(50));
+        assert_eq!(runtime.nested_child_transports.len(), 1);
+        assert!(runtime.nested_child_transports[0].active);
+        assert_eq!(
+            runtime.nested_child_transports[0].parent_transport_id,
+            Some(RuntimeChildTransportId::Follow)
+        );
+        runtime.advance_timeline_follow(now + Duration::from_millis(50));
+        // This is the exact old regression point: target root/nested child
+        // automation ran after source automation and overwrote the shared
+        // source layer.
+        runtime.apply_child_timeline_automations();
+        runtime.refresh_timeline_follow_video_render_snapshot();
+
+        let rendered = shared.read().unwrap().clone().unwrap();
+        let outgoing = rendered
+            .outgoing_video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        let incoming = rendered
+            .incoming_video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        assert!((outgoing.state.opacity - 0.25).abs() < f32::EPSILON);
+        assert!((outgoing.state.transform.x + 0.5).abs() < f32::EPSILON);
+        // Root target automation runs first; its nested Follow descendant
+        // runs second at its own position and therefore wins the same-field
+        // composition only on the isolated incoming projection.
+        assert!((incoming.state.opacity - 0.9).abs() < f32::EPSILON);
+        assert!((incoming.state.transform.x - 0.75).abs() < f32::EPSILON);
+        assert!(
+            (runtime_video_layer_state(&runtime, layer_id).opacity - 0.25).abs() < f32::EPSILON
+        );
+        assert!(
+            (runtime_video_layer_state(&runtime, layer_id).transform.x + 0.5).abs() < f32::EPSILON
+        );
+
+        // An advanced-authoring B replacement tears the active Follow tree
+        // down. A forced publication failure must restore its nested incoming
+        // transport and leave the outgoing/root layer byte-semantically at A.
+        let before_nested = runtime.nested_child_transports[0].clone();
+        let before_source_state = runtime_video_layer_state(&runtime, layer_id).clone();
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let authored = runtime.authored_timeline_snapshot();
+        let candidate = TimelineAdvancedAuthoringSummary {
+            snap_request: None,
+            video_clips: authored.video_clips,
+            audio_clips: authored.audio_clips,
+            phases: authored.phases,
+            item_groups: authored.item_groups,
+            loop_region: authored.loop_region,
+            follow: authored.follow,
+            guide_enabled: authored.guide_enabled,
+        };
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ApplyTimelineAdvancedAuthoringPublished {
+            candidate,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        assert!(runtime.timeline_follow_transition.is_none());
+        assert_eq!(runtime.nested_child_transports.len(), 1);
+        assert!(
+            !runtime.nested_child_transports[0].active,
+            "B must retire, rather than leave an executable nested Follow child"
+        );
+        let guard = published.read().unwrap();
+        runtime.publish_pending_command_acks(0, &published);
+        drop(guard);
+        assert!(receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert_eq!(runtime.nested_child_transports.len(), 1);
+        let restored_nested = &runtime.nested_child_transports[0];
+        assert_eq!(
+            restored_nested.parent_transport_id,
+            before_nested.parent_transport_id
+        );
+        assert_eq!(restored_nested.position_ms, before_nested.position_ms);
+        assert_eq!(
+            restored_nested.direct_generation,
+            before_nested.direct_generation
+        );
+        assert_eq!(
+            restored_nested.activation_generation,
+            before_nested.activation_generation
+        );
+        assert_eq!(restored_nested.active, before_nested.active);
+        assert_eq!(
+            runtime_video_layer_state(&runtime, layer_id),
+            &before_source_state
+        );
+        runtime.refresh_timeline_follow_video_render_snapshot();
+        let restored = shared.read().unwrap().clone().unwrap();
+        let restored_incoming = restored
+            .incoming_video
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .unwrap();
+        assert!((restored_incoming.state.opacity - 0.9).abs() < f32::EPSILON);
+        assert!((restored_incoming.state.transform.x - 0.75).abs() < f32::EPSILON);
+
+        runtime.abort_timeline_follow(
+            protocol::TimelineFollowAbortReason::ManualSeek,
+            now + Duration::from_millis(51),
+        );
+        assert!(shared.read().unwrap().is_none());
+        assert!(
+            (runtime_video_layer_state(&runtime, layer_id).opacity - 0.25).abs() < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_settlement_ack_is_generation_fenced_and_exactly_once() {
+        let now = Instant::now();
+        let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        let source_clip = TimelineAudioClipSummary {
+            id: 80_201,
+            layer_id: 2,
+            media_asset_id: None,
+            path: "source.wav".to_string(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        };
+        let audio_layer = default_timeline_audio_layer(2);
+        runtime.timeline_layers = vec![audio_layer.clone()];
+        runtime.timeline_bank[0].layers = vec![audio_layer.clone()];
+        runtime.timeline_bank[1].layers = vec![audio_layer];
+        let target_clip = TimelineAudioClipSummary {
+            id: 80_202,
+            path: "target.wav".to_string(),
+            ..source_clip.clone()
+        };
+        runtime.timeline_audio_clips = vec![source_clip.clone()];
+        runtime.timeline_bank[0].audio_clips = vec![source_clip];
+        runtime.timeline_bank[1].audio_clips = vec![target_clip];
+        runtime.video_outputs.push(RuntimeVideoOutput {
+            summary: VideoOutputSummary {
+                id: 80_203,
+                label: "Follow presenter".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: true,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: None,
+                width: 640,
+                height: 360,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: Default::default(),
+            },
+        });
+        runtime.video_outputs.push(RuntimeVideoOutput {
+            summary: VideoOutputSummary {
+                id: 80_204,
+                label: "Second Follow presenter".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: true,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: None,
+                width: 640,
+                height: 360,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: Default::default(),
+            },
+        });
+        runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        runtime.advance_timeline_follow(now + Duration::from_millis(100));
+        assert!(matches!(
+            runtime.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Settling
+        ));
+        let generation = runtime.timeline_follow_runtime.generation;
+        let epoch = runtime.output_ownership_gate.status().epoch;
+        let video = TimelineFollowSettlementAck {
+            epoch,
+            generation,
+            domain: TimelineFollowSettlementDomain::Video,
+            consumer_id: TimelineFollowSettlementConsumerId::VideoOutput { output_id: 80_203 },
+            result: TimelineFollowSettlementAckResult::Applied,
+        };
+        runtime
+            .acknowledge_timeline_follow_settlement(video.clone(), now)
+            .unwrap();
+        // Same terminal consumer result is an idempotent transport retry.
+        runtime
+            .acknowledge_timeline_follow_settlement(video.clone(), now)
+            .unwrap();
+        assert!(runtime
+            .acknowledge_timeline_follow_settlement(
+                TimelineFollowSettlementAck {
+                    epoch,
+                    generation: generation.saturating_add(1),
+                    domain: TimelineFollowSettlementDomain::Audio,
+                    consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                    result: TimelineFollowSettlementAckResult::Applied,
+                },
+                now,
+            )
+            .is_err());
+        let second_video = TimelineFollowSettlementAck {
+            epoch,
+            generation,
+            domain: TimelineFollowSettlementDomain::Video,
+            consumer_id: TimelineFollowSettlementConsumerId::VideoOutput { output_id: 80_204 },
+            result: TimelineFollowSettlementAckResult::Applied,
+        };
+        runtime
+            .acknowledge_timeline_follow_settlement(second_video.clone(), now)
+            .unwrap();
+        let final_audio = TimelineFollowSettlementAck {
+            epoch,
+            generation,
+            domain: TimelineFollowSettlementDomain::Audio,
+            consumer_id: TimelineFollowSettlementConsumerId::Audio,
+            result: TimelineFollowSettlementAckResult::Applied,
+        };
+        runtime
+            .acknowledge_timeline_follow_settlement(final_audio.clone(), now)
+            .unwrap();
+        assert_eq!(runtime.timeline_id, TimelineId(8_102));
+        assert!(runtime.timeline_follow_transition.is_none());
+        assert!(matches!(
+            runtime.timeline_follow_runtime.outcome,
+            Some(protocol::TimelineFollowOutcome::Completed)
+        ));
+        // The last ACK may lose its reply after it has installed the target.
+        // An exact retry reports success from the terminal receipt instead of
+        // rejecting the now-cleared transition as stale.
+        runtime
+            .acknowledge_timeline_follow_settlement(final_audio.clone(), now)
+            .unwrap();
+        // The Video consumers were accepted before Audio completed the
+        // quorum. They remain reply-loss recoverable after the transition has
+        // retired, not just the final consumer.
+        runtime
+            .acknowledge_timeline_follow_settlement(video.clone(), now)
+            .unwrap();
+        runtime
+            .acknowledge_timeline_follow_settlement(second_video.clone(), now)
+            .unwrap();
+        assert!(runtime
+            .acknowledge_timeline_follow_settlement(
+                TimelineFollowSettlementAck {
+                    result: TimelineFollowSettlementAckResult::Fault {
+                        fault: "different terminal shape".to_string(),
+                    },
+                    ..video.clone()
+                },
+                now,
+            )
+            .unwrap_err()
+            .contains("different result shape"));
+        // A failed next admission is still a new observable Follow
+        // generation. It must fence the old terminal receipt before a later
+        // project replacement or a retry can observe it.
+        runtime.handle_timeline_follow_admission_failure(
+            "target preparation failed".to_string(),
+            protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+            now,
+        );
+        assert!(runtime
+            .acknowledge_timeline_follow_settlement(final_audio.clone(), now)
+            .unwrap_err()
+            .contains("stale"));
+        // A successful project replacement fences the bounded receipt even
+        // when the output ownership epoch itself did not change.
+        let replacement = runtime.build_persistence_snapshot();
+        runtime.load_project_snapshot_checked(replacement).unwrap();
+        assert!(runtime
+            .acknowledge_timeline_follow_settlement(final_audio, now)
+            .unwrap_err()
+            .contains("stale"));
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_handle_final_ack_reply_loss_replays_terminal_receipt_once() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let primary_output_id = engine.allocate_video_output_id();
+        let secondary_output_id = engine.allocate_video_output_id();
+        for (output_id, label) in [
+            (primary_output_id, "Final ACK primary presenter"),
+            (secondary_output_id, "Final ACK secondary presenter"),
+        ] {
+            engine
+                .send(EngineCommand::AddVideoOutput(VideoOutputSummary {
+                    id: output_id,
+                    label: label.to_string(),
+                    kind: VideoOutputKind::Display,
+                    enabled: true,
+                    composition_id: 1,
+                    fullscreen: false,
+                    monitor_id: None,
+                    width: 640,
+                    height: 360,
+                    endpoint_name: None,
+                    opacity: 1.0,
+                    blackout: false,
+                    mapping: VideoOutputMapping::default(),
+                }))
+                .unwrap();
+        }
+        let audio_layer = default_timeline_audio_layer(2);
+        let mut source = TimelineSnapshot {
+            id: TimelineId(8_161),
+            label: "Final ACK source".to_string(),
+            layers: vec![audio_layer.clone()],
+            audio_clips: vec![TimelineAudioClipSummary {
+                id: 8_162,
+                layer_id: 2,
+                media_asset_id: None,
+                path: "memory://follow-final-ack-source.wav".to_string(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 100,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            duration_ms: 100,
+            ..TimelineSnapshot::default()
+        };
+        source.follow = Some(TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: TimelineId(8_163),
+            duration: VideoClipTakeDuration::milliseconds(10),
+            curve: VideoLayerTransitionCurve::Linear,
+            video_kind: VideoClipTakeKind::Crossfade,
+            lighting_policy: protocol::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: None,
+            preroll_ms: 0,
+            trans_cadence_bars: 4,
+            fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
+        });
+        let target = TimelineSnapshot {
+            id: TimelineId(8_163),
+            label: "Final ACK target".to_string(),
+            layers: vec![audio_layer],
+            duration_ms: 100,
+            ..TimelineSnapshot::default()
+        };
+        engine
+            .apply_timeline_bank_published(vec![source, target], TimelineId(8_161), false)
+            .unwrap();
+        engine.send(EngineCommand::SeekTimeline(90)).unwrap();
+        engine
+            .send(EngineCommand::SetTimelinePlaying(true))
+            .unwrap();
+
+        let epoch = engine.output_ownership_status().epoch;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let status = loop {
+            let status = engine.timeline_follow_runtime_status(epoch);
+            if matches!(
+                status.status,
+                protocol::TimelineFollowRuntimeStatus::Settling
+            ) {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Follow never reached settlement: {status:?}"
+            );
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        };
+        let final_audio = TimelineFollowSettlementAck {
+            epoch,
+            generation: status.generation,
+            domain: TimelineFollowSettlementDomain::Audio,
+            consumer_id: TimelineFollowSettlementConsumerId::Audio,
+            result: TimelineFollowSettlementAckResult::Applied,
+        };
+        let primary_video = TimelineFollowSettlementAck {
+            epoch,
+            generation: status.generation,
+            domain: TimelineFollowSettlementDomain::Video,
+            consumer_id: TimelineFollowSettlementConsumerId::VideoOutput {
+                output_id: primary_output_id,
+            },
+            result: TimelineFollowSettlementAckResult::Applied,
+        };
+        let secondary_video = TimelineFollowSettlementAck {
+            consumer_id: TimelineFollowSettlementConsumerId::VideoOutput {
+                output_id: secondary_output_id,
+            },
+            ..primary_video.clone()
+        };
+
+        // The first Video consumer physically applies, but its definitive
+        // publication/reply is lost. It remains accepted while the rest of
+        // the captured quorum settles.
+        engine.force_next_pending_publication_failure_for_tests();
+        assert!(engine
+            .acknowledge_timeline_follow_settlement_published(
+                primary_video.clone(),
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err()
+            .contains("could not publish"));
+        engine
+            .acknowledge_timeline_follow_settlement_published(
+                secondary_video.clone(),
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+
+        // Audio is the final captured consumer. Its physical application also
+        // completes, but this second forced loss preserves the original
+        // final-ACK recovery seam alongside the earlier Video loss.
+        engine.force_next_pending_publication_failure_for_tests();
+        assert!(engine
+            .acknowledge_timeline_follow_settlement_published(
+                final_audio.clone(),
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err()
+            .contains("could not publish"));
+        let persisted_after_completion = engine.persistence_snapshot().unwrap();
+
+        // Every accepted consumer, including the pre-final reply-loss Video
+        // ACK, crosses the ordinary publication barrier idempotently after
+        // the target is installed. None can re-run install or alter A/B.
+        engine
+            .acknowledge_timeline_follow_settlement_published(
+                primary_video.clone(),
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        let published = engine.snapshot();
+        assert_eq!(published.timeline.id, TimelineId(8_163));
+        assert!(matches!(
+            published.timeline.follow_runtime.outcome,
+            Some(protocol::TimelineFollowOutcome::Completed)
+        ));
+        let installed_audio_revision = published.timeline.audio_transport_revision;
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().timeline_bank,
+            persisted_after_completion.timeline_bank
+        );
+
+        for acknowledgement in [secondary_video.clone(), final_audio.clone()] {
+            engine
+                .acknowledge_timeline_follow_settlement_published(
+                    acknowledgement,
+                    Instant::now() + Duration::from_secs(1),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            engine.snapshot().timeline.audio_transport_revision,
+            installed_audio_revision
+        );
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().timeline_bank,
+            persisted_after_completion.timeline_bank
+        );
+
+        assert!(engine
+            .acknowledge_timeline_follow_settlement_published(
+                TimelineFollowSettlementAck {
+                    result: TimelineFollowSettlementAckResult::Fault {
+                        fault: "same key, different result".to_string(),
+                    },
+                    ..primary_video.clone()
+                },
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err()
+            .contains("different result shape"));
+        assert!(engine
+            .acknowledge_timeline_follow_settlement_published(
+                TimelineFollowSettlementAck {
+                    domain: TimelineFollowSettlementDomain::Lighting,
+                    consumer_id: TimelineFollowSettlementConsumerId::Lighting,
+                    ..primary_video.clone()
+                },
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err()
+            .contains("stale"));
+        assert!(engine
+            .acknowledge_timeline_follow_settlement_published(
+                TimelineFollowSettlementAck {
+                    generation: primary_video.generation.saturating_add(1),
+                    ..primary_video
+                },
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err()
+            .contains("stale"));
+        assert_eq!(
+            engine.snapshot().timeline.audio_transport_revision,
+            installed_audio_revision
+        );
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_audio_quorum_captures_unilateral_and_mute_projection() {
+        for (source_has_audio, source_muted, target_has_audio, target_muted, relevant) in [
+            // Source-only fade to the target's silence still changes the
+            // physical audio sink and must await its terminal application.
+            (true, false, false, false, true),
+            // A target-only clip has no outgoing counterpart but still needs
+            // an explicit fade-in acknowledgement.
+            (false, false, true, false, true),
+            // Muted source transport remains a real final sink state.
+            (true, true, false, false, true),
+            // Muting a target with a real transport is equally relevant.
+            (false, false, true, true, true),
+            // Only a genuinely empty source and target is Audio N/A.
+            (false, false, false, false, false),
+        ] {
+            let now = Instant::now();
+            let mut runtime =
+                timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+            let audio_layer = default_timeline_audio_layer(2);
+            runtime.timeline_layers = vec![audio_layer.clone()];
+            runtime.timeline_bank[0].layers = vec![audio_layer.clone()];
+            runtime.timeline_bank[1].layers = vec![audio_layer];
+            let make_clip = |id, path: &str| TimelineAudioClipSummary {
+                id,
+                layer_id: 2,
+                media_asset_id: None,
+                path: path.to_string(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 1_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            };
+            let source_clips = source_has_audio
+                .then(|| vec![make_clip(80_300, "source.wav")])
+                .unwrap_or_default();
+            let target_clips = target_has_audio
+                .then(|| vec![make_clip(80_301, "target.wav")])
+                .unwrap_or_default();
+            runtime.timeline_audio_clips = source_clips.clone();
+            runtime.timeline_audio_muted = source_muted;
+            runtime.timeline_bank[0].audio_clips = source_clips;
+            runtime.timeline_bank[0].audio_muted = source_muted;
+            runtime.timeline_bank[1].audio_clips = target_clips;
+            runtime.timeline_bank[1].audio_muted = target_muted;
+            runtime
+                .begin_timeline_follow(
+                    protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                    now,
+                )
+                .unwrap();
+            runtime.advance_timeline_follow(now + Duration::from_millis(100));
+            if !relevant {
+                assert_eq!(runtime.timeline_id, TimelineId(8_102));
+                assert!(runtime.timeline_follow_transition.is_none());
+                continue;
+            }
+            let audio_domain = runtime
+                .timeline_follow_runtime
+                .settlement
+                .as_ref()
+                .expect("Follow must enter settlement")
+                .domains
+                .iter()
+                .find(|domain| domain.domain == TimelineFollowSettlementDomain::Audio)
+                .unwrap();
+            assert_eq!(audio_domain.state, TimelineFollowSettlementState::Pending);
+            assert_eq!(runtime.timeline_id, TimelineId(8_101));
+            let generation = runtime.timeline_follow_runtime.generation;
+            runtime
+                .acknowledge_timeline_follow_settlement(
+                    TimelineFollowSettlementAck {
+                        epoch: runtime.output_ownership_gate.status().epoch,
+                        generation,
+                        domain: TimelineFollowSettlementDomain::Audio,
+                        consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                        result: TimelineFollowSettlementAckResult::Applied,
+                    },
+                    now,
+                )
+                .unwrap();
+            assert_eq!(runtime.timeline_id, TimelineId(8_102));
+            assert!(runtime.timeline_follow_transition.is_none());
+        }
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_lighting_quorum_ignores_disabled_routes_and_faults_mutation() {
+        let route_telemetry = |index, universe, success| DmxOutputRouteTelemetry {
+            index,
+            universe,
+            attempted: success,
+            success,
+            bytes: usize::from(success) * 512,
+            error: (!success).then(|| "disabled route skipped".to_string()),
+            consecutive_failures: 0,
+            reconnect_attempts: 0,
+            reconnecting: false,
+            retry_in_ms: None,
+            last_success_unix_ms: None,
+        };
+
+        // Disabled routes never enter the quorum and their skipped telemetry
+        // cannot prevent the enabled captured route from settling.
+        let now = Instant::now();
+        let mut mixed = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        mixed.output.enabled = true;
+        mixed.output.universe = 80;
+        let mut disabled = DmxOutputConfig::default();
+        disabled.enabled = false;
+        disabled.universe = 81;
+        mixed.additional_dmx_outputs.push(RuntimeDmxOutput {
+            config: disabled,
+            sender: None,
+            recovery: DmxRouteRecovery::default(),
+        });
+        mixed
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        let captured = mixed
+            .timeline_follow_transition
+            .as_ref()
+            .unwrap()
+            .lighting_route_quorum
+            .clone();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].index, 0);
+        assert_eq!(captured[0].universe, 80);
+        assert_eq!(captured[0].configuration, mixed.output);
+        assert_eq!(
+            captured[0].configuration_generation,
+            mixed.dmx_route_configuration_generation
+        );
+        mixed.advance_timeline_follow(now + Duration::from_millis(100));
+        mixed.last_dmx_route_results =
+            vec![route_telemetry(0, 80, true), route_telemetry(1, 81, false)];
+        mixed.acknowledge_timeline_follow_lighting_settlement(now);
+        assert_eq!(mixed.timeline_id, TimelineId(8_102));
+        assert!(mixed.timeline_follow_transition.is_none());
+
+        // A captured route disappearing or being disabled after admission is
+        // fail-closed; an unrelated added route cannot satisfy its identity.
+        let mut changed = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        changed.output.enabled = true;
+        changed.output.universe = 82;
+        changed
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        changed.advance_timeline_follow(now + Duration::from_millis(100));
+        changed.output.enabled = false;
+        changed.last_dmx_route_results = vec![route_telemetry(7, 99, true)];
+        changed.acknowledge_timeline_follow_lighting_settlement(now);
+        assert_eq!(changed.timeline_id, TimelineId(8_101));
+        assert!(matches!(
+            changed.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Held
+        ));
+        assert!(changed.timeline_follow_transition.is_none());
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_lighting_quorum_rejects_route_configuration_aba() {
+        let route_telemetry = |index, universe| DmxOutputRouteTelemetry {
+            index,
+            universe,
+            attempted: true,
+            success: true,
+            bytes: 512,
+            error: None,
+            consecutive_failures: 0,
+            reconnect_attempts: 0,
+            reconnecting: false,
+            retry_in_ms: None,
+            last_success_unix_ms: None,
+        };
+        let now = Instant::now();
+
+        // A disable/re-enable which restores byte-equal visible config is an
+        // ABA boundary. Old successful telemetry must not settle the Follow.
+        let mut reenabled = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        let mut primary = DmxOutputConfig::default();
+        primary.enabled = true;
+        primary.universe = 8_110;
+        reenabled.apply_command(EngineCommand::SetOutput(primary.clone()));
+        reenabled
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        reenabled.advance_timeline_follow(now + Duration::from_millis(100));
+        let captured = reenabled
+            .timeline_follow_transition
+            .as_ref()
+            .unwrap()
+            .lighting_route_quorum[0]
+            .clone();
+        let mut disabled = primary.clone();
+        disabled.enabled = false;
+        reenabled.apply_command(EngineCommand::SetOutput(disabled));
+        reenabled.apply_command(EngineCommand::SetOutput(primary.clone()));
+        assert_eq!(reenabled.output, captured.configuration);
+        assert!(reenabled.dmx_route_configuration_generation > captured.configuration_generation);
+        reenabled.last_dmx_route_configuration_generation = captured.configuration_generation;
+        reenabled.last_dmx_route_results = vec![route_telemetry(0, primary.universe)];
+        reenabled.acknowledge_timeline_follow_lighting_settlement(now);
+        assert!(matches!(
+            reenabled.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Held
+        ));
+        assert!(reenabled.timeline_follow_transition.is_none());
+
+        // Removing and re-adding a secondary route at its old vector index
+        // and universe likewise cannot satisfy the original admission.
+        let mut readded = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        let mut disabled_primary = DmxOutputConfig::default();
+        disabled_primary.enabled = false;
+        disabled_primary.universe = 8_120;
+        let mut secondary = DmxOutputConfig::default();
+        secondary.enabled = true;
+        secondary.universe = 8_121;
+        readded.apply_command(EngineCommand::SetDmxOutputs(vec![
+            disabled_primary.clone(),
+            secondary.clone(),
+        ]));
+        readded
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        readded.advance_timeline_follow(now + Duration::from_millis(100));
+        let captured = readded
+            .timeline_follow_transition
+            .as_ref()
+            .unwrap()
+            .lighting_route_quorum[0]
+            .clone();
+        assert_eq!(captured.index, 1);
+        readded.apply_command(EngineCommand::SetDmxOutputs(vec![disabled_primary.clone()]));
+        readded.apply_command(EngineCommand::SetDmxOutputs(vec![
+            disabled_primary,
+            secondary,
+        ]));
+        assert_eq!(
+            readded.additional_dmx_outputs[0].config,
+            captured.configuration
+        );
+        assert!(readded.dmx_route_configuration_generation > captured.configuration_generation);
+        readded.last_dmx_route_configuration_generation = captured.configuration_generation;
+        readded.last_dmx_route_results = vec![route_telemetry(1, captured.universe)];
+        readded.acknowledge_timeline_follow_lighting_settlement(now);
+        assert!(matches!(
+            readded.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Held
+        ));
+        assert!(readded.timeline_follow_transition.is_none());
+
+        // Endpoint/protocol edits retain the slot and universe but replace the
+        // physical route. They must fault before any old successful send can
+        // be mistaken for an acknowledgement.
+        let mut endpoint_changed =
+            timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        let mut endpoint = DmxOutputConfig::default();
+        endpoint.enabled = true;
+        endpoint.universe = 8_130;
+        endpoint.target_ip = "127.0.0.1".to_string();
+        endpoint_changed.apply_command(EngineCommand::SetOutput(endpoint.clone()));
+        endpoint_changed
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        endpoint_changed.advance_timeline_follow(now + Duration::from_millis(100));
+        let captured = endpoint_changed
+            .timeline_follow_transition
+            .as_ref()
+            .unwrap()
+            .lighting_route_quorum[0]
+            .clone();
+        let mut replacement = endpoint.clone();
+        replacement.protocol = DmxOutputProtocol::Sacn;
+        replacement.target_ip = "239.255.8.130".to_string();
+        replacement.port = 5_568;
+        endpoint_changed.apply_command(EngineCommand::SetOutput(replacement));
+        assert_eq!(endpoint_changed.output.universe, captured.universe);
+        assert_ne!(endpoint_changed.output, captured.configuration);
+        endpoint_changed.last_dmx_route_configuration_generation =
+            captured.configuration_generation;
+        endpoint_changed.last_dmx_route_results = vec![route_telemetry(0, captured.universe)];
+        endpoint_changed.acknowledge_timeline_follow_lighting_settlement(now);
+        assert!(matches!(
+            endpoint_changed.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Held
+        ));
+        assert!(endpoint_changed.timeline_follow_transition.is_none());
+
+        // The public route telemetry DTO deliberately has no configuration
+        // fingerprint. The private per-batch generation therefore remains a
+        // required second fence even when the current route still exactly
+        // matches admission.
+        let mut stale_telemetry =
+            timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        let mut current = DmxOutputConfig::default();
+        current.enabled = true;
+        current.universe = 8_140;
+        stale_telemetry.apply_command(EngineCommand::SetOutput(current));
+        stale_telemetry
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        stale_telemetry.advance_timeline_follow(now + Duration::from_millis(100));
+        let captured = stale_telemetry
+            .timeline_follow_transition
+            .as_ref()
+            .unwrap()
+            .lighting_route_quorum[0]
+            .clone();
+        stale_telemetry.last_dmx_route_configuration_generation =
+            captured.configuration_generation.saturating_sub(1);
+        stale_telemetry.last_dmx_route_results = vec![route_telemetry(0, captured.universe)];
+        stale_telemetry.acknowledge_timeline_follow_lighting_settlement(now);
+        assert!(matches!(
+            stale_telemetry.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Held
+        ));
+        assert!(stale_telemetry.timeline_follow_transition.is_none());
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_settlement_timeout_applies_captured_policy_without_dual_transport() {
+        for (policy, expected_status, expected_outcome, expected_timeline) in [
+            (
+                protocol::TimelineFollowFaultPolicy::Hold,
+                protocol::TimelineFollowRuntimeStatus::Held,
+                protocol::TimelineFollowOutcome::Held,
+                TimelineId(8_101),
+            ),
+            (
+                protocol::TimelineFollowFaultPolicy::Cut,
+                protocol::TimelineFollowRuntimeStatus::Idle,
+                protocol::TimelineFollowOutcome::Cut,
+                TimelineId(8_102),
+            ),
+            (
+                protocol::TimelineFollowFaultPolicy::Fault,
+                protocol::TimelineFollowRuntimeStatus::Fault,
+                protocol::TimelineFollowOutcome::Fault,
+                TimelineId(8_101),
+            ),
+        ] {
+            let now = Instant::now();
+            let mut runtime = timeline_follow_ltl5_runtime(policy);
+            runtime.video_outputs.push(RuntimeVideoOutput {
+                summary: VideoOutputSummary {
+                    id: 80_204,
+                    label: "Pending Follow presenter".to_string(),
+                    kind: VideoOutputKind::Display,
+                    enabled: true,
+                    composition_id: 1,
+                    fullscreen: false,
+                    monitor_id: None,
+                    width: 640,
+                    height: 360,
+                    endpoint_name: None,
+                    opacity: 1.0,
+                    blackout: false,
+                    mapping: Default::default(),
+                },
+            });
+            runtime
+                .begin_timeline_follow(
+                    protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                    now,
+                )
+                .unwrap();
+            runtime.advance_timeline_follow(now + Duration::from_millis(100));
+            assert!(matches!(
+                runtime.timeline_follow_runtime.status,
+                protocol::TimelineFollowRuntimeStatus::Settling
+            ));
+            runtime
+                .timeline_follow_transition
+                .as_mut()
+                .unwrap()
+                .settlement_deadline = Some(now);
+            runtime.advance_timeline_follow(now + Duration::from_millis(101));
+            assert_eq!(runtime.timeline_id, expected_timeline);
+            assert_eq!(runtime.timeline_follow_runtime.status, expected_status);
+            assert_eq!(
+                runtime.timeline_follow_runtime.outcome,
+                Some(expected_outcome)
+            );
+            assert!(runtime.timeline_follow_transport.is_none());
+            assert!(runtime.timeline_follow_transition.is_none());
+        }
     }
 
     #[test]
@@ -96235,12 +98398,15 @@ mod tests {
     fn timeline_follow_ltl5_rollback_load_cut_and_abort_fence_regressions() {
         let now = Instant::now();
         let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        let follow_presenter = Arc::new(RwLock::new(None));
+        runtime.timeline_follow_video_render_snapshot = Some(Arc::clone(&follow_presenter));
         runtime
             .begin_timeline_follow(
                 protocol::TimelineFollowAdmissionReason::PrerollBeforeNaturalPlaybackBoundary,
                 now,
             )
             .unwrap();
+        let before_presenter = follow_presenter.read().unwrap().clone().unwrap();
         let before_runtime = runtime.timeline_follow_runtime.clone();
         let before_transition = runtime.timeline_follow_transition.clone().unwrap();
         let before_transport = runtime.timeline_follow_transport.clone().unwrap();
@@ -96267,6 +98433,7 @@ mod tests {
             ack,
         });
         assert!(runtime.timeline_follow_transition.is_none());
+        assert!(follow_presenter.read().unwrap().is_none());
         let guard = published.read().unwrap();
         runtime.publish_pending_command_acks(0, &published);
         drop(guard);
@@ -96276,6 +98443,16 @@ mod tests {
             .unwrap_err()
             .contains("rolled back"));
         assert_eq!(runtime.timeline_follow_runtime, before_runtime);
+        let restored_presenter = follow_presenter.read().unwrap().clone().unwrap();
+        assert_eq!(restored_presenter.generation, before_presenter.generation);
+        assert_eq!(
+            restored_presenter.source_timeline_id,
+            before_presenter.source_timeline_id
+        );
+        assert_eq!(
+            restored_presenter.target_timeline_id,
+            before_presenter.target_timeline_id
+        );
         let transition = runtime.timeline_follow_transition.as_ref().unwrap();
         assert_eq!(transition.generation, before_transition.generation);
         assert_eq!(transition.target.id, before_transition.target.id);
@@ -96358,6 +98535,7 @@ mod tests {
                 now
             )
             .unwrap());
+        cut.advance_timeline_follow(now);
         assert_eq!(cut.timeline_id, TimelineId(8_102));
         assert!(cut.timeline_follow_natural_boundary_armed);
         assert!(cut
@@ -96366,6 +98544,7 @@ mod tests {
                 now
             )
             .unwrap());
+        cut.advance_timeline_follow(now);
         assert_eq!(cut.timeline_id, TimelineId(8_103));
 
         let mut fenced = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
@@ -96934,6 +99113,7 @@ mod tests {
             duration_ms: 1_000,
             progress_millis: 500,
             fault: None,
+            settlement: None,
         };
         snapshot.timeline_bank = vec![snapshot.timeline.clone(), target];
         *engine.snapshot.write().unwrap() = snapshot;

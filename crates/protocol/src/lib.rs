@@ -880,8 +880,18 @@ pub struct VideoIsfEffectSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum VideoTransitionEffectOwner {
-    ClipTake { layer_id: VideoLayerId },
-    LayerBus { bus_id: VideoTransitionBusId },
+    ClipTake {
+        layer_id: VideoLayerId,
+    },
+    LayerBus {
+        bus_id: VideoTransitionBusId,
+    },
+    /// Canonical Custom transition chain for the Follow authored by one stable
+    /// source Timeline. Scope uniqueness therefore permits at most one Follow
+    /// Transition chain per source Timeline regardless of bank order.
+    TimelineFollow {
+        source_timeline_id: TimelineId,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -2734,6 +2744,13 @@ fn validate_video_effect_scope(
                 ));
             }
         }
+        VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::TimelineFollow { source_timeline_id },
+        } => {
+            if source_timeline_id.0 == 0 {
+                return Err("Video Timeline Follow effect references Timeline ID zero".to_string());
+            }
+        }
         VideoEffectScope::Composition { composition_id } => {
             if !compositions.contains_key(composition_id) {
                 return Err(format!(
@@ -4399,6 +4416,346 @@ pub enum TimelineFollowOutcome {
     Aborted { reason: TimelineFollowAbortReason },
 }
 
+/// Domains that must reach one generation-fenced settlement before a Follow
+/// may replace its source Timeline with the target Timeline.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineFollowSettlementDomain {
+    Audio,
+    Video,
+    Lighting,
+}
+
+/// Stable identity of one production consumer captured when a Follow is
+/// admitted. Lighting routes intentionally settle as one aggregate consumer;
+/// route-specific delivery diagnostics remain owned by the lighting runtime.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TimelineFollowSettlementConsumerId {
+    Audio,
+    VideoOutput { output_id: VideoOutputId },
+    Lighting,
+}
+
+impl TimelineFollowSettlementConsumerId {
+    pub const fn domain(self) -> TimelineFollowSettlementDomain {
+        match self {
+            Self::Audio => TimelineFollowSettlementDomain::Audio,
+            Self::VideoOutput { .. } => TimelineFollowSettlementDomain::Video,
+            Self::Lighting => TimelineFollowSettlementDomain::Lighting,
+        }
+    }
+}
+
+/// Runtime state for an expected Follow settlement consumer or its aggregate
+/// domain. `TimedOut` is produced only by the authoritative runtime deadline;
+/// it is not a consumer acknowledgement result.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineFollowSettlementState {
+    #[default]
+    Pending,
+    Applied,
+    NotApplicable,
+    Fault,
+    TimedOut,
+}
+
+impl TimelineFollowSettlementState {
+    pub const fn is_terminal(self) -> bool {
+        !matches!(self, Self::Pending)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineFollowSettlementConsumerSummary {
+    pub consumer_id: TimelineFollowSettlementConsumerId,
+    #[serde(default)]
+    pub state: TimelineFollowSettlementState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fault: Option<String>,
+}
+
+/// One of the three externally observable settlement domains. `consumers` is
+/// the frozen admission-time production quorum: identities remain present
+/// when their result is `NotApplicable`. An empty quorum derives
+/// `NotApplicable` (for example, no active video presenter), except for a
+/// domain-level internal Lighting fault or timeout.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineFollowSettlementDomainSummary {
+    pub domain: TimelineFollowSettlementDomain,
+    #[serde(default)]
+    pub state: TimelineFollowSettlementState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fault: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consumers: Vec<TimelineFollowSettlementConsumerSummary>,
+}
+
+/// Runtime-only settlement of one captured Follow generation. The target
+/// clock is frozen at its terminal boundary while this summary is active. Cut
+/// follows the same Settling handshake as timed transitions. The engine uses
+/// [`TIMELINE_FOLLOW_SETTLEMENT_TIMEOUT_MS`] unless a test-only override is
+/// supplied and applies the captured fault policy to both faults and timeout.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineFollowSettlementSummary {
+    #[serde(default)]
+    pub started_at_ms: u64,
+    #[serde(default)]
+    pub deadline_ms: u64,
+    #[serde(default)]
+    pub state: TimelineFollowSettlementState,
+    #[serde(default)]
+    pub progress_millis: u16,
+    #[serde(default)]
+    pub fault_policy: TimelineFollowFaultPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fault: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub domains: Vec<TimelineFollowSettlementDomainSummary>,
+}
+
+pub const TIMELINE_FOLLOW_SETTLEMENT_TIMEOUT_MS: u64 = 2_000;
+
+/// One consumer acknowledgement. The authoritative runtime rejects stale
+/// epochs/generations and validates that `domain` matches `consumer_id` before
+/// mutating settlement state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineFollowSettlementAck {
+    pub epoch: u64,
+    pub generation: u64,
+    pub domain: TimelineFollowSettlementDomain,
+    pub consumer_id: TimelineFollowSettlementConsumerId,
+    pub result: TimelineFollowSettlementAckResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TimelineFollowSettlementAckResult {
+    Applied,
+    NotApplicable,
+    Fault { fault: String },
+}
+
+pub fn validate_timeline_follow_settlement_ack(
+    ack: &TimelineFollowSettlementAck,
+) -> Result<(), String> {
+    if ack.consumer_id.domain() != ack.domain {
+        return Err(
+            "Timeline Follow settlement ACK domain does not match consumer identity".to_string(),
+        );
+    }
+    if let TimelineFollowSettlementAckResult::Fault { fault } = &ack.result {
+        if fault.trim().is_empty() {
+            return Err("Timeline Follow settlement ACK fault must not be empty".to_string());
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_timeline_follow_settlement_summary(
+    settlement: &TimelineFollowSettlementSummary,
+) -> Result<(), String> {
+    if settlement.progress_millis > 1_000 {
+        return Err("Timeline Follow settlement progress must be between 0 and 1000".to_string());
+    }
+    if settlement.deadline_ms < settlement.started_at_ms {
+        return Err("Timeline Follow settlement deadline precedes its start".to_string());
+    }
+    validate_timeline_follow_settlement_state_fault(
+        settlement.state,
+        settlement.fault.as_deref(),
+        "aggregate",
+    )?;
+
+    let mut domains = BTreeSet::new();
+    let mut consumers = BTreeSet::new();
+    for domain in &settlement.domains {
+        if !domains.insert(domain.domain) {
+            return Err(format!(
+                "Timeline Follow settlement contains duplicate {:?} domain",
+                domain.domain
+            ));
+        }
+        validate_timeline_follow_settlement_state_fault(
+            domain.state,
+            domain.fault.as_deref(),
+            "domain",
+        )?;
+        for consumer in &domain.consumers {
+            if consumer.consumer_id.domain() != domain.domain {
+                return Err(format!(
+                    "Timeline Follow settlement {:?} consumer is assigned to the wrong domain",
+                    consumer.consumer_id
+                ));
+            }
+            if !consumers.insert(consumer.consumer_id) {
+                return Err(format!(
+                    "Timeline Follow settlement contains duplicate {:?} consumer",
+                    consumer.consumer_id
+                ));
+            }
+            validate_timeline_follow_settlement_state_fault(
+                consumer.state,
+                consumer.fault.as_deref(),
+                "consumer",
+            )?;
+        }
+        validate_timeline_follow_settlement_domain_state(domain)?;
+    }
+
+    for required in [
+        TimelineFollowSettlementDomain::Audio,
+        TimelineFollowSettlementDomain::Video,
+        TimelineFollowSettlementDomain::Lighting,
+    ] {
+        if !domains.contains(&required) {
+            return Err(format!(
+                "Timeline Follow settlement is missing {:?} domain",
+                required
+            ));
+        }
+    }
+    let derived_state = derive_timeline_follow_settlement_aggregate_state(&settlement.domains)?;
+    if settlement.state != derived_state {
+        return Err(format!(
+            "Timeline Follow settlement aggregate state {:?} contradicts derived {:?} state",
+            settlement.state, derived_state
+        ));
+    }
+    Ok(())
+}
+
+fn validate_timeline_follow_settlement_state_fault(
+    state: TimelineFollowSettlementState,
+    fault: Option<&str>,
+    scope: &str,
+) -> Result<(), String> {
+    match (state, fault) {
+        (TimelineFollowSettlementState::Fault, Some(fault)) if !fault.trim().is_empty() => Ok(()),
+        (TimelineFollowSettlementState::Fault, _) => Err(format!(
+            "Timeline Follow settlement {scope} Fault state requires non-empty fault text"
+        )),
+        (_, Some(_)) => Err(format!(
+            "Timeline Follow settlement {scope} fault text is allowed only for Fault state"
+        )),
+        (_, None) => Ok(()),
+    }
+}
+
+fn validate_timeline_follow_settlement_domain_state(
+    domain: &TimelineFollowSettlementDomainSummary,
+) -> Result<(), String> {
+    if domain.consumers.is_empty() {
+        if domain.state == TimelineFollowSettlementState::NotApplicable
+            || (domain.domain == TimelineFollowSettlementDomain::Lighting
+                && matches!(
+                    domain.state,
+                    TimelineFollowSettlementState::Fault | TimelineFollowSettlementState::TimedOut
+                ))
+        {
+            return Ok(());
+        }
+        return Err(format!(
+            "Timeline Follow settlement {:?} domain has no consumer and must be NotApplicable",
+            domain.domain
+        ));
+    }
+
+    let derived = derive_timeline_follow_settlement_consumer_state(&domain.consumers)?;
+    if domain.state == derived {
+        return Ok(());
+    }
+    let lighting_internal_terminal = domain.domain == TimelineFollowSettlementDomain::Lighting
+        && matches!(
+            domain.state,
+            TimelineFollowSettlementState::Fault | TimelineFollowSettlementState::TimedOut
+        )
+        && derived != TimelineFollowSettlementState::Fault
+        && (domain.state != TimelineFollowSettlementState::TimedOut
+            || derived != TimelineFollowSettlementState::TimedOut);
+    if lighting_internal_terminal {
+        return Ok(());
+    }
+    Err(format!(
+        "Timeline Follow settlement {:?} domain state {:?} contradicts derived {:?} consumer state",
+        domain.domain, domain.state, derived
+    ))
+}
+
+fn derive_timeline_follow_settlement_consumer_state(
+    consumers: &[TimelineFollowSettlementConsumerSummary],
+) -> Result<TimelineFollowSettlementState, String> {
+    if consumers
+        .iter()
+        .any(|consumer| consumer.state == TimelineFollowSettlementState::Fault)
+    {
+        return Ok(TimelineFollowSettlementState::Fault);
+    }
+    if consumers
+        .iter()
+        .any(|consumer| consumer.state == TimelineFollowSettlementState::TimedOut)
+    {
+        return Ok(TimelineFollowSettlementState::TimedOut);
+    }
+    if consumers
+        .iter()
+        .any(|consumer| consumer.state == TimelineFollowSettlementState::Pending)
+    {
+        return Ok(TimelineFollowSettlementState::Pending);
+    }
+    if consumers
+        .iter()
+        .all(|consumer| consumer.state == TimelineFollowSettlementState::NotApplicable)
+    {
+        return Ok(TimelineFollowSettlementState::NotApplicable);
+    }
+    if consumers.iter().all(|consumer| {
+        matches!(
+            consumer.state,
+            TimelineFollowSettlementState::Applied | TimelineFollowSettlementState::NotApplicable
+        )
+    }) && consumers
+        .iter()
+        .any(|consumer| consumer.state == TimelineFollowSettlementState::Applied)
+    {
+        return Ok(TimelineFollowSettlementState::Applied);
+    }
+    Err("Timeline Follow settlement consumers have no coherent derived state".to_string())
+}
+
+fn derive_timeline_follow_settlement_aggregate_state(
+    domains: &[TimelineFollowSettlementDomainSummary],
+) -> Result<TimelineFollowSettlementState, String> {
+    if domains
+        .iter()
+        .any(|domain| domain.state == TimelineFollowSettlementState::Fault)
+    {
+        return Ok(TimelineFollowSettlementState::Fault);
+    }
+    if domains
+        .iter()
+        .any(|domain| domain.state == TimelineFollowSettlementState::TimedOut)
+    {
+        return Ok(TimelineFollowSettlementState::TimedOut);
+    }
+    if domains
+        .iter()
+        .any(|domain| domain.state == TimelineFollowSettlementState::Pending)
+    {
+        return Ok(TimelineFollowSettlementState::Pending);
+    }
+    if domains.iter().all(|domain| {
+        matches!(
+            domain.state,
+            TimelineFollowSettlementState::Applied | TimelineFollowSettlementState::NotApplicable
+        )
+    }) {
+        return Ok(TimelineFollowSettlementState::Applied);
+    }
+    Err("Timeline Follow settlement aggregate has no coherent terminal state".to_string())
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TimelineFollowRuntimeSummary {
     pub generation: u64,
@@ -4419,6 +4776,8 @@ pub struct TimelineFollowRuntimeSummary {
     pub progress_millis: u16,
     #[serde(default)]
     pub fault: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement: Option<TimelineFollowSettlementSummary>,
 }
 
 /// Bounded public read model for the runtime-only Follow transport. The
@@ -4449,6 +4808,8 @@ pub struct TimelineFollowRuntimeStatusSnapshot {
     pub progress_millis: u16,
     #[serde(default)]
     pub fault: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement: Option<TimelineFollowSettlementSummary>,
 }
 
 impl TimelineFollowRuntimeStatusSnapshot {
@@ -4465,7 +4826,7 @@ impl TimelineFollowRuntimeStatusSnapshot {
             duration_ms: runtime.duration_ms,
             progress_millis: runtime.progress_millis,
             fault: runtime.fault.clone(),
-            ..Self::default()
+            settlement: runtime.settlement.clone(),
         }
     }
 }
@@ -4911,6 +5272,10 @@ pub fn validate_timeline_bank(
                 snapshot.timeline.id.0
             ));
         }
+        validate_timeline_follow_transition_effect_owners(
+            &snapshot.video,
+            &BTreeSet::from([snapshot.timeline.id]),
+        )?;
         return Ok(());
     }
     let mut ids = BTreeSet::new();
@@ -4920,6 +5285,7 @@ pub fn validate_timeline_bank(
         }
         validate_timeline_authoring(timeline, media_assets)?;
     }
+    validate_timeline_follow_transition_effect_owners(&snapshot.video, &ids)?;
     let active_index = snapshot
         .timeline_bank
         .iter()
@@ -4949,6 +5315,27 @@ pub fn validate_timeline_bank(
     Ok(())
 }
 
+fn validate_timeline_follow_transition_effect_owners(
+    video: &VideoSnapshot,
+    timeline_ids: &BTreeSet<TimelineId>,
+) -> Result<(), String> {
+    for chain in &video.effect_chains {
+        let VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::TimelineFollow { source_timeline_id },
+        } = &chain.scope
+        else {
+            continue;
+        };
+        if !timeline_ids.contains(source_timeline_id) {
+            return Err(format!(
+                "Video Timeline Follow effect references missing source Timeline {}",
+                source_timeline_id.0
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Collision-free identity for the root activation that owns a child
 /// Timeline transport tree.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -4959,6 +5346,14 @@ pub enum ChildTimelineTransportRootSummary {
     },
     Direct {
         parent_cue_id: CueId,
+        generation: u64,
+    },
+    /// Runtime-only child transport tree owned by one admitted Follow. Source
+    /// identity plus generation prevents a later Follow from aliasing an older
+    /// tree after Timeline-bank replacement or reordering.
+    #[serde(rename = "follow")]
+    Follow {
+        source_timeline_id: TimelineId,
         generation: u64,
     },
 }
@@ -8099,6 +8494,44 @@ mod tests {
             duration_ms: 1_000,
             progress_millis: 250,
             fault: None,
+            settlement: Some(super::TimelineFollowSettlementSummary {
+                started_at_ms: 9_000,
+                deadline_ms: 11_000,
+                state: super::TimelineFollowSettlementState::Pending,
+                progress_millis: 333,
+                fault_policy: super::TimelineFollowFaultPolicy::Hold,
+                fault: None,
+                domains: vec![
+                    super::TimelineFollowSettlementDomainSummary {
+                        domain: super::TimelineFollowSettlementDomain::Audio,
+                        state: super::TimelineFollowSettlementState::Applied,
+                        fault: None,
+                        consumers: vec![super::TimelineFollowSettlementConsumerSummary {
+                            consumer_id: super::TimelineFollowSettlementConsumerId::Audio,
+                            state: super::TimelineFollowSettlementState::Applied,
+                            fault: None,
+                        }],
+                    },
+                    super::TimelineFollowSettlementDomainSummary {
+                        domain: super::TimelineFollowSettlementDomain::Video,
+                        state: super::TimelineFollowSettlementState::Pending,
+                        fault: None,
+                        consumers: vec![super::TimelineFollowSettlementConsumerSummary {
+                            consumer_id: super::TimelineFollowSettlementConsumerId::VideoOutput {
+                                output_id: 41,
+                            },
+                            state: super::TimelineFollowSettlementState::Pending,
+                            fault: None,
+                        }],
+                    },
+                    super::TimelineFollowSettlementDomainSummary {
+                        domain: super::TimelineFollowSettlementDomain::Lighting,
+                        state: super::TimelineFollowSettlementState::NotApplicable,
+                        fault: None,
+                        consumers: Vec::new(),
+                    },
+                ],
+            }),
         };
 
         let authored_json = serde_json::to_value(&timeline).unwrap();
@@ -8141,11 +8574,507 @@ mod tests {
         );
         assert_eq!(public_json["outcome"]["kind"], "aborted");
         assert_eq!(public_json["outcome"]["reason"], "manual_seek");
+        assert_eq!(public_json["settlement"]["deadline_ms"], 11_000);
+        assert_eq!(public_json["settlement"]["domains"][1]["domain"], "video");
+        assert_eq!(
+            public_json["settlement"]["domains"][1]["consumers"][0]["consumer_id"]["kind"],
+            "video_output"
+        );
         assert_eq!(
             serde_json::from_value::<super::TimelineFollowRuntimeStatusSnapshot>(public_json)
                 .unwrap(),
             public
         );
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_settlement_roundtrips_defaults_and_generation_fenced_ack() {
+        let settlement = super::TimelineFollowSettlementSummary {
+            started_at_ms: 4_000,
+            deadline_ms: 4_000 + super::TIMELINE_FOLLOW_SETTLEMENT_TIMEOUT_MS,
+            state: super::TimelineFollowSettlementState::Pending,
+            progress_millis: 333,
+            fault_policy: super::TimelineFollowFaultPolicy::Cut,
+            fault: None,
+            domains: vec![
+                super::TimelineFollowSettlementDomainSummary {
+                    domain: super::TimelineFollowSettlementDomain::Audio,
+                    state: super::TimelineFollowSettlementState::Applied,
+                    fault: None,
+                    consumers: vec![super::TimelineFollowSettlementConsumerSummary {
+                        consumer_id: super::TimelineFollowSettlementConsumerId::Audio,
+                        state: super::TimelineFollowSettlementState::Applied,
+                        fault: None,
+                    }],
+                },
+                super::TimelineFollowSettlementDomainSummary {
+                    domain: super::TimelineFollowSettlementDomain::Video,
+                    state: super::TimelineFollowSettlementState::Pending,
+                    fault: None,
+                    consumers: vec![
+                        super::TimelineFollowSettlementConsumerSummary {
+                            consumer_id: super::TimelineFollowSettlementConsumerId::VideoOutput {
+                                output_id: 7,
+                            },
+                            state: super::TimelineFollowSettlementState::Applied,
+                            fault: None,
+                        },
+                        super::TimelineFollowSettlementConsumerSummary {
+                            consumer_id: super::TimelineFollowSettlementConsumerId::VideoOutput {
+                                output_id: 9,
+                            },
+                            state: super::TimelineFollowSettlementState::Pending,
+                            fault: None,
+                        },
+                    ],
+                },
+                super::TimelineFollowSettlementDomainSummary {
+                    domain: super::TimelineFollowSettlementDomain::Lighting,
+                    state: super::TimelineFollowSettlementState::NotApplicable,
+                    fault: None,
+                    consumers: Vec::new(),
+                },
+            ],
+        };
+        super::validate_timeline_follow_settlement_summary(&settlement).unwrap();
+
+        let encoded = serde_json::to_value(&settlement).unwrap();
+        assert_eq!(encoded["fault_policy"], "cut");
+        assert_eq!(encoded["domains"][2]["state"], "not_applicable");
+        assert_eq!(
+            serde_json::from_value::<super::TimelineFollowSettlementSummary>(encoded).unwrap(),
+            settlement
+        );
+
+        let ack = super::TimelineFollowSettlementAck {
+            epoch: 12,
+            generation: 34,
+            domain: super::TimelineFollowSettlementDomain::Video,
+            consumer_id: super::TimelineFollowSettlementConsumerId::VideoOutput { output_id: 9 },
+            result: super::TimelineFollowSettlementAckResult::Fault {
+                fault: "present failed".to_string(),
+            },
+        };
+        super::validate_timeline_follow_settlement_ack(&ack).unwrap();
+        let ack_json = serde_json::to_value(&ack).unwrap();
+        assert_eq!(ack_json["domain"], "video");
+        assert_eq!(ack_json["consumer_id"]["kind"], "video_output");
+        assert_eq!(ack_json["result"]["kind"], "fault");
+        assert_eq!(
+            serde_json::from_value::<super::TimelineFollowSettlementAck>(ack_json).unwrap(),
+            ack
+        );
+
+        let not_applicable_ack = super::TimelineFollowSettlementAck {
+            epoch: 12,
+            generation: 34,
+            domain: super::TimelineFollowSettlementDomain::Video,
+            consumer_id: super::TimelineFollowSettlementConsumerId::VideoOutput { output_id: 7 },
+            result: super::TimelineFollowSettlementAckResult::NotApplicable,
+        };
+        super::validate_timeline_follow_settlement_ack(&not_applicable_ack).unwrap();
+        let not_applicable_json = serde_json::to_value(&not_applicable_ack).unwrap();
+        assert_eq!(not_applicable_json["result"]["kind"], "not_applicable");
+        assert_eq!(
+            serde_json::from_value::<super::TimelineFollowSettlementAck>(not_applicable_json)
+                .unwrap(),
+            not_applicable_ack
+        );
+
+        let legacy_runtime: super::TimelineFollowRuntimeSummary =
+            serde_json::from_value(serde_json::json!({
+                "generation": 0,
+                "status": "idle"
+            }))
+            .unwrap();
+        let legacy_public: super::TimelineFollowRuntimeStatusSnapshot =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(legacy_runtime.settlement.is_none());
+        assert!(legacy_public.settlement.is_none());
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_settlement_validation_rejects_malformed_or_duplicate_consumers() {
+        let domains = vec![
+            super::TimelineFollowSettlementDomainSummary {
+                domain: super::TimelineFollowSettlementDomain::Audio,
+                state: super::TimelineFollowSettlementState::Applied,
+                fault: None,
+                consumers: vec![super::TimelineFollowSettlementConsumerSummary {
+                    consumer_id: super::TimelineFollowSettlementConsumerId::Audio,
+                    state: super::TimelineFollowSettlementState::Applied,
+                    fault: None,
+                }],
+            },
+            super::TimelineFollowSettlementDomainSummary {
+                domain: super::TimelineFollowSettlementDomain::Video,
+                state: super::TimelineFollowSettlementState::Applied,
+                fault: None,
+                consumers: vec![super::TimelineFollowSettlementConsumerSummary {
+                    consumer_id: super::TimelineFollowSettlementConsumerId::VideoOutput {
+                        output_id: 5,
+                    },
+                    state: super::TimelineFollowSettlementState::Applied,
+                    fault: None,
+                }],
+            },
+            super::TimelineFollowSettlementDomainSummary {
+                domain: super::TimelineFollowSettlementDomain::Lighting,
+                state: super::TimelineFollowSettlementState::Applied,
+                fault: None,
+                consumers: vec![super::TimelineFollowSettlementConsumerSummary {
+                    consumer_id: super::TimelineFollowSettlementConsumerId::Lighting,
+                    state: super::TimelineFollowSettlementState::Applied,
+                    fault: None,
+                }],
+            },
+        ];
+        let valid = super::TimelineFollowSettlementSummary {
+            started_at_ms: 100,
+            deadline_ms: 2_100,
+            state: super::TimelineFollowSettlementState::Applied,
+            progress_millis: 1_000,
+            fault_policy: super::TimelineFollowFaultPolicy::Hold,
+            fault: None,
+            domains,
+        };
+        super::validate_timeline_follow_settlement_summary(&valid).unwrap();
+
+        let mut duplicate = valid.clone();
+        let duplicate_consumer = duplicate.domains[1].consumers[0].clone();
+        duplicate.domains[1].consumers.push(duplicate_consumer);
+        assert!(
+            super::validate_timeline_follow_settlement_summary(&duplicate)
+                .unwrap_err()
+                .contains("duplicate")
+        );
+
+        let mut wrong_domain = valid.clone();
+        wrong_domain.domains[0].consumers[0].consumer_id =
+            super::TimelineFollowSettlementConsumerId::Lighting;
+        assert!(
+            super::validate_timeline_follow_settlement_summary(&wrong_domain)
+                .unwrap_err()
+                .contains("wrong domain")
+        );
+
+        let mut missing_domain = valid.clone();
+        missing_domain.domains.pop();
+        assert!(
+            super::validate_timeline_follow_settlement_summary(&missing_domain)
+                .unwrap_err()
+                .contains("missing Lighting")
+        );
+
+        let mut invalid_progress = valid.clone();
+        invalid_progress.progress_millis = 1_001;
+        assert!(
+            super::validate_timeline_follow_settlement_summary(&invalid_progress)
+                .unwrap_err()
+                .contains("between 0 and 1000")
+        );
+
+        let malformed_ack = super::TimelineFollowSettlementAck {
+            epoch: 1,
+            generation: 2,
+            domain: super::TimelineFollowSettlementDomain::Audio,
+            consumer_id: super::TimelineFollowSettlementConsumerId::Lighting,
+            result: super::TimelineFollowSettlementAckResult::Applied,
+        };
+        assert!(super::validate_timeline_follow_settlement_ack(&malformed_ack).is_err());
+        assert!(
+            serde_json::from_value::<super::TimelineFollowSettlementAck>(serde_json::json!({
+                "epoch": 1,
+                "generation": 2,
+                "domain": "video",
+                "consumer_id": { "kind": "video_output", "output_id": 5 },
+                "result": { "kind": "timed_out" }
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_settlement_derived_state_accept_reject_table_is_exact() {
+        fn applied_domain(
+            domain: super::TimelineFollowSettlementDomain,
+            consumer_id: super::TimelineFollowSettlementConsumerId,
+        ) -> super::TimelineFollowSettlementDomainSummary {
+            super::TimelineFollowSettlementDomainSummary {
+                domain,
+                state: super::TimelineFollowSettlementState::Applied,
+                fault: None,
+                consumers: vec![super::TimelineFollowSettlementConsumerSummary {
+                    consumer_id,
+                    state: super::TimelineFollowSettlementState::Applied,
+                    fault: None,
+                }],
+            }
+        }
+
+        fn all_applied() -> super::TimelineFollowSettlementSummary {
+            super::TimelineFollowSettlementSummary {
+                started_at_ms: 10,
+                deadline_ms: 2_010,
+                state: super::TimelineFollowSettlementState::Applied,
+                progress_millis: 1_000,
+                fault_policy: super::TimelineFollowFaultPolicy::Hold,
+                fault: None,
+                domains: vec![
+                    applied_domain(
+                        super::TimelineFollowSettlementDomain::Audio,
+                        super::TimelineFollowSettlementConsumerId::Audio,
+                    ),
+                    applied_domain(
+                        super::TimelineFollowSettlementDomain::Video,
+                        super::TimelineFollowSettlementConsumerId::VideoOutput { output_id: 8 },
+                    ),
+                    applied_domain(
+                        super::TimelineFollowSettlementDomain::Lighting,
+                        super::TimelineFollowSettlementConsumerId::Lighting,
+                    ),
+                ],
+            }
+        }
+
+        let applied = all_applied();
+
+        let mut all_not_applicable = applied.clone();
+        for domain in &mut all_not_applicable.domains {
+            domain.state = super::TimelineFollowSettlementState::NotApplicable;
+            domain.consumers.clear();
+        }
+
+        let mut captured_all_not_applicable = applied.clone();
+        for domain in &mut captured_all_not_applicable.domains {
+            domain.state = super::TimelineFollowSettlementState::NotApplicable;
+            for consumer in &mut domain.consumers {
+                consumer.state = super::TimelineFollowSettlementState::NotApplicable;
+            }
+        }
+
+        let mut mixed_applied_not_applicable = applied.clone();
+        mixed_applied_not_applicable.domains[1].consumers.push(
+            super::TimelineFollowSettlementConsumerSummary {
+                consumer_id: super::TimelineFollowSettlementConsumerId::VideoOutput {
+                    output_id: 9,
+                },
+                state: super::TimelineFollowSettlementState::NotApplicable,
+                fault: None,
+            },
+        );
+
+        let mut pending = applied.clone();
+        pending.state = super::TimelineFollowSettlementState::Pending;
+        pending.domains[1].state = super::TimelineFollowSettlementState::Pending;
+        pending.domains[1].consumers[0].state = super::TimelineFollowSettlementState::Pending;
+
+        let mut timed_out = pending.clone();
+        timed_out.state = super::TimelineFollowSettlementState::TimedOut;
+        timed_out.domains[0].state = super::TimelineFollowSettlementState::TimedOut;
+        timed_out.domains[0].consumers[0].state = super::TimelineFollowSettlementState::TimedOut;
+
+        let mut fault_over_timeout = timed_out.clone();
+        fault_over_timeout.state = super::TimelineFollowSettlementState::Fault;
+        fault_over_timeout.fault = Some("video settlement failed".to_string());
+        fault_over_timeout.domains[1].state = super::TimelineFollowSettlementState::Fault;
+        fault_over_timeout.domains[1].fault = Some("present failed".to_string());
+        fault_over_timeout.domains[1].consumers[0].state =
+            super::TimelineFollowSettlementState::Fault;
+        fault_over_timeout.domains[1].consumers[0].fault = Some("present failed".to_string());
+
+        let mut lighting_internal_fault = applied.clone();
+        lighting_internal_fault.state = super::TimelineFollowSettlementState::Fault;
+        lighting_internal_fault.fault = Some("lighting merge failed".to_string());
+        lighting_internal_fault.domains[2].state = super::TimelineFollowSettlementState::Fault;
+        lighting_internal_fault.domains[2].fault = Some("lighting merge failed".to_string());
+        lighting_internal_fault.domains[2].consumers.clear();
+
+        let mut lighting_internal_timeout = applied.clone();
+        lighting_internal_timeout.state = super::TimelineFollowSettlementState::TimedOut;
+        lighting_internal_timeout.domains[2].state = super::TimelineFollowSettlementState::TimedOut;
+        lighting_internal_timeout.domains[2].consumers.clear();
+
+        for (name, accepted) in [
+            ("all applied", applied.clone()),
+            ("empty domains not applicable", all_not_applicable),
+            (
+                "captured consumers all not applicable",
+                captured_all_not_applicable,
+            ),
+            (
+                "mixed applied and not applicable consumers",
+                mixed_applied_not_applicable,
+            ),
+            ("one pending", pending.clone()),
+            ("timeout outranks pending", timed_out.clone()),
+            ("fault outranks timeout", fault_over_timeout.clone()),
+            ("lighting internal fault", lighting_internal_fault),
+            ("lighting internal timeout", lighting_internal_timeout),
+        ] {
+            super::validate_timeline_follow_settlement_summary(&accepted)
+                .unwrap_or_else(|error| panic!("accepted case '{name}' failed: {error}"));
+        }
+
+        let mut aggregate_applied_while_pending = pending.clone();
+        aggregate_applied_while_pending.state = super::TimelineFollowSettlementState::Applied;
+
+        let mut aggregate_pending_while_timed_out = timed_out.clone();
+        aggregate_pending_while_timed_out.state = super::TimelineFollowSettlementState::Pending;
+
+        let mut aggregate_fault_without_text = fault_over_timeout.clone();
+        aggregate_fault_without_text.fault = None;
+
+        let mut aggregate_text_without_fault = applied.clone();
+        aggregate_text_without_fault.fault = Some("stale".to_string());
+
+        let mut domain_applied_with_pending = applied.clone();
+        domain_applied_with_pending.domains[1].consumers[0].state =
+            super::TimelineFollowSettlementState::Pending;
+
+        let mut domain_not_applicable_with_consumer = applied.clone();
+        domain_not_applicable_with_consumer.domains[1].state =
+            super::TimelineFollowSettlementState::NotApplicable;
+
+        let mut domain_applied_without_consumer = applied.clone();
+        domain_applied_without_consumer.domains[1].consumers.clear();
+
+        let mut domain_fault_without_consumer_fault = applied.clone();
+        domain_fault_without_consumer_fault.state = super::TimelineFollowSettlementState::Fault;
+        domain_fault_without_consumer_fault.fault = Some("video failed".to_string());
+        domain_fault_without_consumer_fault.domains[1].state =
+            super::TimelineFollowSettlementState::Fault;
+        domain_fault_without_consumer_fault.domains[1].fault = Some("video failed".to_string());
+
+        let mut domain_timeout_without_consumer_timeout = applied.clone();
+        domain_timeout_without_consumer_timeout.state =
+            super::TimelineFollowSettlementState::TimedOut;
+        domain_timeout_without_consumer_timeout.domains[0].state =
+            super::TimelineFollowSettlementState::TimedOut;
+
+        let mut domain_applied_with_all_not_applicable = applied.clone();
+        domain_applied_with_all_not_applicable.domains[1].consumers[0].state =
+            super::TimelineFollowSettlementState::NotApplicable;
+
+        let mut consumer_fault_without_text = fault_over_timeout.clone();
+        consumer_fault_without_text.domains[1].consumers[0].fault = None;
+
+        let mut consumer_text_without_fault = applied.clone();
+        consumer_text_without_fault.domains[1].consumers[0].fault = Some("stale".to_string());
+
+        let mut domain_text_without_fault = applied.clone();
+        domain_text_without_fault.domains[1].fault = Some("stale".to_string());
+
+        for (name, rejected, expected) in [
+            (
+                "aggregate applied while pending",
+                aggregate_applied_while_pending,
+                "aggregate state",
+            ),
+            (
+                "aggregate pending while timed out",
+                aggregate_pending_while_timed_out,
+                "aggregate state",
+            ),
+            (
+                "aggregate fault without text",
+                aggregate_fault_without_text,
+                "requires non-empty fault text",
+            ),
+            (
+                "aggregate text without fault",
+                aggregate_text_without_fault,
+                "allowed only for Fault state",
+            ),
+            (
+                "domain applied with pending consumer",
+                domain_applied_with_pending,
+                "contradicts derived Pending",
+            ),
+            (
+                "domain not applicable with consumer",
+                domain_not_applicable_with_consumer,
+                "contradicts derived Applied",
+            ),
+            (
+                "domain applied without consumer",
+                domain_applied_without_consumer,
+                "must be NotApplicable",
+            ),
+            (
+                "video domain fault without consumer fault",
+                domain_fault_without_consumer_fault,
+                "contradicts derived Applied",
+            ),
+            (
+                "audio domain timeout without consumer timeout",
+                domain_timeout_without_consumer_timeout,
+                "contradicts derived Applied",
+            ),
+            (
+                "domain applied with all consumers not applicable",
+                domain_applied_with_all_not_applicable,
+                "contradicts derived NotApplicable",
+            ),
+            (
+                "consumer fault without text",
+                consumer_fault_without_text,
+                "requires non-empty fault text",
+            ),
+            (
+                "consumer text without fault",
+                consumer_text_without_fault,
+                "allowed only for Fault state",
+            ),
+            (
+                "domain text without fault",
+                domain_text_without_fault,
+                "allowed only for Fault state",
+            ),
+        ] {
+            let error = super::validate_timeline_follow_settlement_summary(&rejected).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "rejected case '{name}' returned unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_runtime_settlement_and_unknown_video_descriptor_cannot_be_injected() {
+        let mut authored = serde_json::to_value(super::TimelineSnapshot::default()).unwrap();
+        authored.as_object_mut().unwrap().insert(
+            "follow_runtime".to_string(),
+            serde_json::json!({
+                "generation": 55,
+                "status": "settling",
+                "settlement": {
+                    "started_at_ms": 10,
+                    "deadline_ms": 2010,
+                    "state": "fault",
+                    "progress_millis": 1000,
+                    "fault_policy": "fault",
+                    "domains": []
+                },
+                "video_descriptor": {
+                    "kind": "wipe",
+                    "progress_millis": 500
+                }
+            }),
+        );
+        authored.as_object_mut().unwrap().insert(
+            "follow_video_runtime".to_string(),
+            serde_json::json!({ "kind": "slide", "generation": 55 }),
+        );
+
+        let decoded: super::TimelineSnapshot = serde_json::from_value(authored).unwrap();
+        assert_eq!(
+            decoded.follow_runtime,
+            super::TimelineFollowRuntimeSummary::default()
+        );
+        let persisted = serde_json::to_value(decoded).unwrap();
+        assert!(persisted.get("follow_runtime").is_none());
+        assert!(persisted.get("follow_video_runtime").is_none());
     }
 
     #[test]
@@ -8247,18 +9176,38 @@ mod tests {
     #[test]
     fn active_child_transport_runtime_is_never_serialized() {
         let mut snapshot = super::TimelineSnapshot::default();
-        snapshot.active_child_transports = vec![super::ChildTimelineTransportRuntimeSummary {
-            owner_cue_id: 7,
-            root: super::ChildTimelineTransportRootSummary::Timeline {
-                parent_event_id: 100,
-                parent_iteration: 2,
+        snapshot.active_child_transports = vec![
+            super::ChildTimelineTransportRuntimeSummary {
+                owner_cue_id: 7,
+                root: super::ChildTimelineTransportRootSummary::Timeline {
+                    parent_event_id: 100,
+                    parent_iteration: 2,
+                },
+                path: vec![super::ChildTimelineTransportPathSegment {
+                    event_id: 200,
+                    iteration: 3,
+                }],
+                position_ms: 450,
             },
-            path: vec![super::ChildTimelineTransportPathSegment {
-                event_id: 200,
-                iteration: 3,
-            }],
-            position_ms: 450,
-        }];
+            super::ChildTimelineTransportRuntimeSummary {
+                owner_cue_id: 8,
+                root: super::ChildTimelineTransportRootSummary::Follow {
+                    source_timeline_id: super::TimelineId(91),
+                    generation: 17,
+                },
+                path: Vec::new(),
+                position_ms: 1_000,
+            },
+        ];
+
+        let follow_root = snapshot.active_child_transports[1].root.clone();
+        let follow_root_json = serde_json::to_value(&follow_root).unwrap();
+        assert_eq!(follow_root_json["follow"]["source_timeline_id"], 91);
+        assert_eq!(
+            serde_json::from_value::<super::ChildTimelineTransportRootSummary>(follow_root_json)
+                .unwrap(),
+            follow_root
+        );
 
         let encoded = serde_json::to_string(&snapshot).unwrap();
         assert!(!encoded.contains("active_child_transports"));
@@ -11613,6 +12562,97 @@ mod tests {
         too_many_stages.effect_chains[0].stages =
             vec![stage; super::VIDEO_EFFECT_CHAIN_MAX_STAGES + 1];
         assert!(super::validate_authored_video_effect_chains(&too_many_stages).is_err());
+    }
+
+    #[test]
+    fn timeline_follow_transition_effect_owner_is_stable_unique_and_reference_checked() {
+        let scope = super::VideoEffectScope::Transition {
+            owner: super::VideoTransitionEffectOwner::TimelineFollow {
+                source_timeline_id: super::TimelineId(91),
+            },
+        };
+        let mut video = super::VideoSnapshot {
+            effect_chains: vec![super::VideoEffectChainSummary {
+                id: super::VideoEffectChainId(71),
+                scope: scope.clone(),
+                bypassed: false,
+                stages: Vec::new(),
+            }],
+            ..super::VideoSnapshot::default()
+        };
+        super::validate_authored_video_effect_chains(&video).unwrap();
+
+        let wire = serde_json::to_value(&scope).unwrap();
+        assert_eq!(wire["scope"], "transition");
+        assert_eq!(wire["owner"]["kind"], "timeline_follow");
+        assert_eq!(wire["owner"]["source_timeline_id"], 91);
+        assert_eq!(
+            serde_json::from_value::<super::VideoEffectScope>(wire).unwrap(),
+            scope
+        );
+
+        video.effect_chains.push(super::VideoEffectChainSummary {
+            id: super::VideoEffectChainId(72),
+            scope: scope.clone(),
+            bypassed: true,
+            stages: Vec::new(),
+        });
+        assert!(super::validate_authored_video_effect_chains(&video)
+            .unwrap_err()
+            .contains("at most one chain"));
+        video.effect_chains.pop();
+
+        let mut zero_source = video.clone();
+        zero_source.effect_chains[0].scope = super::VideoEffectScope::Transition {
+            owner: super::VideoTransitionEffectOwner::TimelineFollow {
+                source_timeline_id: super::TimelineId(0),
+            },
+        };
+        assert!(super::validate_authored_video_effect_chains(&zero_source)
+            .unwrap_err()
+            .contains("Timeline ID zero"));
+
+        let mut snapshot = super::EngineSnapshot {
+            timeline: super::TimelineSnapshot {
+                id: super::TimelineId(91),
+                label: "Source".to_string(),
+                ..super::TimelineSnapshot::default()
+            },
+            video: video.clone(),
+            ..super::EngineSnapshot::default()
+        };
+        super::validate_timeline_bank(&snapshot, &[]).unwrap();
+
+        snapshot.video.effect_chains[0].scope = super::VideoEffectScope::Transition {
+            owner: super::VideoTransitionEffectOwner::TimelineFollow {
+                source_timeline_id: super::TimelineId(92),
+            },
+        };
+        assert!(super::validate_timeline_bank(&snapshot, &[])
+            .unwrap_err()
+            .contains("missing source Timeline 92"));
+
+        snapshot.timeline_bank = vec![
+            snapshot.timeline.clone(),
+            super::TimelineSnapshot {
+                id: super::TimelineId(92),
+                label: "Target".to_string(),
+                ..super::TimelineSnapshot::default()
+            },
+        ];
+        super::validate_timeline_bank(&snapshot, &[]).unwrap();
+
+        let legacy_clip_take: super::VideoEffectScope = serde_json::from_value(serde_json::json!({
+            "scope": "transition",
+            "owner": { "kind": "clip_take", "layer_id": 5 }
+        }))
+        .unwrap();
+        assert_eq!(
+            legacy_clip_take,
+            super::VideoEffectScope::Transition {
+                owner: super::VideoTransitionEffectOwner::ClipTake { layer_id: 5 }
+            }
+        );
     }
 
     #[test]
