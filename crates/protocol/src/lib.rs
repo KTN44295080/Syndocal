@@ -5,6 +5,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+pub mod control_plane;
+
 pub type FixtureId = u64;
 pub type EffectId = u64;
 pub type CueId = u64;

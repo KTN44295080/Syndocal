@@ -94,6 +94,7 @@ use tauri::{Manager, State, WebviewWindow};
 use tauri_plugin_updater::UpdaterExt;
 
 mod capture_transport;
+mod control_plane;
 mod dvc_import;
 mod ndi_transport;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -36524,6 +36525,15 @@ fn configured_application_updater(
         .build()
         .map_err(|error| error.to_string())?;
     Ok((updater, settings))
+}
+
+/// Returns the local-only AI/control-plane operation inventory.  This is
+/// window-bound discovery only; it registers no MCP, HTTP, or remote adapter.
+#[tauri::command]
+fn get_control_plane_operation_registry(
+    window: WebviewWindow,
+) -> Result<protocol::control_plane::OperationRegistry, String> {
+    control_plane::registry_for_window(window.label()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -84789,6 +84799,7 @@ fn main() {
             },
         ))
         .invoke_handler(tauri::generate_handler![
+            get_control_plane_operation_registry,
             get_application_update_configuration,
             check_application_update,
             install_application_update,
