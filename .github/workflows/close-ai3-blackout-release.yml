@@ -66,7 +66,7 @@ jobs:
       - name: Apply strict receipt patch
         run: python .github/scripts/patch_blackout_release_receipt.py
 
-      - name: Repair baseline portability guards and helper type
+      - name: Repair baseline portability guards and helper types
         shell: bash
         run: |
           python3 - <<'PY'
@@ -99,6 +99,26 @@ jobs:
           else:
               raise SystemExit(
                   f"unexpected prepared-project helper shape: repaired={repaired_count}, original={helper_count}"
+              )
+
+          standby_helper = (
+              "fn replace_prepared_project_snapshot_after_standby_stop(\n"
+              "    state: &State<'_, AppState>,\n"
+          )
+          standby_repaired = (
+              "fn replace_prepared_project_snapshot_after_standby_stop(\n"
+              "    state: &AppState,\n"
+          )
+          standby_helper_count = source.count(standby_helper)
+          standby_repaired_count = source.count(standby_repaired)
+          if standby_repaired_count == 1:
+              pass
+          elif standby_repaired_count == 0 and standby_helper_count == 1:
+              source = source.replace(standby_helper, standby_repaired, 1)
+          else:
+              raise SystemExit(
+                  "unexpected standby-stop helper shape: "
+                  f"repaired={standby_repaired_count}, original={standby_helper_count}"
               )
 
           path.write_text(source, encoding="utf-8")
