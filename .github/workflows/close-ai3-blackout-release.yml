@@ -124,8 +124,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: app/pnpm-lock.yaml
 
       - name: Enable pnpm
         shell: bash
