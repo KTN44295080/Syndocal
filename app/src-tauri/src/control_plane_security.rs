@@ -159,9 +159,6 @@ impl ControlPlaneSecurityState {
             .lock()
             .map_err(|_| "Consent state lock was poisoned".to_string())?;
         prune_security_inner(&mut inner, now);
-        // There is exactly one physical confirmation challenge process-wide.
-        // Starting a newer dialog invalidates the older dialog rather than
-        // allowing one physical key sequence to approve multiple operations.
         if let Some(previous) = inner.active.take() {
             push_tombstone(&mut inner, previous.consent_token, now);
         }
@@ -736,7 +733,10 @@ mod tests {
             "syndocal.output.ownership.arm.v1",
             "syndocal.output.standby.takeover.v1",
         ] {
-            assert!(state.prepare_consent(binding(operation, 9)).is_err(), "{operation}");
+            assert!(
+                state.prepare_consent(binding(operation, 9)).is_err(),
+                "{operation}"
+            );
         }
     }
 
