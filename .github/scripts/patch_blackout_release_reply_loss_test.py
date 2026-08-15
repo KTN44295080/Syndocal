@@ -75,7 +75,7 @@ insert = '''    #[test]
         ));
         assert!(matches!(
             state.reserve_output_control_lane(&key, &shape, now + RECEIPT_TTL),
-            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::ReceiptExpired)
         ));
     }
 
