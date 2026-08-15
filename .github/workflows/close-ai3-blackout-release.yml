@@ -206,6 +206,9 @@ jobs:
             echo "Work branch moved from $start_head to $remote_head; refusing stale write" >&2
             exit 1
           fi
+          rm -f .github/scripts/patch_blackout_release_*.py
+          rm -f .github/workflows/close-ai3-blackout-release.yml
+          git diff --check
           git config user.name "KTN"
           git config user.email "47689501+KTN44295080@users.noreply.github.com"
           git add -A
