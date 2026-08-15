@@ -1,12 +1,15 @@
 /**
- * R4 renderer lane for releasing the runtime safety blackout.
+ * Staged R4 renderer lane for releasing the runtime safety blackout.
  *
- * This controller never mints or fakes human presence. `prepareRelease` returns
+ * This controller deliberately does not participate in the generated frontend
+ * Tauri invoke authority yet. The four commands below remain unreachable from
+ * production UI until the canonical R4 registry row and legacy-release bypass
+ * removal land in the same reviewed slice.
+ *
+ * The controller never mints or fakes human presence. `prepareRelease` returns
  * the backend challenge so the desktop can display it. Only physical Raw Input
  * accepted by the backend can move that challenge to `ready`.
  */
-
-import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 
 export const outputControlAuthorityQueryOperationId =
   "syndocal.query.output.control.authority.v1" as const;
@@ -16,6 +19,18 @@ export const outputConsentStatusQueryOperationId =
   "syndocal.query.output.consent.status.v1" as const;
 export const blackoutReleaseOperationId =
   "syndocal.output.blackout.release.v1" as const;
+
+export const blackoutReleaseInvokeCommands = [
+  "query_output_control_authority_v1",
+  "prepare_output_consent_v1",
+  "query_output_consent_status_v1",
+  "execute_output_control_v1",
+] as const;
+export type BlackoutReleaseInvokeCommand = typeof blackoutReleaseInvokeCommands[number];
+export type BlackoutReleaseInvoke = <T>(
+  command: BlackoutReleaseInvokeCommand,
+  args?: Record<string, unknown>,
+) => Promise<T>;
 
 export type BlackoutReleaseErrorCode =
   | "invalid_request"
@@ -259,7 +274,7 @@ const validatePrepared = (prepared: BlackoutReleasePreparedConsent): void => {
 };
 
 export type BlackoutReleaseRuntimeControllerOptions = {
-  invoke: FrontendTauriInvoke;
+  invoke: BlackoutReleaseInvoke;
   /** One exact resend is the default reply-loss recovery budget. */
   maxReplyLossRetries?: number;
 };
