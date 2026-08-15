@@ -230,7 +230,7 @@ const measure = (client) => evaluate(client, `(() => {
   const selectedVideo = [...root.querySelectorAll('.timelineVideoClip.selected')];
   const selectedAudio = [...root.querySelectorAll('.timelineAudioClip.selected')];
   const bank = document.querySelector('.timelinePerformanceEditor [data-timeline-bank]');
-  const shortTargets = [...document.querySelectorAll('.timelinePerformanceEditor button, .timelinePerformanceEditor input, .timelinePerformanceEditor select, .timelineOperatorBar > .timelineLoopControls button, .timelineOperatorBar [data-timeline-guide]')].filter((element) => {
+  const shortTargets = [...document.querySelectorAll('.timelinePerformanceEditor button, .timelinePerformanceEditor input, .timelinePerformanceEditor select, .timelineOperatorBar > .timelineLoopControls button, .timelineOperatorBar [data-timeline-guide], [data-timeline-follow-operator-abort]')].filter((element) => {
     const bounds = element.getBoundingClientRect();
     return bounds.width > 0 && bounds.height > 0 && bounds.height < 43.5;
   }).length;
@@ -241,6 +241,15 @@ const measure = (client) => evaluate(client, `(() => {
     bankActive: bank?.querySelectorAll('.timelineBankList > li.active').length ?? 0,
     followLegend: [...(bank?.querySelectorAll('legend') ?? [])].some((node) => node.textContent?.includes('Follow to next Timeline')),
     followState: bank?.querySelector('.timelineFollowState')?.textContent?.trim() ?? '',
+    followRuntimeDetails: bank?.querySelectorAll('[data-timeline-follow-runtime-details]').length ?? 0,
+    followRuntimeBadges: document.querySelectorAll('[data-timeline-follow-runtime-badge]').length,
+    operatorFollowState: document.querySelector('[data-timeline-follow-operator-badge]')?.textContent?.trim() ?? '',
+    operatorFollowAbort: document.querySelectorAll('[data-timeline-follow-operator-abort]').length,
+    followAbortButtons: document.querySelectorAll('[data-timeline-follow-abort]').length,
+    followAbortShortTargets: [...document.querySelectorAll('[data-timeline-follow-abort], [data-timeline-follow-operator-abort]')].filter((element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.width > 0 && bounds.height > 0 && (bounds.width < 43.5 || bounds.height < 43.5);
+    }).length,
     phaseEditorOpen: Boolean(document.querySelector('.timelinePerformanceEditor .timelinePhaseEditor[open]')),
     guideAudioOpen: Boolean(document.querySelector('.timelinePerformanceEditor .timelineGuideAudioEditor[open]')),
     guideAudioControls: document.querySelectorAll('.timelineGuideAudioEditorBody input, .timelineGuideAudioEditorBody select').length,
@@ -410,7 +419,26 @@ try {
     const state = await measure(client);
     assert.ok(state.rect[0] > 0 && state.rect[1] > 0, "Timeline surface has visible nonzero geometry");
     assert.deepEqual([state.bankOpen, state.bankItems, state.bankActive, state.followLegend], [true, 2, 1, true]);
-    assert.match(state.followState, /TRANS 50%/);
+    assert.match(state.followState, /transitioning 50%/);
+    assert.deepEqual(
+      [state.followRuntimeDetails, state.followRuntimeBadges >= 1, state.operatorFollowState, state.operatorFollowAbort, state.followAbortButtons >= 1, state.followAbortShortTargets],
+      [1, true, "Follow: transitioning 50%", 1, true, 0],
+      "Visible Operator and Performance Timeline surfaces expose runtime Follow truth with 44px abort targets",
+    );
+    const abortFocusRetained = await evaluate(client, `(() => {
+      const button = document.querySelector('.timelinePerformanceEditor [data-timeline-follow-abort]');
+      if (!(button instanceof HTMLButtonElement)) return false;
+      button.focus();
+      button.click();
+      return true;
+    })()`);
+    assert.equal(abortFocusRetained, true, "Timeline Follow abort control is keyboard-focusable");
+    await sleep(50);
+    assert.equal(
+      await evaluate(client, "document.activeElement?.matches?.('[data-timeline-follow-abort]') === true"),
+      true,
+      "Timeline Follow abort retains focus after its bounded runtime-only result",
+    );
     assert.equal(state.phaseEditorOpen, true);
     assert.deepEqual([state.guideAudioOpen, state.guideAudioControls, state.guideAudioState], [true, 3, 'Ready']);
     assert.deepEqual(state.phaseLabels, ["Intro", "Verse", "Chorus"]);

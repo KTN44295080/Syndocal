@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type {
   TimelineFollowRuntimeSummary,
+  TimelineFollowAbortFocusFence,
   TimelineFollowSummary,
   TimelineSnapshot,
   VideoClipTakeKind,
@@ -12,12 +13,15 @@ interface TimelineBankPanelProps {
   activeTimelineId: number;
   bpm: number;
   followRuntime: TimelineFollowRuntimeSummary;
+  followAbortBusy: boolean;
+  followAbortFocusFence: TimelineFollowAbortFocusFence;
   onCreate: (label: string) => void | Promise<void>;
   onDuplicate: (timelineId: number) => void | Promise<void>;
   onRemove: (timelineId: number) => void | Promise<void>;
   onReorder: (timelineIds: number[]) => void | Promise<void>;
   onSelect: (timelineId: number, play: boolean) => void | Promise<void>;
   onSetFollow: (follow: TimelineFollowSummary | null) => void | Promise<void>;
+  onAbortFollow: () => Promise<boolean>;
 }
 
 const timelineId = (timeline: TimelineSnapshot) => timeline.id ?? 0;
@@ -73,22 +77,36 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
   };
   const runtimeLabel = createMemo(() => {
     const runtime = props.followRuntime;
-    if (runtime.status === "transitioning") {
-      return `TRANS ${Math.round(runtime.progress_millis / 10)}%`;
+    const status = runtime.status === "pending" ? "armed" : runtime.status;
+    if (status === "transitioning" || status === "settling") {
+      return `${status} ${Math.round(runtime.progress_millis / 10)}%`;
     }
-    return runtime.status.toUpperCase();
+    return status;
   });
+  const runtimeSourceTarget = createMemo(() => {
+    const runtime = props.followRuntime;
+    const labelFor = (id: number | null | undefined) => {
+      if (id === null || id === undefined) return "—";
+      const index = props.timelines.findIndex((timeline) => timelineId(timeline) === id);
+      return index >= 0 ? timelineLabel(props.timelines[index], index) : `Timeline ${id}`;
+    };
+    return `${labelFor(runtime.source_timeline_id)} → ${labelFor(runtime.target_timeline_id)}`;
+  });
+  const canAbort = createMemo(() => props.followRuntime.status !== "idle" && props.followRuntime.generation > 0);
+  const abortFollow = async (invokingButton: HTMLButtonElement) => {
+    if (props.followAbortBusy || !canAbort()) return;
+    const applied = await props.onAbortFollow();
+    props.followAbortFocusFence.schedule(applied, () => invokingButton.focus(), requestAnimationFrame);
+  };
 
   return (
     <details class="timelineBankPanel" data-timeline-bank>
       <summary>
         <span>Timeline Bank</span>
         <strong data-no-localize>{timelineLabel(activeTimeline() ?? {}, Math.max(0, activeIndex()))}</strong>
-        <Show when={props.followRuntime.status !== "idle"}>
-          <output class={`timelineFollowState ${props.followRuntime.status}`} aria-live="polite" data-no-localize>
-            {runtimeLabel()}
-          </output>
-        </Show>
+        <output class={`timelineFollowState ${props.followRuntime.status}`} aria-live="polite" data-timeline-follow-runtime-badge>
+          {runtimeLabel()}
+        </output>
       </summary>
       <div class="timelineBankBody">
         <ol class="timelineBankList" aria-label="Timeline bank order">
@@ -183,6 +201,53 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
             </select>
           </label>
         </fieldset>
+        <section class="timelineFollowRuntimeDetails" aria-label="Timeline Follow runtime" data-timeline-follow-runtime-details>
+          <div>
+            <strong>Runtime</strong>
+            <output class={`timelineFollowState ${props.followRuntime.status}`} aria-live="polite">{runtimeLabel()}</output>
+          </div>
+          <p data-timeline-follow-source-target>{runtimeSourceTarget()}</p>
+          <progress
+            aria-label="Timeline Follow progress"
+            max="1000"
+            value={Math.max(0, Math.min(1000, props.followRuntime.settlement?.progress_millis ?? props.followRuntime.progress_millis))}
+          />
+          <Show when={props.followRuntime.admission_reason}>
+            {(reason) => <p>Admission: {reason()}</p>}
+          </Show>
+          <Show when={props.followRuntime.outcome}>
+            {(outcome) => {
+              const current = outcome();
+              return <p>Outcome: {current.kind === "aborted" ? `aborted (${current.reason})` : current.kind}</p>;
+            }}
+          </Show>
+          <Show when={props.followRuntime.settlement}>
+            {(settlement) => (
+              <ul aria-label="Timeline Follow settlement domains" data-timeline-follow-domains>
+                <For each={settlement().domains}>
+                  {(domain) => <li data-domain={domain.domain} data-state={domain.state}>{domain.domain}: {domain.state}{domain.fault ? ` — ${domain.fault}` : ""}</li>}
+                </For>
+              </ul>
+            )}
+          </Show>
+          <Show when={props.followRuntime.fault ?? props.followRuntime.settlement?.fault}>
+            {(fault) => <p class="inlineError" role="alert">{fault()}</p>}
+          </Show>
+          <Show when={canAbort()}>
+            <button
+              type="button"
+              class="danger"
+              style={{ "min-height": "44px", "min-width": "44px" }}
+              aria-label="Abort Timeline Follow"
+              aria-busy={props.followAbortBusy ? "true" : undefined}
+              disabled={props.followAbortBusy || props.followRuntime.status === "aborting"}
+              data-timeline-follow-abort
+              onClick={(event) => void abortFollow(event.currentTarget)}
+            >
+              {props.followAbortBusy ? "Aborting…" : "Abort Follow"}
+            </button>
+          </Show>
+        </section>
       </div>
     </details>
   );

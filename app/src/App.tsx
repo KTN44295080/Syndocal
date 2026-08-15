@@ -331,6 +331,11 @@ import type {
   TimelineAdvancedAuthoritativeResult,
   TimelineAdvancedMutationRequest,
   TimelineAutomationSummary,
+  TimelineFollowAbortAuthoritativeResult,
+  TimelineFollowAbortRequest,
+  TimelineFollowOperationTerminalEnvelope,
+  TimelineFollowRuntimeReport,
+  TimelineFollowRuntimeSummary,
   TimelineFollowSummary,
   TimelineGuideAudioStatus,
   TimelineGroupAutomationAddResult,
@@ -379,6 +384,11 @@ import type {
   VjFirstRunSetupResult,
   VjPreviewTransportSummary,
   VisualizerRenderPayload,
+} from "./types";
+import {
+  createTimelineFollowAbortFocusFence,
+  createTimelineFollowAbortLease,
+  timelineFollowRuntimeCanApply,
 } from "./types";
 import { videoFrameToDataUrl } from "./videoFrameCanvas";
 import {
@@ -768,6 +778,21 @@ const emptyAutoVjSnapshot = defaultAutoVjSnapshot();
 const isTauriRuntime = () =>
   typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
+const emptyTimelineFollowRuntime = (): TimelineFollowRuntimeSummary => ({
+  epoch: 0,
+  generation: 0,
+  status: "idle",
+  elapsed_ms: 0,
+  duration_ms: 0,
+  progress_millis: 0,
+  admission_reason: null,
+  outcome: null,
+  source_timeline_id: null,
+  target_timeline_id: null,
+  fault: null,
+  settlement: null,
+});
+
 const projectHistoryChangedEvent = "syndocal:project-history-changed";
 const authoritativeApplicationCurrentProperty = "__syndocalAuthoritativeApplicationCurrent";
 let activeOperatorLockMode: OperatorLockMode | null = null;
@@ -978,6 +1003,11 @@ const mediaAssetTerminalRecoveryCommands = new Set([
   "get_video_effect_catalog_operation_terminal_result",
   "get_timeline_advanced_operation_terminal_result",
   "cancel_media_asset_operation",
+  // Runtime-only Timeline Follow observation/abort has no authored-history
+  // effect. Full Lock intentionally keeps this emergency transport available.
+  "get_timeline_follow_runtime",
+  "abort_timeline_follow",
+  "get_timeline_follow_operation_terminal_result",
 ]);
 
 // Availability reads only inspect the local machine's copies of project media.
@@ -2282,6 +2312,30 @@ export default function App() {
     lastError: null,
   });
   const [timelineGuideAudioDevices, setTimelineGuideAudioDevices] = createSignal<string[]>([]);
+  // This signal is populated exclusively by the E/R/H-authoritative runtime
+  // read below. Keep it separate from TimelineSnapshot.follow: the latter is
+  // authored configuration, while this is live transport truth.
+  const [timelineFollowRuntime, setTimelineFollowRuntime] = createSignal<TimelineFollowRuntimeSummary>(
+    emptyTimelineFollowRuntime(),
+  );
+  const [timelineFollowAbortBusy, setTimelineFollowAbortBusy] = createSignal(false);
+  let appliedTimelineFollowRuntime: Pick<TimelineFollowRuntimeSummary, "epoch" | "generation"> | null = null;
+  let timelineFollowRuntimeRequestSerial = 0;
+  let appliedTimelineFollowRuntimeRequestSerial = 0;
+  let timelineFollowAbortRequestId = Math.max(1, Date.now());
+  const timelineFollowAbortLease = createTimelineFollowAbortLease();
+  const timelineFollowAbortFocusFence = createTimelineFollowAbortFocusFence();
+  let timelineFollowRuntimeLastError = "";
+  const resetTimelineFollowRuntimeFence = () => {
+    appliedTimelineFollowRuntime = null;
+    timelineFollowRuntimeRequestSerial = 0;
+    appliedTimelineFollowRuntimeRequestSerial = 0;
+    timelineFollowRuntimeLastError = "";
+    timelineFollowAbortLease.reset();
+    timelineFollowAbortFocusFence.reset();
+    setTimelineFollowAbortBusy(false);
+    setTimelineFollowRuntime(emptyTimelineFollowRuntime());
+  };
   const resetMediaAssetUiForProjectReplacement = () => {
     videoThumbnailGeneration += 1;
     mediaAssetThumbnailGeneration += 1;
@@ -2304,6 +2358,7 @@ export default function App() {
     setSelectedVideoClipSlotId(null);
     setVideoClipSlotInspectorOpen(false);
     setVideoClipSlotInspectorTrigger(null);
+    resetTimelineFollowRuntimeFence();
     spokenTimelineGuideKey = "";
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
@@ -2739,6 +2794,14 @@ export default function App() {
     const bank = snapshot().timeline_bank ?? [];
     return bank.length > 0 ? bank : [snapshot().timeline];
   });
+  // Browser fixtures do not have an authoritative backend, so their explicit
+  // runtime fixture remains useful for visual coverage. Native UI never reads
+  // this authored snapshot field for Follow truth.
+  const displayedTimelineFollowRuntime = createMemo<TimelineFollowRuntimeSummary>(() =>
+    isTauriRuntime()
+      ? timelineFollowRuntime()
+      : activeTimeline().follow_runtime ?? emptyTimelineFollowRuntime(),
+  );
   const snapshotTimelineEvents = createMemo(() => activeTimeline().events);
   const snapshotTimelineEventById = createMemo(() => new Map(
     snapshotTimelineEvents().map((event) => [event.id, event]),
@@ -3274,7 +3337,7 @@ export default function App() {
           ? { generation: 8, status: "looping", a_ms: 1_500, b_ms: 3_000, musical_length_millibeats: 4_000, wrap_count: 2 }
           : current.timeline.loop_runtime,
         follow_runtime: timelineLayeredFixture
-          ? { generation: 4, status: "transitioning", source_timeline_id: 901, target_timeline_id: 902, elapsed_ms: 500, duration_ms: 1_000, progress_millis: 500 }
+          ? { epoch: 4, generation: 4, status: "transitioning", source_timeline_id: 901, target_timeline_id: 902, elapsed_ms: 500, duration_ms: 1_000, progress_millis: 500 }
           : current.timeline.follow_runtime,
         audio_offset_ms: timelineLayeredFixture ? 0 : current.timeline.audio_offset_ms,
         audio_muted: timelineLayeredFixture ? false : current.timeline.audio_muted,
@@ -3393,7 +3456,7 @@ export default function App() {
                 { id: 814, label: "Outro", role: "outro", start_ms: 2_500, end_ms: 5_000 },
               ],
               follow: null,
-              follow_runtime: { generation: 0, status: "idle", elapsed_ms: 0, duration_ms: 0, progress_millis: 0 },
+              follow_runtime: { epoch: 0, generation: 0, status: "idle", elapsed_ms: 0, duration_ms: 0, progress_millis: 0 },
               loop_runtime: { generation: 0, status: "disabled", wrap_count: 0 },
             },
           ]
@@ -13508,6 +13571,152 @@ export default function App() {
     });
   });
 
+  const applyTimelineFollowRuntimeReport = (
+    report: TimelineFollowRuntimeReport,
+    requestSerial: number,
+  ) => {
+    const authority = {
+      project_epoch: report.project_epoch,
+      project_revision: report.project_revision,
+      checkpoint_hash: report.checkpoint_hash,
+    };
+    if (!isProjectAuthorityIdentityCurrent(authority)
+      || requestSerial < appliedTimelineFollowRuntimeRequestSerial
+      || !timelineFollowRuntimeCanApply(appliedTimelineFollowRuntime, report.runtime)) {
+      return false;
+    }
+    appliedTimelineFollowRuntime = {
+      epoch: report.runtime.epoch,
+      generation: report.runtime.generation,
+    };
+    appliedTimelineFollowRuntimeRequestSerial = requestSerial;
+    timelineFollowRuntimeLastError = "";
+    setTimelineFollowRuntime(report.runtime);
+    return true;
+  };
+
+  const applyTimelineFollowAbortRuntime = (
+    runtime: TimelineFollowRuntimeSummary,
+    authority: ProjectAuthorityToken,
+    requestSerial: number,
+  ) => {
+    if (!isProjectAuthorityIdentityCurrent(authority)
+      || requestSerial < appliedTimelineFollowRuntimeRequestSerial
+      || !timelineFollowRuntimeCanApply(appliedTimelineFollowRuntime, runtime)) {
+      return false;
+    }
+    appliedTimelineFollowRuntime = { epoch: runtime.epoch, generation: runtime.generation };
+    appliedTimelineFollowRuntimeRequestSerial = requestSerial;
+    timelineFollowRuntimeLastError = "";
+    setTimelineFollowRuntime(runtime);
+    return true;
+  };
+
+  const refreshTimelineFollowRuntime = async (showError = false) => {
+    if (!isTauriRuntime()) return null;
+    const authority = captureProjectAuthorityIdentity();
+    const requestSerial = ++timelineFollowRuntimeRequestSerial;
+    try {
+      const report = await invoke<TimelineFollowRuntimeReport>("get_timeline_follow_runtime", {
+        expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+        ownerId: projectTransactionOwnerId,
+      });
+      return applyTimelineFollowRuntimeReport(report, requestSerial) ? report.runtime : null;
+    } catch (error) {
+      const detail = String(error);
+      if (showError && isProjectAuthorityIdentityCurrent(authority) && detail !== timelineFollowRuntimeLastError) {
+        timelineFollowRuntimeLastError = detail;
+        setMessage(`Timeline Follow runtime unavailable: ${detail}`);
+      }
+      return null;
+    }
+  };
+
+  const abortTimelineFollow = async (): Promise<boolean> => {
+    if (!isTauriRuntime()) return false;
+    const observed = timelineFollowRuntime();
+    if (observed.status === "idle" || timelineFollowAbortBusy()) return false;
+    const abortLease = timelineFollowAbortLease.begin();
+    setTimelineFollowAbortBusy(true);
+    const authority = captureProjectAuthorityIdentity();
+    const request: TimelineFollowAbortRequest = {
+      expected_follow_epoch: observed.epoch,
+      expected_generation: observed.generation,
+    };
+    const requestId = ++timelineFollowAbortRequestId;
+    const requestSerial = ++timelineFollowRuntimeRequestSerial;
+    const args = {
+      request,
+      requestId,
+      expectedEpoch: authority.project_epoch,
+      expectedRevision: authority.project_revision,
+      expectedCheckpointHash: authority.checkpoint_hash,
+      ownerId: projectTransactionOwnerId,
+    };
+    try {
+      let result: TimelineFollowAbortAuthoritativeResult;
+      try {
+        result = await invoke<TimelineFollowAbortAuthoritativeResult>("abort_timeline_follow", args);
+      } catch (error) {
+        // An abort can have reached the engine before its IPC reply was lost.
+        // Query the immutable terminal receipt with the identical E/R/H, owner,
+        // request id, and runtime epoch/generation instead of issuing a second
+        // abort that could target a later Follow generation.
+        const terminal = await invoke<TimelineFollowOperationTerminalEnvelope | null>(
+          "get_timeline_follow_operation_terminal_result",
+          args,
+        ).catch(() => null);
+        if (!terminal) {
+          timelineFollowAbortLease.reportFailure(abortLease, () =>
+            setMessage(`Timeline Follow abort failed: ${String(error)}`),
+          );
+          return false;
+        }
+        if (typeof terminal.shape_fingerprint !== "string" || terminal.shape_fingerprint.length === 0) {
+          timelineFollowAbortLease.reportFailure(abortLease, () =>
+            setMessage("Timeline Follow abort receipt omitted its request-shape fingerprint."),
+          );
+          return false;
+        }
+        result = terminal.terminal;
+      }
+      if (!applyTimelineFollowAbortRuntime(result.runtime, authority, requestSerial)) {
+        return false;
+      }
+      return true;
+    } finally {
+      if (timelineFollowAbortLease.release(abortLease)) {
+        setTimelineFollowAbortBusy(false);
+      }
+    }
+  };
+
+  createEffect(() => {
+    const timelineVisible = workspaceTab() === "control"
+      && controlMode() === "live"
+      && timelineDeskSurface() === "show";
+    if (!timelineVisible || !isTauriRuntime()) return;
+    let disposed = false;
+    let inFlight = false;
+    const refresh = async () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      try {
+        await refreshTimelineFollowRuntime(true);
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 100);
+    onCleanup(() => {
+      disposed = true;
+      window.clearInterval(timer);
+    });
+  });
+
   createEffect(() => {
     const current = currentProjectControlMappings();
     const signature = projectControlMappingsSignature(current.midi, current.osc, current.dmx);
@@ -23303,7 +23512,9 @@ export default function App() {
                   loopRuntime={activeTimeline().loop_runtime ?? { generation: 0, status: "disabled", wrap_count: 0 }}
                   timelines={timelineBank()}
                   activeTimelineId={activeTimeline().id ?? snapshot().timeline.id ?? 1}
-                  followRuntime={activeTimeline().follow_runtime ?? { generation: 0, status: "idle", elapsed_ms: 0, duration_ms: 0, progress_millis: 0 }}
+                  followRuntime={displayedTimelineFollowRuntime()}
+                  followAbortBusy={timelineFollowAbortBusy()}
+                  followAbortFocusFence={timelineFollowAbortFocusFence}
                   visibleWindow={timelineVisibleWindow()}
                   overviewShowDurationMs={timelineOverviewShowDurationMs()}
                   overviewEditExtentMs={timelineOverviewEditExtentMs()}
@@ -23335,6 +23546,7 @@ export default function App() {
                   onReorderTimelines={reorderTimelines}
                   onSelectTimeline={selectTimeline}
                   onSetFollow={setTimelineFollow}
+                  onAbortFollow={abortTimelineFollow}
                   onPanOverview={panTimelineOverview}
                   onZoomOverview={zoomTimelineOverview}
                   onFitOverview={fitTimelineOverview}
@@ -23964,13 +24176,9 @@ export default function App() {
               }}
               timelineBank={timelineBank()}
               activeTimelineId={activeTimeline().id ?? snapshot().timeline.id ?? 0}
-              followRuntime={activeTimeline().follow_runtime ?? {
-                generation: 0,
-                status: "idle",
-                elapsed_ms: 0,
-                duration_ms: 0,
-                progress_millis: 0,
-              }}
+              followRuntime={displayedTimelineFollowRuntime()}
+              followAbortBusy={timelineFollowAbortBusy()}
+              followAbortFocusFence={timelineFollowAbortFocusFence}
               executingLive={timelineExecutionLive()}
               cuesCount={snapshot().cues.length}
               superSceneCueCount={superSceneCueCount()}
@@ -24042,6 +24250,7 @@ export default function App() {
               onReorderTimelines={reorderTimelines}
               onSelectTimeline={selectTimeline}
               onSetFollow={setTimelineFollow}
+              onAbortFollow={abortTimelineFollow}
               onSeekOverviewTime={seekTimelineFromOverviewTime}
               onMoveEventPlacement={moveTimelineCueEventToPlacement}
               onResizeEventTime={resizeTimelineCueEventToTime}

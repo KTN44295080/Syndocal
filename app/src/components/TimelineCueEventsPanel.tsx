@@ -10,6 +10,7 @@ import type {
   TimelineLoopRegionSummary,
   TimelineLoopRuntimeSummary,
   TimelineFollowRuntimeSummary,
+  TimelineFollowAbortFocusFence,
   TimelineFollowSummary,
   TimelineItemGroupSummary,
   TimelineItemLaneMovePlan,
@@ -93,6 +94,8 @@ interface TimelineCueEventsPanelProps {
   timelineBank: TimelineSnapshot[];
   activeTimelineId: number;
   followRuntime: TimelineFollowRuntimeSummary;
+  followAbortBusy: boolean;
+  followAbortFocusFence: TimelineFollowAbortFocusFence;
   executingLive: boolean;
   cuesCount: number;
   superSceneCueCount: number;
@@ -162,6 +165,7 @@ interface TimelineCueEventsPanelProps {
   onReorderTimelines: (timelineIds: number[]) => void | Promise<void>;
   onSelectTimeline: (timelineId: number, play: boolean) => void | Promise<void>;
   onSetFollow: (follow: TimelineFollowSummary | null) => void | Promise<void>;
+  onAbortFollow: () => Promise<boolean>;
   onSeekOverviewTime: (timeMs: number) => void;
   onMoveEventPlacement: (
     eventId: number,
@@ -914,12 +918,15 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           activeTimelineId={props.activeTimelineId}
           bpm={props.bpm}
           followRuntime={props.followRuntime}
+          followAbortBusy={props.followAbortBusy}
+          followAbortFocusFence={props.followAbortFocusFence}
           onCreate={props.onCreateTimeline}
           onDuplicate={props.onDuplicateTimeline}
           onRemove={props.onRemoveTimeline}
           onReorder={props.onReorderTimelines}
           onSelect={props.onSelectTimeline}
           onSetFollow={props.onSetFollow}
+          onAbortFollow={props.onAbortFollow}
         />
       </Show>
       <div class="timelineToolStrip" role="toolbar" aria-label="Timeline tools">

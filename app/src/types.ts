@@ -2744,17 +2744,173 @@ export interface TimelineLoopRuntimeSummary {
   wrap_count: number;
 }
 
-export type TimelineFollowRuntimeStatus = "idle" | "pending" | "transitioning" | "held" | "fault";
+/** Runtime-only Follow transport status. This is never inferred from authored Follow settings. */
+export type TimelineFollowRuntimeStatus =
+  | "idle"
+  | "pending"
+  | "armed"
+  | "transitioning"
+  | "settling"
+  | "held"
+  | "fault"
+  | "aborting";
+export type TimelineFollowAdmissionReason = "natural_playback_boundary" | "preroll_before_natural_playback_boundary";
+export type TimelineFollowAbortReason =
+  | "stop"
+  | "manual_seek"
+  | "project_replacement"
+  | "timeline_bank_replacement"
+  | "loop_wrap"
+  | "playback_fault"
+  | "explicit_abort"
+  | "clock_discontinuity";
+export type TimelineFollowOutcome =
+  | { kind: "completed" }
+  | { kind: "cut" }
+  | { kind: "held" }
+  | { kind: "fault" }
+  | { kind: "aborted"; reason: TimelineFollowAbortReason };
+export type TimelineFollowSettlementState = "pending" | "applied" | "not_applicable" | "fault" | "timed_out";
+export type TimelineFollowSettlementDomain = "audio" | "video" | "lighting";
+export interface TimelineFollowSettlementConsumerSummary {
+  consumer_id: { kind: "audio" } | { kind: "lighting" } | { kind: "video_output"; output_id: number };
+  state: TimelineFollowSettlementState;
+  fault?: string | null;
+}
+export interface TimelineFollowSettlementDomainSummary {
+  domain: TimelineFollowSettlementDomain;
+  state: TimelineFollowSettlementState;
+  fault?: string | null;
+  consumers: TimelineFollowSettlementConsumerSummary[];
+}
+export interface TimelineFollowSettlementSummary {
+  started_at_ms: number;
+  deadline_ms: number;
+  state: TimelineFollowSettlementState;
+  progress_millis: number;
+  fault_policy: TimelineFollowFaultPolicy;
+  fault?: string | null;
+  domains: TimelineFollowSettlementDomainSummary[];
+}
 export interface TimelineFollowRuntimeSummary {
+  /** Output ownership epoch paired with generation; the runtime stale-read fence. */
+  epoch: number;
   generation: number;
   status: TimelineFollowRuntimeStatus;
+  admission_reason?: TimelineFollowAdmissionReason | null;
+  outcome?: TimelineFollowOutcome | null;
   source_timeline_id?: number | null;
   target_timeline_id?: number | null;
   elapsed_ms: number;
   duration_ms: number;
   progress_millis: number;
   fault?: string | null;
+  settlement?: TimelineFollowSettlementSummary | null;
 }
+
+export interface TimelineFollowRuntimeReport {
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  runtime: TimelineFollowRuntimeSummary;
+}
+
+export interface TimelineFollowAbortRequest {
+  expected_follow_epoch: number;
+  expected_generation: number;
+}
+
+export interface TimelineFollowAbortAuthoritativeResult {
+  runtime: TimelineFollowRuntimeSummary;
+}
+
+export interface TimelineFollowOperationTerminalEnvelope {
+  shape_fingerprint: string;
+  terminal: TimelineFollowAbortAuthoritativeResult;
+}
+
+/** Same runtime epoch accepts an equal/newer generation; a newer epoch starts a new generation domain. */
+export const timelineFollowRuntimeCanApply = (
+  applied: Pick<TimelineFollowRuntimeSummary, "epoch" | "generation"> | null,
+  candidate: Pick<TimelineFollowRuntimeSummary, "epoch" | "generation">,
+) => applied === null
+  || candidate.epoch > applied.epoch
+  || (candidate.epoch === applied.epoch && candidate.generation >= applied.generation);
+
+/**
+ * Owns the one renderer-visible Follow abort in flight. A project replacement
+ * invalidates its previous lease before clearing busy state, so an old IPC
+ * completion cannot clear a newer project's Abort affordance.
+ */
+export const createTimelineFollowAbortLease = () => {
+  let latestLease = 0;
+  let activeLease: number | null = null;
+  const nextLease = () => {
+    if (latestLease >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Timeline Follow abort leases are exhausted; reload Syndocal before continuing.");
+    }
+    latestLease += 1;
+    return latestLease;
+  };
+  return {
+    begin: () => {
+      const lease = nextLease();
+      activeLease = lease;
+      return lease;
+    },
+    reset: () => {
+      nextLease();
+      activeLease = null;
+    },
+    isCurrent: (lease: number) => activeLease === lease && latestLease === lease,
+    reportFailure: (lease: number, publish: () => void) => {
+      if (activeLease !== lease || latestLease !== lease) return false;
+      publish();
+      return true;
+    },
+    release: (lease: number) => {
+      if (activeLease !== lease || latestLease !== lease) return false;
+      activeLease = null;
+      return true;
+    },
+  };
+};
+
+export interface TimelineFollowAbortFocusFence {
+  reset: () => void;
+  schedule: (
+    applied: boolean,
+    focus: () => void,
+    scheduler: (callback: () => void) => unknown,
+  ) => boolean;
+}
+
+/**
+ * A separate generation fence for deferred focus restoration. Abort ownership
+ * may already be released when requestAnimationFrame runs, so project reset
+ * must invalidate callbacks independently of the operation lease.
+ */
+export const createTimelineFollowAbortFocusFence = (): TimelineFollowAbortFocusFence => {
+  let generation = 0;
+  const reset = () => {
+    if (generation >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Timeline Follow abort focus generations are exhausted; reload Syndocal before continuing.");
+    }
+    generation += 1;
+  };
+  return {
+    reset,
+    schedule: (applied, focus, scheduler) => {
+      if (!applied) return false;
+      const capturedGeneration = generation;
+      scheduler(() => {
+        if (generation !== capturedGeneration) return;
+        focus();
+      });
+      return true;
+    },
+  };
+};
 
 export type TimelineGuideCueKind =
   | { kind: "phase"; phase_id: number }

@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import type {
   TimelineFollowRuntimeSummary,
+  TimelineFollowAbortFocusFence,
   TimelineFollowSummary,
   TimelineGuideAudioStatus,
   TimelineLoopRegionSummary,
@@ -20,6 +21,8 @@ interface TimelinePerformanceEditorProps {
   phases: TimelinePhaseSummary[];
   visibleWindow: TimelineVisibleWindow;
   followRuntime: TimelineFollowRuntimeSummary;
+  followAbortBusy: boolean;
+  followAbortFocusFence: TimelineFollowAbortFocusFence;
   loopRegion: TimelineLoopRegionSummary | null;
   guideAudioStatus: TimelineGuideAudioStatus;
   guideAudioDevices: string[];
@@ -29,6 +32,7 @@ interface TimelinePerformanceEditorProps {
   onReorderTimelines: (timelineIds: number[]) => void | Promise<void>;
   onSelectTimeline: (timelineId: number, play: boolean) => void | Promise<void>;
   onSetFollow: (follow: TimelineFollowSummary | null) => void | Promise<void>;
+  onAbortFollow: () => Promise<boolean>;
   onSetPhases: (phases: TimelinePhaseSummary[]) => void | Promise<void>;
   onSetLoopRegion: (region: TimelineLoopRegionSummary | null) => void | Promise<void>;
   onConfigureGuideAudio: (enabled: boolean, gain: number, deviceName: string | null) => void | Promise<void>;
@@ -66,12 +70,15 @@ export function TimelinePerformanceEditor(props: TimelinePerformanceEditorProps)
         activeTimelineId={props.activeTimelineId}
         bpm={props.bpm}
         followRuntime={props.followRuntime}
+        followAbortBusy={props.followAbortBusy}
+        followAbortFocusFence={props.followAbortFocusFence}
         onCreate={props.onCreateTimeline}
         onDuplicate={props.onDuplicateTimeline}
         onRemove={props.onRemoveTimeline}
         onReorder={props.onReorderTimelines}
         onSelect={props.onSelectTimeline}
         onSetFollow={props.onSetFollow}
+        onAbortFollow={props.onAbortFollow}
       />
       <details class="timelineGuideAudioEditor" data-timeline-guide-audio-editor>
         <summary>

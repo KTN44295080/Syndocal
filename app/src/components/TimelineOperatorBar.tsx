@@ -2,6 +2,7 @@ import { Show } from "solid-js";
 import type { TimelineContextDrawer, TimelineDeskSurface } from "../uiModes";
 import type {
   TimelineFollowRuntimeSummary,
+  TimelineFollowAbortFocusFence,
   TimelineFollowSummary,
   TimelineGuideAudioStatus,
   TimelineLoopRegionSummary,
@@ -35,6 +36,8 @@ interface TimelineOperatorBarProps {
   timelines: TimelineSnapshot[];
   activeTimelineId: number;
   followRuntime: TimelineFollowRuntimeSummary;
+  followAbortBusy: boolean;
+  followAbortFocusFence: TimelineFollowAbortFocusFence;
   visibleWindow: TimelineVisibleWindow;
   overviewShowDurationMs: number;
   overviewEditExtentMs: number;
@@ -64,6 +67,7 @@ interface TimelineOperatorBarProps {
   onReorderTimelines: (timelineIds: number[]) => void | Promise<void>;
   onSelectTimeline: (timelineId: number, play: boolean) => void | Promise<void>;
   onSetFollow: (follow: TimelineFollowSummary | null) => void | Promise<void>;
+  onAbortFollow: () => Promise<boolean>;
   onPanOverview: (direction: -1 | 1) => void;
   onZoomOverview: (scale: number) => void;
   onFitOverview: () => void;
@@ -102,6 +106,10 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
       : { a_ms: Math.min(current?.a_ms ?? 0, Math.max(0, position - 1)), b_ms: Math.max(position, (current?.a_ms ?? 0) + 1), enabled: current?.enabled ?? false, musical_length_beats: current?.musical_length_beats ?? null };
     void props.onSetLoopRegion(next);
   };
+  const followStatus = () => props.followRuntime.status === "pending" ? "armed" : props.followRuntime.status;
+  const abortFollowFromOperator = async (button: HTMLButtonElement) => {
+    props.followAbortFocusFence.schedule(await props.onAbortFollow(), () => button.focus(), requestAnimationFrame);
+  };
   return (
     <div class="timelineOperatorBar" role="toolbar" aria-label="Timeline tools" data-timeline-operator-bar>
       <div class="timelineTransport" role="group" aria-label="Timeline transport">
@@ -114,6 +122,28 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
         <button type="button" class="primary" title="Play timeline" aria-label="Play timeline" onClick={() => void props.onPlay()} disabled={props.durationMs === 0 || props.playing}>
           <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▶</span>
         </button>
+      </div>
+      <div class="timelineFollowOperatorRuntime" role="group" aria-label="Timeline Follow runtime" data-timeline-follow-operator-runtime>
+        <output class={`timelineFollowState ${props.followRuntime.status}`} aria-live="polite" data-timeline-follow-operator-badge>
+          Follow: {followStatus()}
+          <Show when={props.followRuntime.status === "transitioning" || props.followRuntime.status === "settling"}>
+            {` ${Math.round(props.followRuntime.progress_millis / 10)}%`}
+          </Show>
+        </output>
+        <Show when={props.followRuntime.status !== "idle" && props.followRuntime.generation > 0}>
+          <button
+            type="button"
+            class="danger"
+            style={{ "min-height": "44px", "min-width": "44px" }}
+            aria-label="Abort Timeline Follow"
+            aria-busy={props.followAbortBusy ? "true" : undefined}
+            disabled={props.followAbortBusy || props.followRuntime.status === "aborting"}
+            data-timeline-follow-operator-abort
+            onClick={(event) => void abortFollowFromOperator(event.currentTarget)}
+          >
+            Abort
+          </button>
+        </Show>
       </div>
       <div class="timelineMetronomeControls" role="group" aria-label="Timeline click controls">
         <button
@@ -292,6 +322,8 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
             phases={props.phases}
             visibleWindow={props.visibleWindow}
             followRuntime={props.followRuntime}
+            followAbortBusy={props.followAbortBusy}
+            followAbortFocusFence={props.followAbortFocusFence}
             loopRegion={props.loopRegion}
             guideAudioStatus={props.guideAudioStatus}
             guideAudioDevices={props.guideAudioDevices}
@@ -301,6 +333,7 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
             onReorderTimelines={props.onReorderTimelines}
             onSelectTimeline={props.onSelectTimeline}
             onSetFollow={props.onSetFollow}
+            onAbortFollow={props.onAbortFollow}
             onSetPhases={props.onSetPhases}
             onSetLoopRegion={props.onSetLoopRegion}
             onConfigureGuideAudio={props.onConfigureGuideAudio}
