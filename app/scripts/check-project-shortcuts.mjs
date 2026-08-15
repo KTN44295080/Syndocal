@@ -1,6 +1,227 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
+
+const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const appShortcutPath = path.join(appRoot, "src", "appShortcutActions.ts");
+const projectFileShortcutPath = path.join(appRoot, "src", "projectFileShortcuts.ts");
+const keyboardShortcutSourceManifestPath = path.join(
+  appRoot,
+  "src",
+  "keyboard-shortcut-source-manifest.json",
+);
+
+const unwrapExpression = (expression) => {
+  let current = expression;
+  while (ts.isParenthesizedExpression(current)
+    || ts.isAsExpression(current)
+    || ts.isSatisfiesExpression(current)
+    || ts.isNonNullExpression(current)) current = current.expression;
+  return current;
+};
+
+const finiteStringLiterals = (type, seen = new Set()) => {
+  if (seen.has(type)) return null;
+  seen.add(type);
+  if (type.isStringLiteral()) return new Set([type.value]);
+  if (!type.isUnion()) return null;
+  const values = new Set();
+  for (const member of type.types) {
+    const memberValues = finiteStringLiterals(member, seen);
+    if (!memberValues) return null;
+    for (const value of memberValues) values.add(value);
+  }
+  return values;
+};
+
+const propertyName = (name) => (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) ? name.text : null;
+
+const sourceIdForShortcutActionKind = (kind) => {
+  if (!/^[a-z][A-Za-z0-9]*$/.test(kind)) {
+    throw new Error(`shortcut action kind must be lower camel ASCII: ${JSON.stringify(kind)}`);
+  }
+  const sourceId = `${kind.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)}_v1`;
+  if (!/^[a-z][a-z0-9_]*_v[1-9][0-9]*$/.test(sourceId)) {
+    throw new Error(`shortcut source id is not versioned lower_snake ASCII: ${JSON.stringify(sourceId)}`);
+  }
+  return sourceId;
+};
+
+const setDifference = (left, right) => [...left].filter((value) => !right.has(value));
+
+const assertSameSet = (actual, expected, label) => {
+  const missing = setDifference(expected, actual);
+  const extra = setDifference(actual, expected);
+  assert.deepEqual(
+    { missing, extra },
+    { missing: [], extra: [] },
+    `${label} must have no missing or extra action kinds`,
+  );
+};
+
+const sourceManifestDeclaration = (sourceFile, declarationName) => {
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== declarationName) continue;
+      if ((statement.declarationList.flags & ts.NodeFlags.Const) === 0 || !declaration.initializer) {
+        throw new Error(`${declarationName} must be an initialized const declaration`);
+      }
+      const object = unwrapExpression(declaration.initializer);
+      if (!ts.isObjectLiteralExpression(object)) {
+        throw new Error(`${declarationName} must be a static object literal`);
+      }
+      const keys = [];
+      const seen = new Set();
+      for (const property of object.properties) {
+        if (!ts.isPropertyAssignment(property) || property.name && ts.isComputedPropertyName(property.name)) {
+          throw new Error(`${declarationName} must not contain dynamic, computed, or spread entries`);
+        }
+        const key = propertyName(property.name);
+        if (!key || property.initializer.kind !== ts.SyntaxKind.TrueKeyword) {
+          throw new Error(`${declarationName} entries must be explicit true keyed literals`);
+        }
+        if (seen.has(key)) throw new Error(`${declarationName} contains duplicate key ${key}`);
+        seen.add(key);
+        keys.push(key);
+      }
+      if (keys.length === 0) throw new Error(`${declarationName} must not be empty`);
+      return keys;
+    }
+  }
+  throw new Error(`${declarationName} declaration is missing`);
+};
+
+const actionKindUnion = (checker, sourceFile, typeName) => {
+  for (const statement of sourceFile.statements) {
+    if (!ts.isTypeAliasDeclaration(statement) || statement.name.text !== typeName) continue;
+    const symbol = checker.getSymbolAtLocation(statement.name);
+    if (!symbol) throw new Error(`${typeName} has no type symbol`);
+    const actionType = checker.getDeclaredTypeOfSymbol(symbol);
+    const kind = actionType.getProperty("kind");
+    if (!kind) throw new Error(`${typeName} must discriminate on kind`);
+    const declaration = kind.valueDeclaration ?? kind.declarations?.[0] ?? sourceFile;
+    const values = finiteStringLiterals(checker.getTypeOfSymbolAtLocation(kind, declaration));
+    if (!values || values.size === 0) {
+      throw new Error(`${typeName}["kind"] must be a finite string-literal union`);
+    }
+    return [...values];
+  }
+  throw new Error(`${typeName} declaration is missing`);
+};
+
+const loadShortcutManifestProgram = () => {
+  const configPath = path.join(appRoot, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
+  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, appRoot, undefined, configPath);
+  if (parsed.errors.length > 0) {
+    throw new Error(parsed.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, "\n")).join("\n"));
+  }
+  const program = ts.createProgram(parsed.fileNames, parsed.options);
+  const diagnostics = [...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()];
+  if (diagnostics.length > 0) {
+    throw new Error(diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")).join("\n"));
+  }
+  const appShortcutSourceFile = program.getSourceFile(appShortcutPath);
+  const projectFileShortcutSourceFile = program.getSourceFile(projectFileShortcutPath);
+  if (!appShortcutSourceFile || !projectFileShortcutSourceFile) {
+    throw new Error("shortcut source files are missing from the TypeScript program");
+  }
+  return { checker: program.getTypeChecker(), appShortcutSourceFile, projectFileShortcutSourceFile };
+};
+
+const expectedKeyboardShortcutSourceManifest = ({
+  appKinds,
+  projectFileKinds,
+}) => ({
+  schema_version: 1,
+  keyboard_app: [...appKinds].map(sourceIdForShortcutActionKind).sort(),
+  keyboard_project_file: [...projectFileKinds].map(sourceIdForShortcutActionKind).sort(),
+});
+
+const validateKeyboardShortcutSourceManifest = (raw, expected) => {
+  const errors = [];
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return [`keyboard shortcut source manifest is malformed JSON: ${error.message}`];
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    errors.push("keyboard shortcut source manifest must be an object");
+  } else {
+    const keys = Object.keys(parsed).sort();
+    const expectedKeys = ["keyboard_app", "keyboard_project_file", "schema_version"];
+    if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) {
+      errors.push("keyboard shortcut source manifest has missing or unknown top-level fields");
+    }
+    if (parsed.schema_version !== 1) errors.push("keyboard shortcut source manifest schema_version must be 1");
+    for (const family of ["keyboard_app", "keyboard_project_file"]) {
+      const sources = parsed[family];
+      if (!Array.isArray(sources) || sources.some((source) => typeof source !== "string")) {
+        errors.push(`${family} must be an array of source-id strings`);
+        continue;
+      }
+      if (new Set(sources).size !== sources.length) errors.push(`${family} contains duplicate source ids`);
+      if (sources.some((source, index) => index > 0 && source <= sources[index - 1])) {
+        errors.push(`${family} source ids must be strictly byte-sorted`);
+      }
+      if (sources.some((source) => !/^[a-z][a-z0-9_]*_v[1-9][0-9]*$/.test(source))) {
+        errors.push(`${family} contains a non-versioned lower_snake source id`);
+      }
+    }
+  }
+  const expectedRaw = `${JSON.stringify(expected, null, 2)}\n`;
+  if (raw !== expectedRaw) {
+    errors.push("keyboard shortcut source manifest is not byte-exactly generated from the typed keyed manifests");
+  }
+  return errors;
+};
+
+const runShortcutInventorySelfTests = () => {
+  const expected = {
+    schema_version: 1,
+    keyboard_app: ["new_project_v1"],
+    keyboard_project_file: ["save_project_v1"],
+  };
+  const raw = `${JSON.stringify(expected, null, 2)}\n`;
+  assert.deepEqual(validateKeyboardShortcutSourceManifest(raw, expected), []);
+  assert.ok(
+    validateKeyboardShortcutSourceManifest("{", expected).some((error) => error.includes("malformed")),
+    "malformed JSON must fail closed",
+  );
+  assert.ok(
+    validateKeyboardShortcutSourceManifest(
+      '{"schema_version":1,"keyboard_app":["new_project_v1","new_project_v1"],"keyboard_project_file":["save_project_v1"]}',
+      expected,
+    ).some((error) => error.includes("duplicate") || error.includes("byte-exactly")),
+    "duplicate JSON source ids must fail closed",
+  );
+  assert.ok(
+    validateKeyboardShortcutSourceManifest(
+      `${JSON.stringify({ ...expected, unexpected: [] }, null, 2)}\n`,
+      expected,
+    ).some((error) => error.includes("unknown") || error.includes("byte-exactly")),
+    "unknown JSON fields must fail closed",
+  );
+  assert.ok(
+    validateKeyboardShortcutSourceManifest(
+      raw,
+      { ...expected, keyboard_app: ["renamed_project_v1"] },
+    ).some((error) => error.includes("byte-exactly")),
+    "source-id drift from the typed keyed manifest must fail closed",
+  );
+  assert.throws(() => sourceManifestDeclaration(ts.createSourceFile(
+    "fixture.ts",
+    "const MANIFEST = { ...dynamic };",
+    ts.ScriptTarget.ES2022,
+  ), "MANIFEST"), /dynamic/);
+};
+
+runShortcutInventorySelfTests();
 
 const transpile = (source, fileName) => ts.transpileModule(source, {
   compilerOptions: {
@@ -22,6 +243,7 @@ const appShortcutSource = (await readFile(new URL("../src/appShortcutActions.ts"
 const appShortcutModule = await import(dataUrl(transpile(appShortcutSource, "appShortcutActions.ts")));
 const {
   APP_SHORTCUT_ACTION_KINDS,
+  APP_SHORTCUT_ACTION_SOURCE_MANIFEST,
   executeAppShortcut,
   resolveAppShortcut,
 } = appShortcutModule;
@@ -30,9 +252,58 @@ const projectSource = await readFile(new URL("../src/projectFileShortcuts.ts", i
 const projectModule = await import(dataUrl(transpile(projectSource, "projectFileShortcuts.ts")));
 const {
   PROJECT_FILE_SHORTCUT_ACTION_KINDS,
+  PROJECT_FILE_SHORTCUT_ACTION_SOURCE_MANIFEST,
   dispatchProjectFileShortcut,
   resolveProjectFileShortcut,
 } = projectModule;
+
+// The AST/type-checker path is intentional: source discovery must not depend
+// on a textual regex over the union or its keyed manifest.
+const {
+  checker: shortcutManifestChecker,
+  appShortcutSourceFile,
+  projectFileShortcutSourceFile,
+} = loadShortcutManifestProgram();
+const typedAppKinds = actionKindUnion(shortcutManifestChecker, appShortcutSourceFile, "AppShortcutAction");
+const typedProjectFileKinds = actionKindUnion(
+  shortcutManifestChecker,
+  projectFileShortcutSourceFile,
+  "ProjectFileShortcutAction",
+);
+const staticAppKinds = sourceManifestDeclaration(
+  appShortcutSourceFile,
+  "APP_SHORTCUT_ACTION_SOURCE_MANIFEST",
+);
+const staticProjectFileKinds = sourceManifestDeclaration(
+  projectFileShortcutSourceFile,
+  "PROJECT_FILE_SHORTCUT_ACTION_SOURCE_MANIFEST",
+);
+assertSameSet(new Set(staticAppKinds), new Set(typedAppKinds), "App shortcut keyed manifest and discriminated union");
+assertSameSet(
+  new Set(staticProjectFileKinds),
+  new Set(typedProjectFileKinds),
+  "project-file shortcut keyed manifest and discriminated union",
+);
+assert.deepEqual(
+  Object.keys(APP_SHORTCUT_ACTION_SOURCE_MANIFEST),
+  staticAppKinds,
+  "runtime App keyed manifest must be the compiler-checked static manifest",
+);
+assert.deepEqual(
+  Object.keys(PROJECT_FILE_SHORTCUT_ACTION_SOURCE_MANIFEST),
+  staticProjectFileKinds,
+  "runtime project-file keyed manifest must be the compiler-checked static manifest",
+);
+const keyboardShortcutSourceExpected = expectedKeyboardShortcutSourceManifest({
+  appKinds: staticAppKinds,
+  projectFileKinds: staticProjectFileKinds,
+});
+const keyboardShortcutSourceRaw = await readFile(keyboardShortcutSourceManifestPath, "utf8");
+assert.deepEqual(
+  validateKeyboardShortcutSourceManifest(keyboardShortcutSourceRaw, keyboardShortcutSourceExpected),
+  [],
+  "keyboard source manifest must exactly match the typed shortcut unions and keyed manifests",
+);
 
 const expectedAppKinds = [
   "newProject", "undoProject", "redoProject", "setWorkspaceTab", "selectSetupMode",
@@ -204,7 +475,7 @@ for (const workspaceTab of ["setup", "control", "touch"]) {
     }
   }
 }
-assert.ok(matrixCases >= 10_000, `shortcut matrix must remain nonvacuous (got ${matrixCases})`);
+assert.equal(matrixCases, 15_552, `shortcut matrix contract drifted (got ${matrixCases})`);
 assert.deepEqual([...reachableKinds].sort(), [...expectedAppKinds].sort(), "all 30 declared App actions are reachable in the finite matrix");
 
 const projectEvent = (code, modifiers = {}) => ({
@@ -257,4 +528,4 @@ const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "ut
 assert.match(appSource, /window\.addEventListener\("keydown", handleAppKeyDown\)/, "the tested controller remains mounted");
 assert.match(appSource, /handleControlKeyDown\(event\)/, "the mounted application handler delegates to the controller");
 
-console.log(`project/app shortcuts: ${matrixCases} matrix cases; App=30 reachable kinds; ProjectFile=3 reachable kinds`);
+console.log(`project/app shortcuts: ${matrixCases} matrix cases; App=30 reachable kinds; ProjectFile=3 reachable kinds; source manifest byte-exact`);

@@ -17,13 +17,20 @@ use protocol::control_plane::{
 use protocol::control_plane_command::SET_EFFECT_ENABLED_OPERATION_ID;
 use protocol::control_plane_registry_v2::{
     AdapterPolicy, CanonicalControlPlaneRegistry, CanonicalOperationDescriptor,
-    CanonicalRegistryValidationError, ConsentPolicy, PayloadPolicy, RatePolicy, ReceiptPolicy,
-    SourceDisposition, SourceInventoryDescriptor, SourceKey, SourceRole, TypedSchemaProjection,
+    CanonicalRegistryValidationError, CanonicalSourceFamily, ConsentPolicy, PayloadPolicy,
+    RatePolicy, ReceiptPolicy, SourceDisposition, SourceInventoryDescriptor, SourceKey, SourceRole,
+    TypedSchemaProjection,
 };
+use serde::{Deserialize, Serialize};
 
 const MAX_REGISTERED_OPERATIONS: usize = 2048;
 const MAIN_RS_SOURCE: &str = include_str!("main.rs");
 const FRONTEND_INVOKE_MANIFEST: &str = include_str!("../../src/tauri-invoke-manifest.json");
+const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
+    include_str!("../../src/keyboard-shortcut-source-manifest.json");
+const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
+const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
+const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -43,6 +50,8 @@ pub enum ControlPlaneRegistryError {
     InvalidFrontendInvokeManifest,
     DuplicateFrontendInvokeCommand(String),
     UnregisteredFrontendInvokeCommand(String),
+    InvalidKeyboardShortcutSourceManifest,
+    DuplicateKeyboardShortcutSource(String),
     TooManyOperations(usize),
     MissingRegistryDescriptor(String),
     UnexpectedRegistryDescriptor(String),
@@ -83,6 +92,12 @@ impl fmt::Display for ControlPlaneRegistryError {
                     "frontend invoke command is not registered with Tauri: {name}"
                 )
             }
+            Self::InvalidKeyboardShortcutSourceManifest => formatter.write_str(
+                "keyboard shortcut source manifest is malformed, non-canonical, or out of contract",
+            ),
+            Self::DuplicateKeyboardShortcutSource(name) => {
+                write!(formatter, "duplicate keyboard shortcut source: {name}")
+            }
             Self::TooManyOperations(count) => write!(
                 formatter,
                 "operation registry exceeds its {MAX_REGISTERED_OPERATIONS} entry bound: {count}"
@@ -107,7 +122,10 @@ impl fmt::Display for ControlPlaneRegistryError {
                 write!(formatter, "canonical source inventory is missing: {key}")
             }
             Self::UnexpectedCanonicalSource(key) => {
-                write!(formatter, "canonical source inventory is not in v1: {key}")
+                write!(
+                    formatter,
+                    "canonical source inventory is not expected by v2: {key}"
+                )
             }
             Self::MissingWindowBinding => formatter
                 .write_str("control-plane discovery requires a window-bound Tauri invocation"),
@@ -202,6 +220,8 @@ fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
 /// a canonical operation.
 fn build_canonical_registry() -> Result<CanonicalControlPlaneRegistry, ControlPlaneRegistryError> {
     let legacy = registry()?;
+    let keyboard_shortcut_sources =
+        keyboard_shortcut_source_ids_from_manifest(KEYBOARD_SHORTCUT_SOURCE_MANIFEST)?;
     let mut canonical_operations = legacy
         .operations
         .iter()
@@ -215,6 +235,9 @@ fn build_canonical_registry() -> Result<CanonicalControlPlaneRegistry, ControlPl
         .iter()
         .map(canonical_source_inventory_descriptor)
         .collect::<Vec<_>>();
+    source_inventory.extend(keyboard_shortcut_sources.iter().map(|(family, source_id)| {
+        keyboard_shortcut_source_inventory_descriptor(*family, source_id)
+    }));
     source_inventory.sort_by(|left, right| left.source_key.cmp(&right.source_key));
 
     let mut canonical = CanonicalControlPlaneRegistry {
@@ -232,9 +255,10 @@ fn build_canonical_registry() -> Result<CanonicalControlPlaneRegistry, ControlPl
 fn canonical_source_inventory_descriptor(
     descriptor: &OperationDescriptor,
 ) -> SourceInventoryDescriptor {
-    let source_key = SourceKey::new(descriptor.source_family, descriptor.source_id.clone());
-    let disposition = match descriptor.source_family {
-        OperationSourceFamily::TauriCommand => {
+    let source_family = CanonicalSourceFamily::from(descriptor.source_family);
+    let source_key = SourceKey::new(source_family, descriptor.source_id.clone());
+    let disposition = match source_family {
+        CanonicalSourceFamily::TauriCommand => {
             if let Some(reviewed) = reviewed_canonical_operation(&descriptor.source_id) {
                 SourceDisposition::Operation {
                     canonical_operation_id: reviewed.operation_id().to_string(),
@@ -242,26 +266,26 @@ fn canonical_source_inventory_descriptor(
                 }
             } else {
                 SourceDisposition::Unclassified {
-                    reason: unclassified_reason(descriptor.source_family).to_string(),
+                    reason: unclassified_reason(source_family).to_string(),
                 }
             }
         }
-        OperationSourceFamily::FrontendInvoke => SourceDisposition::AliasOfSource {
+        CanonicalSourceFamily::FrontendInvoke => SourceDisposition::AliasOfSource {
             target: SourceKey::new(
-                OperationSourceFamily::TauriCommand,
+                CanonicalSourceFamily::TauriCommand,
                 descriptor.source_id.clone(),
             ),
         },
-        OperationSourceFamily::EngineCommand
+        CanonicalSourceFamily::EngineCommand
             if descriptor.source_id == "set_effect_enabled_published" =>
         {
             SourceDisposition::InternalStepOf {
-                target: SourceKey::new(OperationSourceFamily::TauriCommand, "set_effect_enabled"),
+                target: SourceKey::new(CanonicalSourceFamily::TauriCommand, "set_effect_enabled"),
             }
         }
         _ => SourceDisposition::Unclassified {
             reason: effect_enabled_unclassified_reason(descriptor)
-                .unwrap_or_else(|| unclassified_reason(descriptor.source_family))
+                .unwrap_or_else(|| unclassified_reason(source_family))
                 .to_string(),
         },
     };
@@ -269,31 +293,134 @@ fn canonical_source_inventory_descriptor(
         schema: SourceInventoryDescriptor::schema_identity(),
         binding_id: source_key.binding_id(),
         source_key,
-        role: SourceRole::for_family(descriptor.source_family),
+        role: SourceRole::for_family(source_family),
         raw_request_schema: descriptor.request_schema.clone(),
         raw_response_schema: descriptor.response_schema.clone(),
         disposition,
     }
 }
 
-fn unclassified_reason(family: OperationSourceFamily) -> &'static str {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyboardShortcutSourceManifest {
+    schema_version: u16,
+    keyboard_app: Vec<String>,
+    keyboard_project_file: Vec<String>,
+}
+
+fn keyboard_shortcut_source_ids_from_manifest(
+    source: &str,
+) -> Result<Vec<(CanonicalSourceFamily, String)>, ControlPlaneRegistryError> {
+    let manifest = serde_json::from_str::<KeyboardShortcutSourceManifest>(source)
+        .map_err(|_| ControlPlaneRegistryError::InvalidKeyboardShortcutSourceManifest)?;
+    if manifest.schema_version != KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION {
+        return Err(ControlPlaneRegistryError::InvalidKeyboardShortcutSourceManifest);
+    }
+    let canonical_bytes = serde_json::to_string_pretty(&manifest)
+        .map_err(|_| ControlPlaneRegistryError::InvalidKeyboardShortcutSourceManifest)?;
+    if source != format!("{canonical_bytes}\n") {
+        return Err(ControlPlaneRegistryError::InvalidKeyboardShortcutSourceManifest);
+    }
+
+    let mut sources = Vec::with_capacity(
+        KEYBOARD_APP_SHORTCUT_SOURCE_COUNT + KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT,
+    );
+    append_keyboard_shortcut_source_ids(
+        CanonicalSourceFamily::KeyboardApp,
+        &manifest.keyboard_app,
+        KEYBOARD_APP_SHORTCUT_SOURCE_COUNT,
+        &mut sources,
+    )?;
+    append_keyboard_shortcut_source_ids(
+        CanonicalSourceFamily::KeyboardProjectFile,
+        &manifest.keyboard_project_file,
+        KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT,
+        &mut sources,
+    )?;
+    Ok(sources)
+}
+
+fn append_keyboard_shortcut_source_ids(
+    family: CanonicalSourceFamily,
+    source_ids: &[String],
+    expected_count: usize,
+    sources: &mut Vec<(CanonicalSourceFamily, String)>,
+) -> Result<(), ControlPlaneRegistryError> {
+    if source_ids.len() != expected_count {
+        return Err(ControlPlaneRegistryError::InvalidKeyboardShortcutSourceManifest);
+    }
+    let mut distinct = BTreeSet::new();
+    for source_id in source_ids {
+        let source_key = SourceKey::new(family, source_id.clone());
+        if source_key.validate().is_err() {
+            return Err(ControlPlaneRegistryError::InvalidKeyboardShortcutSourceManifest);
+        }
+        if !distinct.insert(source_id.as_str()) {
+            return Err(ControlPlaneRegistryError::DuplicateKeyboardShortcutSource(
+                source_key.binding_id(),
+            ));
+        }
+        sources.push((family, source_id.clone()));
+    }
+    if source_ids
+        .windows(2)
+        .any(|pair| pair[0].as_str() >= pair[1].as_str())
+    {
+        return Err(ControlPlaneRegistryError::InvalidKeyboardShortcutSourceManifest);
+    }
+    Ok(())
+}
+
+fn keyboard_shortcut_source_inventory_descriptor(
+    family: CanonicalSourceFamily,
+    source_id: &str,
+) -> SourceInventoryDescriptor {
+    let source_key = SourceKey::new(family, source_id);
+    let family_name = match family {
+        CanonicalSourceFamily::KeyboardApp => "keyboard_app",
+        CanonicalSourceFamily::KeyboardProjectFile => "keyboard_project_file",
+        _ => unreachable!("only keyboard source families use this descriptor builder"),
+    };
+    let raw_schema = |direction| SchemaIdentity {
+        name: format!("syndocal.inventory.{family_name}.{source_id}.{direction}"),
+        version: KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION,
+    };
+    // Shortcut sources intentionally have neither a canonical operation nor
+    // an adapter. Some current shortcuts mutate project/runtime state, so
+    // presentation-only would be both inaccurate and unsafe.
+    SourceInventoryDescriptor {
+        schema: SourceInventoryDescriptor::schema_identity(),
+        binding_id: source_key.binding_id(),
+        source_key,
+        role: SourceRole::for_family(family),
+        raw_request_schema: raw_schema("request"),
+        raw_response_schema: raw_schema("response"),
+        disposition: SourceDisposition::Unclassified {
+            reason: unclassified_reason(family).to_string(),
+        },
+    }
+}
+
+fn unclassified_reason(family: CanonicalSourceFamily) -> &'static str {
     match family {
-        OperationSourceFamily::TauriCommand => "unreviewed tauri command",
-        OperationSourceFamily::EngineCommand => "unreviewed engine command",
-        OperationSourceFamily::RemoteInputEvent
-        | OperationSourceFamily::RemoteClientRequest
-        | OperationSourceFamily::RemoteWireOperation => "unreviewed remote ingress",
-        OperationSourceFamily::MidiControlMessage
-        | OperationSourceFamily::MidiControlAction
-        | OperationSourceFamily::MidiClockEvent
-        | OperationSourceFamily::MidiControlEvent => "unreviewed midi ingress",
-        OperationSourceFamily::OscControlAction | OperationSourceFamily::OscInputEvent => {
+        CanonicalSourceFamily::TauriCommand => "unreviewed tauri command",
+        CanonicalSourceFamily::EngineCommand => "unreviewed engine command",
+        CanonicalSourceFamily::RemoteInputEvent
+        | CanonicalSourceFamily::RemoteClientRequest
+        | CanonicalSourceFamily::RemoteWireOperation => "unreviewed remote ingress",
+        CanonicalSourceFamily::MidiControlMessage
+        | CanonicalSourceFamily::MidiControlAction
+        | CanonicalSourceFamily::MidiClockEvent
+        | CanonicalSourceFamily::MidiControlEvent => "unreviewed midi ingress",
+        CanonicalSourceFamily::OscControlAction | CanonicalSourceFamily::OscInputEvent => {
             "unreviewed osc ingress"
         }
-        OperationSourceFamily::DmxInputProtocol | OperationSourceFamily::DmxInputEvent => {
+        CanonicalSourceFamily::DmxInputProtocol | CanonicalSourceFamily::DmxInputEvent => {
             "unreviewed dmx ingress"
         }
-        OperationSourceFamily::FrontendInvoke => "unreviewed frontend invocation",
+        CanonicalSourceFamily::FrontendInvoke => "unreviewed frontend invocation",
+        CanonicalSourceFamily::KeyboardApp => "unreviewed keyboard app shortcut",
+        CanonicalSourceFamily::KeyboardProjectFile => "unreviewed keyboard project-file shortcut",
     }
 }
 
@@ -305,11 +432,21 @@ pub fn verify_canonical_registry_exact_sources(
     legacy: &OperationRegistry,
     canonical: &CanonicalControlPlaneRegistry,
 ) -> Result<(), ControlPlaneRegistryError> {
-    let expected = legacy
+    let mut expected = legacy
         .operations
         .iter()
-        .map(|descriptor| SourceKey::new(descriptor.source_family, descriptor.source_id.clone()))
+        .map(|descriptor| {
+            SourceKey::new(
+                CanonicalSourceFamily::from(descriptor.source_family),
+                descriptor.source_id.clone(),
+            )
+        })
         .collect::<BTreeSet<_>>();
+    expected.extend(
+        keyboard_shortcut_source_ids_from_manifest(KEYBOARD_SHORTCUT_SOURCE_MANIFEST)?
+            .into_iter()
+            .map(|(family, source_id)| SourceKey::new(family, source_id)),
+    );
     let actual = canonical
         .source_inventory
         .iter()
@@ -981,9 +1118,14 @@ mod tests {
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
         const FRONTEND_COUNT: usize = 386;
-        const SOURCE_TOTAL: usize =
+        const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
-        assert_eq!(SOURCE_TOTAL, 1400);
+        const KEYBOARD_APP_COUNT: usize = 30;
+        const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
+        const SOURCE_TOTAL: usize =
+            LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1400);
+        assert_eq!(SOURCE_TOTAL, 1433);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 9);
 
@@ -995,34 +1137,61 @@ mod tests {
                 .count()
         };
         assert_eq!(
-            count_family(OperationSourceFamily::TauriCommand),
+            count_family(CanonicalSourceFamily::TauriCommand),
             TAURI_COUNT
         );
         assert_eq!(
-            count_family(OperationSourceFamily::EngineCommand),
+            count_family(CanonicalSourceFamily::EngineCommand),
             ENGINE_COUNT
         );
         assert_eq!(
-            count_family(OperationSourceFamily::RemoteInputEvent)
-                + count_family(OperationSourceFamily::RemoteClientRequest)
-                + count_family(OperationSourceFamily::RemoteWireOperation),
+            count_family(CanonicalSourceFamily::RemoteInputEvent)
+                + count_family(CanonicalSourceFamily::RemoteClientRequest)
+                + count_family(CanonicalSourceFamily::RemoteWireOperation),
             REMOTE_COUNT
         );
         assert_eq!(
-            count_family(OperationSourceFamily::MidiControlMessage)
-                + count_family(OperationSourceFamily::MidiControlAction)
-                + count_family(OperationSourceFamily::MidiClockEvent)
-                + count_family(OperationSourceFamily::MidiControlEvent)
-                + count_family(OperationSourceFamily::OscControlAction)
-                + count_family(OperationSourceFamily::OscInputEvent)
-                + count_family(OperationSourceFamily::DmxInputProtocol)
-                + count_family(OperationSourceFamily::DmxInputEvent),
+            count_family(CanonicalSourceFamily::MidiControlMessage)
+                + count_family(CanonicalSourceFamily::MidiControlAction)
+                + count_family(CanonicalSourceFamily::MidiClockEvent)
+                + count_family(CanonicalSourceFamily::MidiControlEvent)
+                + count_family(CanonicalSourceFamily::OscControlAction)
+                + count_family(CanonicalSourceFamily::OscInputEvent)
+                + count_family(CanonicalSourceFamily::DmxInputProtocol)
+                + count_family(CanonicalSourceFamily::DmxInputEvent),
             MIDI_OSC_DMX_COUNT
         );
         assert_eq!(
-            count_family(OperationSourceFamily::FrontendInvoke),
+            count_family(CanonicalSourceFamily::FrontendInvoke),
             FRONTEND_COUNT
         );
+        assert_eq!(
+            count_family(CanonicalSourceFamily::KeyboardApp),
+            KEYBOARD_APP_COUNT
+        );
+        assert_eq!(
+            count_family(CanonicalSourceFamily::KeyboardProjectFile),
+            KEYBOARD_PROJECT_FILE_COUNT
+        );
+
+        let expected_keyboard_sources =
+            keyboard_shortcut_source_ids_from_manifest(KEYBOARD_SHORTCUT_SOURCE_MANIFEST)
+                .unwrap()
+                .into_iter()
+                .map(|(family, source_id)| SourceKey::new(family, source_id))
+                .collect::<BTreeSet<_>>();
+        let actual_keyboard_sources = canonical
+            .source_inventory
+            .iter()
+            .filter(|source| {
+                matches!(
+                    source.source_key.family,
+                    CanonicalSourceFamily::KeyboardApp | CanonicalSourceFamily::KeyboardProjectFile
+                )
+            })
+            .map(|source| source.source_key.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual_keyboard_sources, expected_keyboard_sources);
 
         let direct = canonical
             .source_inventory
@@ -1052,16 +1221,50 @@ mod tests {
         assert_eq!(direct.len(), 9);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 1);
-        assert_eq!(unclassified.len(), 1004);
+        assert_eq!(unclassified.len(), 1037);
         assert_eq!(
             direct.len() + aliases.len() + internal_steps.len() + unclassified.len(),
             SOURCE_TOTAL
         );
 
+        for (family, expected_count, role, reason) in [
+            (
+                CanonicalSourceFamily::KeyboardApp,
+                KEYBOARD_APP_COUNT,
+                SourceRole::KeyboardAppShortcut,
+                "unreviewed keyboard app shortcut",
+            ),
+            (
+                CanonicalSourceFamily::KeyboardProjectFile,
+                KEYBOARD_PROJECT_FILE_COUNT,
+                SourceRole::KeyboardProjectFileShortcut,
+                "unreviewed keyboard project-file shortcut",
+            ),
+        ] {
+            let sources = canonical
+                .source_inventory
+                .iter()
+                .filter(|source| source.source_key.family == family)
+                .collect::<Vec<_>>();
+            assert_eq!(sources.len(), expected_count);
+            for source in sources {
+                assert_eq!(source.role, role);
+                assert!(source.source_key.source_id.ends_with("_v1"));
+                assert!(matches!(
+                    &source.disposition,
+                    SourceDisposition::Unclassified { reason: actual } if actual == reason
+                ));
+                assert!(canonical
+                    .canonical_operation_for_source(&source.source_key)
+                    .unwrap()
+                    .is_none());
+            }
+        }
+
         for source in &direct {
             assert_eq!(
                 source.source_key.family,
-                OperationSourceFamily::TauriCommand
+                CanonicalSourceFamily::TauriCommand
             );
             assert_eq!(source.role, SourceRole::LocalWindowCommand);
             assert!(canonical
@@ -1072,13 +1275,13 @@ mod tests {
         for source in &aliases {
             assert_eq!(
                 source.source_key.family,
-                OperationSourceFamily::FrontendInvoke
+                CanonicalSourceFamily::FrontendInvoke
             );
             assert_eq!(source.role, SourceRole::FrontendInvocation);
             let SourceDisposition::AliasOfSource { target } = &source.disposition else {
                 unreachable!("filtered aliases must retain their disposition");
             };
-            assert_eq!(target.family, OperationSourceFamily::TauriCommand);
+            assert_eq!(target.family, CanonicalSourceFamily::TauriCommand);
             assert_eq!(target.source_id, source.source_key.source_id);
             assert_eq!(
                 canonical
@@ -1117,7 +1320,7 @@ mod tests {
         assert_eq!(
             published_step.source_key,
             SourceKey::new(
-                OperationSourceFamily::EngineCommand,
+                CanonicalSourceFamily::EngineCommand,
                 "set_effect_enabled_published"
             )
         );
@@ -1125,7 +1328,7 @@ mod tests {
             &published_step.disposition,
             SourceDisposition::InternalStepOf { target }
                 if *target == SourceKey::new(
-                    OperationSourceFamily::TauriCommand,
+                    CanonicalSourceFamily::TauriCommand,
                     "set_effect_enabled"
                 )
         ));
@@ -1166,37 +1369,37 @@ mod tests {
 
         let fail_closed_effect_bindings = [
             (
-                OperationSourceFamily::EngineCommand,
+                CanonicalSourceFamily::EngineCommand,
                 "set_effect_enabled",
                 "legacy effect-enabled engine ingress lacks a versioned authored fence",
             ),
             (
-                OperationSourceFamily::RemoteInputEvent,
+                CanonicalSourceFamily::RemoteInputEvent,
                 "set_effect_enabled",
                 "legacy remote effect-enabled ingress is fail-closed pending versioned migration",
             ),
             (
-                OperationSourceFamily::RemoteWireOperation,
+                CanonicalSourceFamily::RemoteWireOperation,
                 "setEffectEnabled",
                 "legacy remote effect-enabled ingress is fail-closed pending versioned migration",
             ),
             (
-                OperationSourceFamily::MidiControlAction,
+                CanonicalSourceFamily::MidiControlAction,
                 "effect_enabled",
                 "legacy midi effect-enabled ingress is fail-closed pending versioned migration",
             ),
             (
-                OperationSourceFamily::MidiControlEvent,
+                CanonicalSourceFamily::MidiControlEvent,
                 "set_effect_enabled",
                 "legacy midi effect-enabled ingress is fail-closed pending versioned migration",
             ),
             (
-                OperationSourceFamily::OscControlAction,
+                CanonicalSourceFamily::OscControlAction,
                 "effect_enabled",
                 "legacy osc effect-enabled ingress is fail-closed pending versioned migration",
             ),
             (
-                OperationSourceFamily::OscInputEvent,
+                CanonicalSourceFamily::OscInputEvent,
                 "set_effect_enabled",
                 "legacy osc effect-enabled ingress is fail-closed pending versioned migration",
             ),
@@ -1227,13 +1430,85 @@ mod tests {
     }
 
     #[test]
-    fn canonical_registry_rejects_a_dropped_v1_source() {
+    fn canonical_registry_rejects_dropped_legacy_and_keyboard_sources() {
         let legacy = registry().unwrap();
         let mut canonical = canonical_registry().unwrap();
-        canonical.source_inventory.pop();
+        let legacy_index = canonical
+            .source_inventory
+            .iter()
+            .position(|source| source.source_key.family == CanonicalSourceFamily::TauriCommand)
+            .unwrap();
+        canonical.source_inventory.remove(legacy_index);
         assert!(matches!(
             verify_canonical_registry_exact_sources(&legacy, &canonical),
             Err(ControlPlaneRegistryError::MissingCanonicalSource(_))
+        ));
+
+        let mut canonical = canonical_registry().unwrap();
+        let keyboard_index = canonical
+            .source_inventory
+            .iter()
+            .position(|source| {
+                source.source_key
+                    == SourceKey::new(CanonicalSourceFamily::KeyboardApp, "new_project_v1")
+            })
+            .unwrap();
+        canonical.source_inventory.remove(keyboard_index);
+        assert!(matches!(
+            verify_canonical_registry_exact_sources(&legacy, &canonical),
+            Err(ControlPlaneRegistryError::MissingCanonicalSource(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_v1_registry_json_and_count_remain_unaffected() {
+        let legacy = registry().unwrap();
+        assert_eq!(legacy.operations.len(), 1400);
+        let encoded = serde_json::to_value(&legacy).unwrap();
+        assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
+        let operations = encoded["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), 1400);
+        assert!(operations.iter().all(|operation| {
+            operation["source_family"] != "keyboard_app"
+                && operation["source_family"] != "keyboard_project_file"
+        }));
+    }
+
+    #[test]
+    fn keyboard_shortcut_manifest_rejects_malformed_duplicate_and_drifting_sources() {
+        assert!(matches!(
+            keyboard_shortcut_source_ids_from_manifest("{"),
+            Err(ControlPlaneRegistryError::InvalidKeyboardShortcutSourceManifest)
+        ));
+        assert!(matches!(
+            keyboard_shortcut_source_ids_from_manifest(
+                "{\"schema_version\":1,\"keyboard_app\":[],\"keyboard_project_file\":[],\"unknown\":true}"
+            ),
+            Err(ControlPlaneRegistryError::InvalidKeyboardShortcutSourceManifest)
+        ));
+
+        let mut duplicate = serde_json::from_str::<KeyboardShortcutSourceManifest>(
+            KEYBOARD_SHORTCUT_SOURCE_MANIFEST,
+        )
+        .unwrap();
+        duplicate.keyboard_app[1] = duplicate.keyboard_app[0].clone();
+        let duplicate = format!("{}\n", serde_json::to_string_pretty(&duplicate).unwrap());
+        assert!(matches!(
+            keyboard_shortcut_source_ids_from_manifest(&duplicate),
+            Err(ControlPlaneRegistryError::DuplicateKeyboardShortcutSource(
+                _
+            ))
+        ));
+
+        let mut drifted = serde_json::from_str::<KeyboardShortcutSourceManifest>(
+            KEYBOARD_SHORTCUT_SOURCE_MANIFEST,
+        )
+        .unwrap();
+        drifted.keyboard_project_file.pop();
+        let drifted = format!("{}\n", serde_json::to_string_pretty(&drifted).unwrap());
+        assert!(matches!(
+            keyboard_shortcut_source_ids_from_manifest(&drifted),
+            Err(ControlPlaneRegistryError::InvalidKeyboardShortcutSourceManifest)
         ));
     }
 

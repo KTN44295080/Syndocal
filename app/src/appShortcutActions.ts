@@ -49,7 +49,13 @@ export type AppShortcutAction =
   | { kind: "toggleVideoBlackout"; enabled: boolean }
   | { kind: "tapBpm" };
 
-const appShortcutActionKindManifest = {
+/**
+ * The single keyed source-of-truth for App keyboard action inventory.  The
+ * checked-in control-plane JSON is mechanically derived from these exact
+ * keys by `check:project-shortcuts`; keep this object literal static so a
+ * shortcut cannot enter the inventory through a dynamic value.
+ */
+export const APP_SHORTCUT_ACTION_SOURCE_MANIFEST = {
   newProject: true,
   undoProject: true,
   redoProject: true,
@@ -83,7 +89,7 @@ const appShortcutActionKindManifest = {
 } as const satisfies Record<AppShortcutAction["kind"], true>;
 
 export const APP_SHORTCUT_ACTION_KINDS = Object.freeze(
-  Object.keys(appShortcutActionKindManifest) as AppShortcutAction["kind"][],
+  Object.keys(APP_SHORTCUT_ACTION_SOURCE_MANIFEST) as AppShortcutAction["kind"][],
 );
 
 export interface AppShortcutEvent {

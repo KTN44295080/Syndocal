@@ -15,7 +15,7 @@ use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serializ
 
 use crate::control_plane::{
     OperationAuditRequirement, OperationCapability, OperationClass, OperationIdempotency,
-    OperationRisk, OperationSourceFamily, SchemaIdentity,
+    OperationRisk, OperationSourceFamily as LegacyOperationSourceFamily, SchemaIdentity,
 };
 
 /// Schema version for this canonical/source registry contract.
@@ -39,22 +39,67 @@ pub const MAX_BINDING_ID_BYTES: usize = 576;
 pub const MAX_SCHEMA_NAME_BYTES: usize = 768;
 pub const MAX_UNCLASSIFIED_REASON_BYTES: usize = 1_024;
 
+/// Version-2-only source namespace. This mirrors legacy v1 families through
+/// an explicit conversion so that v2 can inventory additive source families
+/// without changing the v1 wire contract or its exact registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanonicalSourceFamily {
+    TauriCommand,
+    EngineCommand,
+    RemoteInputEvent,
+    RemoteClientRequest,
+    RemoteWireOperation,
+    MidiControlMessage,
+    MidiControlAction,
+    MidiClockEvent,
+    MidiControlEvent,
+    OscControlAction,
+    OscInputEvent,
+    DmxInputProtocol,
+    DmxInputEvent,
+    FrontendInvoke,
+    KeyboardApp,
+    KeyboardProjectFile,
+}
+
+impl From<LegacyOperationSourceFamily> for CanonicalSourceFamily {
+    fn from(family: LegacyOperationSourceFamily) -> Self {
+        match family {
+            LegacyOperationSourceFamily::TauriCommand => Self::TauriCommand,
+            LegacyOperationSourceFamily::EngineCommand => Self::EngineCommand,
+            LegacyOperationSourceFamily::RemoteInputEvent => Self::RemoteInputEvent,
+            LegacyOperationSourceFamily::RemoteClientRequest => Self::RemoteClientRequest,
+            LegacyOperationSourceFamily::RemoteWireOperation => Self::RemoteWireOperation,
+            LegacyOperationSourceFamily::MidiControlMessage => Self::MidiControlMessage,
+            LegacyOperationSourceFamily::MidiControlAction => Self::MidiControlAction,
+            LegacyOperationSourceFamily::MidiClockEvent => Self::MidiClockEvent,
+            LegacyOperationSourceFamily::MidiControlEvent => Self::MidiControlEvent,
+            LegacyOperationSourceFamily::OscControlAction => Self::OscControlAction,
+            LegacyOperationSourceFamily::OscInputEvent => Self::OscInputEvent,
+            LegacyOperationSourceFamily::DmxInputProtocol => Self::DmxInputProtocol,
+            LegacyOperationSourceFamily::DmxInputEvent => Self::DmxInputEvent,
+            LegacyOperationSourceFamily::FrontendInvoke => Self::FrontendInvoke,
+        }
+    }
+}
+
 /// Stable, family-qualified identity for one raw inventory source.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceKey {
-    pub family: OperationSourceFamily,
+    pub family: CanonicalSourceFamily,
     pub source_id: String,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourceKeyWire {
-    family: OperationSourceFamily,
+    family: CanonicalSourceFamily,
     source_id: String,
 }
 
 impl SourceKey {
-    pub fn new(family: OperationSourceFamily, source_id: impl Into<String>) -> Self {
+    pub fn new(family: CanonicalSourceFamily, source_id: impl Into<String>) -> Self {
         Self {
             family,
             source_id: source_id.into(),
@@ -124,11 +169,13 @@ pub enum SourceRole {
     OscIngress,
     DmxIngress,
     FrontendInvocation,
+    KeyboardAppShortcut,
+    KeyboardProjectFileShortcut,
 }
 
 impl SourceRole {
     /// Derive the only valid structural role for a source family.
-    pub fn for_family(family: OperationSourceFamily) -> Self {
+    pub fn for_family(family: CanonicalSourceFamily) -> Self {
         expected_source_role(family)
     }
 }
@@ -213,7 +260,7 @@ pub enum SourceDisposition {
         target: SourceKey,
     },
     DispatchesToFamily {
-        target_family: OperationSourceFamily,
+        target_family: CanonicalSourceFamily,
     },
     InternalStepOf {
         target: SourceKey,
@@ -287,7 +334,7 @@ impl DerivedAdapterBinding {
                 ),
             );
         }
-        if self.source_key.family != OperationSourceFamily::TauriCommand {
+        if self.source_key.family != CanonicalSourceFamily::TauriCommand {
             return Err(CanonicalRegistryValidationError::FamilyAdapterMismatch(
                 self.source_key.clone(),
             ));
@@ -636,7 +683,7 @@ impl SourceInventoryDescriptor {
             } => {
                 validate_operation_id(canonical_operation_id)?;
                 if *projection != TypedSchemaProjection::Exact
-                    || self.source_key.family != OperationSourceFamily::TauriCommand
+                    || self.source_key.family != CanonicalSourceFamily::TauriCommand
                     || self.role != SourceRole::LocalWindowCommand
                 {
                     return Err(
@@ -650,12 +697,12 @@ impl SourceInventoryDescriptor {
             SourceDisposition::AliasOfSource { target } => {
                 target.validate()?;
                 let allowed = match self.source_key.family {
-                    OperationSourceFamily::FrontendInvoke => {
-                        target.family == OperationSourceFamily::TauriCommand
+                    CanonicalSourceFamily::FrontendInvoke => {
+                        target.family == CanonicalSourceFamily::TauriCommand
                             && target.source_id == self.source_key.source_id
                     }
-                    OperationSourceFamily::TauriCommand => {
-                        target.family == OperationSourceFamily::TauriCommand
+                    CanonicalSourceFamily::TauriCommand => {
+                        target.family == CanonicalSourceFamily::TauriCommand
                     }
                     _ => false,
                 };
@@ -986,7 +1033,7 @@ impl CanonicalControlPlaneRegistry {
                                 canonical_operation_id.clone(),
                             )
                         })?;
-                    if source.source_key.family != OperationSourceFamily::TauriCommand
+                    if source.source_key.family != CanonicalSourceFamily::TauriCommand
                         || source.role != SourceRole::LocalWindowCommand
                         || !matches!(
                             canonical.adapter_policy,
@@ -1129,7 +1176,7 @@ pub enum CanonicalRegistryValidationError {
     InvalidDispositionForFamily(SourceKey, &'static str),
     MissingCanonicalOperation(String),
     MissingSourceTarget(SourceKey),
-    MissingDispatchFamily(OperationSourceFamily),
+    MissingDispatchFamily(CanonicalSourceFamily),
     SourceReferenceCycle(SourceKey),
     AliasDoesNotResolveToOperation(SourceKey),
     InternalStepDoesNotResolveToOperation(SourceKey),
@@ -1384,62 +1431,69 @@ fn expected_domain_capability(class: OperationClass) -> OperationCapability {
     }
 }
 
-fn expected_source_role(family: OperationSourceFamily) -> SourceRole {
+fn expected_source_role(family: CanonicalSourceFamily) -> SourceRole {
     match family {
-        OperationSourceFamily::TauriCommand => SourceRole::LocalWindowCommand,
-        OperationSourceFamily::EngineCommand => SourceRole::EngineCommand,
-        OperationSourceFamily::RemoteInputEvent
-        | OperationSourceFamily::RemoteClientRequest
-        | OperationSourceFamily::RemoteWireOperation => SourceRole::RemoteIngress,
-        OperationSourceFamily::MidiControlMessage
-        | OperationSourceFamily::MidiControlAction
-        | OperationSourceFamily::MidiClockEvent
-        | OperationSourceFamily::MidiControlEvent => SourceRole::MidiIngress,
-        OperationSourceFamily::OscControlAction | OperationSourceFamily::OscInputEvent => {
+        CanonicalSourceFamily::TauriCommand => SourceRole::LocalWindowCommand,
+        CanonicalSourceFamily::EngineCommand => SourceRole::EngineCommand,
+        CanonicalSourceFamily::RemoteInputEvent
+        | CanonicalSourceFamily::RemoteClientRequest
+        | CanonicalSourceFamily::RemoteWireOperation => SourceRole::RemoteIngress,
+        CanonicalSourceFamily::MidiControlMessage
+        | CanonicalSourceFamily::MidiControlAction
+        | CanonicalSourceFamily::MidiClockEvent
+        | CanonicalSourceFamily::MidiControlEvent => SourceRole::MidiIngress,
+        CanonicalSourceFamily::OscControlAction | CanonicalSourceFamily::OscInputEvent => {
             SourceRole::OscIngress
         }
-        OperationSourceFamily::DmxInputProtocol | OperationSourceFamily::DmxInputEvent => {
+        CanonicalSourceFamily::DmxInputProtocol | CanonicalSourceFamily::DmxInputEvent => {
             SourceRole::DmxIngress
         }
-        OperationSourceFamily::FrontendInvoke => SourceRole::FrontendInvocation,
+        CanonicalSourceFamily::FrontendInvoke => SourceRole::FrontendInvocation,
+        CanonicalSourceFamily::KeyboardApp => SourceRole::KeyboardAppShortcut,
+        CanonicalSourceFamily::KeyboardProjectFile => SourceRole::KeyboardProjectFileShortcut,
     }
 }
 
-fn source_family_name(family: OperationSourceFamily) -> &'static str {
+fn source_family_name(family: CanonicalSourceFamily) -> &'static str {
     match family {
-        OperationSourceFamily::TauriCommand => "tauri_command",
-        OperationSourceFamily::EngineCommand => "engine_command",
-        OperationSourceFamily::RemoteInputEvent => "remote_input_event",
-        OperationSourceFamily::RemoteClientRequest => "remote_client_request",
-        OperationSourceFamily::RemoteWireOperation => "remote_wire_operation",
-        OperationSourceFamily::MidiControlMessage => "midi_control_message",
-        OperationSourceFamily::MidiControlAction => "midi_control_action",
-        OperationSourceFamily::MidiClockEvent => "midi_clock_event",
-        OperationSourceFamily::MidiControlEvent => "midi_control_event",
-        OperationSourceFamily::OscControlAction => "osc_control_action",
-        OperationSourceFamily::OscInputEvent => "osc_input_event",
-        OperationSourceFamily::DmxInputProtocol => "dmx_input_protocol",
-        OperationSourceFamily::DmxInputEvent => "dmx_input_event",
-        OperationSourceFamily::FrontendInvoke => "frontend_invoke",
+        CanonicalSourceFamily::TauriCommand => "tauri_command",
+        CanonicalSourceFamily::EngineCommand => "engine_command",
+        CanonicalSourceFamily::RemoteInputEvent => "remote_input_event",
+        CanonicalSourceFamily::RemoteClientRequest => "remote_client_request",
+        CanonicalSourceFamily::RemoteWireOperation => "remote_wire_operation",
+        CanonicalSourceFamily::MidiControlMessage => "midi_control_message",
+        CanonicalSourceFamily::MidiControlAction => "midi_control_action",
+        CanonicalSourceFamily::MidiClockEvent => "midi_clock_event",
+        CanonicalSourceFamily::MidiControlEvent => "midi_control_event",
+        CanonicalSourceFamily::OscControlAction => "osc_control_action",
+        CanonicalSourceFamily::OscInputEvent => "osc_input_event",
+        CanonicalSourceFamily::DmxInputProtocol => "dmx_input_protocol",
+        CanonicalSourceFamily::DmxInputEvent => "dmx_input_event",
+        CanonicalSourceFamily::FrontendInvoke => "frontend_invoke",
+        CanonicalSourceFamily::KeyboardApp => "keyboard_app",
+        CanonicalSourceFamily::KeyboardProjectFile => "keyboard_project_file",
     }
 }
 
-fn is_valid_source_id(family: OperationSourceFamily, source_id: &str) -> bool {
+fn is_valid_source_id(family: CanonicalSourceFamily, source_id: &str) -> bool {
     match family {
-        OperationSourceFamily::RemoteWireOperation => is_bounded_lower_camel_ascii(source_id),
-        OperationSourceFamily::TauriCommand
-        | OperationSourceFamily::EngineCommand
-        | OperationSourceFamily::RemoteInputEvent
-        | OperationSourceFamily::RemoteClientRequest
-        | OperationSourceFamily::MidiControlMessage
-        | OperationSourceFamily::MidiControlAction
-        | OperationSourceFamily::MidiClockEvent
-        | OperationSourceFamily::MidiControlEvent
-        | OperationSourceFamily::OscControlAction
-        | OperationSourceFamily::OscInputEvent
-        | OperationSourceFamily::DmxInputProtocol
-        | OperationSourceFamily::DmxInputEvent
-        | OperationSourceFamily::FrontendInvoke => is_lower_snake_case(source_id),
+        CanonicalSourceFamily::RemoteWireOperation => is_bounded_lower_camel_ascii(source_id),
+        CanonicalSourceFamily::KeyboardApp | CanonicalSourceFamily::KeyboardProjectFile => {
+            is_versioned_lower_snake_case(source_id)
+        }
+        CanonicalSourceFamily::TauriCommand
+        | CanonicalSourceFamily::EngineCommand
+        | CanonicalSourceFamily::RemoteInputEvent
+        | CanonicalSourceFamily::RemoteClientRequest
+        | CanonicalSourceFamily::MidiControlMessage
+        | CanonicalSourceFamily::MidiControlAction
+        | CanonicalSourceFamily::MidiClockEvent
+        | CanonicalSourceFamily::MidiControlEvent
+        | CanonicalSourceFamily::OscControlAction
+        | CanonicalSourceFamily::OscInputEvent
+        | CanonicalSourceFamily::DmxInputProtocol
+        | CanonicalSourceFamily::DmxInputEvent
+        | CanonicalSourceFamily::FrontendInvoke => is_lower_snake_case(source_id),
     }
 }
 
@@ -1458,6 +1512,16 @@ fn is_lower_snake_case(value: &str) -> bool {
     };
     first.is_ascii_lowercase()
         && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn is_versioned_lower_snake_case(value: &str) -> bool {
+    let Some((prefix, version)) = value.rsplit_once("_v") else {
+        return false;
+    };
+    is_lower_snake_case(prefix)
+        && !version.is_empty()
+        && !version.starts_with('0')
+        && version.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn is_valid_schema_name(value: &str) -> bool {
@@ -1557,7 +1621,7 @@ mod tests {
     }
 
     fn source(
-        family: OperationSourceFamily,
+        family: CanonicalSourceFamily,
         source_id: &str,
         disposition: SourceDisposition,
     ) -> SourceInventoryDescriptor {
@@ -1575,7 +1639,7 @@ mod tests {
 
     fn direct_source() -> SourceInventoryDescriptor {
         source(
-            OperationSourceFamily::TauriCommand,
+            CanonicalSourceFamily::TauriCommand,
             DIRECT_SOURCE_ID,
             SourceDisposition::Operation {
                 canonical_operation_id: OPERATION_ID.to_string(),
@@ -1587,7 +1651,7 @@ mod tests {
     fn valid_registry() -> CanonicalControlPlaneRegistry {
         let direct = direct_source();
         let frontend = source(
-            OperationSourceFamily::FrontendInvoke,
+            CanonicalSourceFamily::FrontendInvoke,
             DIRECT_SOURCE_ID,
             SourceDisposition::AliasOfSource {
                 target: direct.source_key.clone(),
@@ -1614,7 +1678,7 @@ mod tests {
         assert_eq!(
             registry
                 .canonical_operation_for_source(&SourceKey::new(
-                    OperationSourceFamily::FrontendInvoke,
+                    CanonicalSourceFamily::FrontendInvoke,
                     DIRECT_SOURCE_ID,
                 ))
                 .unwrap()
@@ -1642,10 +1706,10 @@ mod tests {
 
         let mut orphan = valid_registry();
         orphan.source_inventory.push(source(
-            OperationSourceFamily::TauriCommand,
+            CanonicalSourceFamily::TauriCommand,
             "orphan_alias",
             SourceDisposition::AliasOfSource {
-                target: SourceKey::new(OperationSourceFamily::TauriCommand, "missing_source"),
+                target: SourceKey::new(CanonicalSourceFamily::TauriCommand, "missing_source"),
             },
         ));
         orphan
@@ -1658,17 +1722,17 @@ mod tests {
 
         let mut cycle = valid_registry();
         let first = source(
-            OperationSourceFamily::TauriCommand,
+            CanonicalSourceFamily::TauriCommand,
             "alias_a",
             SourceDisposition::AliasOfSource {
-                target: SourceKey::new(OperationSourceFamily::TauriCommand, "alias_b"),
+                target: SourceKey::new(CanonicalSourceFamily::TauriCommand, "alias_b"),
             },
         );
         let second = source(
-            OperationSourceFamily::TauriCommand,
+            CanonicalSourceFamily::TauriCommand,
             "alias_b",
             SourceDisposition::AliasOfSource {
-                target: SourceKey::new(OperationSourceFamily::TauriCommand, "alias_a"),
+                target: SourceKey::new(CanonicalSourceFamily::TauriCommand, "alias_a"),
             },
         );
         cycle.source_inventory.extend([first, second]);
@@ -1685,7 +1749,7 @@ mod tests {
     fn unclassified_and_internal_sources_cannot_be_exposed() {
         let mut unclassified = valid_registry();
         let unclassified_source = source(
-            OperationSourceFamily::TauriCommand,
+            CanonicalSourceFamily::TauriCommand,
             "unclassified_query",
             SourceDisposition::Unclassified {
                 reason: "not reviewed".to_string(),
@@ -1711,10 +1775,10 @@ mod tests {
 
         let mut internal = valid_registry();
         let internal_source = source(
-            OperationSourceFamily::EngineCommand,
+            CanonicalSourceFamily::EngineCommand,
             "internal_step",
             SourceDisposition::InternalStepOf {
-                target: SourceKey::new(OperationSourceFamily::TauriCommand, DIRECT_SOURCE_ID),
+                target: SourceKey::new(CanonicalSourceFamily::TauriCommand, DIRECT_SOURCE_ID),
             },
         );
         internal.source_inventory.push(internal_source.clone());
@@ -1736,10 +1800,113 @@ mod tests {
     }
 
     #[test]
+    fn v2_keyboard_sources_are_versioned_unclassified_and_cannot_be_exposed() {
+        assert_eq!(
+            CanonicalSourceFamily::from(LegacyOperationSourceFamily::TauriCommand),
+            CanonicalSourceFamily::TauriCommand
+        );
+        assert_eq!(
+            CanonicalSourceFamily::from(LegacyOperationSourceFamily::FrontendInvoke),
+            CanonicalSourceFamily::FrontendInvoke
+        );
+        assert!(
+            SourceKey::new(CanonicalSourceFamily::KeyboardApp, "new_project_v1")
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            SourceKey::new(CanonicalSourceFamily::KeyboardApp, "new_project")
+                .validate()
+                .is_err()
+        );
+        for source_id in ["new_project_v0", "new_project_v01", "new_project_v"] {
+            assert!(
+                serde_json::from_value::<SourceKey>(json!({
+                    "family": "keyboard_app",
+                    "source_id": source_id,
+                }))
+                .is_err(),
+                "wire input must reject {source_id}"
+            );
+            assert!(
+                serde_json::to_value(SourceKey::new(
+                    CanonicalSourceFamily::KeyboardApp,
+                    source_id,
+                ))
+                .is_err(),
+                "outbound serialization must reject {source_id}"
+            );
+        }
+
+        let keyboard_source = source(
+            CanonicalSourceFamily::KeyboardApp,
+            "new_project_v1",
+            SourceDisposition::Unclassified {
+                reason: "unreviewed keyboard app shortcut".to_string(),
+            },
+        );
+        let mut registry = valid_registry();
+        registry.source_inventory.push(keyboard_source.clone());
+        registry
+            .source_inventory
+            .sort_by(|left, right| left.source_key.cmp(&right.source_key));
+        registry.validate().unwrap();
+        assert!(registry
+            .canonical_operation_for_source(&keyboard_source.source_key)
+            .unwrap()
+            .is_none());
+
+        let mut forged_operation = registry.clone();
+        let source = forged_operation
+            .source_inventory
+            .iter_mut()
+            .find(|source| source.source_key == keyboard_source.source_key)
+            .unwrap();
+        source.disposition = SourceDisposition::Operation {
+            canonical_operation_id: OPERATION_ID.to_string(),
+            projection: TypedSchemaProjection::Exact,
+        };
+        assert!(matches!(
+            forged_operation.validate(),
+            Err(CanonicalRegistryValidationError::InvalidDispositionForFamily(_, _))
+        ));
+
+        let mut forged_adapter = registry;
+        forged_adapter.canonical_operations[0]
+            .derived_adapters
+            .push(DerivedAdapterBinding {
+                adapter: AdapterKind::LocalTauriWindow,
+                source_key: keyboard_source.source_key.clone(),
+                binding_id: keyboard_source.binding_id.clone(),
+            });
+        forged_adapter.canonical_operations[0]
+            .derived_adapters
+            .sort();
+        assert!(matches!(
+            forged_adapter.validate(),
+            Err(CanonicalRegistryValidationError::FamilyAdapterMismatch(_))
+        ));
+
+        let mut forged_presentation = valid_registry();
+        let mut presentation_source = keyboard_source;
+        presentation_source.disposition = SourceDisposition::PresentationOnly;
+        forged_presentation
+            .source_inventory
+            .push(presentation_source);
+        forged_presentation
+            .source_inventory
+            .sort_by(|left, right| left.source_key.cmp(&right.source_key));
+        assert!(matches!(
+            forged_presentation.validate(),
+            Err(CanonicalRegistryValidationError::InvalidDispositionForFamily(_, _))
+        ));
+    }
+
+    #[test]
     fn family_projection_and_supported_adapter_mismatches_are_rejected() {
         let mut family = valid_registry();
         let engine_operation = source(
-            OperationSourceFamily::EngineCommand,
+            CanonicalSourceFamily::EngineCommand,
             "engine_query",
             SourceDisposition::Operation {
                 canonical_operation_id: OPERATION_ID.to_string(),
@@ -1780,8 +1947,8 @@ mod tests {
         let mut mutation = authoritative_mutation_operation();
         mutation.derived_adapters.push(DerivedAdapterBinding {
             adapter: AdapterKind::LocalTauriWindow,
-            source_key: SourceKey::new(OperationSourceFamily::TauriCommand, "set_effect_enabled"),
-            binding_id: SourceKey::new(OperationSourceFamily::TauriCommand, "set_effect_enabled")
+            source_key: SourceKey::new(CanonicalSourceFamily::TauriCommand, "set_effect_enabled"),
+            binding_id: SourceKey::new(CanonicalSourceFamily::TauriCommand, "set_effect_enabled")
                 .binding_id(),
         });
         mutation.validate().unwrap();
@@ -1841,7 +2008,7 @@ mod tests {
         for index in 0..(MAX_SOURCE_INVENTORY_DESCRIPTORS - registry.source_inventory.len()) {
             let source_id = format!("oversized_source_{index}");
             registry.source_inventory.push(source(
-                OperationSourceFamily::TauriCommand,
+                CanonicalSourceFamily::TauriCommand,
                 &source_id,
                 SourceDisposition::Unclassified {
                     reason: large_reason.clone(),

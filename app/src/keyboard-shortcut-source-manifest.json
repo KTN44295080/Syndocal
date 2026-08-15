@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "keyboard_app": [
+    "apply_mapping_selection_action_v1",
+    "apply_mapping_selection_management_v1",
+    "apply_mapping_viewport_action_v1",
+    "cancel_mapping_interaction_v1",
+    "close_mapping_hotkey_help_v1",
+    "duplicate_selected_mapping_fixtures_v1",
+    "new_project_v1",
+    "nudge_selected_mapping_fixtures_v1",
+    "redo_project_v1",
+    "remove_selected_mapping_fixtures_v1",
+    "scale_timeline_loop_v1",
+    "select_setup_mode_v1",
+    "set_control_mode_v1",
+    "set_mapping_stage_tool_v1",
+    "set_timeline_loop_a_v1",
+    "set_timeline_loop_b_v1",
+    "set_workspace_tab_v1",
+    "tap_bpm_v1",
+    "toggle_blackout_v1",
+    "toggle_cue_fade_paused_v1",
+    "toggle_mapping_hotkey_help_v1",
+    "toggle_mapping_layer_v1",
+    "toggle_mapping_selection_flag_v1",
+    "toggle_timeline_loop_v1",
+    "toggle_timeline_playback_v1",
+    "toggle_video_blackout_v1",
+    "trigger_cue_v1",
+    "trigger_next_cue_v1",
+    "trigger_previous_cue_v1",
+    "undo_project_v1"
+  ],
+  "keyboard_project_file": [
+    "load_project_v1",
+    "save_project_as_v1",
+    "save_project_v1"
+  ]
+}

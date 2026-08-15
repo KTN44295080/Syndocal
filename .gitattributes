@@ -1,1 +1,2 @@
 qa/specimens/*.dvc -text
+app/src/keyboard-shortcut-source-manifest.json text eol=lf

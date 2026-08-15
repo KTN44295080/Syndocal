@@ -16,14 +16,19 @@ export type ProjectFileShortcutAction =
   | { kind: "saveProjectAs" }
   | { kind: "loadProject" };
 
-const projectFileShortcutActionKindManifest = {
+/**
+ * The single keyed source-of-truth for project-file keyboard action
+ * inventory.  The checked-in control-plane JSON is mechanically derived from
+ * these exact keys by `check:project-shortcuts`.
+ */
+export const PROJECT_FILE_SHORTCUT_ACTION_SOURCE_MANIFEST = {
   saveProject: true,
   saveProjectAs: true,
   loadProject: true,
 } as const satisfies Record<ProjectFileShortcutAction["kind"], true>;
 
 export const PROJECT_FILE_SHORTCUT_ACTION_KINDS = Object.freeze(
-  Object.keys(projectFileShortcutActionKindManifest) as ProjectFileShortcutAction["kind"][],
+  Object.keys(PROJECT_FILE_SHORTCUT_ACTION_SOURCE_MANIFEST) as ProjectFileShortcutAction["kind"][],
 );
 
 export function resolveProjectFileShortcut(event: ProjectFileShortcutEvent): ProjectFileShortcutAction | null {
