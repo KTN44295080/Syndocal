@@ -64,6 +64,9 @@ pub enum OperationRisk {
 pub enum OperationCapability {
     ReadOnly,
     LocalWindowBound,
+    /// A bounded, server-authoritative project mutation. This does not imply
+    /// a remote, HTTP, MCP, or Full-Lock adapter.
+    AuthoritativeProjectMutation,
     /// Marks an internal source-family inventory entry.  It grants neither a
     /// local-window invocation nor an external execution adapter.
     InternalInventory,

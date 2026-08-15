@@ -6,6 +6,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 pub mod control_plane;
+pub mod control_plane_command;
 pub mod control_plane_query;
 pub mod control_plane_registry_v2;
 

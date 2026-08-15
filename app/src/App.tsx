@@ -4,6 +4,15 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { FrontendTauriInvokeCommand } from "./tauriInvokeCommands";
+import {
+  AuthoredSetEffectEnabledCommandError,
+  authoredSetEffectEnabledOperationId,
+  createAuthoredEffectEnableIntentController,
+  isAuthoredProjectMutationFence,
+  validateAuthoredSetEffectEnabledResponse,
+  type AuthoredEffectEnableIntentLifecycle,
+  type AuthoredProjectMutationFence,
+} from "./authoredEffectEnableController";
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { SceneMatrixPanel } from "./components/SceneMatrixPanel";
 import {
@@ -932,7 +941,6 @@ const projectMutationCommands = new Set([
   "set_node_graph_enabled",
   "remove_node_graph",
   "load_node_graph_preset_file",
-  "set_effect_enabled",
   "set_effect_video_target_position",
   "move_effect",
   "duplicate_effect",
@@ -993,7 +1001,12 @@ const serverAuthoritativeProjectMutationCommands = new Set([
   "set_video_layer_isf_effect_enabled",
   "reset_video_layer_isf_effect",
   "set_video_layer_isf_control",
+  "set_effect_enabled",
 ]);
+
+type AuthoredEffectAuthorityBundle = ProjectAuthorityBundle & {
+  authored_effect_fence?: AuthoredProjectMutationFence;
+};
 
 // These owner-scoped operations cannot create a project mutation. Full Lock
 // must still allow an already-admitted commit to reveal its definitive receipt
@@ -1282,6 +1295,11 @@ const invoke = async <T,>(
   const awaitProjectMutationAbort = typeof args?.__awaitProjectMutationAbort === "function"
     ? args.__awaitProjectMutationAbort as () => Promise<void> | void
     : null;
+  // The authored effect vertical captures a complete backend-issued fence
+  // after its own mapping barrier. It must not synthesize a renderer epoch,
+  // owner ID or generic Begin/Commit ticket around that strict envelope.
+  const authoredEffectFencePrepared = command === "set_effect_enabled"
+    && args?.__authoredEffectFencePrepared === true;
   const commandArgs = { ...(args ?? {}) };
   delete commandArgs.__expectedProjectEpoch;
   // Renderer-only lifecycle hooks for staged long-I/O helpers. Never let a
@@ -1292,13 +1310,16 @@ const invoke = async <T,>(
   delete commandArgs.__onProjectTransactionOpened;
   delete commandArgs.__shouldAbortProjectMutation;
   delete commandArgs.__awaitProjectMutationAbort;
+  delete commandArgs.__authoredEffectFencePrepared;
   // Mapping edits are debounced independently of the generic history wrapper.
   // Materialize their authoritative checkpoint before capturing this
   // transaction's `before` image, so a fast fader/edit cannot silently fold an
   // older mapping generation into a later engine mutation.
   // Capture the identity before the async mapping barrier. A replacement
   // during that await must not let this old click reserve a B transaction.
-  const currentEpoch = await flushProjectControlMappingsBeforeProjectMutation?.() ?? 0;
+  const currentEpoch = authoredEffectFencePrepared
+    ? requestedExpectedEpoch ?? 0
+    : await flushProjectControlMappingsBeforeProjectMutation?.() ?? 0;
   if (requestedExpectedEpoch !== null && requestedExpectedEpoch !== currentEpoch) {
     throw new Error("Project changed while the operation dialog was open; nothing was applied.");
   }
@@ -1307,11 +1328,13 @@ const invoke = async <T,>(
     throw new DOMException("Project mutation was cancelled before dispatch.", "AbortError");
   }
   if (serverAuthoritativeMutation) {
-    const result = await tauriInvoke<T>(command, {
-      ...commandArgs,
-      expectedEpoch,
-      ownerId: projectTransactionOwnerId,
-    });
+    const result = await tauriInvoke<T>(command, command === "set_effect_enabled"
+      ? commandArgs
+      : {
+        ...commandArgs,
+        expectedEpoch,
+        ownerId: projectTransactionOwnerId,
+      });
     const current = dispatchProjectHistoryMutationFromUnknown(result);
     markAuthoritativeApplicationCurrent(result, current);
     return result;
@@ -1902,6 +1925,7 @@ export default function App() {
   const [controlLiveView, setControlLiveView] = createSignal<"matrix" | "pads">("matrix");
   const [touchControlDomain, setTouchControlDomain] = createSignal<"lighting" | "video">("lighting");
   const [liveStatusExpanded, setLiveStatusExpanded] = createSignal(false);
+  const [authoredEffectEnableControlId, setAuthoredEffectEnableControlId] = createSignal<number | null>(null);
   const [editDeskSurface, setEditDeskSurface] = createSignal<EditDeskSurface>(initialWorkspaceLayout.edit_desk_surface);
   const [revealedSourceCueId, setRevealedSourceCueId] = createSignal<number | null>(null);
   const [revealedSourceCueRevision, setRevealedSourceCueRevision] = createSignal(0);
@@ -4234,8 +4258,9 @@ export default function App() {
     setAppStatus(appStatusFromMessage(text, key));
     return text;
   };
+  let projectTransactionOwnerRegistration: Promise<void> | null = null;
   if (isTauriRuntime()) {
-    void tauriInvoke<ProjectHistoryMutationResult | null>("register_project_transaction_owner", {
+    projectTransactionOwnerRegistration = tauriInvoke<ProjectHistoryMutationResult | null>("register_project_transaction_owner", {
       ownerId: projectTransactionOwnerId,
     }).then((recovered) => {
       if (!recovered) return;
@@ -4243,7 +4268,8 @@ export default function App() {
         new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: recovered }),
       );
       setMessage("Recovered an interrupted edit from the previous application session. Undo is available.");
-    }).catch((error) => {
+    });
+    void projectTransactionOwnerRegistration.catch((error) => {
       setMessage(`Interrupted edit recovery failed: ${String(error)}`);
     });
   }
@@ -8048,6 +8074,11 @@ export default function App() {
   const enabledDmxOutputCount = createMemo(() => snapshot().dmx_outputs.filter((route) => route.enabled).length);
   const enabledVideoOutputCount = createMemo(() => snapshot().video.outputs.filter((output) => output.enabled).length);
   const activeEffectCount = createMemo(() => snapshot().effects.filter((effect) => effect.enabled).length);
+  const authoredEffectEnableControlEffect = createMemo(() => {
+    const effects = snapshot().effects;
+    const selectedId = authoredEffectEnableControlId();
+    return effects.find((effect) => effect.id === selectedId) ?? effects[0] ?? null;
+  });
   const superSceneCueCount = createMemo(() =>
     snapshotCues().reduce((count, cue) => count + (cue.child_timeline ? 1 : 0), 0));
   const cueOwnedEffectCount = createMemo(() =>
@@ -21166,37 +21197,148 @@ export default function App() {
     }
   };
 
-  const effectEnableCaptureGenerations = new Map<number, number>();
-  const setEffectEnabled = async (effectId: number, enabled: boolean) => {
-    const generation = (effectEnableCaptureGenerations.get(effectId) ?? 0) + 1;
-    effectEnableCaptureGenerations.set(effectId, generation);
-    const previousCaptureTarget = cueEffectCaptureTargets().find((target) => target.effect_id === effectId);
-    const mirrorsLiveState = Boolean(previousCaptureTarget)
-      && !cueEffectCaptureStateOverrideIds().includes(effectId);
-    if (mirrorsLiveState) {
-      setCueEffectCaptureTargets((current) => current.map((target) =>
-        target.effect_id === effectId ? { ...target, enabled } : target
-      ));
+  let authoredSetEffectEnabledRequestId = Math.max(1, Date.now());
+  const nextAuthoredSetEffectEnabledRequestId = () => {
+    if (!Number.isSafeInteger(authoredSetEffectEnabledRequestId)
+      || authoredSetEffectEnabledRequestId >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Effect enable request IDs are exhausted; restart Syndocal before trying again.");
     }
-    try {
-      await invoke("set_effect_enabled", { effectId, enabled });
-      setMessage(`${enabled ? "Enabled" : "Disabled"} effect ${effectId}`);
+    authoredSetEffectEnabledRequestId += 1;
+    return authoredSetEffectEnabledRequestId;
+  };
+  const currentAuthoredSetEffectEnabledFence = async () => {
+    // This is the same canonical mapping barrier the generic mutation facade
+    // uses, but it precedes the backend authority read that issues the strict
+    // process/session + E/R/H/publication envelope.
+    await projectTransactionOwnerRegistration;
+    await flushProjectControlMappingsBeforeMutation();
+    const authority = await tauriInvoke<AuthoredEffectAuthorityBundle>(
+      "get_project_authority_bundle",
+      {},
+    );
+    const fence = authority.authored_effect_fence;
+    if (!isAuthoredProjectMutationFence(fence)
+      || fence.project_epoch !== authority.project_epoch
+      || fence.project_revision !== authority.project_revision
+      || fence.project_checkpoint_hash !== authority.checkpoint_hash
+      || fence.project_publication_generation !== authority.publication_generation) {
+      throw new Error("Current authored project authority fence is unavailable; refresh and retry the effect change.");
+    }
+    return fence;
+  };
+  type CueEffectCaptureLatestIntent = Readonly<{
+    generation: number;
+    requestedEnabled: boolean;
+  }>;
+  // Store Recall mirrors live global-effect state until the editor explicitly
+  // overrides that target. Keep the controller-owned generation here rather
+  // than a second click counter: only the newest lane intent can later undo
+  // this optimistic draft update.
+  const cueEffectCaptureLatestIntents = new Map<number, CueEffectCaptureLatestIntent>();
+  const mirrorCueEffectCaptureTargetForAuthoredIntent = (
+    intent: AuthoredEffectEnableIntentLifecycle,
+  ) => {
+    const previousTarget = cueEffectCaptureTargets().find((target) => target.effect_id === intent.effectId);
+    const mirrorsLiveState = Boolean(previousTarget)
+      && !cueEffectCaptureStateOverrideIds().includes(intent.effectId);
+    if (!previousTarget || !mirrorsLiveState) {
+      cueEffectCaptureLatestIntents.delete(intent.effectId);
+      return;
+    }
+    cueEffectCaptureLatestIntents.set(intent.effectId, {
+      generation: intent.generation,
+      requestedEnabled: intent.enabled,
+    });
+    // `onQueued` is synchronous inside `enqueue`, before its async dispatch
+    // can capture a fence or invoke Tauri. Store Recall therefore captures
+    // the latest desired state even while the canonical command is pending.
+    setCueEffectCaptureTargets((current) => current.map((target) =>
+      target.effect_id === intent.effectId ? { ...target, enabled: intent.enabled } : target
+    ));
+  };
+  const settleCueEffectCaptureTargetForAuthoredIntent = (
+    intent: AuthoredEffectEnableIntentLifecycle,
+  ) => {
+    if (cueEffectCaptureLatestIntents.get(intent.effectId)?.generation === intent.generation) {
+      cueEffectCaptureLatestIntents.delete(intent.effectId);
+    }
+  };
+  const rollbackCueEffectCaptureTargetForAuthoredIntent = (
+    intent: AuthoredEffectEnableIntentLifecycle,
+    settledEnabled: boolean,
+  ) => {
+    // The controller calls `onFailed` only after confirming this generation
+    // remains the lane's latest intent. Repeat the local latest check so an
+    // old completion can never roll back a newer A/B intent's Store Recall
+    // draft.
+    const latest = cueEffectCaptureLatestIntents.get(intent.effectId);
+    if (!latest || latest.generation !== intent.generation) return;
+    cueEffectCaptureLatestIntents.delete(intent.effectId);
+    if (cueEffectCaptureStateOverrideIds().includes(intent.effectId)) return;
+    setCueEffectCaptureTargets((current) => current.map((target) =>
+      target.effect_id === intent.effectId && target.enabled === latest.requestedEnabled
+        ? { ...target, enabled: settledEnabled }
+        : target
+    ));
+  };
+  const authoredEffectEnableIntents = createAuthoredEffectEnableIntentController({
+    // Only an idle lane seeds this from the current engine snapshot. A
+    // pending A/B intent retains its own settled server baseline even though
+    // Store Recall has already mirrored the newer optimistic value.
+    seedSettledBaseline: (effectId) => snapshot().effects.find((effect) => effect.id === effectId)?.enabled ?? false,
+    // A stale-fence retry invokes this dispatcher again, so it always fetches
+    // a fresh canonical server-issued fence. The controller never retries an
+    // intent which a newer local toggle has already superseded.
+    dispatch: async ({ effectId, enabled }) => {
+      const fence = await currentAuthoredSetEffectEnabledFence();
+      const requestId = nextAuthoredSetEffectEnabledRequestId();
+      const response = await invoke<unknown>("set_effect_enabled", {
+        request: {
+          operation_id: authoredSetEffectEnabledOperationId,
+          request_id: requestId,
+          expected_fence: fence,
+          payload: {
+            effect_id: effectId,
+            enabled,
+          },
+        },
+        // Renderer-only markers consumed by `invoke`; the strict Rust DTO
+        // never receives a caller epoch, owner ID, principal or window label.
+        __expectedProjectEpoch: fence.project_epoch,
+        __authoredEffectFencePrepared: true,
+      });
+      validateAuthoredSetEffectEnabledResponse(response, requestId, fence, effectId, enabled);
+      // Keep snapshot application inside the serialized effect lane. A later
+      // opposite toggle cannot start until this exact response has refreshed,
+      // so an older refresh can never arrive after the newer intent's UI.
       await refreshSnapshot();
-    } catch (error) {
-      if (
-        mirrorsLiveState
-        && previousCaptureTarget
-        && effectEnableCaptureGenerations.get(effectId) === generation
-        && !cueEffectCaptureStateOverrideIds().includes(effectId)
-      ) {
-        setCueEffectCaptureTargets((current) => current.map((target) =>
-          target.effect_id === effectId && target.enabled === enabled
-            ? { ...target, enabled: previousCaptureTarget.enabled }
-            : target
-        ));
-      }
+    },
+    isStaleFence: (error) => error instanceof AuthoredSetEffectEnabledCommandError
+      && error.code === "stale_fence",
+    onQueued: mirrorCueEffectCaptureTargetForAuthoredIntent,
+    onApplied: (intent) => {
+      settleCueEffectCaptureTargetForAuthoredIntent(intent);
+      const { effectId, enabled } = intent;
+      setMessage(`${enabled ? "Enabled" : "Disabled"} effect ${effectId}`);
+    },
+    onFailed: (intent, error, settledEnabled) => {
+      rollbackCueEffectCaptureTargetForAuthoredIntent(intent, settledEnabled);
       setMessage(String(error));
+    },
+    // One current-intent retry bounds stale-fence recovery and prevents a
+    // perpetually changing project from creating an unbounded IPC loop.
+    maxAttempts: 2,
+  });
+  const setEffectEnabled = (effectId: number, enabled: boolean) => {
+    if (!Number.isSafeInteger(effectId) || effectId <= 0 || typeof enabled !== "boolean") {
+      setMessage("Effect enable request has an invalid effect ID or enabled value.");
+      return Promise.resolve();
     }
+    if (!snapshot().effects.some((effect) => effect.id === effectId)) {
+      setMessage(`Effect ${effectId} is no longer available.`);
+      return Promise.resolve();
+    }
+    return authoredEffectEnableIntents.enqueue(effectId, enabled);
   };
 
   const moveEffect = async (effectId: number, delta: -1 | 1) => {
@@ -22140,6 +22282,34 @@ export default function App() {
               <span>Effects</span>
               <strong>{activeEffectCount()} / {snapshot().effects.length}</strong>
             </div>
+            <Show when={authoredEffectEnableControlEffect()}>
+              {(effect) => (
+                <div class="liveStatusItem" data-authored-effect-enable-control>
+                  <span>Global FX</span>
+                  <label>
+                    <select
+                      data-authored-effect-enable-select
+                      aria-label="Global effect to enable or bypass"
+                      value={String(effect().id)}
+                      onChange={(event) => setAuthoredEffectEnableControlId(Number(event.currentTarget.value))}
+                    >
+                      <For each={snapshot().effects}>
+                        {(candidate) => <option value={candidate.id}>{candidate.label}</option>}
+                      </For>
+                    </select>
+                  </label>
+                  <label data-authored-effect-enable-toggle={effect().id}>
+                    <input
+                      type="checkbox"
+                      checked={effect().enabled}
+                      aria-label={`${effect().enabled ? "Bypass" : "Enable"} global effect ${effect().id}`}
+                      onChange={(event) => void setEffectEnabled(effect().id, event.currentTarget.checked)}
+                    />
+                    <span>{effect().enabled ? "Enabled" : "Disabled"}</span>
+                  </label>
+                </div>
+              )}
+            </Show>
             <div class="liveStatusItem">
               <span>DMX routes</span>
               <strong>{enabledDmxOutputCount()} / {snapshot().dmx_outputs.length}</strong>

@@ -13,6 +13,7 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use protocol::{
+    control_plane_command::{ProjectMutationFenceV1, MAX_SAFE_JAVASCRIPT_INTEGER},
     control_plane_query::{
         CanonicalObservationEventPayload, CapabilityDescriptor, CapabilityDiscovery,
         ControlPlaneEvent, EventPage, EventPageRequest, GapMarker, GapReason, OpaqueCursorToken,
@@ -33,6 +34,9 @@ const CURSOR_TTL: Duration = Duration::from_secs(60);
 const MAX_CURSORS_PER_WINDOW: usize = 32;
 const MAX_CURSORS_PER_PROCESS: usize = 256;
 const MAX_HANDOFFS_PER_WINDOW: usize = 32;
+const AUTHORED_MUTATION_FENCE_TTL: Duration = Duration::from_secs(10 * 60);
+const MAX_AUTHORED_MUTATION_FENCES_PER_WINDOW: usize = 64;
+const MAX_AUTHORED_MUTATION_FENCES_PER_PROCESS: usize = 256;
 const MAX_EVENT_RING: usize = 2_048;
 const MAX_CAPTURE_ATTEMPTS: usize = 8;
 
@@ -110,6 +114,17 @@ struct IssuedHandoff {
     expires_at: Instant,
 }
 
+/// Server-only binding for the strict authored mutation fence. The wire DTO
+/// deliberately contains no owner/window claim, so the query adapter retains
+/// the issuing window incarnation and registered owner incarnation here.
+#[derive(Debug, Clone)]
+struct IssuedAuthoredMutationFence {
+    fence: ProjectMutationFenceV1,
+    owner_incarnation: u64,
+    expires_at: Instant,
+    last_used: u64,
+}
+
 #[derive(Debug, Clone)]
 struct EventRecord {
     event: ControlPlaneEvent<CanonicalObservationEventPayload>,
@@ -123,6 +138,7 @@ struct EventRecord {
 struct QueryInner {
     window_incarnations: HashMap<String, u64>,
     handoffs: HashMap<WindowOwner, VecDeque<IssuedHandoff>>,
+    authored_mutation_fences: HashMap<WindowOwner, VecDeque<IssuedAuthoredMutationFence>>,
     cursors: HashMap<String, CursorEntry>,
     lru_sequence: u64,
     runtime: BTreeMap<String, RuntimeObservation>,
@@ -144,11 +160,15 @@ pub(crate) struct ControlPlaneQueryState {
 impl ControlPlaneQueryState {
     pub(crate) fn new() -> Result<Self, String> {
         Ok(Self {
-            process_incarnation: random_nonzero_u64()?,
-            session_incarnation: random_nonzero_u64()?,
+            // These two values cross the strict authored-mutation wire and
+            // must survive a JavaScript JSON round-trip exactly. Cursor/event
+            // internals retain the unconstrained CSPRNG u64 helper below.
+            process_incarnation: random_nonzero_javascript_safe_u64()?,
+            session_incarnation: random_nonzero_javascript_safe_u64()?,
             inner: Mutex::new(QueryInner {
                 window_incarnations: HashMap::new(),
                 handoffs: HashMap::new(),
+                authored_mutation_fences: HashMap::new(),
                 cursors: HashMap::new(),
                 lru_sequence: 0,
                 runtime: BTreeMap::new(),
@@ -171,8 +191,123 @@ impl ControlPlaneQueryState {
                     label: label.to_string(),
                     incarnation,
                 });
+                inner.authored_mutation_fences.remove(&WindowOwner {
+                    label: label.to_string(),
+                    incarnation,
+                });
             }
         }
+    }
+
+    /// Issue the exact local query identity plus project E/R/H/publication
+    /// fence for an injected WebView. The method deliberately returns no
+    /// owner/principal/window claim, no path and no project content. A later
+    /// mutation must still validate this fence under external admission and
+    /// the project coordinator; this only gives the renderer a canonical
+    /// start image instead of letting it guess process/session values.
+    pub(crate) fn issue_project_mutation_fence_for_window(
+        &self,
+        window_label: &str,
+        app: &AppState,
+    ) -> Result<ProjectMutationFenceV1, QueryError> {
+        self.issue_project_mutation_fence_for_window_at_inner(window_label, app, Instant::now())
+    }
+
+    /// Test clock seam for the private issue record only. It does not change
+    /// any public query cursor, handoff or observation representation.
+    #[cfg(test)]
+    pub(crate) fn issue_project_mutation_fence_for_window_at(
+        &self,
+        window_label: &str,
+        app: &AppState,
+        now: Instant,
+    ) -> Result<ProjectMutationFenceV1, QueryError> {
+        self.issue_project_mutation_fence_for_window_at_inner(window_label, app, now)
+    }
+
+    fn issue_project_mutation_fence_for_window_at_inner(
+        &self,
+        window_label: &str,
+        app: &AppState,
+        now: Instant,
+    ) -> Result<ProjectMutationFenceV1, QueryError> {
+        let view = self.capture_for_window(window_label, app, false)?;
+        // Capture the registered owner incarnation only after the query view
+        // has finished its coordinator observation. No owner registry lock is
+        // ever held with the coordinator, and a rotation racing either side
+        // becomes a safe validation failure below rather than an ABA reuse.
+        let owner_incarnation = registered_owner_incarnation_for_window(app, window_label)?;
+        let fence = project_mutation_fence_from_query_fence(&view.fence);
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| query_error(QueryErrorCode::Internal))?;
+        if inner.window_incarnations.get(window_label) != Some(&view.owner.incarnation) {
+            return Err(query_error(QueryErrorCode::Forbidden));
+        }
+        record_authored_mutation_fence(&mut inner, &view.owner, fence, owner_incarnation, now)
+    }
+
+    /// Validate only the server-owned query session component of an incoming
+    /// mutation fence. The authoritative E/R/H/publication comparison happens
+    /// later under the mutation lock order; doing it here would create a
+    /// coordinator-before-admission path. Requiring an already-bound window
+    /// prevents a raw caller from manufacturing a process/session pair.
+    pub(super) fn validate_project_mutation_fence_window(
+        &self,
+        window_label: &str,
+        fence: &ProjectMutationFenceV1,
+        owner_incarnation: u64,
+    ) -> Result<(), QueryError> {
+        self.validate_project_mutation_fence_window_at(
+            window_label,
+            fence,
+            owner_incarnation,
+            Instant::now(),
+        )
+    }
+
+    /// Test clock seam for authored receipt-retention ordering. The caller
+    /// still supplies only the injected window label and backend-derived owner
+    /// incarnation; no query content or owner state crosses this boundary.
+    pub(super) fn validate_project_mutation_fence_window_at(
+        &self,
+        window_label: &str,
+        fence: &ProjectMutationFenceV1,
+        owner_incarnation: u64,
+        now: Instant,
+    ) -> Result<(), QueryError> {
+        fence
+            .validate()
+            .map_err(|_| query_error(QueryErrorCode::InvalidRequest))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| query_error(QueryErrorCode::Internal))?;
+        let Some(window_incarnation) = inner.window_incarnations.get(window_label).copied() else {
+            return Err(query_error(QueryErrorCode::Forbidden));
+        };
+        if owner_incarnation == 0 || fence.process_incarnation != self.process_incarnation {
+            return Err(query_error(QueryErrorCode::Forbidden));
+        }
+        let owner = WindowOwner {
+            label: window_label.to_string(),
+            incarnation: window_incarnation,
+        };
+        let last_used = inner.lru_sequence.wrapping_add(1);
+        inner.lru_sequence = last_used;
+        let Some(issued) = inner.authored_mutation_fences.get_mut(&owner) else {
+            return Err(query_error(QueryErrorCode::Forbidden));
+        };
+        issued.retain(|entry| entry.expires_at > now);
+        let Some(entry) = issued
+            .iter_mut()
+            .find(|entry| entry.fence == *fence && entry.owner_incarnation == owner_incarnation)
+        else {
+            return Err(query_error(QueryErrorCode::Forbidden));
+        };
+        entry.last_used = last_used;
+        Ok(())
     }
 
     fn capture_for_window(
@@ -403,6 +538,116 @@ impl ControlPlaneQueryState {
             .filter(|entry| entry.owner.label == label)
             .count()
     }
+}
+
+/// A deliberately lossy projection: project mutation sees the query-process
+/// identity plus project E/R/H/publication fields. The issuing method replaces
+/// its session member with a fresh server-only window/owner session before it
+/// crosses IPC. The six established read-query representations retain their
+/// complete fences and payloads.
+fn project_mutation_fence_from_query_fence(fence: &QueryFence) -> ProjectMutationFenceV1 {
+    ProjectMutationFenceV1 {
+        process_incarnation: fence.process_incarnation,
+        session_incarnation: fence.session_incarnation,
+        project_epoch: fence.project_epoch,
+        project_revision: fence.project_revision,
+        project_checkpoint_hash: fence.project_checkpoint_hash.clone(),
+        project_publication_generation: fence.project_publication_generation,
+    }
+}
+
+fn registered_owner_incarnation_for_window(
+    app: &AppState,
+    window_label: &str,
+) -> Result<u64, QueryError> {
+    let owners = app
+        .project_transaction_owners
+        .lock()
+        .map_err(|_| query_error(QueryErrorCode::Internal))?;
+    if !owners.contains_key(window_label) {
+        return Err(query_error(QueryErrorCode::Forbidden));
+    }
+    let incarnations = app
+        .project_transaction_owner_incarnations
+        .lock()
+        .map_err(|_| query_error(QueryErrorCode::Internal))?;
+    incarnations
+        .get(window_label)
+        .copied()
+        .filter(|incarnation| *incarnation != 0)
+        .ok_or_else(|| query_error(QueryErrorCode::Forbidden))
+}
+
+fn record_authored_mutation_fence(
+    inner: &mut QueryInner,
+    owner: &WindowOwner,
+    mut fence: ProjectMutationFenceV1,
+    owner_incarnation: u64,
+    now: Instant,
+) -> Result<ProjectMutationFenceV1, QueryError> {
+    fence
+        .validate()
+        .map_err(|_| query_error(QueryErrorCode::Internal))?;
+    let last_used = inner.lru_sequence.wrapping_add(1);
+    inner.lru_sequence = last_used;
+    {
+        let entries = inner
+            .authored_mutation_fences
+            .entry(owner.clone())
+            .or_default();
+        // Owner rotation invalidates all prior mutation sessions for this
+        // window. Their opaque session incarnations are not reused, so a
+        // delayed old renderer envelope remains distinguishable even when it
+        // has the same E/R/H/publication values as a new renderer request.
+        entries
+            .retain(|entry| entry.expires_at > now && entry.owner_incarnation == owner_incarnation);
+        if let Some(existing) = entries
+            .iter_mut()
+            .find(|entry| same_project_mutation_fence_ignoring_session(&entry.fence, &fence))
+        {
+            existing.expires_at = now + AUTHORED_MUTATION_FENCE_TTL;
+            existing.last_used = last_used;
+            return Ok(existing.fence.clone());
+        }
+        if entries.len() >= MAX_AUTHORED_MUTATION_FENCES_PER_WINDOW {
+            return Err(query_error(QueryErrorCode::Overloaded));
+        }
+    }
+    let total = inner
+        .authored_mutation_fences
+        .values()
+        .map(VecDeque::len)
+        .sum::<usize>();
+    if total >= MAX_AUTHORED_MUTATION_FENCES_PER_PROCESS {
+        return Err(query_error(QueryErrorCode::Overloaded));
+    }
+    fence.session_incarnation =
+        random_nonzero_javascript_safe_u64().map_err(|_| query_error(QueryErrorCode::Internal))?;
+    fence
+        .validate()
+        .map_err(|_| query_error(QueryErrorCode::Internal))?;
+    let entries = inner
+        .authored_mutation_fences
+        .entry(owner.clone())
+        .or_default();
+    entries.push_back(IssuedAuthoredMutationFence {
+        fence: fence.clone(),
+        owner_incarnation,
+        expires_at: now + AUTHORED_MUTATION_FENCE_TTL,
+        last_used,
+    });
+    Ok(fence)
+}
+
+fn same_project_mutation_fence_ignoring_session(
+    left: &ProjectMutationFenceV1,
+    right: &ProjectMutationFenceV1,
+) -> bool {
+    left.process_incarnation == right.process_incarnation
+        && left.project_epoch == right.project_epoch
+        && left.project_revision == right.project_revision
+        && left.project_checkpoint_hash == right.project_checkpoint_hash
+        && left.project_publication_generation == right.project_publication_generation
 }
 
 enum EventSlice {
@@ -1011,6 +1256,18 @@ fn random_nonzero_u64() -> Result<u64, String> {
     Err("OS random source repeatedly returned zero".to_string())
 }
 
+fn random_nonzero_javascript_safe_u64() -> Result<u64, String> {
+    for _ in 0..8 {
+        let mut bytes = [0_u8; 8];
+        getrandom::getrandom(&mut bytes).map_err(|error| error.to_string())?;
+        let value = u64::from_le_bytes(bytes) & MAX_SAFE_JAVASCRIPT_INTEGER;
+        if value != 0 {
+            return Ok(value);
+        }
+    }
+    Err("OS random source repeatedly returned zero JavaScript-safe incarnation".to_string())
+}
+
 fn random_cursor_token() -> Result<OpaqueCursorToken, QueryError> {
     let mut bytes = [0_u8; 16];
     getrandom::getrandom(&mut bytes).map_err(|_| query_error(QueryErrorCode::Internal))?;
@@ -1140,6 +1397,7 @@ pub(crate) fn poll_control_plane_observation_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::{MediaAssetA6CommandHarness, MEDIA_ASSET_A6_OWNER};
 
     fn test_project(hash_seed: &str) -> ProjectAuthorityQueryPayload {
         ProjectAuthorityQueryPayload {
@@ -1231,6 +1489,171 @@ mod tests {
             output: source.output,
             runtime,
         }
+    }
+
+    #[test]
+    fn project_mutation_fence_projection_preserves_six_query_outputs_counts_and_fences() {
+        let state = ControlPlaneQueryState::new().unwrap();
+        let view = seeded_view(&state, "main");
+        let catalog_before = schema_catalog();
+        let capabilities_before = capability_discovery(view.fence.clone());
+        let project_before = view.project.clone();
+        let runtime_before = view.runtime.clone();
+        let output_before = view.output.clone();
+        let fence_before = view.fence.clone();
+        let counts_before = {
+            let inner = state.inner.lock().unwrap();
+            (
+                inner.window_incarnations.len(),
+                inner.handoffs.len(),
+                inner.cursors.len(),
+                inner.runtime.len(),
+                inner.events.len(),
+                inner.event_stream_generation,
+            )
+        };
+
+        let mutation_fence = project_mutation_fence_from_query_fence(&view.fence);
+        mutation_fence.validate().unwrap();
+        assert!(mutation_fence.process_incarnation <= MAX_SAFE_JAVASCRIPT_INTEGER);
+        assert!(mutation_fence.session_incarnation <= MAX_SAFE_JAVASCRIPT_INTEGER);
+        assert_eq!(
+            mutation_fence.process_incarnation,
+            fence_before.process_incarnation
+        );
+        assert_eq!(
+            mutation_fence.session_incarnation,
+            fence_before.session_incarnation
+        );
+        assert_eq!(mutation_fence.project_epoch, fence_before.project_epoch);
+        assert_eq!(
+            mutation_fence.project_revision,
+            fence_before.project_revision
+        );
+        assert_eq!(
+            mutation_fence.project_checkpoint_hash,
+            fence_before.project_checkpoint_hash
+        );
+        assert_eq!(
+            mutation_fence.project_publication_generation,
+            fence_before.project_publication_generation
+        );
+
+        // Schema catalog, capability discovery, project, runtime, output and
+        // their complete canonical fence are the six pre-existing outputs.
+        assert_eq!(schema_catalog(), catalog_before);
+        assert_eq!(
+            capability_discovery(view.fence.clone()),
+            capabilities_before
+        );
+        assert_eq!(view.project, project_before);
+        assert_eq!(view.runtime, runtime_before);
+        assert_eq!(view.output, output_before);
+        assert_eq!(view.fence, fence_before);
+        let counts_after = {
+            let inner = state.inner.lock().unwrap();
+            (
+                inner.window_incarnations.len(),
+                inner.handoffs.len(),
+                inner.cursors.len(),
+                inner.runtime.len(),
+                inner.events.len(),
+                inner.event_stream_generation,
+            )
+        };
+        assert_eq!(counts_after, counts_before);
+    }
+
+    #[test]
+    fn issued_local_mutation_fence_is_owner_bound_without_changing_six_query_outputs() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = ControlPlaneQueryState::new().unwrap();
+        let before = state
+            .capture_for_window("media-asset-a6", &harness.state, false)
+            .unwrap();
+        let catalog_before = schema_catalog();
+        let capabilities_before = capability_discovery(before.fence.clone());
+        let counts_before = {
+            let inner = state.inner.lock().unwrap();
+            (
+                inner.window_incarnations.len(),
+                inner.handoffs.len(),
+                inner.cursors.len(),
+                inner.runtime.len(),
+                inner.events.len(),
+                inner.event_stream_generation,
+            )
+        };
+        let owner_incarnation = harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .get("media-asset-a6")
+            .copied()
+            .unwrap();
+        assert_eq!(
+            harness
+                .state
+                .project_transaction_owners
+                .lock()
+                .unwrap()
+                .get("media-asset-a6")
+                .map(String::as_str),
+            Some(MEDIA_ASSET_A6_OWNER)
+        );
+
+        let issued = state
+            .issue_project_mutation_fence_for_window("media-asset-a6", &harness.state)
+            .unwrap();
+        issued.validate().unwrap();
+        assert!(issued.process_incarnation <= MAX_SAFE_JAVASCRIPT_INTEGER);
+        assert!(issued.session_incarnation <= MAX_SAFE_JAVASCRIPT_INTEGER);
+        assert_eq!(issued.process_incarnation, before.fence.process_incarnation);
+        assert_ne!(
+            issued.session_incarnation, before.fence.session_incarnation,
+            "the mutation session is server-only and owner-scoped"
+        );
+        assert_eq!(issued.project_epoch, before.fence.project_epoch);
+        assert_eq!(issued.project_revision, before.fence.project_revision);
+        assert_eq!(
+            issued.project_checkpoint_hash,
+            before.fence.project_checkpoint_hash
+        );
+        assert_eq!(
+            issued.project_publication_generation,
+            before.fence.project_publication_generation
+        );
+        state
+            .validate_project_mutation_fence_window("media-asset-a6", &issued, owner_incarnation)
+            .unwrap();
+        let after = state
+            .capture_for_window("media-asset-a6", &harness.state, false)
+            .unwrap();
+        // The existing schema catalog, capability discovery, project,
+        // runtime, output and complete query fence are untouched. Only the
+        // private mutation-issue table gained a bounded record.
+        assert_eq!(schema_catalog(), catalog_before);
+        assert_eq!(
+            capability_discovery(after.fence.clone()),
+            capabilities_before
+        );
+        assert_eq!(after.project, before.project);
+        assert_eq!(after.runtime, before.runtime);
+        assert_eq!(after.output, before.output);
+        assert_eq!(after.fence, before.fence);
+        let counts_after = {
+            let inner = state.inner.lock().unwrap();
+            (
+                inner.window_incarnations.len(),
+                inner.handoffs.len(),
+                inner.cursors.len(),
+                inner.runtime.len(),
+                inner.events.len(),
+                inner.event_stream_generation,
+            )
+        };
+        assert_eq!(counts_after, counts_before);
     }
 
     #[test]

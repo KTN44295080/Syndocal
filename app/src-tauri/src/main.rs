@@ -36,48 +36,53 @@ use minisign_verify::PublicKey;
 #[cfg(test)]
 use protocol::DmxControlAction;
 use protocol::{
-    canonical_video_output_mapping_field, normalize_legacy_video_clip_slots,
-    normalize_legacy_video_media_assets, validate_engine_ready_video_clip_slots,
-    validate_engine_ready_video_effect_chains, AttributeControl, AttributeResolution,
-    AudioAnalysisSummary, AutoVjConfig, AutomationId, AutomationKeyframeSummary,
-    ChaserEffectRequest, ChaserStep, ChildTimelineSummary, ChildTimelineTransportPathSegment,
-    ClockSnapshot, ColorEffectRequest, ColorMappingEffectRequest, CompositionId,
-    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueNodeGraphTarget,
-    CurveEffectRequest, CustomFixtureProfileFile, CustomFixtureProfileRequest, DmxControlMapping,
-    DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig,
-    DmxOutputProtocol, EffectBeamTarget, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset,
-    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureGroupSummary,
-    FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary,
-    LearnedDmxControl, LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MachineOutputRole,
-    MappingEffectRequest, MediaAssetAvailability, MediaAssetId, MediaAssetRelinkOutcome,
-    MediaAssetRelinkPolicy, MediaAssetSummary, MediaContentHash, MediaHashAlgorithm,
-    MidiControlAction, MidiControlMapping, MidiFeedbackMessage, MidiInputSummary,
-    MidiOutputSummary, MoveEffectBeamTarget, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorFeatureFaderResult,
-    OperatorLockMode, OperatorPolicy, OperatorSelectionContext, OscControlAction,
-    OscControlMapping, OscInputConfig, OutputOwnershipStatus, PatchFixtureRequest,
-    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
-    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
-    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary,
-    TimelineAdvancedAuthoringSummary, TimelineAudioClipId, TimelineAudioClipSummary,
-    TimelineEventId, TimelineFollowRuntimeStatusSnapshot, TimelineFollowSettlementAck,
-    TimelineFollowSettlementAckResult, TimelineFollowSettlementConsumerId,
-    TimelineFollowSettlementDomain, TimelineFollowSettlementState, TimelineFollowSummary,
-    TimelineGuideCueKind, TimelineGuideCueSummary, TimelineId, TimelineItemGroupId,
-    TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind, TimelineLoopRegionSummary,
-    TimelineLoopScale, TimelinePhaseSummary, TimelineSnapRequest, TimelineSnapshot,
-    TimelineTrackKind, TimelineVideoClipSummary, TouchControlBinding, TouchFeaturePresetTarget,
-    TouchSurfaceSummary, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBackendState, VideoBlendMode, VideoClipRuntimeSnapshot, VideoClipSlotId,
-    VideoClipSlotSummary, VideoClipTakeDuration, VideoClipTakeDurationUnit, VideoClipTakeKind,
-    VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary, VideoEffectScope,
-    VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
-    VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
-    VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
-    VideoLayerTransitionTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
-    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
-    VideoTransitionBusId, COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
+    canonical_video_output_mapping_field,
+    control_plane_command::{
+        AuthoredRequestV1, ProjectMutationFenceV1, SetEffectEnabledPayload,
+        SetEffectEnabledResponseV1,
+    },
+    normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
+    validate_engine_ready_video_clip_slots, validate_engine_ready_video_effect_chains,
+    AttributeControl, AttributeResolution, AudioAnalysisSummary, AutoVjConfig, AutomationId,
+    AutomationKeyframeSummary, ChaserEffectRequest, ChaserStep, ChildTimelineSummary,
+    ChildTimelineTransportPathSegment, ClockSnapshot, ColorEffectRequest,
+    ColorMappingEffectRequest, CompositionId, CompositionSummary, CueEffectTarget,
+    CueFixtureTarget, CueId, CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile,
+    CustomFixtureProfileRequest, DmxControlMapping, DmxInputConfig, DmxInputProtocol,
+    DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectBeamTarget, EffectId,
+    EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, FixtureGroupSummary, FixtureId, FixtureLimits, FixturePreset,
+    FixtureProfileSummary, GeometrySummary, LearnedDmxControl, LearnedMidiControl,
+    LearnedOscControl, LfoEffectRequest, MachineOutputRole, MappingEffectRequest,
+    MediaAssetAvailability, MediaAssetId, MediaAssetRelinkOutcome, MediaAssetRelinkPolicy,
+    MediaAssetSummary, MediaContentHash, MediaHashAlgorithm, MidiControlAction, MidiControlMapping,
+    MidiFeedbackMessage, MidiInputSummary, MidiOutputSummary, MoveEffectBeamTarget,
+    MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
+    NodeGraphTransformOp, OperatorFeatureFaderResult, OperatorLockMode, OperatorPolicy,
+    OperatorSelectionContext, OscControlAction, OscControlMapping, OscInputConfig,
+    OutputOwnershipStatus, PatchFixtureRequest, PatchedFixtureSummary, PositionWaveEffectRequest,
+    ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus, Rotation3,
+    SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary, StageObjectId,
+    StageObjectKind, StageObjectSummary, TimelineAdvancedAuthoringSummary, TimelineAudioClipId,
+    TimelineAudioClipSummary, TimelineEventId, TimelineFollowRuntimeStatusSnapshot,
+    TimelineFollowSettlementAck, TimelineFollowSettlementAckResult,
+    TimelineFollowSettlementConsumerId, TimelineFollowSettlementDomain,
+    TimelineFollowSettlementState, TimelineFollowSummary, TimelineGuideCueKind,
+    TimelineGuideCueSummary, TimelineId, TimelineItemGroupId, TimelineItemGroupSummary,
+    TimelineItemRef, TimelineLayerKind, TimelineLoopRegionSummary, TimelineLoopScale,
+    TimelinePhaseSummary, TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind,
+    TimelineVideoClipSummary, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
+    VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary, VideoClipTakeDuration,
+    VideoClipTakeDurationUnit, VideoClipTakeKind, VideoEffectChainSummary, VideoEffectKind,
+    VideoEffectPresetSummary, VideoEffectScope, VideoEffectTarget, VideoIsfControlKind,
+    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerGroupSummary, VideoLayerId,
+    VideoLayerState, VideoLayerTarget, VideoLayerTransitionBusSummary, VideoLayerTransitionCurve,
+    VideoLayerTransitionRuntimeSnapshot, VideoLayerTransitionTarget, VideoOutputId,
+    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary, VideoTransitionBusId,
+    COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -93,6 +98,7 @@ use tauri::Emitter;
 use tauri::{Manager, State, WebviewWindow};
 use tauri_plugin_updater::UpdaterExt;
 
+mod authored_control_plane;
 mod capture_transport;
 mod control_plane;
 mod control_plane_query;
@@ -307,6 +313,9 @@ struct AppState {
     /// generation so a delayed cancel for an old request cannot stop a newer
     /// request that reused the same client request ID.
     media_asset_operations: Arc<MediaAssetOperationRegistry>,
+    /// Bounded, typed receipt state for server-authoritative authored
+    /// mutations which retain the legacy local Tauri source name.
+    authored_control_plane: authored_control_plane::AuthoredControlPlaneState,
     /// The single background reaper for `media_asset_operations`, installed once
     /// during setup. Holding it here keeps the thread owned by `AppState` and
     /// joined on teardown instead of leaked.
@@ -323,6 +332,10 @@ struct AppState {
     /// receipt retries must never increment this counter.
     #[cfg(test)]
     video_effect_catalog_authoritative_publish_attempts: AtomicU64,
+    /// Test-only proof that an authored effect toggle reaches the sole
+    /// published engine primitive once, never on an exact receipt retry.
+    #[cfg(test)]
+    authored_effect_enabled_publish_attempts: AtomicU64,
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
     program_audio_handoff: Arc<ProgramAudioHandoffCoordinator>,
     _media_audio_sync: MediaAudioSyncRuntime,
@@ -13653,6 +13666,11 @@ struct ProjectAuthorityBundle {
     dmx_mappings: Vec<DmxControlMapping>,
     history: ProjectHistoryStatus,
     input_runtime: ProjectInputRuntimeStatus,
+    /// Present only on the injected local authority read that issued this
+    /// exact query-process/session project fence. Other authority replies keep
+    /// their established wire shape and deliberately do not guess one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authored_effect_fence: Option<ProjectMutationFenceV1>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14770,6 +14788,7 @@ fn project_authority_bundle_from_captured_snapshot(
         dmx_mappings: coordinator.mappings.dmx_mappings.clone(),
         history: project_history_status_for_coordinator(coordinator),
         input_runtime: project_input_runtime_status_from_state(state),
+        authored_effect_fence: None,
     }
 }
 
@@ -32295,13 +32314,12 @@ fn load_node_graph_preset_file(
 
 #[tauri::command]
 fn set_effect_enabled(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    effect_id: EffectId,
-    enabled: bool,
-) -> Result<(), String> {
-    state
-        .engine
-        .set_effect_enabled_published(effect_id, enabled)
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: AuthoredRequestV1<SetEffectEnabledPayload>,
+) -> SetEffectEnabledResponseV1 {
+    authored_control_plane::set_effect_enabled_authoritative(&window, &state, &query_state, request)
 }
 
 #[tauri::command]
@@ -34206,11 +34224,22 @@ fn get_project_recovery_authority_status(
 /// reservation is active because a partial project cannot be hydrated.
 #[tauri::command]
 fn get_project_authority_bundle(
+    window: WebviewWindow,
+    query_state: State<'_, ControlPlaneQueryState>,
     state: State<'_, AppState>,
     expected_epoch: Option<u64>,
     expected_revision: Option<u64>,
     expected_checkpoint_hash: Option<String>,
 ) -> Result<ProjectAuthorityBundle, String> {
+    // Issue the UI's authored-mutation fence before acquiring the normal
+    // authority read locks. A generic authority caller may legitimately run
+    // before its renderer registration has completed, so a missing local
+    // owner never changes the established bundle result; it merely omits the
+    // optional strict fence. The authored UI rejects an absent fence rather
+    // than guessing one. If C wins below, an A fence is likewise omitted.
+    let authored_effect_fence = query_state
+        .issue_project_mutation_fence_for_window(window.label(), &state)
+        .ok();
     let _external_admission = lock_project_external_command_admission(&state)?;
     let mut coordinator = lock_project_coordinator(&state)?;
     ensure_no_pending_project_transaction(&coordinator)?;
@@ -34234,10 +34263,14 @@ fn get_project_authority_bundle(
             );
         }
     }
-    Ok(project_authority_bundle_from_coordinator(
-        &state,
-        &coordinator,
-    ))
+    let mut bundle = project_authority_bundle_from_coordinator(&state, &coordinator);
+    bundle.authored_effect_fence = authored_effect_fence.filter(|fence| {
+        coordinator.epoch == fence.project_epoch
+            && coordinator.revision == fence.project_revision
+            && coordinator.checkpoint_hash == fence.project_checkpoint_hash
+            && coordinator.publication_generation == fence.project_publication_generation
+    });
+    Ok(bundle)
 }
 
 /// A capture can distinguish "nothing changed" from "this attempt was mixed
@@ -34986,6 +35019,7 @@ fn register_project_transaction_owner(
             state
                 .media_asset_operations
                 .purge_video_effect_catalog_authoritative_for_owner(retired_owner);
+            state.authored_control_plane.retire_principal(retired_owner);
         }
     }
     Ok(recovered)
@@ -35090,6 +35124,7 @@ fn retire_project_transaction_owner_for_window(
         state
             .media_asset_operations
             .purge_video_effect_catalog_authoritative_for_owner(retired_owner);
+        state.authored_control_plane.retire_principal(retired_owner);
     }
     Ok(recovered)
 }
@@ -35340,7 +35375,7 @@ fn validate_history_navigation_cas(
 }
 
 fn navigate_project_history(
-    state: &State<'_, AppState>,
+    state: &AppState,
     undo: bool,
     expected_epoch: Option<u64>,
     expected_entry_id: Option<u64>,
@@ -35352,10 +35387,52 @@ fn navigate_project_history(
     stop_standby_sync_for_project_swap(state)?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
+    navigate_project_history_with_coordinator(
+        state,
+        &mut coordinator,
+        undo,
+        expected_epoch,
+        expected_entry_id,
+        expected_checkpoint_hash,
+        |state, prepared, coordinator| {
+            replace_prepared_project_snapshot_with_coordinator(
+                state,
+                prepared,
+                coordinator,
+                ProjectReplacementCoordinatorEffect::RevisionMutation,
+                false,
+            )
+        },
+    )
+}
+
+/// The coordinator-owned Undo/Redo core.  The caller owns the lifecycle and
+/// external-admission guards; the replacement callback is the one platform
+/// boundary which needs a real Tauri app handle for output retirement and
+/// recovery-authority persistence.  Keeping every history CAS, stack move,
+/// post-publication rewrite, and authoritative result assignment here gives
+/// headless tests the exact production coordinator path without forging an
+/// `AppHandle<MockRuntime>` as `AppHandle<Wry>`.
+fn navigate_project_history_with_coordinator<Replace>(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    undo: bool,
+    expected_epoch: Option<u64>,
+    expected_entry_id: Option<u64>,
+    expected_checkpoint_hash: Option<String>,
+    replace: Replace,
+) -> Result<ProjectHistoryNavigationResult, String>
+where
+    Replace: FnOnce(
+        &AppState,
+        PreparedProjectLoad,
+        &mut ProjectCoordinator,
+    ) -> Result<ProjectLoadResult, String>,
+{
     // Undo/Redo is an identity-adjacent publication. It may not consume or
     // silently discard a Begin→Commit reservation from an in-flight edit.
     ensure_no_pending_project_transaction(&coordinator)?;
-    let current = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    let current = reconcile_project_checkpoint_for_coordinator(state, coordinator)?;
     let top = if undo {
         coordinator.history.undo.last()
     } else {
@@ -35398,7 +35475,7 @@ fn navigate_project_history(
     // popping. A direct live command can also arrive while it runs, so prove
     // the historical source is still the persistence snapshot immediately
     // before consuming the stack entry.
-    let current = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    let current = reconcile_project_checkpoint_for_coordinator(state, coordinator)?;
     let top = if undo {
         coordinator.history.undo.last()
     } else {
@@ -35452,13 +35529,7 @@ fn navigate_project_history(
     };
     let mut prepared = prepared.expect("history top was prepared before it was popped");
     prepared.authority_disposition = ProjectAuthorityDisposition::HistoryNavigation;
-    let mut replacement_result = match replace_prepared_project_snapshot_with_coordinator(
-        state,
-        prepared,
-        &mut coordinator,
-        ProjectReplacementCoordinatorEffect::RevisionMutation,
-        false,
-    ) {
+    let mut replacement_result = match replace(state, prepared, coordinator) {
         Ok(result) => result,
         Err(error) => {
             if undo {
@@ -35489,7 +35560,7 @@ fn navigate_project_history(
     coordinator.history_generation =
         next_history_generation.expect("a moved history entry preflights its status generation");
     commit_project_authority_publication_after_preflight(
-        &mut coordinator,
+        coordinator,
         next_publication_generation
             .expect("a moved history entry preflights its publication generation"),
         ProjectAuthorityPublicationKind::HistoryNavigation,
@@ -38992,7 +39063,7 @@ fn replace_prepared_project_snapshot_after_standby_stop(
 /// later serialized replacement the project actually published by its
 /// predecessor, not a stale pre-lock observation.
 fn replace_prepared_project_snapshot_with_coordinator(
-    state: &State<'_, AppState>,
+    state: &AppState,
     mut prepared: PreparedProjectLoad,
     coordinator: &mut ProjectCoordinator,
     coordinator_effect: ProjectReplacementCoordinatorEffect,
@@ -39117,39 +39188,45 @@ fn replace_prepared_project_snapshot_with_coordinator(
     // preflighted and is deliberately infallible; do not claim a rollback
     // after this point because the published snapshot is authoritative.
     reset_project_runtime_after_published_snapshot_infallible(state);
-    if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
-        coordinator.finish_identity_swap_after_preflight(
-            prepared.ancillary.clone(),
-            prepared.mappings.clone(),
-            next_checkpoint_hash.clone(),
-            identity_swap_counters
-                .expect("identity swap counters were preflighted before publication"),
-            prepared.authority_disposition,
-        );
-    } else if coordinator_effect == ProjectReplacementCoordinatorEffect::RevisionMutation {
-        coordinator.ancillary = prepared.ancillary.clone();
-        coordinator.mappings = prepared.mappings.clone();
-        coordinator.revision = revision_mutation_revision
-            .expect("project revision was preflighted before publication");
-        coordinator.checkpoint_hash = next_checkpoint_hash.clone();
-        commit_project_authority_disposition_after_preflight(
-            coordinator,
-            revision_mutation_disposition_generation
-                .expect("history navigation disposition was preflighted before publication"),
-            prepared.authority_disposition,
-        );
-    }
+    let coordinator_mirrors_committed =
+        if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
+            coordinator.finish_identity_swap_after_preflight(
+                prepared.ancillary.clone(),
+                prepared.mappings.clone(),
+                next_checkpoint_hash.clone(),
+                identity_swap_counters
+                    .expect("identity swap counters were preflighted before publication"),
+                prepared.authority_disposition,
+            );
+            false
+        } else if coordinator_effect == ProjectReplacementCoordinatorEffect::RevisionMutation {
+            commit_history_navigation_coordinator_after_ack(
+                state,
+                &prepared,
+                coordinator,
+                revision_mutation_disposition_generation
+                    .expect("history navigation disposition was preflighted before publication"),
+                revision_mutation_revision
+                    .expect("project revision was preflighted before publication"),
+                next_checkpoint_hash.clone(),
+            );
+            true
+        } else {
+            false
+        };
     // Same-project runtime sanitization must not let `prepare_project_load`
     // manufacture a fresh ancillary image (notably delete-undo=None) and
     // overwrite the coordinator-owned mirrors.  The engine receives the
     // sanitized runtime snapshot, while all project ancillary state remains
     // exactly the current coordinator value.
-    let mirrors_after_commit = project_swap_ancillary_mirrors_after_commit(
-        coordinator,
-        &prepared.ancillary,
-        coordinator_effect,
-    );
-    commit_project_swap_ancillary_state_after_preflight(state, &mirrors_after_commit);
+    if !coordinator_mirrors_committed {
+        let mirrors_after_commit = project_swap_ancillary_mirrors_after_commit(
+            coordinator,
+            &prepared.ancillary,
+            coordinator_effect,
+        );
+        commit_project_swap_ancillary_state_after_preflight(state, &mirrors_after_commit);
+    }
 
     synchronize_project_load_result_authority_metadata(&mut prepared.result, coordinator);
     match finish_project_snapshot_replacement_with_current_status_model(
@@ -39188,6 +39265,38 @@ fn replace_prepared_project_snapshot_with_coordinator(
         }
     }
     Ok(prepared.result)
+}
+
+/// Assignment-only coordinator/mirror commit after a history-navigation
+/// snapshot has been acknowledged by the engine.  Its counters and mirrors
+/// are preflighted before the acknowledgement, so this cannot turn a real
+/// published A/B image into a false failure.  The headless authored-command
+/// regression calls this same post-ACK production core after a real
+/// `EngineHandle` publication; only the Wry-only output/recovery shell is
+/// unavailable to that harness.
+fn commit_history_navigation_coordinator_after_ack(
+    state: &AppState,
+    prepared: &PreparedProjectLoad,
+    coordinator: &mut ProjectCoordinator,
+    next_authority_disposition_generation: u64,
+    next_revision: u64,
+    next_checkpoint_hash: String,
+) {
+    coordinator.ancillary = prepared.ancillary.clone();
+    coordinator.mappings = prepared.mappings.clone();
+    coordinator.revision = next_revision;
+    coordinator.checkpoint_hash = next_checkpoint_hash;
+    commit_project_authority_disposition_after_preflight(
+        coordinator,
+        next_authority_disposition_generation,
+        prepared.authority_disposition,
+    );
+    let mirrors_after_commit = project_swap_ancillary_mirrors_after_commit(
+        coordinator,
+        &prepared.ancillary,
+        ProjectReplacementCoordinatorEffect::RevisionMutation,
+    );
+    commit_project_swap_ancillary_state_after_preflight(state, &mirrors_after_commit);
 }
 
 /// Copy the coordinator-owned result token only after the publication/commit
@@ -39353,7 +39462,7 @@ fn undo_delete_fixture_group_in_project_data(
 /// deliberately survives a successful acknowledgement until the published
 /// snapshot's runtime reset has completed.
 fn publish_project_snapshot_with_runtime_reset_admission(
-    state: &State<'_, AppState>,
+    state: &AppState,
     snapshot: EngineSnapshot,
 ) -> Result<(), String> {
     {
@@ -39382,7 +39491,7 @@ fn publish_project_snapshot_with_runtime_reset_admission(
 }
 
 fn resume_program_audio_handoff_after_failed_project_publication(
-    state: &State<'_, AppState>,
+    state: &AppState,
 ) -> Result<(), String> {
     let mut program_handoff = state
         .program_audio_handoff
@@ -53755,10 +53864,13 @@ pub(crate) mod tests {
                 vj_preview_renderer: Mutex::new(new_vj_preview_renderer()),
                 vj_preview_renderer_reset_pending: AtomicBool::new(false),
                 media_asset_operations: Arc::new(MediaAssetOperationRegistry::default()),
+                authored_control_plane: authored_control_plane::AuthoredControlPlaneState::default(
+                ),
                 media_asset_reaper: Mutex::new(None),
                 media_asset_authoritative_publish_attempts: AtomicU64::new(0),
                 video_clip_slot_authoritative_publish_attempts: AtomicU64::new(0),
                 video_effect_catalog_authoritative_publish_attempts: AtomicU64::new(0),
+                authored_effect_enabled_publish_attempts: AtomicU64::new(0),
                 media_audio,
                 program_audio_handoff: Arc::clone(&program_audio_handoff),
                 _media_audio_sync: MediaAudioSyncRuntime::idle_for_tests(program_audio_handoff),
@@ -54849,6 +54961,7 @@ pub(crate) mod tests {
                     osc_active: false,
                     dmx_active: false,
                 },
+                authored_effect_fence: None,
             },
         }
     }
@@ -84734,6 +84847,7 @@ fn main() {
             vj_preview_renderer: Mutex::new(new_vj_preview_renderer()),
             vj_preview_renderer_reset_pending: AtomicBool::new(false),
             media_asset_operations: Arc::new(MediaAssetOperationRegistry::default()),
+            authored_control_plane: authored_control_plane::AuthoredControlPlaneState::default(),
             media_asset_reaper: Mutex::new(None),
             #[cfg(test)]
             media_asset_authoritative_publish_attempts: AtomicU64::new(0),
@@ -84741,6 +84855,8 @@ fn main() {
             video_clip_slot_authoritative_publish_attempts: AtomicU64::new(0),
             #[cfg(test)]
             video_effect_catalog_authoritative_publish_attempts: AtomicU64::new(0),
+            #[cfg(test)]
+            authored_effect_enabled_publish_attempts: AtomicU64::new(0),
             media_audio,
             program_audio_handoff,
             _media_audio_sync: media_audio_sync,
@@ -84814,6 +84930,12 @@ fn main() {
                 window
                     .state::<ControlPlaneQueryState>()
                     .retire_window(window.label());
+                if let Err(error) = retire_project_transaction_owner_for_window(
+                    &window.state::<AppState>(),
+                    window.label(),
+                ) {
+                    eprintln!("failed to retire project transaction owner after Destroyed: {error}");
+                }
             }
         })
         .plugin(tauri_plugin_updater::Builder::new().build())

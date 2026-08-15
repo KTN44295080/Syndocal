@@ -152,16 +152,22 @@ pub enum AdapterPolicy {
     /// The only currently supported adapter: an injected local Tauri window
     /// for an R0 read-only operation.
     LocalWindowReadOnly,
+    /// A typed, local-window-only authored mutation. It is deliberately
+    /// separate from the read policy: it has no Full-Lock allowance and must
+    /// retain an exact terminal receipt.
+    LocalWindowAuthoritativeMutation,
     /// No adapter is exposed.  This is the only policy available before a
     /// separately reviewed adapter is introduced.
     FailClosed,
 }
 
-/// Receipt handling deliberately has no enabled implementation in v2.
+/// Receipt retention is fail-closed by default. The one reviewed local
+/// authoritative mutation uses an exact terminal receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiptPolicy {
     FailClosed,
+    ExactTerminalReceipt,
 }
 
 /// Rate handling deliberately has no enabled implementation in v2.
@@ -423,6 +429,38 @@ impl CanonicalOperationDescriptor {
                     }
                 }
             }
+            AdapterPolicy::LocalWindowAuthoritativeMutation => {
+                if self.class != OperationClass::Mutation
+                    || self.risk != OperationRisk::R0
+                    || self.idempotency != OperationIdempotency::Mutating
+                    || self.audit != OperationAuditRequirement::NotApplicable
+                    || self.capabilities
+                        != vec![
+                            OperationCapability::LocalWindowBound,
+                            OperationCapability::AuthoritativeProjectMutation,
+                        ]
+                    || self.receipt_policy != ReceiptPolicy::ExactTerminalReceipt
+                    || self.rate_policy != RatePolicy::FailClosed
+                    || self.payload_policy != PayloadPolicy::FailClosed
+                    || self.consent_policy != ConsentPolicy::FailClosed
+                {
+                    return Err(
+                        CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(
+                            self.operation_id.clone(),
+                        ),
+                    );
+                }
+                for adapter in &self.derived_adapters {
+                    adapter.validate_shape()?;
+                    if adapter.adapter != AdapterKind::LocalTauriWindow {
+                        return Err(
+                            CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(
+                                self.operation_id.clone(),
+                            ),
+                        );
+                    }
+                }
+            }
             AdapterPolicy::FailClosed => {
                 if !self.derived_adapters.is_empty() {
                     return Err(
@@ -438,7 +476,10 @@ impl CanonicalOperationDescriptor {
 
     pub fn validate(&self) -> Result<(), CanonicalRegistryValidationError> {
         self.validate_metadata()?;
-        if self.adapter_policy == AdapterPolicy::LocalWindowReadOnly {
+        if matches!(
+            self.adapter_policy,
+            AdapterPolicy::LocalWindowReadOnly | AdapterPolicy::LocalWindowAuthoritativeMutation
+        ) {
             if self.derived_adapters.is_empty() {
                 return Err(CanonicalRegistryValidationError::MissingDerivedAdapter(
                     self.operation_id.clone(),
@@ -828,7 +869,11 @@ impl CanonicalControlPlaneRegistry {
                 .get(&operation.operation_id)
                 .cloned()
                 .unwrap_or_default();
-            if operation.adapter_policy == AdapterPolicy::LocalWindowReadOnly && expected.is_empty()
+            if matches!(
+                operation.adapter_policy,
+                AdapterPolicy::LocalWindowReadOnly
+                    | AdapterPolicy::LocalWindowAuthoritativeMutation
+            ) && expected.is_empty()
             {
                 return Err(
                     CanonicalRegistryValidationError::CanonicalWithoutDirectSource(
@@ -943,7 +988,11 @@ impl CanonicalControlPlaneRegistry {
                         })?;
                     if source.source_key.family != OperationSourceFamily::TauriCommand
                         || source.role != SourceRole::LocalWindowCommand
-                        || canonical.adapter_policy != AdapterPolicy::LocalWindowReadOnly
+                        || !matches!(
+                            canonical.adapter_policy,
+                            AdapterPolicy::LocalWindowReadOnly
+                                | AdapterPolicy::LocalWindowAuthoritativeMutation
+                        )
                     {
                         return Err(CanonicalRegistryValidationError::FamilyAdapterMismatch(
                             source.source_key.clone(),
@@ -1477,6 +1526,36 @@ mod tests {
         }
     }
 
+    fn authoritative_mutation_operation() -> CanonicalOperationDescriptor {
+        let operation_id = "syndocal.effects.set_enabled.v1";
+        CanonicalOperationDescriptor {
+            schema: CanonicalOperationDescriptor::schema_identity(),
+            operation_id: operation_id.to_string(),
+            class: OperationClass::Mutation,
+            risk: OperationRisk::R0,
+            capabilities: vec![
+                OperationCapability::LocalWindowBound,
+                OperationCapability::AuthoritativeProjectMutation,
+            ],
+            request_schema: SchemaIdentity {
+                name: format!("{operation_id}.request"),
+                version: 1,
+            },
+            response_schema: SchemaIdentity {
+                name: format!("{operation_id}.response"),
+                version: 1,
+            },
+            idempotency: OperationIdempotency::Mutating,
+            audit: OperationAuditRequirement::NotApplicable,
+            adapter_policy: AdapterPolicy::LocalWindowAuthoritativeMutation,
+            receipt_policy: ReceiptPolicy::ExactTerminalReceipt,
+            rate_policy: RatePolicy::FailClosed,
+            payload_policy: PayloadPolicy::FailClosed,
+            consent_policy: ConsentPolicy::FailClosed,
+            derived_adapters: Vec::new(),
+        }
+    }
+
     fn source(
         family: OperationSourceFamily,
         source_id: &str,
@@ -1692,6 +1771,50 @@ mod tests {
         adapter.canonical_operations[0].derived_adapters[0].adapter = AdapterKind::ExternalMcp;
         assert!(matches!(
             adapter.validate(),
+            Err(CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(_))
+        ));
+    }
+
+    #[test]
+    fn authoritative_local_mutation_policy_rejects_forged_read_full_lock_and_external_shapes() {
+        let mut mutation = authoritative_mutation_operation();
+        mutation.derived_adapters.push(DerivedAdapterBinding {
+            adapter: AdapterKind::LocalTauriWindow,
+            source_key: SourceKey::new(OperationSourceFamily::TauriCommand, "set_effect_enabled"),
+            binding_id: SourceKey::new(OperationSourceFamily::TauriCommand, "set_effect_enabled")
+                .binding_id(),
+        });
+        mutation.validate().unwrap();
+
+        let mut forged_read = mutation.clone();
+        forged_read
+            .capabilities
+            .insert(0, OperationCapability::ReadOnly);
+        assert!(matches!(
+            forged_read.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+
+        let mut forged_full_lock = mutation.clone();
+        forged_full_lock
+            .capabilities
+            .insert(1, OperationCapability::AllowedDuringFullLock);
+        assert!(matches!(
+            forged_full_lock.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+
+        let mut forged_read_policy = mutation.clone();
+        forged_read_policy.adapter_policy = AdapterPolicy::LocalWindowReadOnly;
+        assert!(matches!(
+            forged_read_policy.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+
+        let mut external = mutation;
+        external.derived_adapters[0].adapter = AdapterKind::ExternalMcp;
+        assert!(matches!(
+            external.validate(),
             Err(CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(_))
         ));
     }

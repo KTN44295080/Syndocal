@@ -14,6 +14,7 @@ use protocol::control_plane::{
     OperationDescriptor, OperationIdempotency, OperationRegistry, OperationRisk,
     OperationSourceFamily, SchemaIdentity, CONTROL_PLANE_SCHEMA_VERSION,
 };
+use protocol::control_plane_command::SET_EFFECT_ENABLED_OPERATION_ID;
 use protocol::control_plane_registry_v2::{
     AdapterPolicy, CanonicalControlPlaneRegistry, CanonicalOperationDescriptor,
     CanonicalRegistryValidationError, ConsentPolicy, PayloadPolicy, RatePolicy, ReceiptPolicy,
@@ -205,31 +206,7 @@ fn build_canonical_registry() -> Result<CanonicalControlPlaneRegistry, ControlPl
         .operations
         .iter()
         .filter(|descriptor| descriptor.source_family == OperationSourceFamily::TauriCommand)
-        .filter_map(|descriptor| {
-            let reviewed = reviewed_query_operation(&descriptor.source_id)?;
-            Some(CanonicalOperationDescriptor {
-                schema: CanonicalOperationDescriptor::schema_identity(),
-                operation_id: reviewed.operation_id.to_string(),
-                class: reviewed.class,
-                risk: OperationRisk::R0,
-                capabilities: vec![
-                    OperationCapability::ReadOnly,
-                    OperationCapability::LocalWindowBound,
-                    OperationCapability::AllowedDuringFullLock,
-                    reviewed.domain_capability,
-                ],
-                request_schema: descriptor.request_schema.clone(),
-                response_schema: descriptor.response_schema.clone(),
-                idempotency: OperationIdempotency::ReadOnly,
-                audit: OperationAuditRequirement::NotApplicable,
-                adapter_policy: AdapterPolicy::LocalWindowReadOnly,
-                receipt_policy: ReceiptPolicy::FailClosed,
-                rate_policy: RatePolicy::FailClosed,
-                payload_policy: PayloadPolicy::FailClosed,
-                consent_policy: ConsentPolicy::FailClosed,
-                derived_adapters: Vec::new(),
-            })
-        })
+        .filter_map(|descriptor| canonical_descriptor_for_source(descriptor))
         .collect::<Vec<_>>();
     canonical_operations.sort_by(|left, right| left.operation_id.cmp(&right.operation_id));
 
@@ -258,9 +235,9 @@ fn canonical_source_inventory_descriptor(
     let source_key = SourceKey::new(descriptor.source_family, descriptor.source_id.clone());
     let disposition = match descriptor.source_family {
         OperationSourceFamily::TauriCommand => {
-            if let Some(reviewed) = reviewed_query_operation(&descriptor.source_id) {
+            if let Some(reviewed) = reviewed_canonical_operation(&descriptor.source_id) {
                 SourceDisposition::Operation {
-                    canonical_operation_id: reviewed.operation_id.to_string(),
+                    canonical_operation_id: reviewed.operation_id().to_string(),
                     projection: TypedSchemaProjection::Exact,
                 }
             } else {
@@ -275,8 +252,17 @@ fn canonical_source_inventory_descriptor(
                 descriptor.source_id.clone(),
             ),
         },
+        OperationSourceFamily::EngineCommand
+            if descriptor.source_id == "set_effect_enabled_published" =>
+        {
+            SourceDisposition::InternalStepOf {
+                target: SourceKey::new(OperationSourceFamily::TauriCommand, "set_effect_enabled"),
+            }
+        }
         _ => SourceDisposition::Unclassified {
-            reason: unclassified_reason(descriptor.source_family).to_string(),
+            reason: effect_enabled_unclassified_reason(descriptor)
+                .unwrap_or_else(|| unclassified_reason(descriptor.source_family))
+                .to_string(),
         },
     };
     SourceInventoryDescriptor {
@@ -349,6 +335,75 @@ struct ReviewedQueryOperation {
     domain_capability: OperationCapability,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ReviewedCanonicalOperation {
+    Query(ReviewedQueryOperation),
+    SetEffectEnabled,
+}
+
+impl ReviewedCanonicalOperation {
+    fn operation_id(self) -> &'static str {
+        match self {
+            Self::Query(query) => query.operation_id,
+            Self::SetEffectEnabled => SET_EFFECT_ENABLED_OPERATION_ID,
+        }
+    }
+}
+
+fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperation> {
+    if let Some(query) = reviewed_query_operation(command) {
+        return Some(ReviewedCanonicalOperation::Query(query));
+    }
+    (command == "set_effect_enabled").then_some(ReviewedCanonicalOperation::SetEffectEnabled)
+}
+
+fn canonical_descriptor_for_source(
+    descriptor: &OperationDescriptor,
+) -> Option<CanonicalOperationDescriptor> {
+    let reviewed = reviewed_canonical_operation(&descriptor.source_id)?;
+    let (class, capabilities, idempotency, adapter_policy, receipt_policy) = match reviewed {
+        ReviewedCanonicalOperation::Query(query) => (
+            query.class,
+            vec![
+                OperationCapability::ReadOnly,
+                OperationCapability::LocalWindowBound,
+                OperationCapability::AllowedDuringFullLock,
+                query.domain_capability,
+            ],
+            OperationIdempotency::ReadOnly,
+            AdapterPolicy::LocalWindowReadOnly,
+            ReceiptPolicy::FailClosed,
+        ),
+        ReviewedCanonicalOperation::SetEffectEnabled => (
+            OperationClass::Mutation,
+            vec![
+                OperationCapability::LocalWindowBound,
+                OperationCapability::AuthoritativeProjectMutation,
+            ],
+            OperationIdempotency::Mutating,
+            AdapterPolicy::LocalWindowAuthoritativeMutation,
+            ReceiptPolicy::ExactTerminalReceipt,
+        ),
+    };
+    Some(CanonicalOperationDescriptor {
+        schema: CanonicalOperationDescriptor::schema_identity(),
+        operation_id: reviewed.operation_id().to_string(),
+        class,
+        risk: OperationRisk::R0,
+        capabilities,
+        request_schema: descriptor.request_schema.clone(),
+        response_schema: descriptor.response_schema.clone(),
+        idempotency,
+        audit: OperationAuditRequirement::NotApplicable,
+        adapter_policy,
+        receipt_policy,
+        rate_policy: RatePolicy::FailClosed,
+        payload_policy: PayloadPolicy::FailClosed,
+        consent_policy: ConsentPolicy::FailClosed,
+        derived_adapters: Vec::new(),
+    })
+}
+
 fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
     let (operation_id, class, domain_capability) = match command {
         "get_control_plane_operation_registry" => (
@@ -401,47 +456,84 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
 }
 
 fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
-    let Some(reviewed) = reviewed_query_operation(operation_id) else {
-        return unavailable_descriptor(operation_id);
-    };
-    OperationDescriptor {
-        schema: SchemaIdentity::descriptor(),
-        operation_id: reviewed.operation_id.to_string(),
-        source_family: OperationSourceFamily::TauriCommand,
-        source_id: operation_id.to_string(),
-        class: reviewed.class,
-        risk: OperationRisk::R0,
-        capabilities: vec![
-            OperationCapability::ReadOnly,
-            OperationCapability::LocalWindowBound,
-            // Registry discovery remains observable during Full Lock and has
-            // no mutation capability.
-            OperationCapability::AllowedDuringFullLock,
-            reviewed.domain_capability,
-        ],
-        availability: OperationAvailability::LocalWindowOnly,
-        idempotency: OperationIdempotency::ReadOnly,
-        audit: OperationAuditRequirement::NotApplicable,
-        request_schema: command_schema(reviewed.operation_id, "request"),
-        response_schema: command_schema(reviewed.operation_id, "response"),
+    if let Some(reviewed) = reviewed_query_operation(operation_id) {
+        return OperationDescriptor {
+            schema: SchemaIdentity::descriptor(),
+            operation_id: reviewed.operation_id.to_string(),
+            source_family: OperationSourceFamily::TauriCommand,
+            source_id: operation_id.to_string(),
+            class: reviewed.class,
+            risk: OperationRisk::R0,
+            capabilities: vec![
+                OperationCapability::ReadOnly,
+                OperationCapability::LocalWindowBound,
+                // Registry discovery remains observable during Full Lock and has
+                // no mutation capability.
+                OperationCapability::AllowedDuringFullLock,
+                reviewed.domain_capability,
+            ],
+            availability: OperationAvailability::LocalWindowOnly,
+            idempotency: OperationIdempotency::ReadOnly,
+            audit: OperationAuditRequirement::NotApplicable,
+            request_schema: command_schema(reviewed.operation_id, "request"),
+            response_schema: command_schema(reviewed.operation_id, "response"),
+        };
     }
+    if operation_id == "set_effect_enabled" {
+        // v1 has no safe executable-authoritative mutation descriptor. Keep
+        // its raw inventory row fail-closed/R5 while preserving the precise
+        // v2 schema identity needed for the reviewed direct projection.
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            SET_EFFECT_ENABLED_OPERATION_ID,
+        );
+    }
+    unavailable_descriptor(operation_id)
 }
 
 fn unavailable_descriptor(operation_id: &str) -> OperationDescriptor {
     let semantic_operation_id = format!("syndocal.inventory.tauri.{operation_id}.v1");
+    unavailable_descriptor_for_semantic_operation(operation_id, &semantic_operation_id)
+}
+
+fn unavailable_descriptor_for_semantic_operation(
+    source_id: &str,
+    semantic_operation_id: &str,
+) -> OperationDescriptor {
     OperationDescriptor {
         schema: SchemaIdentity::descriptor(),
-        operation_id: semantic_operation_id.clone(),
+        operation_id: semantic_operation_id.to_string(),
         source_family: OperationSourceFamily::TauriCommand,
-        source_id: operation_id.to_string(),
+        source_id: source_id.to_string(),
         class: OperationClass::Mutation,
         risk: OperationRisk::R5,
         capabilities: vec![OperationCapability::LocalWindowBound],
         availability: OperationAvailability::Unavailable,
         idempotency: OperationIdempotency::Mutating,
         audit: OperationAuditRequirement::RequiredBeforeExternalExecution,
-        request_schema: command_schema(&semantic_operation_id, "request"),
-        response_schema: command_schema(&semantic_operation_id, "response"),
+        request_schema: command_schema(semantic_operation_id, "request"),
+        response_schema: command_schema(semantic_operation_id, "response"),
+    }
+}
+
+fn effect_enabled_unclassified_reason(descriptor: &OperationDescriptor) -> Option<&'static str> {
+    match (descriptor.source_family, descriptor.source_id.as_str()) {
+        (OperationSourceFamily::EngineCommand, "set_effect_enabled") => {
+            Some("legacy effect-enabled engine ingress lacks a versioned authored fence")
+        }
+        (OperationSourceFamily::RemoteInputEvent, "set_effect_enabled")
+        | (OperationSourceFamily::RemoteWireOperation, "setEffectEnabled") => {
+            Some("legacy remote effect-enabled ingress is fail-closed pending versioned migration")
+        }
+        (OperationSourceFamily::MidiControlAction, "effect_enabled")
+        | (OperationSourceFamily::MidiControlEvent, "set_effect_enabled") => {
+            Some("legacy midi effect-enabled ingress is fail-closed pending versioned migration")
+        }
+        (OperationSourceFamily::OscControlAction, "effect_enabled")
+        | (OperationSourceFamily::OscInputEvent, "set_effect_enabled") => {
+            Some("legacy osc effect-enabled ingress is fail-closed pending versioned migration")
+        }
+        _ => None,
     }
 }
 
@@ -893,7 +985,7 @@ mod tests {
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         assert_eq!(SOURCE_TOTAL, 1400);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 8);
+        assert_eq!(canonical.canonical_operations.len(), 9);
 
         let count_family = |family| {
             canonical
@@ -947,11 +1039,22 @@ mod tests {
             .iter()
             .filter(|source| matches!(&source.disposition, SourceDisposition::Unclassified { .. }))
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 8);
+        let internal_steps = canonical
+            .source_inventory
+            .iter()
+            .filter(|source| {
+                matches!(
+                    &source.disposition,
+                    SourceDisposition::InternalStepOf { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(direct.len(), 9);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
-        assert_eq!(unclassified.len(), 1006);
+        assert_eq!(internal_steps.len(), 1);
+        assert_eq!(unclassified.len(), 1004);
         assert_eq!(
-            direct.len() + aliases.len() + unclassified.len(),
+            direct.len() + aliases.len() + internal_steps.len() + unclassified.len(),
             SOURCE_TOTAL
         );
 
@@ -988,6 +1091,44 @@ mod tests {
                     .map(|operation| operation.operation_id.as_str())
             );
         }
+        let effect_enabled_direct = direct
+            .iter()
+            .find(|source| source.source_key.source_id == "set_effect_enabled")
+            .expect("set_effect_enabled must be the ninth direct canonical source");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&effect_enabled_direct.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(SET_EFFECT_ENABLED_OPERATION_ID)
+        );
+        let effect_enabled_alias = aliases
+            .iter()
+            .find(|source| source.source_key.source_id == "set_effect_enabled")
+            .expect("frontend set_effect_enabled must retain its alias row");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&effect_enabled_alias.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(SET_EFFECT_ENABLED_OPERATION_ID)
+        );
+        let published_step = internal_steps[0];
+        assert_eq!(
+            published_step.source_key,
+            SourceKey::new(
+                OperationSourceFamily::EngineCommand,
+                "set_effect_enabled_published"
+            )
+        );
+        assert!(matches!(
+            &published_step.disposition,
+            SourceDisposition::InternalStepOf { target }
+                if *target == SourceKey::new(
+                    OperationSourceFamily::TauriCommand,
+                    "set_effect_enabled"
+                )
+        ));
         for source in &unclassified {
             assert!(canonical
                 .canonical_operation_for_source(&source.source_key)
@@ -996,10 +1137,84 @@ mod tests {
         }
         for operation in &canonical.canonical_operations {
             assert_eq!(operation.risk, OperationRisk::R0);
-            assert_eq!(operation.idempotency, OperationIdempotency::ReadOnly);
             assert_eq!(operation.audit, OperationAuditRequirement::NotApplicable);
-            assert_eq!(operation.adapter_policy, AdapterPolicy::LocalWindowReadOnly);
             assert_eq!(operation.derived_adapters.len(), 1);
+            if operation.operation_id == SET_EFFECT_ENABLED_OPERATION_ID {
+                assert_eq!(operation.class, OperationClass::Mutation);
+                assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
+                assert_eq!(
+                    operation.adapter_policy,
+                    AdapterPolicy::LocalWindowAuthoritativeMutation
+                );
+                assert_eq!(
+                    operation.receipt_policy,
+                    ReceiptPolicy::ExactTerminalReceipt
+                );
+                assert_eq!(
+                    operation.capabilities,
+                    vec![
+                        OperationCapability::LocalWindowBound,
+                        OperationCapability::AuthoritativeProjectMutation,
+                    ]
+                );
+            } else {
+                assert_eq!(operation.idempotency, OperationIdempotency::ReadOnly);
+                assert_eq!(operation.adapter_policy, AdapterPolicy::LocalWindowReadOnly);
+                assert_eq!(operation.receipt_policy, ReceiptPolicy::FailClosed);
+            }
+        }
+
+        let fail_closed_effect_bindings = [
+            (
+                OperationSourceFamily::EngineCommand,
+                "set_effect_enabled",
+                "legacy effect-enabled engine ingress lacks a versioned authored fence",
+            ),
+            (
+                OperationSourceFamily::RemoteInputEvent,
+                "set_effect_enabled",
+                "legacy remote effect-enabled ingress is fail-closed pending versioned migration",
+            ),
+            (
+                OperationSourceFamily::RemoteWireOperation,
+                "setEffectEnabled",
+                "legacy remote effect-enabled ingress is fail-closed pending versioned migration",
+            ),
+            (
+                OperationSourceFamily::MidiControlAction,
+                "effect_enabled",
+                "legacy midi effect-enabled ingress is fail-closed pending versioned migration",
+            ),
+            (
+                OperationSourceFamily::MidiControlEvent,
+                "set_effect_enabled",
+                "legacy midi effect-enabled ingress is fail-closed pending versioned migration",
+            ),
+            (
+                OperationSourceFamily::OscControlAction,
+                "effect_enabled",
+                "legacy osc effect-enabled ingress is fail-closed pending versioned migration",
+            ),
+            (
+                OperationSourceFamily::OscInputEvent,
+                "set_effect_enabled",
+                "legacy osc effect-enabled ingress is fail-closed pending versioned migration",
+            ),
+        ];
+        for (family, source_id, reason) in fail_closed_effect_bindings {
+            let source = canonical
+                .source_inventory
+                .iter()
+                .find(|source| {
+                    source.source_key.family == family && source.source_key.source_id == source_id
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing legacy effect-enabled source {family:?}:{source_id}")
+                });
+            assert!(matches!(
+                &source.disposition,
+                SourceDisposition::Unclassified { reason: actual } if actual == reason
+            ));
         }
 
         let canonical_json = serde_json::to_value(&canonical).unwrap();
@@ -1052,6 +1267,40 @@ mod tests {
                 "allowed_during_full_lock",
                 "registry_discovery"
             ])
+        );
+    }
+
+    #[test]
+    fn legacy_set_effect_enabled_stays_r5_while_v2_owns_the_authoritative_mutation() {
+        let legacy = registry().unwrap();
+        let descriptor = legacy
+            .operations
+            .iter()
+            .find(|descriptor| {
+                descriptor.source_family == OperationSourceFamily::TauriCommand
+                    && descriptor.source_id == "set_effect_enabled"
+            })
+            .expect("set_effect_enabled must remain in the exact v1 source inventory");
+        assert_eq!(descriptor.operation_id, SET_EFFECT_ENABLED_OPERATION_ID);
+        assert_eq!(descriptor.risk, OperationRisk::R5);
+        assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
+        assert_eq!(descriptor.class, OperationClass::Mutation);
+        assert_eq!(descriptor.idempotency, OperationIdempotency::Mutating);
+        assert_eq!(
+            descriptor.capabilities,
+            vec![OperationCapability::LocalWindowBound]
+        );
+        assert_eq!(
+            descriptor.audit,
+            OperationAuditRequirement::RequiredBeforeExternalExecution
+        );
+        assert_eq!(
+            descriptor.request_schema,
+            command_schema(SET_EFFECT_ENABLED_OPERATION_ID, "request")
+        );
+        assert_eq!(
+            descriptor.response_schema,
+            command_schema(SET_EFFECT_ENABLED_OPERATION_ID, "response")
         );
     }
 

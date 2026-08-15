@@ -16,6 +16,10 @@ const helpers = await import(
 );
 const guardSource = await readFile(new URL("../src/snapshotRequestGuard.ts", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const authoredEffectEnableSource = await readFile(
+  new URL("../src/authoredEffectEnableController.ts", import.meta.url),
+  "utf8",
+);
 const editorSource = await readFile(new URL("../src/components/CueEffectRecallEditor.tsx", import.meta.url), "utf8");
 const guardTranspiled = ts.transpileModule(guardSource, {
   compilerOptions: {
@@ -56,8 +60,33 @@ assert.match(
 );
 assert.match(
   appSource,
-  /const setEffectEnabled = async[\s\S]*?setCueEffectCaptureTargets[\s\S]*?await invoke\("set_effect_enabled"/,
-  "Effect toggles must update non-overridden Store Recall state before awaiting the backend",
+  /const mirrorCueEffectCaptureTargetForAuthoredIntent = \([\s\S]*?const mirrorsLiveState = Boolean\(previousTarget\)[\s\S]*?!cueEffectCaptureStateOverrideIds\(\)\.includes\(intent\.effectId\)[\s\S]*?setCueEffectCaptureTargets\([\s\S]*?enabled: intent\.enabled/,
+  "canonical effect enqueue must update a non-overridden Store Recall target to its latest intent",
+);
+assert.match(
+  appSource,
+  /const authoredEffectEnableIntents = createAuthoredEffectEnableIntentController\([\s\S]*?onQueued: mirrorCueEffectCaptureTargetForAuthoredIntent/,
+  "Store Recall mirroring must be wired to the canonical authored enqueue lifecycle",
+);
+assert.match(
+  authoredEffectEnableSource,
+  /lane\.latest = \{ effectId, enabled, generation: allocateGeneration\(\) \};[\s\S]*?options\.onQueued\?\.\(lane\.latest\);[\s\S]*?if \(!lane\.running\) \{[\s\S]*?lane\.drain = runLane/,
+  "Store Recall lifecycle update must run synchronously before the effect lane starts async dispatch",
+);
+assert.match(
+  appSource,
+  /const rollbackCueEffectCaptureTargetForAuthoredIntent = \([\s\S]*?settledEnabled: boolean,[\s\S]*?if \(!latest \|\| latest\.generation !== intent\.generation\) return;[\s\S]*?if \(cueEffectCaptureStateOverrideIds\(\)\.includes\(intent\.effectId\)\) return;[\s\S]*?target\.effect_id === intent\.effectId && target\.enabled === latest\.requestedEnabled[\s\S]*?enabled: settledEnabled/,
+  "a failed effect command may roll back only its still-current non-overridden Store Recall target to the settled baseline",
+);
+assert.match(
+  appSource,
+  /seedSettledBaseline: \(effectId\) => snapshot\(\)\.effects\.find\(\(effect\) => effect\.id === effectId\)\?\.enabled \?\? false/,
+  "an idle effect lane must seed its rollback baseline from the authoritative snapshot instead of Store Recall draft state",
+);
+assert.match(
+  appSource,
+  /onFailed: \(intent, error, settledEnabled\) => \{[\s\S]*?rollbackCueEffectCaptureTargetForAuthoredIntent\(intent, settledEnabled\)/,
+  "the latest-lane terminal failure must use the guarded Store Recall rollback",
 );
 assert.match(
   appSource,
