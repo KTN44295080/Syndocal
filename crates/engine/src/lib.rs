@@ -13,8 +13,10 @@ use std::{
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
 
+mod control_plane;
 mod move_path;
 
+pub use control_plane::{control_plane_engine_command_descriptors, engine_command_variant_count};
 use move_path::{move_rotation, transform_move_delta, CompiledMovePath};
 
 use crossbeam_queue::ArrayQueue;
@@ -1395,8 +1397,36 @@ pub struct VideoLayerDuplicateEffectCatalogPlan {
     duplicate_chain_ids: Vec<VideoEffectLegacyAdapterIds>,
 }
 
-#[derive(Debug)]
-pub enum EngineCommand {
+// Keep the command definition and the AI0 inventory in the same declarative
+// source.  Adding a variant here automatically adds it to the internal,
+// fail-closed inventory; no source parsing or manually maintained mirror is
+// involved.
+macro_rules! define_engine_command {
+    ($(
+        $(#[$attribute:meta])* $variant:ident
+        $(($($tuple_fields:tt)*))?
+        $({$($struct_fields:tt)*})?
+    ,)*) => {
+        #[derive(Debug)]
+        pub enum EngineCommand {
+            $(
+                $(#[$attribute])*
+                $variant $(($($tuple_fields)*))? $({$($struct_fields)*})?,
+            )*
+        }
+
+        impl EngineCommand {
+            /// Exact command-variant inventory generated from this enum's
+            /// declaration. This is metadata only and never executes a
+            /// command or exposes an external adapter.
+            pub const CONTROL_PLANE_VARIANT_NAMES: &'static [&'static str] = &[
+                $(stringify!($variant),)*
+            ];
+        }
+    };
+}
+
+define_engine_command! {
     PatchFixture {
         fixture_id: FixtureId,
         request: PatchFixtureRequest,

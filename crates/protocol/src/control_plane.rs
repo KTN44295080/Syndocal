@@ -64,6 +64,9 @@ pub enum OperationRisk {
 pub enum OperationCapability {
     ReadOnly,
     LocalWindowBound,
+    /// Marks an internal source-family inventory entry.  It grants neither a
+    /// local-window invocation nor an external execution adapter.
+    InternalInventory,
     AllowedDuringFullLock,
     RegistryDiscovery,
     ProjectAuthorityRead,
@@ -104,6 +107,7 @@ pub enum OperationAuditRequirement {
 #[serde(rename_all = "snake_case")]
 pub enum OperationSourceFamily {
     TauriCommand,
+    EngineCommand,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -193,22 +197,37 @@ impl OperationDescriptor {
         {
             return Err(OperationDescriptorValidationError::UnavailableOperationMustBeR5);
         }
-        if self.availability == OperationAvailability::Unavailable
-            && (self.idempotency != OperationIdempotency::Mutating
-                || self.audit != OperationAuditRequirement::RequiredBeforeExternalExecution
-                || self.capabilities != vec![OperationCapability::LocalWindowBound])
-        {
-            return Err(OperationDescriptorValidationError::UnsafeUnavailableOperation);
+        if self.availability == OperationAvailability::Unavailable {
+            validate_unavailable_descriptor(self)?;
         }
         Ok(())
     }
+}
+
+fn validate_unavailable_descriptor(
+    descriptor: &OperationDescriptor,
+) -> Result<(), OperationDescriptorValidationError> {
+    if descriptor.idempotency != OperationIdempotency::Mutating
+        || descriptor.audit != OperationAuditRequirement::RequiredBeforeExternalExecution
+    {
+        return Err(OperationDescriptorValidationError::UnsafeUnavailableOperation);
+    }
+    let expected_capability = match descriptor.source_family {
+        OperationSourceFamily::TauriCommand => OperationCapability::LocalWindowBound,
+        OperationSourceFamily::EngineCommand => OperationCapability::InternalInventory,
+    };
+    if descriptor.capabilities != vec![expected_capability] {
+        return Err(OperationDescriptorValidationError::UnsafeUnavailableOperation);
+    }
+    Ok(())
 }
 
 fn validate_local_window_only_descriptor(
     descriptor: &OperationDescriptor,
     capabilities: &BTreeSet<OperationCapability>,
 ) -> Result<(), OperationDescriptorValidationError> {
-    if descriptor.risk != OperationRisk::R0
+    if descriptor.source_family != OperationSourceFamily::TauriCommand
+        || descriptor.risk != OperationRisk::R0
         || descriptor.idempotency != OperationIdempotency::ReadOnly
         || descriptor.audit != OperationAuditRequirement::NotApplicable
         || !capabilities.contains(&OperationCapability::ReadOnly)
@@ -453,7 +472,7 @@ impl fmt::Display for OperationDescriptorValidationError {
             Self::UnexpectedLocalCapability => "local availability has an unreviewed capability",
             Self::UnavailableOperationMustBeR5 => "unavailable operations must remain R5",
             Self::UnsafeUnavailableOperation => {
-                "unavailable operations must remain mutating, audited, and capability-free"
+                "unavailable operations must remain mutating, audited, and carry only their family inventory capability"
             }
         })
     }
@@ -518,6 +537,54 @@ mod tests {
         assert_eq!(
             descriptor.validate(),
             Err(OperationDescriptorValidationError::UnavailableOperationMustBeR5)
+        );
+    }
+
+    #[test]
+    fn engine_inventory_is_unavailable_and_cannot_be_forged_as_read_or_discovery() {
+        let mut descriptor = local_read_descriptor();
+        descriptor.source_family = OperationSourceFamily::EngineCommand;
+        descriptor.operation_id = "syndocal.inventory.engine.set_blackout.v1".to_string();
+        descriptor.source_id = "set_blackout".to_string();
+        descriptor.class = OperationClass::Mutation;
+        descriptor.risk = OperationRisk::R5;
+        descriptor.capabilities = vec![OperationCapability::InternalInventory];
+        descriptor.availability = OperationAvailability::Unavailable;
+        descriptor.idempotency = OperationIdempotency::Mutating;
+        descriptor.audit = OperationAuditRequirement::RequiredBeforeExternalExecution;
+        descriptor.request_schema = SchemaIdentity {
+            name: "syndocal.inventory.engine.set_blackout.v1.request".to_string(),
+            version: CONTROL_PLANE_SCHEMA_VERSION,
+        };
+        descriptor.response_schema = SchemaIdentity {
+            name: "syndocal.inventory.engine.set_blackout.v1.response".to_string(),
+            version: CONTROL_PLANE_SCHEMA_VERSION,
+        };
+        descriptor.validate().unwrap();
+
+        descriptor.capabilities = vec![OperationCapability::ReadOnly];
+        assert_eq!(
+            descriptor.validate(),
+            Err(OperationDescriptorValidationError::UnsafeUnavailableOperation)
+        );
+        descriptor.capabilities = vec![OperationCapability::RegistryDiscovery];
+        assert_eq!(
+            descriptor.validate(),
+            Err(OperationDescriptorValidationError::UnsafeUnavailableOperation)
+        );
+        descriptor.capabilities = vec![
+            OperationCapability::ReadOnly,
+            OperationCapability::LocalWindowBound,
+            OperationCapability::AllowedDuringFullLock,
+            OperationCapability::RuntimeRead,
+        ];
+        descriptor.availability = OperationAvailability::LocalWindowOnly;
+        descriptor.risk = OperationRisk::R0;
+        descriptor.idempotency = OperationIdempotency::ReadOnly;
+        descriptor.audit = OperationAuditRequirement::NotApplicable;
+        assert_eq!(
+            descriptor.validate(),
+            Err(OperationDescriptorValidationError::UnsafeLocalAvailability)
         );
     }
 

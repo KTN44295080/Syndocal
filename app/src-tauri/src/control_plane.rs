@@ -7,13 +7,14 @@
 
 use std::{collections::BTreeSet, fmt, sync::LazyLock};
 
+use engine::control_plane_engine_command_descriptors;
 use protocol::control_plane::{
     OperationAuditRequirement, OperationAvailability, OperationCapability, OperationClass,
     OperationDescriptor, OperationIdempotency, OperationRegistry, OperationRisk,
     OperationSourceFamily, SchemaIdentity, CONTROL_PLANE_SCHEMA_VERSION,
 };
 
-const MAX_REGISTERED_OPERATIONS: usize = 512;
+const MAX_REGISTERED_OPERATIONS: usize = 768;
 const MAIN_RS_SOURCE: &str = include_str!("main.rs");
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
@@ -93,17 +94,24 @@ pub fn registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
 
 fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
     let command_names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE)?;
-    if command_names.len() > MAX_REGISTERED_OPERATIONS {
+    let engine_descriptors = control_plane_engine_command_descriptors();
+    let total_operations = command_names.len() + engine_descriptors.len();
+    if total_operations > MAX_REGISTERED_OPERATIONS {
         return Err(ControlPlaneRegistryError::TooManyOperations(
-            command_names.len(),
+            total_operations,
         ));
     }
+    let mut operations = command_names
+        .iter()
+        .map(|name| descriptor_for_command(name))
+        .collect::<Vec<_>>();
+    operations.extend(engine_descriptors);
+    operations.sort_by(|left, right| {
+        (left.source_family, &left.source_id).cmp(&(right.source_family, &right.source_id))
+    });
     let registry = OperationRegistry {
         schema: SchemaIdentity::registry(),
-        operations: command_names
-            .iter()
-            .map(|name| descriptor_for_command(name))
-            .collect(),
+        operations,
     };
     registry
         .validate()
@@ -258,7 +266,8 @@ mod tests {
         let registry = registry().unwrap();
         const R0_ALLOWLIST: [&str; 1] = ["syndocal.query.control_plane.registry.v1"];
         assert_eq!(names.len(), 438);
-        assert_eq!(registry.operations.len(), 438);
+        const ENGINE_COMMAND_COUNT: usize = 247;
+        assert_eq!(registry.operations.len(), 438 + ENGINE_COMMAND_COUNT);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -266,7 +275,10 @@ mod tests {
             .filter(|descriptor| descriptor.risk == OperationRisk::R0)
             .collect::<Vec<_>>();
         assert_eq!(r0.len(), 1);
-        assert_eq!(registry.operations.len() - r0.len(), 437);
+        assert_eq!(
+            registry.operations.len() - r0.len(),
+            437 + ENGINE_COMMAND_COUNT
+        );
         assert_eq!(r0[0].operation_id, R0_ALLOWLIST[0]);
         assert_eq!(r0[0].source_family, OperationSourceFamily::TauriCommand);
         assert_eq!(r0[0].source_id, "get_control_plane_operation_registry");
@@ -280,11 +292,12 @@ mod tests {
                 OperationCapability::RegistryDiscovery,
             ]
         );
-        for descriptor in registry
-            .operations
-            .iter()
-            .filter(|descriptor| !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str()))
-        {
+        let tauri_unavailable = registry.operations.iter().filter(|descriptor| {
+            descriptor.source_family == OperationSourceFamily::TauriCommand
+                && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
+        });
+        assert_eq!(tauri_unavailable.clone().count(), 437);
+        for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
                 OperationRisk::R5,
@@ -314,6 +327,25 @@ mod tests {
                 vec![OperationCapability::LocalWindowBound],
                 "{}",
                 descriptor.operation_id
+            );
+        }
+        let engine_unavailable = registry
+            .operations
+            .iter()
+            .filter(|descriptor| descriptor.source_family == OperationSourceFamily::EngineCommand)
+            .collect::<Vec<_>>();
+        assert_eq!(engine_unavailable.len(), ENGINE_COMMAND_COUNT);
+        for descriptor in engine_unavailable {
+            assert_eq!(descriptor.risk, OperationRisk::R5);
+            assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
+            assert_eq!(descriptor.idempotency, OperationIdempotency::Mutating);
+            assert_eq!(
+                descriptor.audit,
+                OperationAuditRequirement::RequiredBeforeExternalExecution
+            );
+            assert_eq!(
+                descriptor.capabilities,
+                vec![OperationCapability::InternalInventory]
             );
         }
     }
