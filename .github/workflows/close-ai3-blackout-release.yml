@@ -75,7 +75,7 @@ jobs:
           path = Path("app/src-tauri/src/main.rs")
           source = path.read_text(encoding="utf-8")
           guard = "    #[cfg(all(feature = \"spout\", target_os = \"windows\", target_arch = \"x86_64\"))]\n"
-          block = "    spout\n        .harvest_failed_workers(engine)\n        .map_err(|error| error.to_string())?;\n"
+          block = "    spout\n        .harvest_failed_workers(engine)\n        .map_err(|error| error.message)?;\n"
           guarded = guard + block
           guarded_count = source.count(guarded)
           if guarded_count == 1:
