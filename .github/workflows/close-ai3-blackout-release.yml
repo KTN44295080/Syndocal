@@ -63,7 +63,7 @@ jobs:
         with:
           shared-key: syndocal-ai3-blackout-release-ubuntu
 
-      - name: Apply strict receipt patch
+      - name: Apply strict Blackout Release patch
         run: python .github/scripts/patch_blackout_release_receipt.py
 
       - name: Repair baseline portability guards and helper types
@@ -133,7 +133,11 @@ jobs:
           mapfile -t changed < <(git diff --name-only | sort)
           required=(
             app/scripts/check-blackout-release-runtime.mjs
+            app/src-tauri/src/control_plane.rs
+            app/src-tauri/src/main.rs
             app/src/blackoutReleaseRuntimeController.ts
+            app/src/tauri-invoke-manifest.json
+            app/src/tauriInvokeCommands.ts
             crates/protocol/src/control_plane_command.rs
           )
           for file in "${required[@]}"; do
@@ -141,7 +145,7 @@ jobs:
           done
           for file in "${changed[@]}"; do
             case "$file" in
-              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/src/main.rs|app/src/blackoutReleaseRuntimeController.ts|crates/protocol/src/control_plane_command.rs)
+              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/src/control_plane.rs|app/src-tauri/src/main.rs|app/src/blackoutReleaseRuntimeController.ts|app/src/tauri-invoke-manifest.json|app/src/tauriInvokeCommands.ts|crates/protocol/src/control_plane_command.rs)
                 ;;
               *)
                 echo "Unexpected changed file: $file" >&2
@@ -200,5 +204,5 @@ jobs:
           git config user.name "KTN"
           git config user.email "47689501+KTN44295080@users.noreply.github.com"
           git add -A
-          git commit -m "fix: close strict blackout release receipt lane"
+          git commit -m "fix: close strict blackout release wire lane"
           git push origin HEAD:codex/ai3-r4-blackout-release
