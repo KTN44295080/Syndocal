@@ -77,6 +77,9 @@ pub enum OperationCapability {
     /// Narrow safer-direction capability for emergency lighting blackout
     /// engagement. It cannot authorize release or any other S0 operation.
     SafetyBlackoutEngage,
+    /// Narrow energizing capability for releasing the runtime safety blackout.
+    /// It never authorizes Arm, Takeover, or another R4 output action.
+    OutputBlackoutRelease,
     /// Marks an internal source-family inventory entry.  It grants neither a
     /// local-window invocation nor an external execution adapter.
     InternalInventory,
