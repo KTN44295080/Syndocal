@@ -26,6 +26,48 @@ pub enum DmxInputEvent {
     },
 }
 
+macro_rules! control_plane_variant_inventory {
+    (
+        $names:ident,
+        $matcher:ident,
+        $uniqueness:ident,
+        $enum_type:ty;
+        $( $variant:ident => $pattern:pat ),+ $(,)?
+    ) => {
+        pub(crate) const $names: &[&str] = &[$(stringify!($variant)),+];
+
+        #[allow(dead_code)]
+        enum $uniqueness {
+            $($variant),+
+        }
+
+        #[allow(dead_code)]
+        fn $matcher(value: &$enum_type) -> &'static str {
+            match value {
+                $($pattern => stringify!($variant)),+
+            }
+        }
+    };
+}
+
+control_plane_variant_inventory!(
+    DMX_INPUT_PROTOCOL_VARIANT_NAMES,
+    dmx_input_protocol_variant_name,
+    DmxInputProtocolInventoryUniqueness,
+    DmxInputProtocol;
+    ArtNet => DmxInputProtocol::ArtNet,
+    Sacn => DmxInputProtocol::Sacn,
+);
+
+control_plane_variant_inventory!(
+    DMX_INPUT_EVENT_VARIANT_NAMES,
+    dmx_input_event_variant_name,
+    DmxInputEventInventoryUniqueness,
+    DmxInputEvent;
+    Frame => DmxInputEvent::Frame { .. },
+    SignalLost => DmxInputEvent::SignalLost { .. },
+);
+
 /// Converts the protocol-native universe carried on the wire into the
 /// zero-based universe used by persisted control mappings. Raw DMX merge keeps
 /// the protocol-native universe so this conversion cannot change its existing

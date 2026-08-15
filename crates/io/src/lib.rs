@@ -14,8 +14,13 @@ pub mod serial_dmx;
 pub mod serial_rdm;
 
 pub use control_plane::{
-    control_plane_remote_descriptors, remote_client_request_variant_count,
-    remote_input_event_variant_count, remote_wire_operation_count,
+    control_plane_midi_osc_dmx_descriptors, control_plane_remote_descriptors,
+    dmx_input_event_variant_count, dmx_input_protocol_variant_count,
+    midi_clock_event_variant_count, midi_control_action_variant_count,
+    midi_control_event_variant_count, midi_control_message_variant_count,
+    osc_control_action_variant_count, osc_input_event_variant_count,
+    remote_client_request_variant_count, remote_input_event_variant_count,
+    remote_wire_operation_count,
 };
 
 pub(crate) fn parse_clock_source_label(source: &str) -> Option<ClockSource> {

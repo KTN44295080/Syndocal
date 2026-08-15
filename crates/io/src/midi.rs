@@ -304,6 +304,169 @@ pub enum MidiControlEvent {
     },
 }
 
+macro_rules! control_plane_variant_inventory {
+    (
+        $names:ident,
+        $matcher:ident,
+        $uniqueness:ident,
+        $enum_type:ty;
+        $( $variant:ident => $pattern:pat ),+ $(,)?
+    ) => {
+        pub(crate) const $names: &[&str] = &[$(stringify!($variant)),+];
+
+        // Duplicate entries are a compile error, while the exhaustive match
+        // makes any newly added source enum variant a compile error until it
+        // is deliberately inventoried here.
+        #[allow(dead_code)]
+        enum $uniqueness {
+            $($variant),+
+        }
+
+        #[allow(dead_code)]
+        fn $matcher(value: &$enum_type) -> &'static str {
+            match value {
+                $($pattern => stringify!($variant)),+
+            }
+        }
+    };
+}
+
+control_plane_variant_inventory!(
+    MIDI_CONTROL_MESSAGE_VARIANT_NAMES,
+    midi_control_message_variant_name,
+    MidiControlMessageInventoryUniqueness,
+    MidiControlMessage;
+    NoteOn => MidiControlMessage::NoteOn,
+    NoteOff => MidiControlMessage::NoteOff,
+    ControlChange => MidiControlMessage::ControlChange,
+    ProgramChange => MidiControlMessage::ProgramChange,
+);
+
+control_plane_variant_inventory!(
+    MIDI_CONTROL_ACTION_VARIANT_NAMES,
+    midi_control_action_variant_name,
+    MidiControlActionInventoryUniqueness,
+    MidiControlAction;
+    FixtureAttribute => MidiControlAction::FixtureAttribute,
+    SelectedFeatureFader => MidiControlAction::SelectedFeatureFader,
+    FixtureHighlight => MidiControlAction::FixtureHighlight,
+    FixtureSolo => MidiControlAction::FixtureSolo,
+    FixturePark => MidiControlAction::FixturePark,
+    GroupHighlight => MidiControlAction::GroupHighlight,
+    GroupSolo => MidiControlAction::GroupSolo,
+    GroupPark => MidiControlAction::GroupPark,
+    TriggerCue => MidiControlAction::TriggerCue,
+    FlashCue => MidiControlAction::FlashCue,
+    TriggerCueDirection => MidiControlAction::TriggerCueDirection,
+    FlashCueDirection => MidiControlAction::FlashCueDirection,
+    TriggerCueListNext => MidiControlAction::TriggerCueListNext,
+    TriggerNextCue => MidiControlAction::TriggerNextCue,
+    TriggerPreviousCue => MidiControlAction::TriggerPreviousCue,
+    EffectEnabled => MidiControlAction::EffectEnabled,
+    NodeGraphEnabled => MidiControlAction::NodeGraphEnabled,
+    VideoParam => MidiControlAction::VideoParam,
+    VideoCuePointAdd => MidiControlAction::VideoCuePointAdd,
+    VideoCuePointRemove => MidiControlAction::VideoCuePointRemove,
+    VideoCuePointJump => MidiControlAction::VideoCuePointJump,
+    VideoCuePointPrevious => MidiControlAction::VideoCuePointPrevious,
+    VideoCuePointNext => MidiControlAction::VideoCuePointNext,
+    VideoLayerEnabled => MidiControlAction::VideoLayerEnabled,
+    VideoLayerSolo => MidiControlAction::VideoLayerSolo,
+    VideoPlay => MidiControlAction::VideoPlay,
+    VideoLoop => MidiControlAction::VideoLoop,
+    VideoLayerFade => MidiControlAction::VideoLayerFade,
+    VideoOutputEnabled => MidiControlAction::VideoOutputEnabled,
+    VideoOutputOpacity => MidiControlAction::VideoOutputOpacity,
+    VideoOutputFade => MidiControlAction::VideoOutputFade,
+    VideoOutputMappingField => MidiControlAction::VideoOutputMappingField,
+    VideoOutputMappingPreset => MidiControlAction::VideoOutputMappingPreset,
+    VideoOutputBlackout => MidiControlAction::VideoOutputBlackout,
+    TimelinePlay => MidiControlAction::TimelinePlay,
+    TimelineSeek => MidiControlAction::TimelineSeek,
+    TimelineBeatPrevious => MidiControlAction::TimelineBeatPrevious,
+    TimelineBeatNext => MidiControlAction::TimelineBeatNext,
+    TimelineLoopToggle => MidiControlAction::TimelineLoopToggle,
+    TimelineLoopHalf => MidiControlAction::TimelineLoopHalf,
+    TimelineLoopDouble => MidiControlAction::TimelineLoopDouble,
+    SetBpm => MidiControlAction::SetBpm,
+    TapBpm => MidiControlAction::TapBpm,
+    LightingMaster => MidiControlAction::LightingMaster,
+    GroupSubmaster => MidiControlAction::GroupSubmaster,
+    CueFadePause => MidiControlAction::CueFadePause,
+    Blackout => MidiControlAction::Blackout,
+    AllBlackout => MidiControlAction::AllBlackout,
+    VideoMaster => MidiControlAction::VideoMaster,
+    VideoBlackout => MidiControlAction::VideoBlackout,
+    ClearFixtureFlags => MidiControlAction::ClearFixtureFlags,
+);
+
+control_plane_variant_inventory!(
+    MIDI_CLOCK_EVENT_VARIANT_NAMES,
+    midi_clock_event_variant_name,
+    MidiClockEventInventoryUniqueness,
+    MidiClockEvent;
+    ClockPulse => MidiClockEvent::ClockPulse,
+    Start => MidiClockEvent::Start,
+    Continue => MidiClockEvent::Continue,
+    Stop => MidiClockEvent::Stop,
+    SongPositionPointer => MidiClockEvent::SongPositionPointer(_),
+    Timecode => MidiClockEvent::Timecode(_),
+);
+
+control_plane_variant_inventory!(
+    MIDI_CONTROL_EVENT_VARIANT_NAMES,
+    midi_control_event_variant_name,
+    MidiControlEventInventoryUniqueness,
+    MidiControlEvent;
+    SetAttribute => MidiControlEvent::SetAttribute { .. },
+    SetSelectedFeatureFader => MidiControlEvent::SetSelectedFeatureFader { .. },
+    SetFixtureHighlight => MidiControlEvent::SetFixtureHighlight { .. },
+    SetFixtureSolo => MidiControlEvent::SetFixtureSolo { .. },
+    SetFixturePark => MidiControlEvent::SetFixturePark { .. },
+    SetGroupHighlight => MidiControlEvent::SetGroupHighlight { .. },
+    SetGroupSolo => MidiControlEvent::SetGroupSolo { .. },
+    SetGroupPark => MidiControlEvent::SetGroupPark { .. },
+    TriggerCue => MidiControlEvent::TriggerCue(_),
+    TriggerCueWithDirection => MidiControlEvent::TriggerCueWithDirection { .. },
+    ReleaseCue => MidiControlEvent::ReleaseCue(_),
+    TriggerCueListNext => MidiControlEvent::TriggerCueListNext(_),
+    TriggerNextCue => MidiControlEvent::TriggerNextCue,
+    TriggerPreviousCue => MidiControlEvent::TriggerPreviousCue,
+    SetEffectEnabled => MidiControlEvent::SetEffectEnabled { .. },
+    SetNodeGraphEnabled => MidiControlEvent::SetNodeGraphEnabled { .. },
+    SetVideoParam => MidiControlEvent::SetVideoParam { .. },
+    AddVideoCuePoint => MidiControlEvent::AddVideoCuePoint { .. },
+    RemoveVideoCuePoint => MidiControlEvent::RemoveVideoCuePoint { .. },
+    JumpVideoCuePoint => MidiControlEvent::JumpVideoCuePoint { .. },
+    JumpVideoCuePointRelative => MidiControlEvent::JumpVideoCuePointRelative { .. },
+    SetVideoLayerEnabled => MidiControlEvent::SetVideoLayerEnabled { .. },
+    SetVideoLayerSolo => MidiControlEvent::SetVideoLayerSolo { .. },
+    SetVideoPlaying => MidiControlEvent::SetVideoPlaying { .. },
+    SetVideoLoop => MidiControlEvent::SetVideoLoop { .. },
+    FadeVideoLayerOpacity => MidiControlEvent::FadeVideoLayerOpacity { .. },
+    SetVideoOutputEnabled => MidiControlEvent::SetVideoOutputEnabled { .. },
+    SetVideoOutputOpacity => MidiControlEvent::SetVideoOutputOpacity { .. },
+    FadeVideoOutputOpacity => MidiControlEvent::FadeVideoOutputOpacity { .. },
+    SetVideoOutputMappingField => MidiControlEvent::SetVideoOutputMappingField { .. },
+    ApplyVideoOutputMappingPreset => MidiControlEvent::ApplyVideoOutputMappingPreset { .. },
+    SetVideoOutputBlackout => MidiControlEvent::SetVideoOutputBlackout { .. },
+    SetTimelinePlaying => MidiControlEvent::SetTimelinePlaying(_),
+    SeekTimeline => MidiControlEvent::SeekTimeline { .. },
+    SeekTimelineBeat => MidiControlEvent::SeekTimelineBeat { .. },
+    ToggleTimelineLoop => MidiControlEvent::ToggleTimelineLoop,
+    ScaleTimelineLoop => MidiControlEvent::ScaleTimelineLoop(_),
+    SetBpm => MidiControlEvent::SetBpm(_),
+    TapBpm => MidiControlEvent::TapBpm,
+    LightingMaster => MidiControlEvent::LightingMaster(_),
+    VideoMaster => MidiControlEvent::VideoMaster(_),
+    SetGroupSubmaster => MidiControlEvent::SetGroupSubmaster { .. },
+    SetCueFadePaused => MidiControlEvent::SetCueFadePaused(_),
+    Blackout => MidiControlEvent::Blackout(_),
+    AllBlackout => MidiControlEvent::AllBlackout(_),
+    VideoBlackout => MidiControlEvent::VideoBlackout(_),
+    ClearFixtureFlags => MidiControlEvent::ClearFixtureFlags { .. },
+);
+
 #[derive(Debug, Clone, PartialEq)]
 struct MidiMessage {
     message: MidiControlMessage,

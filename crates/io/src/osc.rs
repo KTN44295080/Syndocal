@@ -174,6 +174,138 @@ pub enum OscInputEvent {
     },
 }
 
+macro_rules! control_plane_variant_inventory {
+    (
+        $names:ident,
+        $matcher:ident,
+        $uniqueness:ident,
+        $enum_type:ty;
+        $( $variant:ident => $pattern:pat ),+ $(,)?
+    ) => {
+        pub(crate) const $names: &[&str] = &[$(stringify!($variant)),+];
+
+        #[allow(dead_code)]
+        enum $uniqueness {
+            $($variant),+
+        }
+
+        #[allow(dead_code)]
+        fn $matcher(value: &$enum_type) -> &'static str {
+            match value {
+                $($pattern => stringify!($variant)),+
+            }
+        }
+    };
+}
+
+control_plane_variant_inventory!(
+    OSC_CONTROL_ACTION_VARIANT_NAMES,
+    osc_control_action_variant_name,
+    OscControlActionInventoryUniqueness,
+    OscControlAction;
+    FixtureAttribute => OscControlAction::FixtureAttribute,
+    SelectedFeatureFader => OscControlAction::SelectedFeatureFader,
+    FixtureHighlight => OscControlAction::FixtureHighlight,
+    FixtureSolo => OscControlAction::FixtureSolo,
+    FixturePark => OscControlAction::FixturePark,
+    GroupHighlight => OscControlAction::GroupHighlight,
+    GroupSolo => OscControlAction::GroupSolo,
+    GroupPark => OscControlAction::GroupPark,
+    TriggerCue => OscControlAction::TriggerCue,
+    TriggerNextCue => OscControlAction::TriggerNextCue,
+    TriggerPreviousCue => OscControlAction::TriggerPreviousCue,
+    EffectEnabled => OscControlAction::EffectEnabled,
+    NodeGraphEnabled => OscControlAction::NodeGraphEnabled,
+    VideoParam => OscControlAction::VideoParam,
+    VideoCuePointAdd => OscControlAction::VideoCuePointAdd,
+    VideoCuePointRemove => OscControlAction::VideoCuePointRemove,
+    VideoCuePointJump => OscControlAction::VideoCuePointJump,
+    VideoCuePointPrevious => OscControlAction::VideoCuePointPrevious,
+    VideoCuePointNext => OscControlAction::VideoCuePointNext,
+    VideoLayerEnabled => OscControlAction::VideoLayerEnabled,
+    VideoLayerSolo => OscControlAction::VideoLayerSolo,
+    VideoPlay => OscControlAction::VideoPlay,
+    VideoLoop => OscControlAction::VideoLoop,
+    VideoLayerFade => OscControlAction::VideoLayerFade,
+    VideoOutputEnabled => OscControlAction::VideoOutputEnabled,
+    VideoOutputOpacity => OscControlAction::VideoOutputOpacity,
+    VideoOutputFade => OscControlAction::VideoOutputFade,
+    VideoOutputMappingField => OscControlAction::VideoOutputMappingField,
+    VideoOutputMappingPreset => OscControlAction::VideoOutputMappingPreset,
+    VideoOutputBlackout => OscControlAction::VideoOutputBlackout,
+    TimelinePlay => OscControlAction::TimelinePlay,
+    TimelineSeek => OscControlAction::TimelineSeek,
+    TimelineBeatPrevious => OscControlAction::TimelineBeatPrevious,
+    TimelineBeatNext => OscControlAction::TimelineBeatNext,
+    TimelineLoopToggle => OscControlAction::TimelineLoopToggle,
+    TimelineLoopHalf => OscControlAction::TimelineLoopHalf,
+    TimelineLoopDouble => OscControlAction::TimelineLoopDouble,
+    SetBpm => OscControlAction::SetBpm,
+    TapBpm => OscControlAction::TapBpm,
+    LightingMaster => OscControlAction::LightingMaster,
+    GroupSubmaster => OscControlAction::GroupSubmaster,
+    CueFadePause => OscControlAction::CueFadePause,
+    Blackout => OscControlAction::Blackout,
+    AllBlackout => OscControlAction::AllBlackout,
+    VideoMaster => OscControlAction::VideoMaster,
+    VideoBlackout => OscControlAction::VideoBlackout,
+    ClearFixtureFlags => OscControlAction::ClearFixtureFlags,
+);
+
+control_plane_variant_inventory!(
+    OSC_INPUT_EVENT_VARIANT_NAMES,
+    osc_input_event_variant_name,
+    OscInputEventInventoryUniqueness,
+    OscInputEvent;
+    SetAttribute => OscInputEvent::SetAttribute { .. },
+    SetSelectedFeatureFader => OscInputEvent::SetSelectedFeatureFader { .. },
+    SetFixtureHighlight => OscInputEvent::SetFixtureHighlight { .. },
+    SetFixtureSolo => OscInputEvent::SetFixtureSolo { .. },
+    SetFixturePark => OscInputEvent::SetFixturePark { .. },
+    SetGroupHighlight => OscInputEvent::SetGroupHighlight { .. },
+    SetGroupSolo => OscInputEvent::SetGroupSolo { .. },
+    SetGroupPark => OscInputEvent::SetGroupPark { .. },
+    Blackout => OscInputEvent::Blackout(_),
+    AllBlackout => OscInputEvent::AllBlackout(_),
+    ClearFixtureFlags => OscInputEvent::ClearFixtureFlags { .. },
+    TriggerCue => OscInputEvent::TriggerCue(_),
+    TriggerNextCue => OscInputEvent::TriggerNextCue,
+    TriggerPreviousCue => OscInputEvent::TriggerPreviousCue,
+    SetEffectEnabled => OscInputEvent::SetEffectEnabled { .. },
+    SetNodeGraphEnabled => OscInputEvent::SetNodeGraphEnabled { .. },
+    SetCueFadePaused => OscInputEvent::SetCueFadePaused(_),
+    SetTimelinePlaying => OscInputEvent::SetTimelinePlaying(_),
+    SeekTimeline => OscInputEvent::SeekTimeline { .. },
+    SeekTimelineBeat => OscInputEvent::SeekTimelineBeat { .. },
+    ToggleTimelineLoop => OscInputEvent::ToggleTimelineLoop,
+    ScaleTimelineLoop => OscInputEvent::ScaleTimelineLoop(_),
+    SyncTimelineTimecode => OscInputEvent::SyncTimelineTimecode { .. },
+    SetVideoParam => OscInputEvent::SetVideoParam { .. },
+    SetVideoPlaying => OscInputEvent::SetVideoPlaying { .. },
+    SetVideoLoop => OscInputEvent::SetVideoLoop { .. },
+    FadeVideoLayerOpacity => OscInputEvent::FadeVideoLayerOpacity { .. },
+    SeekVideoLayer => OscInputEvent::SeekVideoLayer { .. },
+    AddVideoCuePoint => OscInputEvent::AddVideoCuePoint { .. },
+    RemoveVideoCuePoint => OscInputEvent::RemoveVideoCuePoint { .. },
+    JumpVideoCuePoint => OscInputEvent::JumpVideoCuePoint { .. },
+    JumpVideoCuePointRelative => OscInputEvent::JumpVideoCuePointRelative { .. },
+    SetVideoLayerEnabled => OscInputEvent::SetVideoLayerEnabled { .. },
+    SetVideoLayerSolo => OscInputEvent::SetVideoLayerSolo { .. },
+    SetVideoOutputEnabled => OscInputEvent::SetVideoOutputEnabled { .. },
+    SetVideoOutputOpacity => OscInputEvent::SetVideoOutputOpacity { .. },
+    FadeVideoOutputOpacity => OscInputEvent::FadeVideoOutputOpacity { .. },
+    SetVideoOutputMappingField => OscInputEvent::SetVideoOutputMappingField { .. },
+    ApplyVideoOutputMappingPreset => OscInputEvent::ApplyVideoOutputMappingPreset { .. },
+    SetVideoOutputBlackout => OscInputEvent::SetVideoOutputBlackout { .. },
+    VideoMasterOpacity => OscInputEvent::VideoMasterOpacity(_),
+    VideoBlackout => OscInputEvent::VideoBlackout(_),
+    LightingMaster => OscInputEvent::LightingMaster(_),
+    SetGroupSubmaster => OscInputEvent::SetGroupSubmaster { .. },
+    SetBpm => OscInputEvent::SetBpm(_),
+    TapBpm => OscInputEvent::TapBpm,
+    SyncExternalClock => OscInputEvent::SyncExternalClock { .. },
+);
+
 #[derive(Debug, Error)]
 pub enum OscInputError {
     #[error("OSC bind address is required")]

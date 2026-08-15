@@ -8,7 +8,7 @@
 use std::{collections::BTreeSet, fmt, sync::LazyLock};
 
 use engine::control_plane_engine_command_descriptors;
-use io::control_plane_remote_descriptors;
+use io::{control_plane_midi_osc_dmx_descriptors, control_plane_remote_descriptors};
 use protocol::control_plane::{
     OperationAuditRequirement, OperationAvailability, OperationCapability, OperationClass,
     OperationDescriptor, OperationIdempotency, OperationRegistry, OperationRisk,
@@ -97,8 +97,11 @@ fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
     let command_names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE)?;
     let engine_descriptors = control_plane_engine_command_descriptors();
     let remote_descriptors = control_plane_remote_descriptors();
-    let total_operations =
-        command_names.len() + engine_descriptors.len() + remote_descriptors.len();
+    let midi_osc_dmx_descriptors = control_plane_midi_osc_dmx_descriptors();
+    let total_operations = command_names.len()
+        + engine_descriptors.len()
+        + remote_descriptors.len()
+        + midi_osc_dmx_descriptors.len();
     if total_operations > MAX_REGISTERED_OPERATIONS {
         return Err(ControlPlaneRegistryError::TooManyOperations(
             total_operations,
@@ -110,6 +113,7 @@ fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
         .collect::<Vec<_>>();
     operations.extend(engine_descriptors);
     operations.extend(remote_descriptors);
+    operations.extend(midi_osc_dmx_descriptors);
     operations.sort_by(|left, right| {
         (left.source_family, &left.source_id).cmp(&(right.source_family, &right.source_id))
     });
@@ -276,10 +280,28 @@ mod tests {
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
         const REMOTE_OPERATION_COUNT: usize =
             REMOTE_INPUT_EVENT_COUNT + REMOTE_CLIENT_REQUEST_COUNT + REMOTE_WIRE_OPERATION_COUNT;
+        const MIDI_CONTROL_MESSAGE_COUNT: usize = 4;
+        const MIDI_CONTROL_ACTION_COUNT: usize = 51;
+        const MIDI_CLOCK_EVENT_COUNT: usize = 6;
+        const MIDI_CONTROL_EVENT_COUNT: usize = 47;
+        const OSC_CONTROL_ACTION_COUNT: usize = 47;
+        const OSC_INPUT_EVENT_COUNT: usize = 47;
+        const DMX_INPUT_PROTOCOL_COUNT: usize = 2;
+        const DMX_INPUT_EVENT_COUNT: usize = 2;
+        const MIDI_OSC_DMX_OPERATION_COUNT: usize = MIDI_CONTROL_MESSAGE_COUNT
+            + MIDI_CONTROL_ACTION_COUNT
+            + MIDI_CLOCK_EVENT_COUNT
+            + MIDI_CONTROL_EVENT_COUNT
+            + OSC_CONTROL_ACTION_COUNT
+            + OSC_INPUT_EVENT_COUNT
+            + DMX_INPUT_PROTOCOL_COUNT
+            + DMX_INPUT_EVENT_COUNT;
+        assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            438 + ENGINE_COMMAND_COUNT + REMOTE_OPERATION_COUNT
+            438 + ENGINE_COMMAND_COUNT + REMOTE_OPERATION_COUNT + MIDI_OSC_DMX_OPERATION_COUNT
         );
+        assert_eq!(registry.operations.len(), 1007);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -289,7 +311,7 @@ mod tests {
         assert_eq!(r0.len(), 1);
         assert_eq!(
             registry.operations.len() - r0.len(),
-            437 + ENGINE_COMMAND_COUNT + REMOTE_OPERATION_COUNT
+            437 + ENGINE_COMMAND_COUNT + REMOTE_OPERATION_COUNT + MIDI_OSC_DMX_OPERATION_COUNT
         );
         assert_eq!(r0[0].operation_id, R0_ALLOWLIST[0]);
         assert_eq!(r0[0].source_family, OperationSourceFamily::TauriCommand);
@@ -401,6 +423,68 @@ mod tests {
             REMOTE_WIRE_OPERATION_COUNT
         );
         for descriptor in remote_unavailable {
+            assert_eq!(descriptor.risk, OperationRisk::R5);
+            assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
+            assert_eq!(descriptor.idempotency, OperationIdempotency::Mutating);
+            assert_eq!(
+                descriptor.audit,
+                OperationAuditRequirement::RequiredBeforeExternalExecution
+            );
+            assert_eq!(
+                descriptor.capabilities,
+                vec![OperationCapability::InternalInventory]
+            );
+        }
+        let midi_osc_dmx_families = [
+            (
+                OperationSourceFamily::MidiControlMessage,
+                MIDI_CONTROL_MESSAGE_COUNT,
+            ),
+            (
+                OperationSourceFamily::MidiControlAction,
+                MIDI_CONTROL_ACTION_COUNT,
+            ),
+            (
+                OperationSourceFamily::MidiClockEvent,
+                MIDI_CLOCK_EVENT_COUNT,
+            ),
+            (
+                OperationSourceFamily::MidiControlEvent,
+                MIDI_CONTROL_EVENT_COUNT,
+            ),
+            (
+                OperationSourceFamily::OscControlAction,
+                OSC_CONTROL_ACTION_COUNT,
+            ),
+            (OperationSourceFamily::OscInputEvent, OSC_INPUT_EVENT_COUNT),
+            (
+                OperationSourceFamily::DmxInputProtocol,
+                DMX_INPUT_PROTOCOL_COUNT,
+            ),
+            (OperationSourceFamily::DmxInputEvent, DMX_INPUT_EVENT_COUNT),
+        ];
+        let midi_osc_dmx_unavailable = registry
+            .operations
+            .iter()
+            .filter(|descriptor| {
+                midi_osc_dmx_families
+                    .iter()
+                    .any(|(family, _)| descriptor.source_family == *family)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(midi_osc_dmx_unavailable.len(), MIDI_OSC_DMX_OPERATION_COUNT);
+        for (family, expected_count) in midi_osc_dmx_families {
+            assert_eq!(
+                midi_osc_dmx_unavailable
+                    .iter()
+                    .filter(|descriptor| descriptor.source_family == family)
+                    .count(),
+                expected_count,
+                "{family:?}"
+            );
+        }
+        for descriptor in midi_osc_dmx_unavailable {
+            assert_eq!(descriptor.class, OperationClass::Mutation);
             assert_eq!(descriptor.risk, OperationRisk::R5);
             assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
             assert_eq!(descriptor.idempotency, OperationIdempotency::Mutating);

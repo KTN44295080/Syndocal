@@ -111,6 +111,14 @@ pub enum OperationSourceFamily {
     RemoteInputEvent,
     RemoteClientRequest,
     RemoteWireOperation,
+    MidiControlMessage,
+    MidiControlAction,
+    MidiClockEvent,
+    MidiControlEvent,
+    OscControlAction,
+    OscInputEvent,
+    DmxInputProtocol,
+    DmxInputEvent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -220,7 +228,15 @@ fn validate_unavailable_descriptor(
         OperationSourceFamily::EngineCommand
         | OperationSourceFamily::RemoteInputEvent
         | OperationSourceFamily::RemoteClientRequest
-        | OperationSourceFamily::RemoteWireOperation => OperationCapability::InternalInventory,
+        | OperationSourceFamily::RemoteWireOperation
+        | OperationSourceFamily::MidiControlMessage
+        | OperationSourceFamily::MidiControlAction
+        | OperationSourceFamily::MidiClockEvent
+        | OperationSourceFamily::MidiControlEvent
+        | OperationSourceFamily::OscControlAction
+        | OperationSourceFamily::OscInputEvent
+        | OperationSourceFamily::DmxInputProtocol
+        | OperationSourceFamily::DmxInputEvent => OperationCapability::InternalInventory,
     };
     if descriptor.capabilities != vec![expected_capability] {
         return Err(OperationDescriptorValidationError::UnsafeUnavailableOperation);
@@ -393,7 +409,15 @@ fn validate_source_id(
         OperationSourceFamily::TauriCommand
         | OperationSourceFamily::EngineCommand
         | OperationSourceFamily::RemoteInputEvent
-        | OperationSourceFamily::RemoteClientRequest => is_lower_snake_case(source_id),
+        | OperationSourceFamily::RemoteClientRequest
+        | OperationSourceFamily::MidiControlMessage
+        | OperationSourceFamily::MidiControlAction
+        | OperationSourceFamily::MidiClockEvent
+        | OperationSourceFamily::MidiControlEvent
+        | OperationSourceFamily::OscControlAction
+        | OperationSourceFamily::OscInputEvent
+        | OperationSourceFamily::DmxInputProtocol
+        | OperationSourceFamily::DmxInputEvent => is_lower_snake_case(source_id),
     };
     if valid {
         Ok(())
@@ -622,6 +646,75 @@ mod tests {
             descriptor.validate(),
             Err(OperationDescriptorValidationError::UnsafeLocalAvailability)
         );
+    }
+
+    #[test]
+    fn midi_osc_dmx_inventory_families_cannot_be_forged_as_read_local_or_full_lock() {
+        let families = [
+            OperationSourceFamily::MidiControlMessage,
+            OperationSourceFamily::MidiControlAction,
+            OperationSourceFamily::MidiClockEvent,
+            OperationSourceFamily::MidiControlEvent,
+            OperationSourceFamily::OscControlAction,
+            OperationSourceFamily::OscInputEvent,
+            OperationSourceFamily::DmxInputProtocol,
+            OperationSourceFamily::DmxInputEvent,
+        ];
+        for (index, source_family) in families.into_iter().enumerate() {
+            let operation_id = format!("syndocal.inventory.io.family_{index}.v1");
+            let mut descriptor = OperationDescriptor {
+                schema: SchemaIdentity::descriptor(),
+                operation_id: operation_id.clone(),
+                source_family,
+                source_id: "sample_variant".to_string(),
+                class: OperationClass::Mutation,
+                risk: OperationRisk::R5,
+                capabilities: vec![OperationCapability::InternalInventory],
+                availability: OperationAvailability::Unavailable,
+                idempotency: OperationIdempotency::Mutating,
+                audit: OperationAuditRequirement::RequiredBeforeExternalExecution,
+                request_schema: SchemaIdentity {
+                    name: format!("{operation_id}.request"),
+                    version: CONTROL_PLANE_SCHEMA_VERSION,
+                },
+                response_schema: SchemaIdentity {
+                    name: format!("{operation_id}.response"),
+                    version: CONTROL_PLANE_SCHEMA_VERSION,
+                },
+            };
+            descriptor.validate().unwrap();
+
+            descriptor.capabilities = vec![OperationCapability::ReadOnly];
+            assert_eq!(
+                descriptor.validate(),
+                Err(OperationDescriptorValidationError::UnsafeUnavailableOperation),
+                "{source_family:?}"
+            );
+            descriptor.capabilities = vec![
+                OperationCapability::InternalInventory,
+                OperationCapability::AllowedDuringFullLock,
+            ];
+            assert_eq!(
+                descriptor.validate(),
+                Err(OperationDescriptorValidationError::UnsafeUnavailableOperation),
+                "{source_family:?}"
+            );
+            descriptor.capabilities = vec![
+                OperationCapability::ReadOnly,
+                OperationCapability::LocalWindowBound,
+                OperationCapability::AllowedDuringFullLock,
+                OperationCapability::RuntimeRead,
+            ];
+            descriptor.availability = OperationAvailability::LocalWindowOnly;
+            descriptor.risk = OperationRisk::R0;
+            descriptor.idempotency = OperationIdempotency::ReadOnly;
+            descriptor.audit = OperationAuditRequirement::NotApplicable;
+            assert_eq!(
+                descriptor.validate(),
+                Err(OperationDescriptorValidationError::UnsafeLocalAvailability),
+                "{source_family:?}"
+            );
+        }
     }
 
     #[test]
