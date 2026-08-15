@@ -66,7 +66,7 @@ jobs:
       - name: Apply strict receipt patch
         run: python .github/scripts/patch_blackout_release_receipt.py
 
-      - name: Apply exact Spout platform guard and retire diagnostics
+      - name: Ensure exact Spout platform guard and retire diagnostics
         shell: bash
         run: |
           python3 - <<'PY'
@@ -74,31 +74,44 @@ jobs:
 
           path = Path("app/src-tauri/src/main.rs")
           source = path.read_text(encoding="utf-8")
-          old = "    spout\n        .harvest_failed_workers(engine)\n        .map_err(|error| error.to_string())?;\n"
-          new = "    #[cfg(all(feature = \"spout\", target_os = \"windows\", target_arch = \"x86_64\"))]\n" + old
-          count = source.count(old)
-          if count != 1:
-              raise SystemExit(f"expected exactly one unguarded Spout harvest block, found {count}")
-          path.write_text(source.replace(old, new, 1), encoding="utf-8")
+          guard = "    #[cfg(all(feature = \"spout\", target_os = \"windows\", target_arch = \"x86_64\"))]\n"
+          block = "    spout\n        .harvest_failed_workers(engine)\n        .map_err(|error| error.to_string())?;\n"
+          guarded = guard + block
+          guarded_count = source.count(guarded)
+          if guarded_count == 1:
+              pass
+          elif guarded_count == 0 and source.count(block) == 1:
+              path.write_text(source.replace(block, guarded, 1), encoding="utf-8")
+          else:
+              raise SystemExit(
+                  f"unexpected Spout harvest shape: guarded={guarded_count}, block={source.count(block)}"
+              )
           PY
-          rm .github/workflows/diagnose-ai3-main.yml
+          rm -f .github/workflows/diagnose-ai3-main.yml
 
-      - name: Verify exact diff
+      - name: Verify bounded diff
         shell: bash
         run: |
           set -euo pipefail
           git diff --check
           mapfile -t changed < <(git diff --name-only | sort)
-          expected=(
-            .github/workflows/diagnose-ai3-main.yml
+          required=(
             app/scripts/check-blackout-release-runtime.mjs
-            app/src-tauri/src/main.rs
             app/src/blackoutReleaseRuntimeController.ts
             crates/protocol/src/control_plane_command.rs
           )
-          test "${#changed[@]}" -eq "${#expected[@]}"
-          for i in "${!expected[@]}"; do
-            test "${changed[$i]}" = "${expected[$i]}"
+          for file in "${required[@]}"; do
+            printf '%s\n' "${changed[@]}" | grep -Fqx "$file"
+          done
+          for file in "${changed[@]}"; do
+            case "$file" in
+              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/src/main.rs|app/src/blackoutReleaseRuntimeController.ts|crates/protocol/src/control_plane_command.rs)
+                ;;
+              *)
+                echo "Unexpected changed file: $file" >&2
+                exit 1
+                ;;
+            esac
           done
 
       - name: Check Rust formatting
@@ -106,6 +119,13 @@ jobs:
 
       - name: Compile and test Rust workspace serially
         run: cargo test --workspace --locked -- --test-threads=1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
 
       - name: Enable pnpm
         shell: bash
