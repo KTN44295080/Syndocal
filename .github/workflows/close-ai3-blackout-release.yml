@@ -114,8 +114,12 @@ jobs:
             esac
           done
 
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
+      - name: Format and verify Rust
+        shell: bash
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
 
       - name: Compile and test Rust workspace serially
         run: cargo test --workspace --locked -- --test-threads=1
