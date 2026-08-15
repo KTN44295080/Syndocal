@@ -1,0 +1,146 @@
+name: Close AI3 Blackout Release lane
+
+on:
+  push:
+    branches:
+      - codex/ai3-r4-blackout-release
+    paths:
+      - .github/scripts/patch_blackout_release_receipt.py
+      - .github/workflows/close-ai3-blackout-release.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: close-ai3-blackout-release
+  cancel-in-progress: true
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact work branch
+        uses: actions/checkout@v5
+        with:
+          ref: codex/ai3-r4-blackout-release
+          fetch-depth: 0
+
+      - name: Verify branch ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "codex/ai3-r4-blackout-release"
+          git merge-base --is-ancestor df7e335c14fe82bb534fbd8867dcd431777e1522 HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/patch-start-head"
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libclang-dev \
+            libssl-dev \
+            libswscale-dev \
+            libudev-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            librsvg2-dev \
+            ffmpeg
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: syndocal-ai3-blackout-release-ubuntu
+
+      - name: Apply strict receipt patch
+        run: python .github/scripts/patch_blackout_release_receipt.py
+
+      - name: Apply exact Spout platform guard and retire diagnostics
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("app/src-tauri/src/main.rs")
+          source = path.read_text(encoding="utf-8")
+          old = "    spout\n        .harvest_failed_workers(engine)\n        .map_err(|error| error.to_string())?;\n"
+          new = "    #[cfg(all(feature = \"spout\", target_os = \"windows\", target_arch = \"x86_64\"))]\n" + old
+          count = source.count(old)
+          if count != 1:
+              raise SystemExit(f"expected exactly one unguarded Spout harvest block, found {count}")
+          path.write_text(source.replace(old, new, 1), encoding="utf-8")
+          PY
+          rm .github/workflows/diagnose-ai3-main.yml
+
+      - name: Verify exact diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected=(
+            .github/workflows/diagnose-ai3-main.yml
+            app/scripts/check-blackout-release-runtime.mjs
+            app/src-tauri/src/main.rs
+            app/src/blackoutReleaseRuntimeController.ts
+            crates/protocol/src/control_plane_command.rs
+          )
+          test "${#changed[@]}" -eq "${#expected[@]}"
+          for i in "${!expected[@]}"; do
+            test "${changed[$i]}" = "${expected[$i]}"
+          done
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Compile and test Rust workspace serially
+        run: cargo test --workspace --locked -- --test-threads=1
+
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.15.0 --activate
+
+      - name: Install frontend dependencies
+        run: pnpm --dir app install --frozen-lockfile
+
+      - name: Test Blackout Release renderer contract
+        run: pnpm --dir app run check:blackout-release-runtime
+
+      - name: Check frontend invoke inventory
+        run: pnpm --dir app run check:frontend-invokes
+
+      - name: Type-check frontend
+        run: pnpm --dir app exec tsc --noEmit
+
+      - name: Build frontend
+        run: pnpm --dir app build
+
+      - name: Commit verified fixes without racing another writer
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_head="$(cat "$RUNNER_TEMP/patch-start-head")"
+          git fetch origin codex/ai3-r4-blackout-release
+          remote_head="$(git rev-parse origin/codex/ai3-r4-blackout-release)"
+          if [ "$remote_head" != "$start_head" ]; then
+            echo "Work branch moved from $start_head to $remote_head; refusing stale write" >&2
+            exit 1
+          fi
+          git config user.name "KTN"
+          git config user.email "47689501+KTN44295080@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: close strict blackout release receipt lane"
+          git push origin HEAD:codex/ai3-r4-blackout-release
