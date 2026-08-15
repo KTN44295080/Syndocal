@@ -11,6 +11,7 @@ on:
       - .github/scripts/patch_blackout_release_full_lock_ui.py
       - .github/scripts/patch_blackout_release_physical_device_binding.py
       - .github/scripts/patch_blackout_release_consent_expiry.py
+      - .github/scripts/patch_blackout_release_reply_loss_test.py
       - .github/workflows/close-ai3-blackout-release.yml
 
 permissions:
@@ -124,6 +125,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/scripts/patch_blackout_release_runtime_guards.py
+          python3 .github/scripts/patch_blackout_release_reply_loss_test.py
 
       - name: Apply Release UI guardrails
         shell: bash
@@ -247,7 +249,11 @@ jobs:
           cargo test -p syndocal --bin syndocal --locked control_plane_security::tests::prepared_consent_rejects_other_r4_operations -- --exact --test-threads=1
 
       - name: Test deterministic Release terminal fence
-        run: cargo test -p syndocal --bin syndocal --locked control_plane_runtime::tests::blackout_release_receipt_fence_is_exact_and_rolls_safely -- --exact --test-threads=1
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p syndocal --bin syndocal --locked control_plane_runtime::tests::blackout_release_receipt_fence_is_exact_and_rolls_safely -- --exact --test-threads=1
+          cargo test -p syndocal --bin syndocal --locked control_plane_runtime::tests::blackout_release_exact_reply_loss_reuses_terminal_and_tombstones_shape_conflicts -- --exact --test-threads=1
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
