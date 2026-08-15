@@ -14,7 +14,11 @@ use protocol::control_plane::{
     OperationDescriptor, OperationIdempotency, OperationRegistry, OperationRisk,
     OperationSourceFamily, SchemaIdentity, CONTROL_PLANE_SCHEMA_VERSION,
 };
-use protocol::control_plane_command::SET_EFFECT_ENABLED_OPERATION_ID;
+use protocol::control_plane_command::{
+    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SET_EFFECT_ENABLED_OPERATION_ID,
+    TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
+    TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+};
 use protocol::control_plane_registry_v2::{
     AdapterPolicy, CanonicalControlPlaneRegistry, CanonicalOperationDescriptor,
     CanonicalRegistryValidationError, CanonicalSourceFamily, ConsentPolicy, PayloadPolicy,
@@ -283,6 +287,34 @@ fn canonical_source_inventory_descriptor(
                 target: SourceKey::new(CanonicalSourceFamily::TauriCommand, "set_effect_enabled"),
             }
         }
+        CanonicalSourceFamily::EngineCommand
+            if descriptor.source_id == "set_timeline_playing_published" =>
+        {
+            SourceDisposition::InternalStepOf {
+                target: SourceKey::new(
+                    CanonicalSourceFamily::TauriCommand,
+                    "set_timeline_transport_playing_runtime_v1",
+                ),
+            }
+        }
+        CanonicalSourceFamily::EngineCommand if descriptor.source_id == "abort_timeline_follow" => {
+            SourceDisposition::InternalStepOf {
+                target: SourceKey::new(
+                    CanonicalSourceFamily::TauriCommand,
+                    "abort_timeline_follow_runtime_v1",
+                ),
+            }
+        }
+        CanonicalSourceFamily::EngineCommand
+            if descriptor.source_id == "safety_blackout_engage_published" =>
+        {
+            SourceDisposition::InternalStepOf {
+                target: SourceKey::new(
+                    CanonicalSourceFamily::TauriCommand,
+                    "safety_blackout_engage_v1",
+                ),
+            }
+        }
         _ => SourceDisposition::Unclassified {
             reason: effect_enabled_unclassified_reason(descriptor)
                 .unwrap_or_else(|| unclassified_reason(source_family))
@@ -395,8 +427,19 @@ fn keyboard_shortcut_source_inventory_descriptor(
         role: SourceRole::for_family(family),
         raw_request_schema: raw_schema("request"),
         raw_response_schema: raw_schema("response"),
-        disposition: SourceDisposition::Unclassified {
-            reason: unclassified_reason(family).to_string(),
+        disposition: if family == CanonicalSourceFamily::KeyboardApp
+            && source_id == "toggle_timeline_playback_v1"
+        {
+            SourceDisposition::StructuralRoute {
+                target: SourceKey::new(
+                    CanonicalSourceFamily::TauriCommand,
+                    "set_timeline_transport_playing_runtime_v1",
+                ),
+            }
+        } else {
+            SourceDisposition::Unclassified {
+                reason: unclassified_reason(family).to_string(),
+            }
         },
     }
 }
@@ -476,6 +519,9 @@ struct ReviewedQueryOperation {
 enum ReviewedCanonicalOperation {
     Query(ReviewedQueryOperation),
     SetEffectEnabled,
+    SetTimelineTransportPlaying,
+    AbortTimelineFollow,
+    EngageSafetyBlackout,
 }
 
 impl ReviewedCanonicalOperation {
@@ -483,6 +529,9 @@ impl ReviewedCanonicalOperation {
         match self {
             Self::Query(query) => query.operation_id,
             Self::SetEffectEnabled => SET_EFFECT_ENABLED_OPERATION_ID,
+            Self::SetTimelineTransportPlaying => TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+            Self::AbortTimelineFollow => TIMELINE_FOLLOW_ABORT_OPERATION_ID,
+            Self::EngageSafetyBlackout => SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
         }
     }
 }
@@ -491,7 +540,15 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
     if let Some(query) = reviewed_query_operation(command) {
         return Some(ReviewedCanonicalOperation::Query(query));
     }
-    (command == "set_effect_enabled").then_some(ReviewedCanonicalOperation::SetEffectEnabled)
+    match command {
+        "set_effect_enabled" => Some(ReviewedCanonicalOperation::SetEffectEnabled),
+        "set_timeline_transport_playing_runtime_v1" => {
+            Some(ReviewedCanonicalOperation::SetTimelineTransportPlaying)
+        }
+        "abort_timeline_follow_runtime_v1" => Some(ReviewedCanonicalOperation::AbortTimelineFollow),
+        "safety_blackout_engage_v1" => Some(ReviewedCanonicalOperation::EngageSafetyBlackout),
+        _ => None,
+    }
 }
 
 fn canonical_descriptor_for_source(
@@ -521,22 +578,75 @@ fn canonical_descriptor_for_source(
             AdapterPolicy::LocalWindowAuthoritativeMutation,
             ReceiptPolicy::ExactTerminalReceipt,
         ),
+        ReviewedCanonicalOperation::SetTimelineTransportPlaying => (
+            OperationClass::Mutation,
+            vec![
+                OperationCapability::LocalWindowBound,
+                OperationCapability::AuthoritativeRuntimeMutation,
+            ],
+            OperationIdempotency::Mutating,
+            AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation,
+            ReceiptPolicy::ExactTerminalReceipt,
+        ),
+        ReviewedCanonicalOperation::AbortTimelineFollow => (
+            OperationClass::Mutation,
+            vec![
+                OperationCapability::LocalWindowBound,
+                OperationCapability::AuthoritativeRuntimeMutation,
+                OperationCapability::AllowedDuringFullLock,
+            ],
+            OperationIdempotency::Mutating,
+            AdapterPolicy::LocalWindowRuntimeSafetyMutation,
+            ReceiptPolicy::ExactTerminalReceipt,
+        ),
+        ReviewedCanonicalOperation::EngageSafetyBlackout => (
+            OperationClass::Mutation,
+            vec![
+                OperationCapability::LocalWindowBound,
+                OperationCapability::SafetyBlackoutEngage,
+                OperationCapability::AllowedDuringFullLock,
+            ],
+            OperationIdempotency::Mutating,
+            AdapterPolicy::LocalWindowEmergencySafetyMutation,
+            ReceiptPolicy::ExactTerminalReceipt,
+        ),
     };
     Some(CanonicalOperationDescriptor {
         schema: CanonicalOperationDescriptor::schema_identity(),
         operation_id: reviewed.operation_id().to_string(),
         class,
-        risk: OperationRisk::R0,
+        risk: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
+            OperationRisk::S0
+        } else {
+            OperationRisk::R0
+        },
         capabilities,
         request_schema: descriptor.request_schema.clone(),
         response_schema: descriptor.response_schema.clone(),
         idempotency,
-        audit: OperationAuditRequirement::NotApplicable,
+        audit: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
+            OperationAuditRequirement::Immutable
+        } else {
+            OperationAuditRequirement::NotApplicable
+        },
         adapter_policy,
         receipt_policy,
-        rate_policy: RatePolicy::FailClosed,
+        rate_policy: if matches!(
+            reviewed,
+            ReviewedCanonicalOperation::SetTimelineTransportPlaying
+                | ReviewedCanonicalOperation::AbortTimelineFollow
+                | ReviewedCanonicalOperation::EngageSafetyBlackout
+        ) {
+            RatePolicy::TokenBucket4PerSecondBurst8
+        } else {
+            RatePolicy::FailClosed
+        },
         payload_policy: PayloadPolicy::FailClosed,
-        consent_policy: ConsentPolicy::FailClosed,
+        consent_policy: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
+            ConsentPolicy::NotRequiredForSafetyOnly
+        } else {
+            ConsentPolicy::FailClosed
+        },
         derived_adapters: Vec::new(),
     })
 }
@@ -570,6 +680,16 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
         ),
         "query_control_plane_runtime_generations" => (
             "syndocal.query.runtime.generations.v1",
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
+        "query_timeline_transport_authority_v1" => (
+            TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
+        "query_timeline_follow_abort_authority_v1" => (
+            TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
         ),
@@ -625,6 +745,27 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             SET_EFFECT_ENABLED_OPERATION_ID,
         );
     }
+    if operation_id == "set_timeline_transport_playing_runtime_v1" {
+        // v1 remains an inventory-only view. The v2 direct source is the
+        // reviewed runtime mutation; its local rate/receipt policy is not
+        // retroactively advertised by the legacy registry.
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+        );
+    }
+    if operation_id == "abort_timeline_follow_runtime_v1" {
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            TIMELINE_FOLLOW_ABORT_OPERATION_ID,
+        );
+    }
+    if operation_id == "safety_blackout_engage_v1" {
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
+        );
+    }
     unavailable_descriptor(operation_id)
 }
 
@@ -670,6 +811,21 @@ fn effect_enabled_unclassified_reason(descriptor: &OperationDescriptor) -> Optio
         | (OperationSourceFamily::OscInputEvent, "set_effect_enabled") => {
             Some("legacy osc effect-enabled ingress is fail-closed pending versioned migration")
         }
+        (OperationSourceFamily::EngineCommand, "set_timeline_playing") => {
+            Some("legacy timeline set-playing engine ingress lacks a versioned runtime identity")
+        }
+        (OperationSourceFamily::RemoteInputEvent, "set_timeline_playing")
+        | (OperationSourceFamily::RemoteWireOperation, "setTimelinePlaying") => Some(
+            "legacy remote timeline set-playing ingress is fail-closed pending versioned migration",
+        ),
+        (OperationSourceFamily::MidiControlAction, "timeline_play")
+        | (OperationSourceFamily::MidiControlEvent, "set_timeline_playing") => Some(
+            "legacy midi timeline set-playing ingress is fail-closed pending versioned migration",
+        ),
+        (OperationSourceFamily::OscControlAction, "timeline_play")
+        | (OperationSourceFamily::OscInputEvent, "set_timeline_playing") => Some(
+            "legacy osc timeline set-playing ingress is fail-closed pending versioned migration",
+        ),
         _ => None,
     }
 }
@@ -814,7 +970,7 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 8] = [
+        const R0_ALLOWLIST: [&str; 10] = [
             "syndocal.query.control_plane.registry.v1",
             "syndocal.query.control_plane.canonical_registry.v2",
             "syndocal.query.control_plane.capabilities.v1",
@@ -823,9 +979,11 @@ mod tests {
             "syndocal.query.output.ownership.v1",
             "syndocal.query.project.authority.v1",
             "syndocal.query.runtime.generations.v1",
+            TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
+            TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 445);
-        const ENGINE_COMMAND_COUNT: usize = 247;
+        assert_eq!(names.len(), 450);
+        const ENGINE_COMMAND_COUNT: usize = 249;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -847,16 +1005,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 386;
+        const FRONTEND_INVOKE_COUNT: usize = 389;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            445 + ENGINE_COMMAND_COUNT
+            450 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1400);
+        assert_eq!(registry.operations.len(), 1410);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -866,7 +1024,7 @@ mod tests {
         assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
-            437 + ENGINE_COMMAND_COUNT
+            440 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -897,7 +1055,7 @@ mod tests {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
         });
-        assert_eq!(tauri_unavailable.clone().count(), 437);
+        assert_eq!(tauri_unavailable.clone().count(), 440);
         for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
@@ -1113,21 +1271,21 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 445;
-        const ENGINE_COUNT: usize = 247;
+        const TAURI_COUNT: usize = 450;
+        const ENGINE_COUNT: usize = 249;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 386;
+        const FRONTEND_COUNT: usize = 389;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1400);
-        assert_eq!(SOURCE_TOTAL, 1433);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1410);
+        assert_eq!(SOURCE_TOTAL, 1443);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 9);
+        assert_eq!(canonical.canonical_operations.len(), 14);
 
         let count_family = |family| {
             canonical
@@ -1218,29 +1376,36 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 9);
+        let structural_routes = canonical
+            .source_inventory
+            .iter()
+            .filter(|source| {
+                matches!(
+                    &source.disposition,
+                    SourceDisposition::StructuralRoute { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(direct.len(), 14);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
-        assert_eq!(internal_steps.len(), 1);
-        assert_eq!(unclassified.len(), 1037);
+        assert_eq!(internal_steps.len(), 4);
+        assert_eq!(structural_routes.len(), 1);
+        assert_eq!(unclassified.len(), 1035);
         assert_eq!(
-            direct.len() + aliases.len() + internal_steps.len() + unclassified.len(),
+            direct.len()
+                + aliases.len()
+                + internal_steps.len()
+                + structural_routes.len()
+                + unclassified.len(),
             SOURCE_TOTAL
         );
 
-        for (family, expected_count, role, reason) in [
-            (
-                CanonicalSourceFamily::KeyboardApp,
-                KEYBOARD_APP_COUNT,
-                SourceRole::KeyboardAppShortcut,
-                "unreviewed keyboard app shortcut",
-            ),
-            (
-                CanonicalSourceFamily::KeyboardProjectFile,
-                KEYBOARD_PROJECT_FILE_COUNT,
-                SourceRole::KeyboardProjectFileShortcut,
-                "unreviewed keyboard project-file shortcut",
-            ),
-        ] {
+        for (family, expected_count, role, reason) in [(
+            CanonicalSourceFamily::KeyboardProjectFile,
+            KEYBOARD_PROJECT_FILE_COUNT,
+            SourceRole::KeyboardProjectFileShortcut,
+            "unreviewed keyboard project-file shortcut",
+        )] {
             let sources = canonical
                 .source_inventory
                 .iter()
@@ -1260,6 +1425,27 @@ mod tests {
                     .is_none());
             }
         }
+        let timeline_shortcut = structural_routes[0];
+        assert_eq!(
+            timeline_shortcut.source_key.family,
+            CanonicalSourceFamily::KeyboardApp
+        );
+        assert_eq!(
+            timeline_shortcut.source_key.source_id,
+            "toggle_timeline_playback_v1"
+        );
+        assert!(matches!(
+            &timeline_shortcut.disposition,
+            SourceDisposition::StructuralRoute { target }
+                if *target == SourceKey::new(
+                    CanonicalSourceFamily::TauriCommand,
+                    "set_timeline_transport_playing_runtime_v1"
+                )
+        ));
+        assert!(canonical
+            .canonical_operation_for_source(&timeline_shortcut.source_key)
+            .unwrap()
+            .is_some());
 
         for source in &direct {
             assert_eq!(
@@ -1316,22 +1502,145 @@ mod tests {
                 .map(|operation| operation.operation_id.as_str()),
             Some(SET_EFFECT_ENABLED_OPERATION_ID)
         );
-        let published_step = internal_steps[0];
+        let timeline_authority_direct = direct
+            .iter()
+            .find(|source| source.source_key.source_id == "query_timeline_transport_authority_v1")
+            .expect("runtime Timeline authority must be a direct canonical query source");
         assert_eq!(
-            published_step.source_key,
-            SourceKey::new(
-                CanonicalSourceFamily::EngineCommand,
-                "set_effect_enabled_published"
-            )
+            canonical
+                .canonical_operation_for_source(&timeline_authority_direct.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID)
         );
-        assert!(matches!(
-            &published_step.disposition,
-            SourceDisposition::InternalStepOf { target }
-                if *target == SourceKey::new(
-                    CanonicalSourceFamily::TauriCommand,
-                    "set_effect_enabled"
-                )
-        ));
+        assert_eq!(
+            timeline_authority_direct.raw_request_schema.name.as_str(),
+            "syndocal.query.runtime.timeline.transport.authority.v1.request"
+        );
+        assert_eq!(
+            timeline_authority_direct.raw_response_schema.name.as_str(),
+            "syndocal.query.runtime.timeline.transport.authority.v1.response"
+        );
+        let timeline_authority_alias = aliases
+            .iter()
+            .find(|source| source.source_key.source_id == "query_timeline_transport_authority_v1")
+            .expect("frontend runtime Timeline authority must retain its alias row");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&timeline_authority_alias.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID)
+        );
+        let timeline_transport_direct = direct
+            .iter()
+            .find(|source| {
+                source.source_key.source_id == "set_timeline_transport_playing_runtime_v1"
+            })
+            .expect("runtime Timeline transport must be a direct canonical source");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&timeline_transport_direct.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID)
+        );
+        let timeline_transport_alias = aliases
+            .iter()
+            .find(|source| {
+                source.source_key.source_id == "set_timeline_transport_playing_runtime_v1"
+            })
+            .expect("frontend runtime Timeline transport must retain its alias row");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&timeline_transport_alias.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID)
+        );
+        let follow_abort_authority_direct = direct
+            .iter()
+            .find(|source| {
+                source.source_key.source_id == "query_timeline_follow_abort_authority_v1"
+            })
+            .expect("Follow Abort authority must be a direct canonical query source");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&follow_abort_authority_direct.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID)
+        );
+        let follow_abort_direct = direct
+            .iter()
+            .find(|source| source.source_key.source_id == "abort_timeline_follow_runtime_v1")
+            .expect("Follow Abort must be a direct canonical runtime-safety source");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&follow_abort_direct.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(TIMELINE_FOLLOW_ABORT_OPERATION_ID)
+        );
+        let follow_abort_alias = aliases
+            .iter()
+            .find(|source| source.source_key.source_id == "abort_timeline_follow_runtime_v1")
+            .expect("frontend Follow Abort must retain its canonical alias row");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&follow_abort_alias.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(TIMELINE_FOLLOW_ABORT_OPERATION_ID)
+        );
+        let safety_blackout_direct = direct
+            .iter()
+            .find(|source| source.source_key.source_id == "safety_blackout_engage_v1")
+            .expect("S0 safety blackout must be a direct canonical source");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&safety_blackout_direct.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(SAFETY_BLACKOUT_ENGAGE_OPERATION_ID)
+        );
+        let safety_blackout_alias = aliases
+            .iter()
+            .find(|source| source.source_key.source_id == "safety_blackout_engage_v1")
+            .expect("frontend S0 safety blackout must retain its canonical alias row");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&safety_blackout_alias.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(SAFETY_BLACKOUT_ENGAGE_OPERATION_ID)
+        );
+        for (source_id, target_id) in [
+            ("set_effect_enabled_published", "set_effect_enabled"),
+            (
+                "set_timeline_playing_published",
+                "set_timeline_transport_playing_runtime_v1",
+            ),
+            ("abort_timeline_follow", "abort_timeline_follow_runtime_v1"),
+            (
+                "safety_blackout_engage_published",
+                "safety_blackout_engage_v1",
+            ),
+        ] {
+            let published_step = internal_steps
+                .iter()
+                .find(|source| source.source_key.source_id == source_id)
+                .unwrap_or_else(|| panic!("missing internal step {source_id}"));
+            assert_eq!(
+                published_step.source_key.family,
+                CanonicalSourceFamily::EngineCommand
+            );
+            assert!(matches!(
+                &published_step.disposition,
+                SourceDisposition::InternalStepOf { target }
+                    if *target == SourceKey::new(CanonicalSourceFamily::TauriCommand, target_id)
+            ));
+        }
         for source in &unclassified {
             assert!(canonical
                 .canonical_operation_for_source(&source.source_key)
@@ -1339,8 +1648,13 @@ mod tests {
                 .is_none());
         }
         for operation in &canonical.canonical_operations {
-            assert_eq!(operation.risk, OperationRisk::R0);
-            assert_eq!(operation.audit, OperationAuditRequirement::NotApplicable);
+            if operation.operation_id == SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
+                assert_eq!(operation.risk, OperationRisk::S0);
+                assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
+            } else {
+                assert_eq!(operation.risk, OperationRisk::R0);
+                assert_eq!(operation.audit, OperationAuditRequirement::NotApplicable);
+            }
             assert_eq!(operation.derived_adapters.len(), 1);
             if operation.operation_id == SET_EFFECT_ENABLED_OPERATION_ID {
                 assert_eq!(operation.class, OperationClass::Mutation);
@@ -1358,6 +1672,81 @@ mod tests {
                     vec![
                         OperationCapability::LocalWindowBound,
                         OperationCapability::AuthoritativeProjectMutation,
+                    ]
+                );
+            } else if operation.operation_id == TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID {
+                assert_eq!(operation.class, OperationClass::Mutation);
+                assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
+                assert_eq!(
+                    operation.adapter_policy,
+                    AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation
+                );
+                assert_eq!(
+                    operation.receipt_policy,
+                    ReceiptPolicy::ExactTerminalReceipt
+                );
+                assert_eq!(
+                    operation.rate_policy,
+                    RatePolicy::TokenBucket4PerSecondBurst8
+                );
+                assert_eq!(
+                    operation.capabilities,
+                    vec![
+                        OperationCapability::LocalWindowBound,
+                        OperationCapability::AuthoritativeRuntimeMutation,
+                    ]
+                );
+                assert!(!operation
+                    .capabilities
+                    .contains(&OperationCapability::AllowedDuringFullLock));
+            } else if operation.operation_id == TIMELINE_FOLLOW_ABORT_OPERATION_ID {
+                assert_eq!(operation.class, OperationClass::Mutation);
+                assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
+                assert_eq!(
+                    operation.adapter_policy,
+                    AdapterPolicy::LocalWindowRuntimeSafetyMutation
+                );
+                assert_eq!(
+                    operation.receipt_policy,
+                    ReceiptPolicy::ExactTerminalReceipt
+                );
+                assert_eq!(
+                    operation.rate_policy,
+                    RatePolicy::TokenBucket4PerSecondBurst8
+                );
+                assert_eq!(
+                    operation.capabilities,
+                    vec![
+                        OperationCapability::LocalWindowBound,
+                        OperationCapability::AuthoritativeRuntimeMutation,
+                        OperationCapability::AllowedDuringFullLock,
+                    ]
+                );
+            } else if operation.operation_id == SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
+                assert_eq!(operation.class, OperationClass::Mutation);
+                assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
+                assert_eq!(
+                    operation.adapter_policy,
+                    AdapterPolicy::LocalWindowEmergencySafetyMutation
+                );
+                assert_eq!(
+                    operation.receipt_policy,
+                    ReceiptPolicy::ExactTerminalReceipt
+                );
+                assert_eq!(
+                    operation.rate_policy,
+                    RatePolicy::TokenBucket4PerSecondBurst8
+                );
+                assert_eq!(
+                    operation.consent_policy,
+                    ConsentPolicy::NotRequiredForSafetyOnly
+                );
+                assert_eq!(
+                    operation.capabilities,
+                    vec![
+                        OperationCapability::LocalWindowBound,
+                        OperationCapability::SafetyBlackoutEngage,
+                        OperationCapability::AllowedDuringFullLock,
                     ]
                 );
             } else {
@@ -1420,6 +1809,66 @@ mod tests {
             ));
         }
 
+        // These are the actual existing non-local timeline ingress bindings.
+        // They remain deliberately unclassified until each adapter has its own
+        // versioned identity and server-derived runtime authority contract.
+        let fail_closed_timeline_transport_bindings = [
+            (
+                CanonicalSourceFamily::EngineCommand,
+                "set_timeline_playing",
+                "legacy timeline set-playing engine ingress lacks a versioned runtime identity",
+            ),
+            (
+                CanonicalSourceFamily::RemoteInputEvent,
+                "set_timeline_playing",
+                "legacy remote timeline set-playing ingress is fail-closed pending versioned migration",
+            ),
+            (
+                CanonicalSourceFamily::RemoteWireOperation,
+                "setTimelinePlaying",
+                "legacy remote timeline set-playing ingress is fail-closed pending versioned migration",
+            ),
+            (
+                CanonicalSourceFamily::MidiControlAction,
+                "timeline_play",
+                "legacy midi timeline set-playing ingress is fail-closed pending versioned migration",
+            ),
+            (
+                CanonicalSourceFamily::MidiControlEvent,
+                "set_timeline_playing",
+                "legacy midi timeline set-playing ingress is fail-closed pending versioned migration",
+            ),
+            (
+                CanonicalSourceFamily::OscControlAction,
+                "timeline_play",
+                "legacy osc timeline set-playing ingress is fail-closed pending versioned migration",
+            ),
+            (
+                CanonicalSourceFamily::OscInputEvent,
+                "set_timeline_playing",
+                "legacy osc timeline set-playing ingress is fail-closed pending versioned migration",
+            ),
+        ];
+        for (family, source_id, reason) in fail_closed_timeline_transport_bindings {
+            let source = canonical
+                .source_inventory
+                .iter()
+                .find(|source| {
+                    source.source_key.family == family && source.source_key.source_id == source_id
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing legacy timeline transport source {family:?}:{source_id}")
+                });
+            assert!(matches!(
+                &source.disposition,
+                SourceDisposition::Unclassified { reason: actual } if actual == reason
+            ));
+            assert!(canonical
+                .canonical_operation_for_source(&source.source_key)
+                .unwrap()
+                .is_none());
+        }
+
         let canonical_json = serde_json::to_value(&canonical).unwrap();
         for source in canonical_json["source_inventory"].as_array().unwrap() {
             let source = source.as_object().unwrap();
@@ -1461,13 +1910,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v1_registry_json_and_count_remain_unaffected() {
+    fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1400);
+        assert_eq!(legacy.operations.len(), 1410);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1400);
+        assert_eq!(operations.len(), 1410);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

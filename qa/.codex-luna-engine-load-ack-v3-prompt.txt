@@ -1,0 +1,16 @@
+You own ONLY `crates/engine/src/lib.rs` in the shared `C:\Users\kouty\Documents\KDMX` worktree. Other agents own `app/src-tauri/src/main.rs`, frontend files, docs, and protocol files. Do not edit any other file. Do not stage, commit, push, reset, checkout, or modify user-owned release/handoff files.
+
+Continue the existing acknowledged project snapshot load implementation and fix this confirmed P1 without weakening its existing admission/cancellation/publication guarantees:
+
+`EngineHandle::load_project_snapshot_and_wait_with_timeout` currently synchronizes handle-owned allocator counters only after the runtime has published snapshot B and the caller has received `Ok(())`. During an admitted load, or in the interval between shared publication/ack and the loader thread executing `sync_allocator_counters`, another thread can allocate from the old counters and issue an ID already present in B. Rejection atomicity must not create success-path duplicate IDs.
+
+Required contract:
+- Once an admitted candidate B can become authoritative, every public `allocate_*_id` call must return IDs strictly above all IDs contained in B. There must be no publication/ack window and no admitted-load window that can allocate a duplicate.
+- Preserve linearizable Queued/Admitted/Cancelled: a queued timeout/cancellation must not mutate runtime or shared snapshot. Admitted calls wait for definitive publication; no caller timeout followed by late B.
+- Preserve the publication barrier: B is visible before ack; later queued commands do not enter the same ack snapshot.
+- Rejected and cancelled candidates must not lower counters or create duplicates. Monotonic skipped ranges on rejected candidates are acceptable if that is the smallest safe design; duplicate IDs are not. Prefer a shared allocator reservation/commit design only if it remains demonstrably linearizable and does not make the load rollback fallible.
+- Do not reintroduce EngineSnapshot-based runtime rollback or ignored rollback errors.
+
+Add deterministic tests that block shared snapshot publication, admit B containing high IDs in every allocator-relevant domain, and race public `allocate_*_id` calls. Assert every allocation is above B maxima before publication is released and after ack. Add cancelled/rejected coverage showing no lowering/reuse. Confirm the existing contention, barrier, invalid layer/audio/ISF/reconform tests still pass.
+
+Run focused `project_snapshot` tests, relevant allocator tests, full `cargo test -p engine --locked`, fmt/check/diff-check for this file. Report exact counts, changed behavior, and remaining boundaries. Native/release is out of scope. Do not claim completion if any duplicate-ID race remains.

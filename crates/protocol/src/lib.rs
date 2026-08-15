@@ -4875,6 +4875,15 @@ pub struct TimelineSnapshot {
     pub count_in_remaining_ms: u64,
     #[serde(default, skip_serializing)]
     pub audio_transport_revision: u64,
+    /// Monotonic, engine-owned Timeline Play authority epoch. It is published
+    /// only through runtime/control-plane observations and cannot be persisted
+    /// or injected by project JSON.
+    #[serde(default, skip)]
+    pub transport_epoch: u64,
+    /// Monotonic, engine-owned Timeline Play authority generation. Together
+    /// with `transport_epoch` it is a non-saturating ABA fence.
+    #[serde(default, skip)]
+    pub transport_generation: u64,
     /// Runtime-only positions for every active child Timeline transport,
     /// including recursively nested Scene Blocks. This is published to the
     /// native audio worker and is never written to `.sdc` or sent to the UI.
@@ -4917,6 +4926,8 @@ impl Default for TimelineSnapshot {
             count_in_beats: default_timeline_count_in_beats(),
             count_in_remaining_ms: 0,
             audio_transport_revision: 0,
+            transport_epoch: 0,
+            transport_generation: 0,
             active_child_transports: Vec::new(),
             loop_runtime: TimelineLoopRuntimeSummary::default(),
             follow_runtime: TimelineFollowRuntimeSummary::default(),

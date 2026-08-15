@@ -97,6 +97,11 @@ use protocol::{
 use thiserror::Error;
 
 const ENGINE_QUEUE_CAPACITY: usize = 4096;
+/// Emergency safer-direction commands never wait behind the normal engine
+/// command backlog. The app-side S0 token bucket admits at most eight burst
+/// attempts, while this larger queue leaves bounded headroom for local UI
+/// receipt retries.
+const SAFETY_COMMAND_QUEUE_CAPACITY: usize = 64;
 /// Upper bound for one directly addressable layer clip bank.
 const MAX_VIDEO_CLIP_SLOTS_PER_LAYER: usize = 32;
 const MAX_VIDEO_CLIP_TAKE_DURATION_MS: u64 = 600_000;
@@ -1397,6 +1402,65 @@ pub struct VideoLayerDuplicateEffectCatalogPlan {
     duplicate_chain_ids: Vec<VideoEffectLegacyAdapterIds>,
 }
 
+/// Definitive result of the canonical runtime-only Timeline Play/Pause
+/// publication.  This is intentionally an engine-local type; the app maps it
+/// into the strict protocol receipt after its own owner/fence validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimelineTransportSetPlayingDisposition {
+    Applied,
+    NoOp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimelineTransportSetPlayingAck {
+    pub disposition: TimelineTransportSetPlayingDisposition,
+    pub epoch_after: u64,
+    pub generation_after: u64,
+}
+
+/// Exact non-persistent fence for the canonical local Timeline transport
+/// command. Both values are non-zero and JavaScript-safe in published state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimelineTransportAuthority {
+    pub epoch: u64,
+    pub generation: u64,
+}
+
+#[derive(Debug)]
+pub struct TimelineTransportPublicationCompletion {
+    ack: mpsc::SyncSender<Result<(), String>>,
+    outcome: Arc<Mutex<Option<TimelineTransportSetPlayingAck>>>,
+}
+
+/// Definitive result of the emergency lighting blackout latch. The operation
+/// has no target value, so it cannot be adapted into a toggle or release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafetyBlackoutEngageDisposition {
+    Applied,
+    NoOp,
+}
+
+#[derive(Debug)]
+pub struct SafetyBlackoutPublicationCompletion {
+    ack: mpsc::SyncSender<Result<(), String>>,
+    outcome: Arc<Mutex<Option<SafetyBlackoutEngageDisposition>>>,
+}
+
+/// Definitive result of the separately authorized emergency-blackout release.
+/// Release is deliberately not priority queued: engage always wins queue
+/// pressure, while release must traverse the ordinary ordered command lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafetyBlackoutReleaseDisposition {
+    Applied,
+    NoOp,
+}
+
+#[derive(Debug)]
+pub struct SafetyBlackoutReleasePublicationCompletion {
+    ack: mpsc::SyncSender<Result<(), String>>,
+    outcome: Arc<Mutex<Option<SafetyBlackoutReleaseDisposition>>>,
+}
+
 // Keep the command definition and the AI0 inventory in the same declarative
 // source.  Adding a variant here automatically adds it to the internal,
 // fail-closed inventory; no source parsing or manually maintained mirror is
@@ -1634,6 +1698,21 @@ define_engine_command! {
     ClearDmxInput(u16),
     Blackout(bool),
     SetAllBlackout(bool),
+    /// Priority-queued, safer-direction-only emergency blackout. Only the
+    /// separately authorized R4 release path may clear the runtime latch.
+    SafetyBlackoutEngagePublished {
+        expires_at: Instant,
+        completion: SafetyBlackoutPublicationCompletion,
+    },
+    /// R4-only release of the runtime emergency latch. The exact authority
+    /// pair is checked in the engine so stale consent can never clear a newer
+    /// engage.
+    SafetyBlackoutReleasePublished {
+        expected_epoch: u64,
+        expected_generation: u64,
+        expires_at: Instant,
+        completion: SafetyBlackoutReleasePublicationCompletion,
+    },
     SetLightingMaster(f32),
     SetGroupSubmaster {
         group_id: String,
@@ -2143,9 +2222,11 @@ define_engine_command! {
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     /// Runtime-only, ABA-fenced Follow abort. The caller must bind this to the
-    /// generation it observed from `timeline_follow_runtime_status`; it never
-    /// changes the authored Timeline or project history.
+    /// output epoch and generation it observed from
+    /// `timeline_follow_runtime_status`; it never changes the authored
+    /// Timeline or project history.
     AbortTimelineFollow {
+        expected_epoch: u64,
         expected_generation: u64,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
@@ -2211,6 +2292,16 @@ define_engine_command! {
         captured_at: Instant,
     },
     SetTimelinePlaying(bool),
+    /// Canonical, generation-fenced local-runtime Play/Pause publication.
+    /// Unlike the legacy command above, it has a worker recheck and a
+    /// definitive snapshot acknowledgement for the strict app receipt lane.
+    SetTimelinePlayingPublished {
+        expected_epoch: u64,
+        expected_generation: u64,
+        playing: bool,
+        expires_at: Instant,
+        completion: TimelineTransportPublicationCompletion,
+    },
     SeekTimeline(u64),
     SetTimelineLoopEnabled(bool),
     ToggleTimelineLoop,
@@ -2672,6 +2763,7 @@ impl EngineCommand {
                 | EngineCommand::ClearLiveAudioInputPublished { .. }
                 | EngineCommand::ReportLiveAudioOnset { .. }
                 | EngineCommand::SetTimelinePlaying(_)
+                | EngineCommand::SetTimelinePlayingPublished { .. }
                 | EngineCommand::SeekTimeline(_)
                 | EngineCommand::SetTimelineLoopEnabled(_)
                 | EngineCommand::ToggleTimelineLoop
@@ -2681,6 +2773,8 @@ impl EngineCommand {
                 | EngineCommand::SeekTimelineBeat { .. }
                 | EngineCommand::SyncTimelineTimecode { .. }
                 | EngineCommand::AbortTimelineFollow { .. }
+                | EngineCommand::SafetyBlackoutEngagePublished { .. }
+                | EngineCommand::SafetyBlackoutReleasePublished { .. }
                 | EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
                 | EngineCommand::PulseVideoLayerIsfEvent { .. }
         )
@@ -2730,6 +2824,8 @@ impl EngineCommand {
                 | EngineCommand::ClearDmxInput(_)
                 | EngineCommand::Blackout(_)
                 | EngineCommand::SetAllBlackout(_)
+                | EngineCommand::SafetyBlackoutEngagePublished { .. }
+                | EngineCommand::SafetyBlackoutReleasePublished { .. }
                 | EngineCommand::SetLightingMaster(_)
                 | EngineCommand::SetGroupSubmaster { .. }
                 | EngineCommand::SetCueLiveModifier { .. }
@@ -2800,6 +2896,7 @@ impl EngineCommand {
                 | EngineCommand::RemoveCue(_)
                 | EngineCommand::RemoveCuePublished { .. }
                 | EngineCommand::SetTimelinePlaying(_)
+                | EngineCommand::SetTimelinePlayingPublished { .. }
                 | EngineCommand::SetTimelineLoopEnabled(_)
                 | EngineCommand::ToggleTimelineLoop
                 | EngineCommand::ScaleTimelineLoop(_)
@@ -2822,6 +2919,7 @@ impl EngineCommand {
 pub struct EngineHandle {
     _lifetime: Arc<EngineLifetime>,
     queue: Arc<ArrayQueue<QueuedEngineCommand>>,
+    safety_queue: Arc<ArrayQueue<QueuedEngineCommand>>,
     wake: Arc<EngineWake>,
     shared_telemetry: Arc<EngineSharedTelemetry>,
     snapshot: Arc<RwLock<EngineSnapshot>>,
@@ -2864,6 +2962,16 @@ pub struct EngineHandle {
     test_fail_next_pending_publication: Arc<AtomicBool>,
     #[cfg(test)]
     test_media_asset_publication_failed_after_b: Arc<AtomicBool>,
+}
+
+/// Runtime-only authority for the safer-direction emergency latch. This is
+/// separate from authored `blackout`, survives project replacement, and is
+/// never serialized into a project file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SafetyBlackoutAuthority {
+    pub engaged: bool,
+    pub epoch: u64,
+    pub generation: u64,
 }
 
 /// Engine-owned inputs for one active Timeline Follow presenter. The backend
@@ -2975,6 +3083,7 @@ struct EngineSharedTelemetry {
     queue_push_failure_count: AtomicU64,
     requested_live_audio_clear_generation: AtomicU64,
     live_audio_take_gate: Mutex<()>,
+    safety_blackout: Mutex<SafetyBlackoutAuthority>,
 }
 
 impl EngineSharedTelemetry {
@@ -2983,6 +3092,11 @@ impl EngineSharedTelemetry {
             queue_push_failure_count: AtomicU64::new(0),
             requested_live_audio_clear_generation: AtomicU64::new(0),
             live_audio_take_gate: Mutex::new(()),
+            safety_blackout: Mutex::new(SafetyBlackoutAuthority {
+                engaged: false,
+                epoch: 1,
+                generation: 1,
+            }),
         }
     }
 
@@ -3011,6 +3125,90 @@ impl EngineSharedTelemetry {
 
     fn reset(&self) {
         self.queue_push_failure_count.store(0, Ordering::Relaxed);
+    }
+
+    fn safety_blackout_authority(&self) -> SafetyBlackoutAuthority {
+        *self
+            .safety_blackout
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn engage_safety_blackout(
+        &self,
+    ) -> Result<(SafetyBlackoutEngageDisposition, SafetyBlackoutAuthority), String> {
+        let mut authority = self
+            .safety_blackout
+            .lock()
+            .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
+        if authority.engaged {
+            return Ok((SafetyBlackoutEngageDisposition::NoOp, *authority));
+        }
+        let (epoch, generation) =
+            protocol::control_plane_command::next_timeline_transport_authority(
+                authority.epoch,
+                authority.generation,
+            )
+            .ok_or_else(|| "Safety blackout authority is exhausted".to_string())?;
+        *authority = SafetyBlackoutAuthority {
+            engaged: true,
+            epoch,
+            generation,
+        };
+        Ok((SafetyBlackoutEngageDisposition::Applied, *authority))
+    }
+
+    fn release_safety_blackout(
+        &self,
+        expected_epoch: u64,
+        expected_generation: u64,
+    ) -> Result<
+        (
+            SafetyBlackoutReleaseDisposition,
+            SafetyBlackoutAuthority,
+            SafetyBlackoutAuthority,
+        ),
+        String,
+    > {
+        let mut authority = self
+            .safety_blackout
+            .lock()
+            .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
+        if authority.epoch != expected_epoch || authority.generation != expected_generation {
+            return Err("Safety blackout authority is stale".to_string());
+        }
+        let before = *authority;
+        if !authority.engaged {
+            return Ok((SafetyBlackoutReleaseDisposition::NoOp, before, before));
+        }
+        let (epoch, generation) =
+            protocol::control_plane_command::next_timeline_transport_authority(
+                authority.epoch,
+                authority.generation,
+            )
+            .ok_or_else(|| "Safety blackout authority is exhausted".to_string())?;
+        *authority = SafetyBlackoutAuthority {
+            engaged: false,
+            epoch,
+            generation,
+        };
+        Ok((
+            SafetyBlackoutReleaseDisposition::Applied,
+            before,
+            *authority,
+        ))
+    }
+
+    fn restore_safety_blackout_authority(
+        &self,
+        authority: SafetyBlackoutAuthority,
+    ) -> Result<(), String> {
+        let mut current = self
+            .safety_blackout
+            .lock()
+            .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
+        *current = authority;
+        Ok(())
     }
 }
 
@@ -3074,17 +3272,24 @@ impl EngineHandle {
         )
     }
 
+    pub fn safety_blackout_authority(&self) -> SafetyBlackoutAuthority {
+        self.shared_telemetry.safety_blackout_authority()
+    }
+
     fn start_with_output_ownership(
         output: DmxOutputConfig,
         output_ownership_gate: OutputOwnershipGate,
     ) -> Self {
         let queue = Arc::new(ArrayQueue::new(ENGINE_QUEUE_CAPACITY));
+        let safety_queue = Arc::new(ArrayQueue::new(SAFETY_COMMAND_QUEUE_CAPACITY));
         let wake = Arc::new(EngineWake::new());
         let shared_telemetry = Arc::new(EngineSharedTelemetry::new());
-        let initial_snapshot = EngineSnapshot {
+        let mut initial_snapshot = EngineSnapshot {
             output: output.clone(),
             ..EngineSnapshot::default()
         };
+        initial_snapshot.timeline.transport_epoch = 1;
+        initial_snapshot.timeline.transport_generation = 1;
         let next_timeline_identity = initial_snapshot
             .timeline
             .id
@@ -3124,6 +3329,7 @@ impl EngineHandle {
         let lifetime = Arc::new(EngineLifetime::new(Arc::clone(&wake)));
 
         let runtime_queue = Arc::clone(&queue);
+        let runtime_safety_queue = Arc::clone(&safety_queue);
         let runtime_wake = Arc::clone(&wake);
         let runtime_shared_telemetry = Arc::clone(&shared_telemetry);
         let runtime_output_ownership_gate = output_ownership_gate.clone();
@@ -3154,6 +3360,7 @@ impl EngineHandle {
                     Some(runtime_timeline_follow_video_render_snapshot);
                 runtime.run(
                     runtime_queue,
+                    runtime_safety_queue,
                     runtime_wake,
                     runtime_snapshot,
                     runtime_lifetime,
@@ -3165,6 +3372,7 @@ impl EngineHandle {
         Self {
             _lifetime: lifetime,
             queue,
+            safety_queue,
             wake,
             shared_telemetry,
             snapshot,
@@ -3468,6 +3676,90 @@ impl EngineHandle {
                 Err(EngineError::QueueFull)
             }
         }
+    }
+
+    fn send_safety(&self, command: EngineCommand) -> Result<(), EngineError> {
+        let command = self
+            .prepare_command_for_enqueue(command)
+            .map_err(EngineError::InvalidAllocatorCapacity)?;
+        match self.safety_queue.push(QueuedEngineCommand {
+            command,
+            queued_at: Instant::now(),
+        }) {
+            Ok(()) => {
+                self.wake.notify_command();
+                Ok(())
+            }
+            Err(_) => {
+                self.shared_telemetry.record_queue_push_failure();
+                Err(EngineError::QueueFull)
+            }
+        }
+    }
+
+    /// Engage emergency DMX blackout through the independent priority lane.
+    /// A successful return follows shared-snapshot publication and never
+    /// changes project persistence or history.
+    pub fn safety_blackout_engage_published(
+        &self,
+        expires_at: Instant,
+    ) -> Result<SafetyBlackoutEngageDisposition, String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let outcome = Arc::new(Mutex::new(None));
+        self.send_safety(EngineCommand::SafetyBlackoutEngagePublished {
+            expires_at,
+            completion: SafetyBlackoutPublicationCompletion {
+                ack,
+                outcome: Arc::clone(&outcome),
+            },
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Safety blackout acknowledgement failed: {error}"))??;
+        let acknowledged = outcome
+            .lock()
+            .map_err(|_| "Safety blackout acknowledgement state was poisoned".to_string())?
+            .take()
+            .ok_or_else(|| "Safety blackout acknowledgement omitted its result".to_string());
+        acknowledged
+    }
+
+    /// Release emergency blackout only from the exact authority pair captured
+    /// by the caller's physical-consent fence. A successful return follows
+    /// shared-snapshot publication; failed publication restores the engaged
+    /// latch and its authority pair before returning an error.
+    pub fn safety_blackout_release_published(
+        &self,
+        expected_epoch: u64,
+        expected_generation: u64,
+        expires_at: Instant,
+    ) -> Result<SafetyBlackoutReleaseDisposition, String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let outcome = Arc::new(Mutex::new(None));
+        self.send(EngineCommand::SafetyBlackoutReleasePublished {
+            expected_epoch,
+            expected_generation,
+            expires_at,
+            completion: SafetyBlackoutReleasePublicationCompletion {
+                ack,
+                outcome: Arc::clone(&outcome),
+            },
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Safety blackout release acknowledgement failed: {error}")
+            })??;
+        let acknowledged = outcome
+            .lock()
+            .map_err(|_| "Safety blackout release acknowledgement state was poisoned".to_string())?
+            .take()
+            .ok_or_else(|| {
+                "Safety blackout release acknowledgement omitted its result".to_string()
+            });
+        acknowledged
     }
 
     /// Allocate compatibility asset identities and reserve all explicit IDs
@@ -4732,6 +5024,57 @@ impl EngineHandle {
             .map_err(|error| format!("Timeline bank acknowledgement failed: {error}"))?
     }
 
+    /// Publish one canonical Timeline Play/Pause intent after the engine has
+    /// rechecked the exact transport generation.  The caller receives a
+    /// disposition only after the shared snapshot exposes the same runtime
+    /// generation; no project persistence or history operation is involved.
+    pub fn set_timeline_playing_published(
+        &self,
+        expected_epoch: u64,
+        expected_generation: u64,
+        playing: bool,
+        expires_at: Instant,
+    ) -> Result<TimelineTransportSetPlayingAck, String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let outcome = Arc::new(Mutex::new(None));
+        self.send(EngineCommand::SetTimelinePlayingPublished {
+            expected_epoch,
+            expected_generation,
+            playing,
+            expires_at,
+            completion: TimelineTransportPublicationCompletion {
+                ack,
+                outcome: Arc::clone(&outcome),
+            },
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Timeline transport acknowledgement failed: {error}"))??;
+        let acknowledged = outcome
+            .lock()
+            .map_err(|_| "Timeline transport acknowledgement state was poisoned".to_string())?
+            .take()
+            .ok_or_else(|| "Timeline transport acknowledgement omitted its result".to_string());
+        acknowledged
+    }
+
+    /// The exact engine-owned fence used by the local runtime control plane.
+    /// It is non-persistent and becomes visible atomically with the snapshot.
+    pub fn timeline_transport_generation(&self) -> u64 {
+        self.snapshot().timeline.transport_generation
+    }
+
+    /// The exact pair must be captured from one shared snapshot. Callers must
+    /// not independently observe epoch and generation across a worker change.
+    pub fn timeline_transport_authority(&self) -> TimelineTransportAuthority {
+        let timeline = self.snapshot().timeline;
+        TimelineTransportAuthority {
+            epoch: timeline.transport_epoch,
+            generation: timeline.transport_generation,
+        }
+    }
+
     pub fn bootstrap_vj_show(
         &self,
         layers: Vec<(VideoLayerId, String, VideoSourceSummary)>,
@@ -5402,11 +5745,13 @@ impl EngineHandle {
     /// applied, matching other runtime ownership fences).
     pub fn abort_timeline_follow_published(
         &self,
+        expected_epoch: u64,
         expected_generation: u64,
         expires_at: Instant,
     ) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::AbortTimelineFollow {
+            expected_epoch,
             expected_generation,
             expires_at,
             ack,
@@ -6209,6 +6554,8 @@ impl EngineHandle {
             | EngineCommand::ClearDmxInput(_)
             | EngineCommand::Blackout(_)
             | EngineCommand::SetAllBlackout(_)
+            | EngineCommand::SafetyBlackoutEngagePublished { .. }
+            | EngineCommand::SafetyBlackoutReleasePublished { .. }
             | EngineCommand::SetLightingMaster(_)
             | EngineCommand::SetGroupSubmaster { .. }
             | EngineCommand::SetBpm(_)
@@ -6274,6 +6621,7 @@ impl EngineHandle {
             | EngineCommand::ClearLiveAudioInputPublished { .. }
             | EngineCommand::ReportLiveAudioOnset { .. }
             | EngineCommand::SetTimelinePlaying(_)
+            | EngineCommand::SetTimelinePlayingPublished { .. }
             | EngineCommand::SeekTimeline(_)
             | EngineCommand::SetTimelineLoopEnabled(_)
             | EngineCommand::ToggleTimelineLoop
@@ -13484,6 +13832,14 @@ struct PendingCommandAck {
 #[derive(Clone)]
 enum PendingCommandRollback {
     KeepApplied,
+    /// Safety blackout cannot be undone by a shared-snapshot publication
+    /// failure; the worker republishes the already-engaged latch.
+    SafetyBlackoutKeepApplied,
+    /// Clearing the emergency latch is the less-safe direction. If its
+    /// publication barrier fails, restore the exact engaged authority image.
+    RestoreSafetyBlackoutAuthority {
+        authority: SafetyBlackoutAuthority,
+    },
     ProjectSnapshotApplied,
     RestoreTouchSurface {
         touch_surface: TouchSurfaceSummary,
@@ -13700,6 +14056,50 @@ enum PendingCommandRollback {
         active: TimelineSnapshot,
         playing: bool,
         position_ms: u64,
+        transport_epoch: u64,
+        transport_generation: u64,
+        last_error: Option<String>,
+    },
+    /// Complete A image for the one runtime-only canonical Play/Pause lane.
+    /// The command may abort a Follow, pause an active fade or retime effect
+    /// clocks, so a publication failure must restore more than its boolean.
+    RestoreTimelineTransport {
+        playing: bool,
+        transport_epoch: u64,
+        transport_generation: u64,
+        loop_runtime: TimelineLoopRuntimeSummary,
+        count_in_until: Option<Instant>,
+        paused_at: Option<Instant>,
+        playhead_boundary_armed: bool,
+        evaluated_boundary_position_ms: Option<u64>,
+        jump_landed_event_id: Option<TimelineEventId>,
+        external_sync_source: Option<ClockSource>,
+        follow_natural_boundary_armed: bool,
+        follow_runtime: TimelineFollowRuntimeSummary,
+        follow_abort_ticks_remaining: u8,
+        follow_transition: Option<RuntimeTimelineFollowTransition>,
+        follow_transport: Option<RuntimeChildTransport>,
+        follow_terminal_receipt: Option<TimelineFollowSettlementTerminalReceipt>,
+        guide_cues: Vec<TimelineGuideCueSummary>,
+        last_announced_phase_id: Option<TimelinePhaseId>,
+        audio_transport_revision: u64,
+        active_fade: Option<RuntimeFade>,
+        effect_activations: Vec<RuntimeEffectActivation>,
+        active_effect_activation_indices: Vec<usize>,
+        step_activations: Vec<RuntimeCueStepActivation>,
+        active_step_activation_indices: Vec<usize>,
+        timeline_effect_activation_ranges: Vec<RuntimeEffectActivationRange>,
+        timeline_step_activation_ranges: Vec<RuntimeCueStepActivationRange>,
+        pending_cues: VecDeque<PendingCueTrigger>,
+        child_transports: Vec<RuntimeChildTransport>,
+        child_transport_by_parent_event: Vec<Option<usize>>,
+        direct_child_transports: Vec<RuntimeChildTransport>,
+        direct_child_transport_by_cue: Vec<Option<usize>>,
+        nested_child_transports: Vec<RuntimeChildTransport>,
+        timeline_video_layer_restores: HashMap<VideoLayerId, RuntimeTimelineVideoLayerRestore>,
+        video_layers: Vec<RuntimeVideoLayer>,
+        video_layer_fades: Vec<RuntimeVideoLayerFade>,
+        clock: BpmClock,
         last_error: Option<String>,
     },
 }
@@ -13729,6 +14129,7 @@ impl PendingCommandRollback {
                 | Self::RestoreTimelineAudioMaster { .. }
                 | Self::RestoreTimelineAdvancedAuthoring { .. }
                 | Self::RestoreTimelineBank { .. }
+                | Self::RestoreTimelineTransport { .. }
                 | Self::RestoreTouchSurface { .. }
         )
     }
@@ -13929,6 +14330,11 @@ struct EngineRuntime {
     live_audio_generation: Option<u64>,
     last_live_audio_frame_sequence: Option<u64>,
     timeline_playing: bool,
+    /// Canonical runtime Play authority. This never participates in authored
+    /// Timeline serialization; together with generation it is strictly
+    /// monotonic for the life of this engine process.
+    timeline_transport_epoch: u64,
+    timeline_transport_generation: u64,
     timeline_count_in_until: Option<Instant>,
     timeline_paused_at: Option<Instant>,
     direct_child_count_in: Option<RuntimeDirectChildCountIn>,
@@ -13985,6 +14391,9 @@ struct EngineRuntime {
     output_ownership_gate: OutputOwnershipGate,
     dmx_input_frames: HashMap<u16, RuntimeDmxInputFrame>,
     blackout: bool,
+    /// Runtime-only emergency latch. Project replacement and ordinary
+    /// `Blackout(false)` cannot release it.
+    safety_blackout_engaged: bool,
     clock: BpmClock,
     frame_counter: u64,
     queue_depth_abs_max: usize,
@@ -14265,6 +14674,8 @@ impl EngineRuntime {
             live_audio_generation: None,
             last_live_audio_frame_sequence: None,
             timeline_playing: false,
+            timeline_transport_epoch: 1,
+            timeline_transport_generation: 1,
             timeline_count_in_until: None,
             timeline_paused_at: None,
             direct_child_count_in: None,
@@ -14319,6 +14730,7 @@ impl EngineRuntime {
             output_ownership_gate,
             dmx_input_frames: HashMap::new(),
             blackout: false,
+            safety_blackout_engaged: false,
             clock: BpmClock::new(120.0, Instant::now()),
             frame_counter: 0,
             queue_depth_abs_max: 0,
@@ -14707,6 +15119,14 @@ impl EngineRuntime {
         mut snapshot: EngineSnapshot,
     ) -> Result<(), String> {
         snapshot = normalized_engine_snapshot_video_for_load(snapshot)?;
+        // Runtime authority is never imported with project JSON or an
+        // in-memory authored image. The live process owns its epoch.
+        snapshot.timeline.transport_epoch = 0;
+        snapshot.timeline.transport_generation = 0;
+        for timeline in &mut snapshot.timeline_bank {
+            timeline.transport_epoch = 0;
+            timeline.transport_generation = 0;
+        }
         normalize_timeline_bank(&mut snapshot);
         validate_project_snapshot_allocator_capacity(&snapshot)?;
         if let Err(error) = normalize_and_validate_timeline_layers(
@@ -14744,6 +15164,8 @@ impl EngineRuntime {
         // Every load failure above ran only against the candidate/staged
         // image. Do not tear down an active Follow until all fallible work has
         // succeeded, otherwise a rejected project would mutate live runtime A.
+        self.preflight_timeline_transport_authority_invalidation()?;
+        self.invalidate_timeline_transport_authority()?;
         // A successful project replacement is an epoch boundary for runtime
         // Follow receipts. A delayed acknowledgement from the prior project
         // must not be recoverable against a reused Timeline generation.
@@ -15613,6 +16035,7 @@ impl EngineRuntime {
     fn run(
         &mut self,
         queue: Arc<ArrayQueue<QueuedEngineCommand>>,
+        safety_queue: Arc<ArrayQueue<QueuedEngineCommand>>,
         wake: Arc<EngineWake>,
         snapshot: Arc<RwLock<EngineSnapshot>>,
         lifetime: Weak<EngineLifetime>,
@@ -15623,14 +16046,20 @@ impl EngineRuntime {
             if lifetime.upgrade().is_none() {
                 break;
             }
-            self.record_queue_depth(queue.len());
+            self.record_queue_depth(queue.len().saturating_add(safety_queue.len()));
+            // The S0 lane is always drained before normal authored/runtime
+            // traffic, so a saturated ordinary queue cannot delay blackout.
+            self.consume_commands(&safety_queue);
             self.consume_commands(&queue);
-            self.publish_pending_command_acks(queue.len(), &snapshot);
+            self.publish_pending_command_acks(
+                queue.len().saturating_add(safety_queue.len()),
+                &snapshot,
+            );
 
             let mut now = Instant::now();
             self.maybe_advance_low_latency_dmx_tick(now, &mut next_tick);
             if now >= next_tick {
-                self.tick(queue.len(), &snapshot);
+                self.tick(queue.len().saturating_add(safety_queue.len()), &snapshot);
                 self.low_latency_dmx_tick_requested = false;
                 self.low_latency_dmx_tick_defer_recorded = false;
                 next_tick += DMX_TICK_INTERVAL;
@@ -15716,6 +16145,9 @@ impl EngineRuntime {
                     | EngineCommand::AddColorMappingEffect { .. }
                     | EngineCommand::UpdateColorMappingEffect { .. }
                     | EngineCommand::SetEffectEnabledPublished { .. }
+                    | EngineCommand::SetTimelinePlayingPublished { .. }
+                    | EngineCommand::SafetyBlackoutEngagePublished { .. }
+                    | EngineCommand::SafetyBlackoutReleasePublished { .. }
                     | EngineCommand::UpsertNodeGraphPublished { .. }
                     | EngineCommand::SetNodeGraphEnabledPublished { .. }
                     | EngineCommand::RemoveNodeGraphPublished { .. }
@@ -16806,6 +17238,73 @@ impl EngineRuntime {
                 self.video_blackout = enabled;
                 self.last_error = None;
             }
+            EngineCommand::SafetyBlackoutEngagePublished {
+                expires_at,
+                completion,
+            } => {
+                let result = if Instant::now() > expires_at {
+                    Err("Safety blackout expired before engine execution".to_string())
+                } else {
+                    match self.shared_telemetry.engage_safety_blackout() {
+                        Ok((disposition, authority)) => {
+                            self.safety_blackout_engaged = authority.engaged;
+                            match completion.outcome.lock() {
+                                Ok(mut slot) => {
+                                    *slot = Some(disposition);
+                                    Ok(())
+                                }
+                                Err(_) => Err("Safety blackout acknowledgement state was poisoned"
+                                    .to_string()),
+                            }
+                        }
+                        Err(error) => Err(error),
+                    }
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: completion.ack,
+                    result,
+                    rollback: PendingCommandRollback::SafetyBlackoutKeepApplied,
+                    publication_error:
+                        "Engine snapshot was busy; emergency blackout remains engaged",
+                });
+            }
+            EngineCommand::SafetyBlackoutReleasePublished {
+                expected_epoch,
+                expected_generation,
+                expires_at,
+                completion,
+            } => {
+                let mut rollback = PendingCommandRollback::KeepApplied;
+                let result = if Instant::now() > expires_at {
+                    Err("Safety blackout release expired before engine execution".to_string())
+                } else {
+                    match completion.outcome.lock() {
+                        Ok(mut slot) => match self
+                            .shared_telemetry
+                            .release_safety_blackout(expected_epoch, expected_generation)
+                        {
+                            Ok((disposition, before, after)) => {
+                                self.safety_blackout_engaged = after.engaged;
+                                *slot = Some(disposition);
+                                rollback = PendingCommandRollback::RestoreSafetyBlackoutAuthority {
+                                    authority: before,
+                                };
+                                Ok(())
+                            }
+                            Err(error) => Err(error),
+                        },
+                        Err(_) => Err("Safety blackout release acknowledgement state was poisoned"
+                            .to_string()),
+                    }
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: completion.ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; emergency blackout release was rolled back",
+                });
+            }
             EngineCommand::SetLightingMaster(master) => {
                 if master.is_finite() {
                     self.lighting_master = master.clamp(0.0, 1.0);
@@ -16923,6 +17422,10 @@ impl EngineRuntime {
             }
             EngineCommand::MidiSongPositionPointer(sixteenth_notes) => {
                 let now = Instant::now();
+                if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
+                    self.last_error = Some(error);
+                    return;
+                }
                 if self.timeline_follow_is_abortable() {
                     self.abort_timeline_follow(
                         protocol::TimelineFollowAbortReason::ClockDiscontinuity,
@@ -16950,6 +17453,11 @@ impl EngineRuntime {
                     self.advance_child_transports(now);
                 }
                 self.apply_child_timeline_automations();
+                // SPP is an externally-owned positional discontinuity even
+                // when it lands on the current millisecond. A prior local
+                // Play authority must therefore fail the worker recheck.
+                self.invalidate_timeline_transport_authority()
+                    .expect("SPP preflight must reserve a transport authority successor");
             }
             EngineCommand::ResetTelemetry => {
                 self.reset_telemetry();
@@ -19871,6 +20379,8 @@ impl EngineRuntime {
                     active: persistence_before.timeline,
                     playing: self.timeline_playing,
                     position_ms: self.timeline_position_ms,
+                    transport_epoch: self.timeline_transport_epoch,
+                    transport_generation: self.timeline_transport_generation,
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -19892,12 +20402,18 @@ impl EngineRuntime {
                 });
             }
             EngineCommand::AbortTimelineFollow {
+                expected_epoch,
                 expected_generation,
                 expires_at,
                 ack,
             } => {
                 let result = if Instant::now() > expires_at {
                     Err("Timeline Follow abort expired before engine execution".to_string())
+                } else if self.output_ownership_gate.status().epoch != expected_epoch {
+                    Err(format!(
+                        "Timeline Follow abort output epoch is stale (expected {expected_epoch}, current {})",
+                        self.output_ownership_gate.status().epoch
+                    ))
                 } else if self.timeline_follow_runtime.generation != expected_generation {
                     Err(format!(
                         "Timeline Follow abort generation is stale (expected {expected_generation}, current {})",
@@ -20179,104 +20695,62 @@ impl EngineRuntime {
                 );
             }
             EngineCommand::SetTimelinePlaying(playing) => {
-                let was_playing = self.timeline_playing;
-                let now = Instant::now();
-                if !playing && self.timeline_follow_is_abortable() {
-                    self.abort_timeline_follow(protocol::TimelineFollowAbortReason::Stop, now);
-                }
-                self.timeline_playing = playing;
-                if playing {
-                    // An explicit Play command hands the playhead back to the internal clock.
-                    // Pause alone must not release external ownership while MTC/LTC/SPP frames
-                    // continue to drive the authoritative position.
-                    self.timeline_external_sync_source = None;
-                }
-                if playing && !was_playing {
-                    self.timeline_last_announced_phase_id = None;
-                    self.refresh_timeline_loop_runtime_status();
-                    if let Some(paused_at) = self.timeline_paused_at.take() {
-                        self.shift_timeline_effect_clocks(paused_at, now);
-                    }
-                    self.timeline_count_in_until = (self.timeline_metronome_enabled
-                        && self.timeline_count_in_beats > 0)
-                        .then(|| {
-                            now.checked_add(timeline_count_in_duration(
-                                self.clock.bpm,
-                                self.timeline_count_in_beats,
-                            ))
-                            .unwrap_or(now)
-                        });
-                    if self.timeline_count_in_until.is_some() {
-                        self.timeline_paused_at = Some(now);
-                    } else if self
-                        .active_fade
-                        .as_ref()
-                        .is_some_and(|fade| fade.source == PendingCueTriggerSource::Timeline)
-                    {
-                        self.set_active_fade_paused(false, now);
-                    }
-                    // Resume must not replay a boundary that the playhead already consumed.
-                    // Fresh playback and explicit positioning clear the evaluated marker and
-                    // therefore still arm the current boundary exactly once.
-                    if self.timeline_evaluated_boundary_position_ms
-                        != Some(self.timeline_position_ms)
-                    {
-                        self.timeline_playhead_boundary_armed = true;
-                    }
-                    if self
-                        .timeline_follow
-                        .as_ref()
-                        .is_some_and(|follow| follow.enabled)
-                        && !self.timeline_follow_abort_fence_pending()
-                        && matches!(
-                            self.timeline_follow_runtime.status,
-                            protocol::TimelineFollowRuntimeStatus::Idle
-                                | protocol::TimelineFollowRuntimeStatus::Held
-                                | protocol::TimelineFollowRuntimeStatus::Fault
-                        )
-                    {
-                        // A successful load or a completed abort begins a new
-                        // natural-playback generation. Explicit seeks own this
-                        // token separately, and the observable Aborting fence
-                        // remains non-reentrant.
-                        self.timeline_follow_natural_boundary_armed =
-                            self.timeline_position_ms < self.timeline_duration_ms();
-                    }
-                    if let Some(follow) = self.timeline_follow.as_ref().filter(|follow| {
-                        follow.enabled
-                            && self.timeline_follow_natural_boundary_armed
-                            && !self.timeline_follow_abort_fence_pending()
-                    }) {
-                        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
-                            generation: next_timeline_runtime_generation(
-                                self.timeline_follow_runtime.generation,
-                            ),
-                            status: protocol::TimelineFollowRuntimeStatus::Armed,
-                            source_timeline_id: Some(self.timeline_id),
-                            target_timeline_id: Some(follow.next_timeline_id),
-                            ..TimelineFollowRuntimeSummary::default()
-                        };
-                    }
-                } else if !playing {
-                    self.timeline_count_in_until = None;
-                    self.timeline_jump_landed_event_id = None;
-                    if was_playing {
-                        self.timeline_paused_at = Some(now);
-                        if self
-                            .active_fade
-                            .as_ref()
-                            .is_some_and(|fade| fade.source == PendingCueTriggerSource::Timeline)
-                        {
-                            self.set_active_fade_paused(true, now);
-                        }
-                    }
-                    if self.timeline_follow_transition.is_none()
-                        && !self.timeline_follow_abort_fence_pending()
-                    {
-                        self.timeline_follow_runtime.status =
-                            protocol::TimelineFollowRuntimeStatus::Idle;
-                    }
-                }
+                // Legacy ingress remains intentionally available to unmigrated
+                // remote/MIDI/OSC paths. It has no versioned identity, but it
+                // still advances the common runtime authority when it changes
+                // playing state or releases an external clock owner.
+                self.last_error = self.apply_timeline_playing_command(playing, false).err();
+            }
+            EngineCommand::SetTimelinePlayingPublished {
+                expected_epoch,
+                expected_generation,
+                playing,
+                expires_at,
+                completion,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = self.timeline_transport_rollback();
+                let result = if Instant::now() > expires_at {
+                    Err("Timeline transport command expired before engine execution".to_string())
+                } else if expected_epoch == 0
+                    || expected_generation == 0
+                    || expected_epoch != self.timeline_transport_epoch
+                    || expected_generation != self.timeline_transport_generation
+                {
+                    Err("Timeline transport authority is stale".to_string())
+                } else {
+                    self.apply_timeline_playing_command(playing, true)
+                        .and_then(|disposition| {
+                            let outcome = TimelineTransportSetPlayingAck {
+                                disposition,
+                                epoch_after: self.timeline_transport_epoch,
+                                generation_after: self.timeline_transport_generation,
+                            };
+                            match completion.outcome.lock() {
+                                Ok(mut slot) => {
+                                    *slot = Some(outcome);
+                                    Ok(())
+                                }
+                                Err(_) => {
+                                    self.rollback_pending_command(rollback.clone());
+                                    Err("Timeline transport acknowledgement state was poisoned"
+                                        .to_string())
+                                }
+                            }
+                        })
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: completion.ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Timeline transport change was rolled back",
+                });
             }
             EngineCommand::SetTimelineLoopEnabled(enabled) => {
                 self.set_timeline_loop_enabled_state(enabled);
@@ -20332,6 +20806,10 @@ impl EngineRuntime {
             }
             EngineCommand::SeekTimeline(position_ms) => {
                 let now = Instant::now();
+                if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
+                    self.last_error = Some(error);
+                    return;
+                }
                 if self.timeline_follow_is_abortable() {
                     self.abort_timeline_follow(
                         protocol::TimelineFollowAbortReason::ManualSeek,
@@ -20358,6 +20836,11 @@ impl EngineRuntime {
                 self.establish_child_transports_at_position(now);
                 self.apply_child_timeline_automations();
                 self.timeline_paused_at = (!self.timeline_playing).then_some(now);
+                // Every manual positioning operation invalidates a capability
+                // minted for the previous transport image, even if a clamp
+                // leaves the visible millisecond position unchanged.
+                self.invalidate_timeline_transport_authority()
+                    .expect("seek preflight must reserve a transport authority successor");
             }
             EngineCommand::SetDirectChildTimelinePlaying { cue_id, playing } => {
                 self.set_direct_child_timeline_playing(cue_id, playing, Instant::now());
@@ -20370,6 +20853,10 @@ impl EngineRuntime {
             }
             EngineCommand::SeekTimelineBeat { direction } => {
                 let now = Instant::now();
+                if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
+                    self.last_error = Some(error);
+                    return;
+                }
                 if self.timeline_follow_is_abortable() {
                     self.abort_timeline_follow(
                         protocol::TimelineFollowAbortReason::ManualSeek,
@@ -20388,12 +20875,18 @@ impl EngineRuntime {
                 self.apply_child_timeline_automations();
                 self.timeline_audio_transport_revision =
                     self.timeline_audio_transport_revision.wrapping_add(1);
+                self.invalidate_timeline_transport_authority()
+                    .expect("beat seek preflight must reserve a transport authority successor");
             }
             EngineCommand::SyncTimelineTimecode {
                 position_ms,
                 source,
             } => {
                 let now = Instant::now();
+                if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
+                    self.last_error = Some(error);
+                    return;
+                }
                 if self.timeline_follow_is_abortable() {
                     self.abort_timeline_follow(
                         protocol::TimelineFollowAbortReason::ClockDiscontinuity,
@@ -20424,6 +20917,8 @@ impl EngineRuntime {
                     self.advance_child_transports(now);
                 }
                 self.apply_child_timeline_automations();
+                self.invalidate_timeline_transport_authority()
+                    .expect("timecode preflight must reserve a transport authority successor");
             }
             EngineCommand::SetAutoVjConfig(config) => {
                 let _ = self.set_auto_vj_config(config);
@@ -21734,6 +22229,8 @@ impl EngineRuntime {
                 && matches!(
                     &pending.rollback,
                     PendingCommandRollback::ProjectSnapshotApplied
+                        | PendingCommandRollback::SafetyBlackoutKeepApplied
+                        | PendingCommandRollback::RestoreSafetyBlackoutAuthority { .. }
                         | PendingCommandRollback::RestoreFixtureGroupState { .. }
                         | PendingCommandRollback::RestoreFixturePatchBatch { .. }
                         | PendingCommandRollback::RestoreStageMapPresets { .. }
@@ -21827,20 +22324,19 @@ impl EngineRuntime {
                     .map(|pending| pending.publication_error.to_string());
             }
         }
-        let restored_timeline_advanced_runtime = !published
+        let restored_timeline_runtime = !published
             && pending.iter().any(|pending| {
                 pending.result.is_ok()
                     && matches!(
                         &pending.rollback,
                         PendingCommandRollback::RestoreTimelineAdvancedAuthoring { .. }
+                            | PendingCommandRollback::RestoreTimelineTransport { .. }
                     )
             });
         // That rollback restores a live Follow subtree and its activation
         // ranges verbatim. Rebuilding here would derive only authored root
         // transports and tear the restored Follow/nested subtree down again.
-        if pending.iter().any(|pending| pending.result.is_ok())
-            && !restored_timeline_advanced_runtime
-        {
+        if pending.iter().any(|pending| pending.result.is_ok()) && !restored_timeline_runtime {
             self.rebuild_effect_activations(Instant::now());
         }
         for pending in pending {
@@ -21856,7 +22352,22 @@ impl EngineRuntime {
     fn rollback_pending_command(&mut self, rollback: PendingCommandRollback) {
         match rollback {
             PendingCommandRollback::KeepApplied
+            | PendingCommandRollback::SafetyBlackoutKeepApplied
             | PendingCommandRollback::ProjectSnapshotApplied => {}
+            PendingCommandRollback::RestoreSafetyBlackoutAuthority { authority } => {
+                if self
+                    .shared_telemetry
+                    .restore_safety_blackout_authority(authority)
+                    .is_ok()
+                {
+                    self.safety_blackout_engaged = authority.engaged;
+                } else {
+                    // Poisoned shared authority is already fail-closed: no
+                    // caller can acquire a fresh release fence. Preserve the
+                    // safer local latch as well.
+                    self.safety_blackout_engaged = true;
+                }
+            }
             PendingCommandRollback::RestoreTouchSurface {
                 touch_surface,
                 last_error,
@@ -22296,12 +22807,93 @@ impl EngineRuntime {
                 active,
                 playing,
                 position_ms,
+                transport_epoch,
+                transport_generation,
                 last_error,
             } => {
                 if let Ok((active, runtime_events)) = self.prepare_timeline_bank_entry(active) {
                     self.timeline_bank = timelines;
                     self.install_timeline_bank_entry(active, runtime_events, playing, position_ms);
                 }
+                self.timeline_transport_epoch = transport_epoch;
+                self.timeline_transport_generation = transport_generation;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreTimelineTransport {
+                playing,
+                transport_epoch,
+                transport_generation,
+                loop_runtime,
+                count_in_until,
+                paused_at,
+                playhead_boundary_armed,
+                evaluated_boundary_position_ms,
+                jump_landed_event_id,
+                external_sync_source,
+                follow_natural_boundary_armed,
+                follow_runtime,
+                follow_abort_ticks_remaining,
+                follow_transition,
+                follow_transport,
+                follow_terminal_receipt,
+                guide_cues,
+                last_announced_phase_id,
+                audio_transport_revision,
+                active_fade,
+                effect_activations,
+                active_effect_activation_indices,
+                step_activations,
+                active_step_activation_indices,
+                timeline_effect_activation_ranges,
+                timeline_step_activation_ranges,
+                pending_cues,
+                child_transports,
+                child_transport_by_parent_event,
+                direct_child_transports,
+                direct_child_transport_by_cue,
+                nested_child_transports,
+                timeline_video_layer_restores,
+                video_layers,
+                video_layer_fades,
+                clock,
+                last_error,
+            } => {
+                self.timeline_playing = playing;
+                self.timeline_transport_epoch = transport_epoch;
+                self.timeline_transport_generation = transport_generation;
+                self.timeline_loop_runtime = loop_runtime;
+                self.timeline_count_in_until = count_in_until;
+                self.timeline_paused_at = paused_at;
+                self.timeline_playhead_boundary_armed = playhead_boundary_armed;
+                self.timeline_evaluated_boundary_position_ms = evaluated_boundary_position_ms;
+                self.timeline_jump_landed_event_id = jump_landed_event_id;
+                self.timeline_external_sync_source = external_sync_source;
+                self.timeline_follow_natural_boundary_armed = follow_natural_boundary_armed;
+                self.timeline_follow_runtime = follow_runtime;
+                self.timeline_follow_abort_ticks_remaining = follow_abort_ticks_remaining;
+                self.timeline_follow_transition = follow_transition;
+                self.timeline_follow_transport = follow_transport;
+                self.timeline_follow_terminal_settlement_receipt = follow_terminal_receipt;
+                self.timeline_guide_cues = guide_cues;
+                self.timeline_last_announced_phase_id = last_announced_phase_id;
+                self.timeline_audio_transport_revision = audio_transport_revision;
+                self.active_fade = active_fade;
+                self.effect_activations = effect_activations;
+                self.active_effect_activation_indices = active_effect_activation_indices;
+                self.step_activations = step_activations;
+                self.active_step_activation_indices = active_step_activation_indices;
+                self.timeline_effect_activation_ranges = timeline_effect_activation_ranges;
+                self.timeline_step_activation_ranges = timeline_step_activation_ranges;
+                self.pending_cues = pending_cues;
+                self.child_transports = child_transports;
+                self.child_transport_by_parent_event = child_transport_by_parent_event;
+                self.direct_child_transports = direct_child_transports;
+                self.direct_child_transport_by_cue = direct_child_transport_by_cue;
+                self.nested_child_transports = nested_child_transports;
+                self.timeline_video_layer_restores = timeline_video_layer_restores;
+                self.video_layers = video_layers;
+                self.video_layer_fades = video_layer_fades;
+                self.clock = clock;
                 self.last_error = last_error;
             }
         }
@@ -23806,7 +24398,7 @@ impl EngineRuntime {
 
     fn render_dmx_frame_for_universe(&self, universe: u16, now: Instant) -> [u8; 512] {
         let mut frame = [0u8; 512];
-        if !self.blackout {
+        if !(self.blackout || self.safety_blackout_engaged) {
             self.render_dmx_frame(&mut frame, universe, now);
             if let Some(input) = self.dmx_input_frames.get(&universe) {
                 match input.merge_mode {
@@ -28220,6 +28812,8 @@ impl EngineRuntime {
         timeline.position_ms = 0;
         timeline.count_in_remaining_ms = 0;
         timeline.audio_transport_revision = 0;
+        timeline.transport_epoch = 0;
+        timeline.transport_generation = 0;
         timeline.active_child_transports.clear();
         timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
         timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
@@ -28389,6 +28983,8 @@ impl EngineRuntime {
         validation.video.media_assets = self.media_assets.clone();
         validate_timeline_bank(&validation, &self.media_assets)?;
 
+        self.preflight_timeline_transport_authority_invalidation()?;
+
         // Installing a new authored bank is a runtime identity boundary even
         // when no transition is presently active. Do not allow a delayed ACK
         // receipt from the replaced bank to be observed as current.
@@ -28399,6 +28995,7 @@ impl EngineRuntime {
                 Instant::now(),
             );
         }
+        self.invalidate_timeline_transport_authority()?;
         self.timeline_bank = validation.timeline_bank;
         self.install_timeline_bank_entry(active, runtime_events, play, 0);
         Ok(())
@@ -32285,6 +32882,314 @@ impl EngineRuntime {
             )
     }
 
+    /// Advance the single non-persistent fence used by the canonical local
+    /// Timeline transport lane.  Do not derive this from playhead time: a
+    /// value can repeat after a seek, a loop wrap, or a project replacement.
+    fn next_timeline_transport_authority(&self) -> Result<TimelineTransportAuthority, String> {
+        let (epoch, generation) =
+            protocol::control_plane_command::next_timeline_transport_authority(
+                self.timeline_transport_epoch,
+                self.timeline_transport_generation,
+            )
+            .ok_or_else(|| "Timeline transport authority is exhausted".to_string())?;
+        Ok(TimelineTransportAuthority { epoch, generation })
+    }
+
+    /// Reserve the one successor required by an invalidating Timeline
+    /// transport transition without making it visible yet. The engine worker
+    /// is single-threaded, so a successfully returned pair is stable until
+    /// this command either commits it or returns. In particular, a terminal
+    /// Follow consumer ACK can prove capacity before it marks that consumer
+    /// accepted.
+    fn reserve_timeline_transport_authority_invalidation(
+        &self,
+    ) -> Result<TimelineTransportAuthority, String> {
+        self.next_timeline_transport_authority()
+    }
+
+    /// Commit a successor that was reserved by this worker turn. Keeping the
+    /// write separate from reservation makes terminal ACK admission atomic:
+    /// `MAX_SAFE/MAX_SAFE` returns before any consumer, settlement, Follow,
+    /// target, or playing state changes.
+    fn commit_reserved_timeline_transport_authority(
+        &mut self,
+        reserved: TimelineTransportAuthority,
+    ) {
+        debug_assert_eq!(
+            self.next_timeline_transport_authority().ok(),
+            Some(reserved),
+            "a Timeline transport successor must be committed in the worker turn that reserved it"
+        );
+        self.timeline_transport_epoch = reserved.epoch;
+        self.timeline_transport_generation = reserved.generation;
+    }
+
+    /// No invalidating runtime path may mutate transport state unless the
+    /// precise next non-saturating authority pair already exists.
+    fn preflight_timeline_transport_authority_invalidation(&self) -> Result<(), String> {
+        self.reserve_timeline_transport_authority_invalidation()
+            .map(|_| ())
+    }
+
+    /// Confirm that this worker can invalidate the authority `count` times
+    /// without changing it. A timeline tick can cross more than one loop
+    /// boundary, so a single successor check is not enough to make a
+    /// multi-wrap tick atomic at the terminal pair.
+    fn preflight_timeline_transport_authority_invalidations(
+        &self,
+        count: u128,
+    ) -> Result<(), String> {
+        if count == 0 {
+            return Ok(());
+        }
+        let max = protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER as u128;
+        let epoch = self.timeline_transport_epoch as u128;
+        let generation = self.timeline_transport_generation as u128;
+        if epoch == 0 || generation == 0 || epoch > max || generation > max {
+            return Err("Timeline transport authority is exhausted".to_string());
+        }
+        // The current epoch has `max - generation` successors remaining. Each
+        // later epoch contributes exactly `max` successors: rollover to 1,
+        // then the remaining generation increments. `u128` safely holds the
+        // full JavaScript-safe epoch × generation space and large tick deltas.
+        let available = (max - generation) + (max - epoch) * max;
+        if count > available {
+            return Err("Timeline transport authority is exhausted".to_string());
+        }
+        Ok(())
+    }
+
+    /// Conservative upper bound for loop-boundary invalidations a single
+    /// local Timeline tick can require. It intentionally ignores cue jumps:
+    /// over-reserving at the terminal pair is fail-closed, while under-
+    /// reserving could mutate one wrap before discovering a second has no
+    /// successor.
+    fn timeline_loop_wraps_for_next_tick(&self) -> u128 {
+        if !self.timeline_playing
+            || self.timeline_external_sync_source.is_some()
+            || self.timeline_count_in_until.is_some()
+        {
+            return 0;
+        }
+        let Some((a_ms, b_ms)) = (match self.timeline_loop_runtime.status {
+            TimelineLoopRuntimeStatus::Disabled => None,
+            TimelineLoopRuntimeStatus::Armed | TimelineLoopRuntimeStatus::Looping => self
+                .timeline_loop_runtime
+                .a_ms
+                .zip(self.timeline_loop_runtime.b_ms),
+        }) else {
+            return 0;
+        };
+        let duration = self.timeline_duration_ms();
+        let position = self.timeline_position_ms;
+        if duration == 0
+            || a_ms >= duration
+            || b_ms > duration
+            || b_ms <= a_ms
+            || position >= duration
+            || position >= b_ms
+        {
+            return 0;
+        }
+        let delta_ms = self.last_tick_interval.as_millis().min(u64::MAX as u128);
+        let cycle_ms = u128::from(b_ms - a_ms);
+        let position = u128::from(position);
+        let a_ms = u128::from(a_ms);
+        let b_ms = u128::from(b_ms);
+        if position < a_ms {
+            let distance_to_a = a_ms - position;
+            if delta_ms <= distance_to_a {
+                return 0;
+            }
+            return (delta_ms - distance_to_a) / cycle_ms;
+        }
+
+        let distance_to_b = b_ms - position;
+        if delta_ms < distance_to_b {
+            0
+        } else {
+            1 + (delta_ms - distance_to_b) / cycle_ms
+        }
+    }
+
+    fn invalidate_timeline_transport_authority(&mut self) -> Result<(), String> {
+        let reserved = self.reserve_timeline_transport_authority_invalidation()?;
+        self.commit_reserved_timeline_transport_authority(reserved);
+        Ok(())
+    }
+
+    /// Capture every runtime field the Play/Pause transition is permitted to
+    /// touch. This image is deliberately broader than `{playing, generation}`:
+    /// stopping an active Follow or pausing a Timeline fade has visible live
+    /// consequences that must disappear if snapshot publication fails.
+    fn timeline_transport_rollback(&self) -> PendingCommandRollback {
+        PendingCommandRollback::RestoreTimelineTransport {
+            playing: self.timeline_playing,
+            transport_epoch: self.timeline_transport_epoch,
+            transport_generation: self.timeline_transport_generation,
+            loop_runtime: self.timeline_loop_runtime.clone(),
+            count_in_until: self.timeline_count_in_until,
+            paused_at: self.timeline_paused_at,
+            playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+            evaluated_boundary_position_ms: self.timeline_evaluated_boundary_position_ms,
+            jump_landed_event_id: self.timeline_jump_landed_event_id,
+            external_sync_source: self.timeline_external_sync_source.clone(),
+            follow_natural_boundary_armed: self.timeline_follow_natural_boundary_armed,
+            follow_runtime: self.timeline_follow_runtime.clone(),
+            follow_abort_ticks_remaining: self.timeline_follow_abort_ticks_remaining,
+            follow_transition: self.timeline_follow_transition.clone(),
+            follow_transport: self.timeline_follow_transport.clone(),
+            follow_terminal_receipt: self.timeline_follow_terminal_settlement_receipt.clone(),
+            guide_cues: self.timeline_guide_cues.clone(),
+            last_announced_phase_id: self.timeline_last_announced_phase_id,
+            audio_transport_revision: self.timeline_audio_transport_revision,
+            active_fade: self.active_fade.clone(),
+            effect_activations: self.effect_activations.clone(),
+            active_effect_activation_indices: self.active_effect_activation_indices.clone(),
+            step_activations: self.step_activations.clone(),
+            active_step_activation_indices: self.active_step_activation_indices.clone(),
+            timeline_effect_activation_ranges: self.timeline_effect_activation_ranges.clone(),
+            timeline_step_activation_ranges: self.timeline_step_activation_ranges.clone(),
+            pending_cues: self.pending_cues.clone(),
+            child_transports: self.child_transports.clone(),
+            child_transport_by_parent_event: self.child_transport_by_parent_event.clone(),
+            direct_child_transports: self.direct_child_transports.clone(),
+            direct_child_transport_by_cue: self.direct_child_transport_by_cue.clone(),
+            nested_child_transports: self.nested_child_transports.clone(),
+            timeline_video_layer_restores: self.timeline_video_layer_restores.clone(),
+            video_layers: self.video_layers.clone(),
+            video_layer_fades: self.video_layer_fades.clone(),
+            clock: self.clock.clone(),
+            last_error: self.last_error.clone(),
+        }
+    }
+
+    /// Apply the historic Play/Pause behavior while reporting whether it
+    /// actually changed transport authority. The legacy ingress intentionally
+    /// shares this state transition, but only the Published command is allowed
+    /// to expose a strict runtime receipt.
+    fn apply_timeline_playing_command(
+        &mut self,
+        playing: bool,
+        canonical_exact_noop: bool,
+    ) -> Result<TimelineTransportSetPlayingDisposition, String> {
+        let was_playing = self.timeline_playing;
+        let releases_external_clock = playing && self.timeline_external_sync_source.is_some();
+        let aborts_follow = !playing && self.timeline_follow_is_abortable();
+        let mut changed = was_playing != playing || releases_external_clock || aborts_follow;
+
+        // A canonical exact retry must not disturb boundary arming, fades, or
+        // Follow state when the requested transport image is already current.
+        if canonical_exact_noop && !changed {
+            return Ok(TimelineTransportSetPlayingDisposition::NoOp);
+        }
+
+        if changed {
+            self.preflight_timeline_transport_authority_invalidation()?;
+        }
+
+        let now = Instant::now();
+        if !playing && aborts_follow {
+            changed |= self.abort_timeline_follow(protocol::TimelineFollowAbortReason::Stop, now);
+        }
+        self.timeline_playing = playing;
+        if playing {
+            // An explicit Play command hands the playhead back to the internal
+            // clock. Pause deliberately preserves MTC/LTC/SPP ownership.
+            self.timeline_external_sync_source = None;
+        }
+        if playing && !was_playing {
+            self.timeline_last_announced_phase_id = None;
+            self.refresh_timeline_loop_runtime_status();
+            if let Some(paused_at) = self.timeline_paused_at.take() {
+                self.shift_timeline_effect_clocks(paused_at, now);
+            }
+            self.timeline_count_in_until =
+                (self.timeline_metronome_enabled && self.timeline_count_in_beats > 0).then(|| {
+                    now.checked_add(timeline_count_in_duration(
+                        self.clock.bpm,
+                        self.timeline_count_in_beats,
+                    ))
+                    .unwrap_or(now)
+                });
+            if self.timeline_count_in_until.is_some() {
+                self.timeline_paused_at = Some(now);
+            } else if self
+                .active_fade
+                .as_ref()
+                .is_some_and(|fade| fade.source == PendingCueTriggerSource::Timeline)
+            {
+                self.set_active_fade_paused(false, now);
+            }
+            // Resume must not replay a boundary that the playhead already
+            // consumed. Fresh playback and explicit positioning clear the
+            // marker and therefore still arm the current boundary exactly once.
+            if self.timeline_evaluated_boundary_position_ms != Some(self.timeline_position_ms) {
+                self.timeline_playhead_boundary_armed = true;
+            }
+            if self
+                .timeline_follow
+                .as_ref()
+                .is_some_and(|follow| follow.enabled)
+                && !self.timeline_follow_abort_fence_pending()
+                && matches!(
+                    self.timeline_follow_runtime.status,
+                    protocol::TimelineFollowRuntimeStatus::Idle
+                        | protocol::TimelineFollowRuntimeStatus::Held
+                        | protocol::TimelineFollowRuntimeStatus::Fault
+                )
+            {
+                // A successful load or a completed abort begins a new
+                // natural-playback generation. Explicit seeks own this token
+                // separately, and the observable Aborting fence is non-reentrant.
+                self.timeline_follow_natural_boundary_armed =
+                    self.timeline_position_ms < self.timeline_duration_ms();
+            }
+            if let Some(follow) = self.timeline_follow.as_ref().filter(|follow| {
+                follow.enabled
+                    && self.timeline_follow_natural_boundary_armed
+                    && !self.timeline_follow_abort_fence_pending()
+            }) {
+                self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+                    generation: next_timeline_runtime_generation(
+                        self.timeline_follow_runtime.generation,
+                    ),
+                    status: protocol::TimelineFollowRuntimeStatus::Armed,
+                    source_timeline_id: Some(self.timeline_id),
+                    target_timeline_id: Some(follow.next_timeline_id),
+                    ..TimelineFollowRuntimeSummary::default()
+                };
+            }
+        } else if !playing {
+            self.timeline_count_in_until = None;
+            self.timeline_jump_landed_event_id = None;
+            if was_playing {
+                self.timeline_paused_at = Some(now);
+                if self
+                    .active_fade
+                    .as_ref()
+                    .is_some_and(|fade| fade.source == PendingCueTriggerSource::Timeline)
+                {
+                    self.set_active_fade_paused(true, now);
+                }
+            }
+            if self.timeline_follow_transition.is_none()
+                && !self.timeline_follow_abort_fence_pending()
+            {
+                self.timeline_follow_runtime.status = protocol::TimelineFollowRuntimeStatus::Idle;
+            }
+        }
+
+        if changed {
+            self.invalidate_timeline_transport_authority()?;
+            Ok(TimelineTransportSetPlayingDisposition::Applied)
+        } else {
+            // Legacy same-value calls intentionally preserve the historical
+            // behavior above, but they do not fabricate a new authority epoch.
+            Ok(TimelineTransportSetPlayingDisposition::NoOp)
+        }
+    }
+
     fn timeline_follow_is_abortable(&self) -> bool {
         self.timeline_follow_transition.is_some()
             || self.timeline_follow_transport.is_some()
@@ -32472,6 +33377,10 @@ impl EngineRuntime {
         target_position_ms: u64,
         now: Instant,
     ) {
+        if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
+            self.last_error = Some(error);
+            return;
+        }
         let timeout = Duration::from_millis(TIMELINE_FOLLOW_SETTLEMENT_TIMEOUT_MS);
         let started_at_ms = self
             .timeline_position_ms
@@ -32494,6 +33403,8 @@ impl EngineRuntime {
             follow_transport.direct_paused_at = Some(now);
         }
         self.timeline_playing = false;
+        self.invalidate_timeline_transport_authority()
+            .expect("Follow settling preflight must reserve a transport authority successor");
         self.timeline_paused_at = Some(now);
         if let Some(active) = self.timeline_follow_transition.as_mut() {
             if active.generation != transition.generation {
@@ -32523,11 +33434,29 @@ impl EngineRuntime {
             // A Follow with no active production consumers has a complete
             // all-N/A quorum. It still passed through the same state machine,
             // but no external acknowledgement can legitimately be awaited.
-            let _ = self.complete_timeline_follow_settlement(now);
+            if let Err(error) = self.complete_timeline_follow_settlement(now) {
+                // There is no Handle reply for an all-N/A quorum. Preserve the
+                // terminal fail-closed reason instead of silently leaving
+                // Settling after its authority pair is exhausted.
+                self.last_error = Some(error);
+            }
         }
     }
 
     fn complete_timeline_follow_settlement(&mut self, now: Instant) -> Result<(), String> {
+        let reserved = self.reserve_timeline_transport_authority_invalidation()?;
+        self.complete_timeline_follow_settlement_with_reserved_authority(now, reserved)
+    }
+
+    /// Complete a Follow after its terminal consumer ACK (or all-N/A quorum)
+    /// has already reserved the successor pair. Do not preflight here: the
+    /// caller's reservation is the admission boundary that keeps a terminal
+    /// ACK from being recorded when the transport authority is exhausted.
+    fn complete_timeline_follow_settlement_with_reserved_authority(
+        &mut self,
+        now: Instant,
+        reserved: TimelineTransportAuthority,
+    ) -> Result<(), String> {
         let transition = self
             .timeline_follow_transition
             .as_ref()
@@ -32538,6 +33467,11 @@ impl EngineRuntime {
             .clone()
             .ok_or_else(|| "Timeline Follow settlement target was not prepared".to_string())?;
         let target_position_ms = transition.settlement_target_position_ms.unwrap_or(0);
+        // Settling may last long enough for a local Play/Pause authority to
+        // be minted. The successor was reserved before the terminal ACK was
+        // accepted, so commit it before retiring the source or installing the
+        // target.
+        self.commit_reserved_timeline_transport_authority(reserved);
         self.retire_timeline_follow_transport(now, None);
         self.install_timeline_bank_entry(
             transition.target.clone(),
@@ -32663,6 +33597,29 @@ impl EngineRuntime {
         Self::recompute_timeline_follow_settlement(&mut settlement);
         let terminal_state = settlement.state;
         let fault_text = settlement.fault.clone();
+        // Do not commit the final consumer result until the terminal action
+        // has a successor to fence every authority minted during Settling.
+        // This must precede both the accepted-ACK ledger and the published
+        // settlement copy: on terminal exhaustion the exact retry sees the
+        // same Pending consumer and returns the same typed error.
+        let reserved_terminal_authority = match terminal_state {
+            TimelineFollowSettlementState::Applied | TimelineFollowSettlementState::Fault => {
+                Some(self.reserve_timeline_transport_authority_invalidation()?)
+            }
+            _ => None,
+        };
+        let terminal_transition = self
+            .timeline_follow_transition
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                "Timeline Follow settlement acknowledgement has no active transition".to_string()
+            })?;
+        if terminal_transition.generation != acknowledgement.generation {
+            return Err(
+                "Timeline Follow settlement acknowledgement generation is stale".to_string(),
+            );
+        }
         // Record the accepted physical acknowledgement before completion can
         // retire the Follow child. The transition only admits captured
         // consumers, so this per-generation vector is inherently bounded.
@@ -32699,23 +33656,25 @@ impl EngineRuntime {
         };
         self.timeline_follow_runtime.settlement = Some(settlement);
         let result = match terminal_state {
-            TimelineFollowSettlementState::Applied => self.complete_timeline_follow_settlement(now),
-            TimelineFollowSettlementState::Fault => {
-                let transition = self.timeline_follow_transition.clone().ok_or_else(|| {
-                    "Timeline Follow settlement fault has no active transition".to_string()
-                })?;
-                self.settle_timeline_follow_failure(
+            TimelineFollowSettlementState::Applied => self
+                .complete_timeline_follow_settlement_with_reserved_authority(
+                    now,
+                    reserved_terminal_authority
+                        .expect("terminal Follow completion must reserve an authority successor"),
+                ),
+            TimelineFollowSettlementState::Fault => self
+                .settle_timeline_follow_failure_with_reserved_authority(
                     fault_text.unwrap_or_else(|| "Timeline Follow settlement failed".to_string()),
                     now,
-                    transition.generation,
-                    transition.source_timeline_id,
-                    Some(transition.target),
-                    Some(transition.source_bpm),
-                    transition.fault_policy,
-                    transition.admission_reason,
-                );
-                Ok(())
-            }
+                    terminal_transition.generation,
+                    terminal_transition.source_timeline_id,
+                    Some(terminal_transition.target),
+                    Some(terminal_transition.source_bpm),
+                    terminal_transition.fault_policy,
+                    terminal_transition.admission_reason,
+                    reserved_terminal_authority
+                        .expect("terminal Follow fault must reserve an authority successor"),
+                ),
             _ => Ok(()),
         };
         if result.is_ok()
@@ -32853,7 +33812,40 @@ impl EngineRuntime {
         source_bpm: Option<f32>,
         fault_policy: protocol::TimelineFollowFaultPolicy,
         admission_reason: protocol::TimelineFollowAdmissionReason,
-    ) {
+    ) -> Result<(), String> {
+        let reserved = self.reserve_timeline_transport_authority_invalidation()?;
+        self.settle_timeline_follow_failure_with_reserved_authority(
+            error,
+            now,
+            generation,
+            source_timeline_id,
+            target,
+            source_bpm,
+            fault_policy,
+            admission_reason,
+            reserved,
+        )
+    }
+
+    /// Settle a failure after the terminal path has already reserved the
+    /// authority successor. This is deliberately fallible at the reservation
+    /// boundary, not after the caller has accepted the final consumer ACK.
+    fn settle_timeline_follow_failure_with_reserved_authority(
+        &mut self,
+        error: String,
+        now: Instant,
+        generation: u64,
+        source_timeline_id: TimelineId,
+        target: Option<TimelineSnapshot>,
+        source_bpm: Option<f32>,
+        fault_policy: protocol::TimelineFollowFaultPolicy,
+        admission_reason: protocol::TimelineFollowAdmissionReason,
+        reserved: TimelineTransportAuthority,
+    ) -> Result<(), String> {
+        // A Cut installs and starts the target directly. Invalidate before
+        // retiring/installing so an authority issued during Settling cannot
+        // survive either the successful Cut or its Hold/Fault fallback.
+        self.commit_reserved_timeline_transport_authority(reserved);
         self.retire_timeline_follow_transport(now, source_bpm);
         self.timeline_follow_abort_ticks_remaining = 0;
         self.timeline_follow_natural_boundary_armed = false;
@@ -32879,11 +33871,10 @@ impl EngineRuntime {
                     self.timeline_last_announced_phase_id = None;
                     self.announce_timeline_phase_at(0);
                     self.last_error = Some(error);
-                    return;
+                    return Ok(());
                 }
             }
         }
-
         self.timeline_playing = false;
         self.timeline_count_in_until = None;
         self.timeline_paused_at = Some(now);
@@ -32909,6 +33900,7 @@ impl EngineRuntime {
             ..TimelineFollowRuntimeSummary::default()
         };
         self.last_error = Some(error);
+        Ok(())
     }
 
     fn handle_timeline_follow_admission_failure(
@@ -32927,7 +33919,7 @@ impl EngineRuntime {
                 .into_iter()
                 .find(|timeline| timeline.id == follow.next_timeline_id)
         });
-        self.settle_timeline_follow_failure(
+        if let Err(error) = self.settle_timeline_follow_failure(
             error,
             now,
             next_timeline_runtime_generation(self.timeline_follow_runtime.generation),
@@ -32938,7 +33930,9 @@ impl EngineRuntime {
                 .map(|follow| follow.fault_policy)
                 .unwrap_or(protocol::TimelineFollowFaultPolicy::Fault),
             admission_reason,
-        );
+        ) {
+            self.last_error = Some(error);
+        }
     }
 
     fn abort_timeline_follow(
@@ -33019,6 +34013,13 @@ impl EngineRuntime {
                 .is_some_and(|deadline| now >= deadline)
             {
                 let timeout = "Timeline Follow settlement timed out".to_string();
+                let reserved = match self.reserve_timeline_transport_authority_invalidation() {
+                    Ok(reserved) => reserved,
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                };
                 if let Some(settlement) = self.timeline_follow_runtime.settlement.as_mut() {
                     for domain in &mut settlement.domains {
                         for consumer in &mut domain.consumers {
@@ -33030,7 +34031,7 @@ impl EngineRuntime {
                     Self::recompute_timeline_follow_settlement(settlement);
                     settlement.fault = Some(timeout.clone());
                 }
-                self.settle_timeline_follow_failure(
+                if let Err(error) = self.settle_timeline_follow_failure_with_reserved_authority(
                     timeout,
                     now,
                     transition.generation,
@@ -33039,7 +34040,10 @@ impl EngineRuntime {
                     Some(transition.source_bpm),
                     transition.fault_policy,
                     transition.admission_reason,
-                );
+                    reserved,
+                ) {
+                    self.last_error = Some(error);
+                }
             }
             return;
         }
@@ -33099,7 +34103,7 @@ impl EngineRuntime {
         let prepared_target = match self.prepare_timeline_bank_entry(transition.target.clone()) {
             Ok(prepared) => prepared,
             Err(error) => {
-                self.settle_timeline_follow_failure(
+                if let Err(settlement_error) = self.settle_timeline_follow_failure(
                     error,
                     now,
                     transition.generation,
@@ -33108,7 +34112,9 @@ impl EngineRuntime {
                     Some(transition.source_bpm),
                     transition.fault_policy,
                     transition.admission_reason,
-                );
+                ) {
+                    self.last_error = Some(settlement_error);
+                }
                 return;
             }
         };
@@ -33364,6 +34370,26 @@ impl EngineRuntime {
     }
 
     fn advance_timeline(&mut self, now: Instant) {
+        // At terminal authority exhaustion freeze runtime advancement before
+        // any child, playhead, Follow, or loop state can move without an
+        // accompanying published authority successor.
+        if self.timeline_playing
+            && self
+                .preflight_timeline_transport_authority_invalidation()
+                .is_err()
+        {
+            self.last_error = Some("Timeline transport authority is exhausted".to_string());
+            return;
+        }
+        // A tick can wrap more than once. Reserve enough authority before any
+        // child, playhead, event, or loop mutation so a second wrap cannot
+        // panic or leave a partial tick after the first consumes the final
+        // successor.
+        let loop_wraps = self.timeline_loop_wraps_for_next_tick();
+        if let Err(error) = self.preflight_timeline_transport_authority_invalidations(loop_wraps) {
+            self.last_error = Some(error);
+            return;
+        }
         self.advance_direct_child_count_in(now);
         if !self.timeline_playing || self.timeline_external_sync_source.is_some() {
             self.advance_child_transports(now);
@@ -33401,6 +34427,8 @@ impl EngineRuntime {
                 );
             }
             self.timeline_playing = false;
+            self.invalidate_timeline_transport_authority()
+                .expect("terminal playback preflight must reserve a transport authority successor");
             if self.timeline_follow_natural_boundary_armed {
                 let admission_reason =
                     protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary;
@@ -33500,6 +34528,14 @@ impl EngineRuntime {
                 break;
             }
             remaining_ms -= distance_to_b;
+            // The tick-level reservation above guarantees this succeeds for
+            // every planned wrap. Keep the mutation first at the individual
+            // boundary too: an unforeseen future caller cannot move a loop
+            // back to `a_ms` and only then discover terminal exhaustion.
+            if let Err(error) = self.invalidate_timeline_transport_authority() {
+                self.last_error = Some(error);
+                return;
+            }
             if self.timeline_follow_is_abortable() {
                 self.abort_timeline_follow(protocol::TimelineFollowAbortReason::LoopWrap, now);
             }
@@ -33544,6 +34580,8 @@ impl EngineRuntime {
 
         if !jumped && self.timeline_position_ms >= duration {
             self.timeline_playing = false;
+            self.invalidate_timeline_transport_authority()
+                .expect("playback-end preflight must reserve a transport authority successor");
             self.timeline_paused_at = Some(now);
             self.timeline_playhead_boundary_armed = false;
             if self.timeline_follow_natural_boundary_armed {
@@ -34180,6 +35218,8 @@ impl EngineRuntime {
                 .map(|until| until.saturating_duration_since(self.last_tick).as_millis() as u64)
                 .unwrap_or(0),
             audio_transport_revision: self.timeline_audio_transport_revision,
+            transport_epoch: self.timeline_transport_epoch,
+            transport_generation: self.timeline_transport_generation,
             active_child_transports: self.active_child_timeline_transport_summaries(),
             loop_runtime: self.timeline_loop_runtime.clone(),
             follow_runtime: self.timeline_follow_runtime.clone(),
@@ -34196,6 +35236,8 @@ impl EngineRuntime {
         timeline.position_ms = 0;
         timeline.count_in_remaining_ms = 0;
         timeline.audio_transport_revision = 0;
+        timeline.transport_epoch = 0;
+        timeline.transport_generation = 0;
         timeline.active_child_transports.clear();
         timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
         timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
@@ -36858,7 +37900,7 @@ impl EngineRuntime {
             dmx_outputs: self.dmx_output_snapshot(),
             lighting_master: self.lighting_master,
             submasters: self.submaster_snapshot(),
-            blackout: self.blackout,
+            blackout: self.blackout || self.safety_blackout_engaged,
             clock: self.clock.snapshot(self.last_tick),
             stage_map: self.stage_map,
             stage_map_presets: self.stage_map_presets.clone(),
@@ -36932,6 +37974,10 @@ impl EngineRuntime {
 
     fn build_persistence_snapshot(&self) -> EngineSnapshot {
         let mut snapshot = self.build_snapshot(0);
+        // Persist only the authored blackout bit. The emergency S0 latch is
+        // runtime-only and survives project replacement until an authorized
+        // R4 release explicitly clears it.
+        snapshot.blackout = self.blackout;
         // Runtime clip selection/queue/playhead is intentionally skipped by
         // serde, and is also cleared for callers which inspect this in-memory
         // snapshot before serializing it.
@@ -36946,7 +37992,16 @@ impl EngineRuntime {
             submaster.strobe_fixture_count = 0;
         }
         snapshot.timeline.layers = self.timeline_layers.clone();
+        // Timeline transport is entirely runtime-owned. In particular, the
+        // canonical local Play/Pause lane must not create a project/history
+        // delta merely because a caller observed a persistence image while it
+        // was playing.
+        snapshot.timeline.playing = false;
+        snapshot.timeline.position_ms = 0;
+        snapshot.timeline.count_in_remaining_ms = 0;
         snapshot.timeline.audio_transport_revision = 0;
+        snapshot.timeline.transport_epoch = 0;
+        snapshot.timeline.transport_generation = 0;
         snapshot.timeline.active_child_transports.clear();
         snapshot.timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
         snapshot.timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
@@ -36973,6 +38028,8 @@ impl EngineRuntime {
         active_bank_timeline.position_ms = 0;
         active_bank_timeline.count_in_remaining_ms = 0;
         active_bank_timeline.audio_transport_revision = 0;
+        active_bank_timeline.transport_epoch = 0;
+        active_bank_timeline.transport_generation = 0;
         active_bank_timeline.active_child_transports.clear();
         active_bank_timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
         active_bank_timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
@@ -58359,6 +59416,7 @@ mod tests {
         EngineHandle {
             _lifetime: Arc::new(EngineLifetime::new(Arc::clone(&wake))),
             queue,
+            safety_queue: Arc::new(ArrayQueue::new(SAFETY_COMMAND_QUEUE_CAPACITY)),
             wake,
             shared_telemetry,
             snapshot,
@@ -63626,6 +64684,176 @@ mod tests {
     }
 
     #[test]
+    fn safety_blackout_is_priority_latched_idempotent_and_never_persisted() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            universe: 0,
+            ..DmxOutputConfig::default()
+        });
+        runtime.blackout = false;
+        runtime.last_frame[0] = 123;
+        let before = runtime.build_persistence_snapshot();
+        assert!(!before.blackout);
+
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let outcome = Arc::new(Mutex::new(None));
+        runtime.apply_command(EngineCommand::SafetyBlackoutEngagePublished {
+            expires_at: Instant::now() + Duration::from_secs(1),
+            completion: SafetyBlackoutPublicationCompletion {
+                ack,
+                outcome: Arc::clone(&outcome),
+            },
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        receiver.recv().unwrap().unwrap();
+        assert_eq!(
+            outcome.lock().unwrap().take(),
+            Some(SafetyBlackoutEngageDisposition::Applied)
+        );
+        assert!(runtime.build_snapshot(0).blackout);
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, Instant::now()),
+            [0; 512]
+        );
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+
+        // Neither an ordinary clear nor a project replacement can release the
+        // emergency runtime latch.
+        runtime.apply_command(EngineCommand::Blackout(false));
+        runtime.load_project_snapshot(before.clone());
+        assert!(runtime.build_snapshot(0).blackout);
+        assert!(!runtime.build_persistence_snapshot().blackout);
+
+        let (retry_ack, retry_receiver) = mpsc::sync_channel(1);
+        let retry_outcome = Arc::new(Mutex::new(None));
+        runtime.apply_command(EngineCommand::SafetyBlackoutEngagePublished {
+            expires_at: Instant::now() + Duration::from_secs(1),
+            completion: SafetyBlackoutPublicationCompletion {
+                ack: retry_ack,
+                outcome: Arc::clone(&retry_outcome),
+            },
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        retry_receiver.recv().unwrap().unwrap();
+        assert_eq!(
+            retry_outcome.lock().unwrap().take(),
+            Some(SafetyBlackoutEngageDisposition::NoOp)
+        );
+
+        let engaged_authority = runtime.shared_telemetry.safety_blackout_authority();
+        assert!(engaged_authority.engaged);
+
+        // A stale release cannot clear the latch or consume a successor.
+        let (stale_ack, stale_receiver) = mpsc::sync_channel(1);
+        let stale_outcome = Arc::new(Mutex::new(None));
+        runtime.apply_command(EngineCommand::SafetyBlackoutReleasePublished {
+            expected_epoch: engaged_authority.epoch,
+            expected_generation: engaged_authority.generation + 1,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            completion: SafetyBlackoutReleasePublicationCompletion {
+                ack: stale_ack,
+                outcome: Arc::clone(&stale_outcome),
+            },
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(stale_receiver.recv().unwrap().is_err());
+        assert_eq!(*stale_outcome.lock().unwrap(), None);
+        assert_eq!(
+            runtime.shared_telemetry.safety_blackout_authority(),
+            engaged_authority
+        );
+        assert!(runtime.build_snapshot(0).blackout);
+
+        // Release is the less-safe direction. A publication failure restores
+        // both the latch and its exact authority pair before acknowledging.
+        let (failed_ack, failed_receiver) = mpsc::sync_channel(1);
+        let failed_outcome = Arc::new(Mutex::new(None));
+        runtime.apply_command(EngineCommand::SafetyBlackoutReleasePublished {
+            expected_epoch: engaged_authority.epoch,
+            expected_generation: engaged_authority.generation,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            completion: SafetyBlackoutReleasePublicationCompletion {
+                ack: failed_ack,
+                outcome: Arc::clone(&failed_outcome),
+            },
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(failed_receiver.recv().unwrap().is_err());
+        assert_eq!(
+            failed_outcome.lock().unwrap().take(),
+            Some(SafetyBlackoutReleaseDisposition::Applied)
+        );
+        assert_eq!(
+            runtime.shared_telemetry.safety_blackout_authority(),
+            engaged_authority
+        );
+        assert!(runtime.build_snapshot(0).blackout);
+        assert!(!runtime.build_persistence_snapshot().blackout);
+
+        let (release_ack, release_receiver) = mpsc::sync_channel(1);
+        let release_outcome = Arc::new(Mutex::new(None));
+        runtime.apply_command(EngineCommand::SafetyBlackoutReleasePublished {
+            expected_epoch: engaged_authority.epoch,
+            expected_generation: engaged_authority.generation,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            completion: SafetyBlackoutReleasePublicationCompletion {
+                ack: release_ack,
+                outcome: Arc::clone(&release_outcome),
+            },
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        release_receiver.recv().unwrap().unwrap();
+        assert_eq!(
+            release_outcome.lock().unwrap().take(),
+            Some(SafetyBlackoutReleaseDisposition::Applied)
+        );
+        let released_authority = runtime.shared_telemetry.safety_blackout_authority();
+        assert!(!released_authority.engaged);
+        assert_ne!(released_authority, engaged_authority);
+        assert!(!runtime.build_snapshot(0).blackout);
+        assert!(!runtime.build_persistence_snapshot().blackout);
+
+        assert!(!EngineCommand::SafetyBlackoutEngagePublished {
+            expires_at: Instant::now(),
+            completion: SafetyBlackoutPublicationCompletion {
+                ack: mpsc::sync_channel(1).0,
+                outcome: Arc::new(Mutex::new(None)),
+            },
+        }
+        .mutates_persistence_snapshot());
+        assert!(EngineCommand::SafetyBlackoutEngagePublished {
+            expires_at: Instant::now(),
+            completion: SafetyBlackoutPublicationCompletion {
+                ack: mpsc::sync_channel(1).0,
+                outcome: Arc::new(Mutex::new(None)),
+            },
+        }
+        .requests_low_latency_dmx_tick());
+        assert!(!EngineCommand::SafetyBlackoutReleasePublished {
+            expected_epoch: released_authority.epoch,
+            expected_generation: released_authority.generation,
+            expires_at: Instant::now(),
+            completion: SafetyBlackoutReleasePublicationCompletion {
+                ack: mpsc::sync_channel(1).0,
+                outcome: Arc::new(Mutex::new(None)),
+            },
+        }
+        .mutates_persistence_snapshot());
+        assert!(EngineCommand::SafetyBlackoutReleasePublished {
+            expected_epoch: released_authority.epoch,
+            expected_generation: released_authority.generation,
+            expires_at: Instant::now(),
+            completion: SafetyBlackoutReleasePublicationCompletion {
+                ack: mpsc::sync_channel(1).0,
+                outcome: Arc::new(Mutex::new(None)),
+            },
+        }
+        .requests_low_latency_dmx_tick());
+    }
+
+    #[test]
     fn programmer_blind_non_active_scene_commit_preserves_live_output_and_active_cue() {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
@@ -67145,6 +68373,7 @@ mod tests {
         let handle = EngineHandle {
             _lifetime: Arc::new(EngineLifetime::new(Arc::clone(&wake))),
             queue: Arc::new(ArrayQueue::new(1)),
+            safety_queue: Arc::new(ArrayQueue::new(SAFETY_COMMAND_QUEUE_CAPACITY)),
             wake,
             shared_telemetry: Arc::clone(&shared_telemetry),
             snapshot: Arc::new(RwLock::new(EngineSnapshot::default())),
@@ -67183,6 +68412,19 @@ mod tests {
             handle.send(EngineCommand::SetBpm(121.0)),
             Err(EngineError::QueueFull)
         ));
+        assert_eq!(shared_telemetry.queue_push_failure_count(), 1);
+        let (safety_ack, _) = mpsc::sync_channel(1);
+        handle
+            .send_safety(EngineCommand::SafetyBlackoutEngagePublished {
+                expires_at: Instant::now() + Duration::from_secs(1),
+                completion: SafetyBlackoutPublicationCompletion {
+                    ack: safety_ack,
+                    outcome: Arc::new(Mutex::new(None)),
+                },
+            })
+            .unwrap();
+        assert_eq!(handle.queue.len(), 1);
+        assert_eq!(handle.safety_queue.len(), 1);
         assert_eq!(shared_telemetry.queue_push_failure_count(), 1);
 
         let mut runtime = EngineRuntime::new_with_shared_telemetry(
@@ -96683,6 +97925,719 @@ mod tests {
     }
 
     #[test]
+    fn timeline_transport_published_reply_loss_retries_once_without_persistence_drift() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut seeded = engine.snapshot();
+        seeded.timeline.playing = false;
+        seeded.timeline.phases.push(TimelinePhaseSummary {
+            id: TimelinePhaseId(1),
+            label: "Runtime transport test".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 0,
+            end_ms: 60_000,
+        });
+        engine.load_project_snapshot_and_wait(seeded).unwrap();
+        let persistence_before = engine.persistence_snapshot().unwrap();
+        let assert_transport_persistence_unchanged = |snapshot: EngineSnapshot| {
+            assert_eq!(snapshot.timeline, persistence_before.timeline);
+            assert_eq!(snapshot.timeline_bank, persistence_before.timeline_bank);
+        };
+        let authority_before = engine.timeline_transport_authority();
+        let generation_before = authority_before.generation;
+        assert_ne!(authority_before.epoch, 0);
+        assert_ne!(generation_before, 0);
+
+        // This test seam fails publication after the worker has applied B.
+        // The visible A rollback leaves the original authority generation
+        // usable for one exact retry; it must not leave a history/persistence
+        // trace of the lost reply.
+        engine.force_next_pending_publication_failure_for_tests();
+        let lost_reply = engine
+            .set_timeline_playing_published(
+                authority_before.epoch,
+                generation_before,
+                true,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err();
+        assert!(lost_reply.contains("rolled back"));
+        assert_eq!(engine.timeline_transport_generation(), generation_before);
+        assert_eq!(
+            engine.timeline_transport_authority().epoch,
+            authority_before.epoch
+        );
+        assert!(!engine.snapshot().timeline.playing);
+        assert_transport_persistence_unchanged(engine.persistence_snapshot().unwrap());
+
+        let applied = engine
+            .set_timeline_playing_published(
+                authority_before.epoch,
+                generation_before,
+                true,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        assert_eq!(
+            applied.disposition,
+            TimelineTransportSetPlayingDisposition::Applied
+        );
+        assert_eq!(applied.generation_after, generation_before + 1);
+        assert_eq!(applied.epoch_after, authority_before.epoch);
+        assert!(engine.snapshot().timeline.playing);
+        assert_eq!(
+            engine.timeline_transport_generation(),
+            applied.generation_after
+        );
+        assert_transport_persistence_unchanged(engine.persistence_snapshot().unwrap());
+
+        let noop = engine
+            .set_timeline_playing_published(
+                applied.epoch_after,
+                applied.generation_after,
+                true,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        assert_eq!(
+            noop.disposition,
+            TimelineTransportSetPlayingDisposition::NoOp
+        );
+        assert_eq!(noop.generation_after, applied.generation_after);
+        assert_eq!(noop.epoch_after, applied.epoch_after);
+        assert_transport_persistence_unchanged(engine.persistence_snapshot().unwrap());
+
+        let stale = engine
+            .set_timeline_playing_published(
+                authority_before.epoch,
+                generation_before,
+                false,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err();
+        assert!(stale.contains("stale"));
+    }
+
+    #[test]
+    fn timeline_transport_authority_rolls_epoch_and_terminal_exhaustion_preserves_state() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let max = protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER;
+        runtime.timeline_transport_epoch = 41;
+        runtime.timeline_transport_generation = max;
+
+        let disposition = runtime
+            .apply_timeline_playing_command(true, true)
+            .expect("generation max must roll into the next epoch");
+        assert_eq!(disposition, TimelineTransportSetPlayingDisposition::Applied);
+        assert_eq!(runtime.timeline_transport_epoch, 42);
+        assert_eq!(runtime.timeline_transport_generation, 1);
+        assert!(runtime.timeline_playing);
+
+        runtime.timeline_playing = false;
+        runtime.timeline_position_ms = 123;
+        runtime.timeline_transport_epoch = max;
+        runtime.timeline_transport_generation = max;
+        let before = (
+            runtime.timeline_playing,
+            runtime.timeline_position_ms,
+            runtime.timeline_transport_epoch,
+            runtime.timeline_transport_generation,
+        );
+        assert!(runtime
+            .apply_timeline_playing_command(true, true)
+            .unwrap_err()
+            .contains("exhausted"));
+        assert_eq!(
+            (
+                runtime.timeline_playing,
+                runtime.timeline_position_ms,
+                runtime.timeline_transport_epoch,
+                runtime.timeline_transport_generation,
+            ),
+            before,
+            "terminal authority cannot apply a transport mutation"
+        );
+
+        runtime.apply_command(EngineCommand::SeekTimeline(999));
+        assert_eq!(
+            (
+                runtime.timeline_playing,
+                runtime.timeline_position_ms,
+                runtime.timeline_transport_epoch,
+                runtime.timeline_transport_generation,
+            ),
+            before,
+            "legacy/internal seek preflights terminal exhaustion before changing transport"
+        );
+    }
+
+    #[test]
+    fn timeline_transport_authority_fences_follow_terminals_before_target_mutation() {
+        let now = Instant::now();
+        let max = protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER;
+
+        let mut completed =
+            timeline_follow_settling_runtime(protocol::TimelineFollowFaultPolicy::Hold, now);
+        let completion_before = TimelineTransportAuthority {
+            epoch: completed.timeline_transport_epoch,
+            generation: completed.timeline_transport_generation,
+        };
+        completed.complete_timeline_follow_settlement(now).unwrap();
+        assert_eq!(completed.timeline_id, TimelineId(8_102));
+        assert!(completed.timeline_playing);
+        assert_eq!(
+            TimelineTransportAuthority {
+                epoch: completed.timeline_transport_epoch,
+                generation: completed.timeline_transport_generation,
+            },
+            TimelineTransportAuthority {
+                epoch: completion_before.epoch,
+                generation: completion_before.generation + 1,
+            },
+            "completion must stale an authority minted during Settling"
+        );
+
+        let mut cut =
+            timeline_follow_settling_runtime(protocol::TimelineFollowFaultPolicy::Cut, now);
+        let cut_before = TimelineTransportAuthority {
+            epoch: cut.timeline_transport_epoch,
+            generation: cut.timeline_transport_generation,
+        };
+        let transition = cut.timeline_follow_transition.clone().unwrap();
+        cut.settle_timeline_follow_failure(
+            "forced Cut settlement fault".to_string(),
+            now,
+            transition.generation,
+            transition.source_timeline_id,
+            Some(transition.target),
+            Some(transition.source_bpm),
+            transition.fault_policy,
+            transition.admission_reason,
+        )
+        .unwrap();
+        assert_eq!(cut.timeline_id, TimelineId(8_102));
+        assert!(cut.timeline_playing);
+        assert_eq!(
+            TimelineTransportAuthority {
+                epoch: cut.timeline_transport_epoch,
+                generation: cut.timeline_transport_generation,
+            },
+            TimelineTransportAuthority {
+                epoch: cut_before.epoch,
+                generation: cut_before.generation + 1,
+            },
+            "successful Cut must stale an authority minted during Settling"
+        );
+
+        let mut terminal_completion =
+            timeline_follow_settling_runtime(protocol::TimelineFollowFaultPolicy::Hold, now);
+        terminal_completion.timeline_transport_epoch = max;
+        terminal_completion.timeline_transport_generation = max;
+        let completion_before = (
+            terminal_completion.timeline_id,
+            terminal_completion.timeline_playing,
+            terminal_completion.timeline_position_ms,
+        );
+        let completion_transition_before = terminal_completion
+            .timeline_follow_transition
+            .as_ref()
+            .map(|transition| {
+                (
+                    transition.generation,
+                    transition.source_timeline_id,
+                    transition.target_timeline_id,
+                )
+            });
+        assert!(terminal_completion
+            .complete_timeline_follow_settlement(now)
+            .unwrap_err()
+            .contains("exhausted"));
+        assert_eq!(
+            (
+                terminal_completion.timeline_id,
+                terminal_completion.timeline_playing,
+                terminal_completion.timeline_position_ms,
+            ),
+            completion_before,
+            "terminal completion must not retire or install a target"
+        );
+        assert_eq!(
+            terminal_completion
+                .timeline_follow_transition
+                .as_ref()
+                .map(|transition| {
+                    (
+                        transition.generation,
+                        transition.source_timeline_id,
+                        transition.target_timeline_id,
+                    )
+                }),
+            completion_transition_before
+        );
+        assert_eq!(
+            (
+                terminal_completion.timeline_transport_epoch,
+                terminal_completion.timeline_transport_generation,
+            ),
+            (max, max)
+        );
+
+        let mut terminal_cut =
+            timeline_follow_settling_runtime(protocol::TimelineFollowFaultPolicy::Cut, now);
+        terminal_cut.timeline_transport_epoch = max;
+        terminal_cut.timeline_transport_generation = max;
+        let cut_before = (
+            terminal_cut.timeline_id,
+            terminal_cut.timeline_playing,
+            terminal_cut.timeline_position_ms,
+        );
+        let cut_transition_before =
+            terminal_cut
+                .timeline_follow_transition
+                .as_ref()
+                .map(|transition| {
+                    (
+                        transition.generation,
+                        transition.source_timeline_id,
+                        transition.target_timeline_id,
+                    )
+                });
+        let transition = terminal_cut.timeline_follow_transition.clone().unwrap();
+        let terminal_cut_error = terminal_cut
+            .settle_timeline_follow_failure(
+                "terminal Cut settlement fault".to_string(),
+                now,
+                transition.generation,
+                transition.source_timeline_id,
+                Some(transition.target),
+                Some(transition.source_bpm),
+                transition.fault_policy,
+                transition.admission_reason,
+            )
+            .unwrap_err();
+        assert_eq!(
+            (
+                terminal_cut.timeline_id,
+                terminal_cut.timeline_playing,
+                terminal_cut.timeline_position_ms,
+            ),
+            cut_before,
+            "terminal Cut must not retire or install a target"
+        );
+        assert_eq!(
+            terminal_cut
+                .timeline_follow_transition
+                .as_ref()
+                .map(|transition| {
+                    (
+                        transition.generation,
+                        transition.source_timeline_id,
+                        transition.target_timeline_id,
+                    )
+                }),
+            cut_transition_before
+        );
+        assert_eq!(
+            (
+                terminal_cut.timeline_transport_epoch,
+                terminal_cut.timeline_transport_generation,
+            ),
+            (max, max)
+        );
+        assert!(terminal_cut_error.contains("exhausted"));
+    }
+
+    #[test]
+    fn timeline_follow_terminal_ack_reserves_before_commit_at_authority_exhaustion() {
+        let now = Instant::now();
+        let max = protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER;
+
+        for (fault_policy, result) in [
+            (
+                protocol::TimelineFollowFaultPolicy::Hold,
+                TimelineFollowSettlementAckResult::Applied,
+            ),
+            (
+                protocol::TimelineFollowFaultPolicy::Cut,
+                TimelineFollowSettlementAckResult::Fault {
+                    fault: "terminal Cut consumer fault".to_string(),
+                },
+            ),
+        ] {
+            let mut runtime = timeline_follow_settling_runtime(fault_policy, now);
+            runtime.timeline_transport_epoch = max;
+            runtime.timeline_transport_generation = max;
+            let acknowledgement = TimelineFollowSettlementAck {
+                epoch: runtime.output_ownership_gate.status().epoch,
+                generation: runtime.timeline_follow_runtime.generation,
+                domain: TimelineFollowSettlementDomain::Audio,
+                consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                result,
+            };
+            let before_runtime = runtime.timeline_follow_runtime.clone();
+            let before_timeline_bank = runtime.timeline_bank.clone();
+            let before_transition = runtime
+                .timeline_follow_transition
+                .as_ref()
+                .map(|transition| {
+                    (
+                        transition.generation,
+                        transition.source_timeline_id,
+                        transition.target_timeline_id,
+                        transition.accepted_settlement_acknowledgements.clone(),
+                    )
+                });
+            let before_follow_transport =
+                runtime.timeline_follow_transport.as_ref().map(|transport| {
+                    (
+                        transport.active,
+                        transport.previous_position_ms,
+                        transport.position_ms,
+                        transport.direct_paused,
+                        transport.direct_paused_at.is_some(),
+                    )
+                });
+            let before = (
+                runtime.timeline_id,
+                runtime.timeline_playing,
+                runtime.timeline_position_ms,
+                runtime.timeline_transport_epoch,
+                runtime.timeline_transport_generation,
+                runtime.last_error.clone(),
+            );
+
+            // This is the real worker ACK method, not either terminal helper.
+            // Its initial call and an exact retry must both reject before the
+            // final consumer, settlement, receipt, or target commit.
+            for attempt in ["initial", "exact retry"] {
+                let error = runtime
+                    .acknowledge_timeline_follow_settlement(acknowledgement.clone(), now)
+                    .unwrap_err();
+                assert!(error.contains("exhausted"), "{attempt}: {error}");
+                assert_eq!(
+                    (
+                        runtime.timeline_id,
+                        runtime.timeline_playing,
+                        runtime.timeline_position_ms,
+                        runtime.timeline_transport_epoch,
+                        runtime.timeline_transport_generation,
+                        runtime.last_error.clone(),
+                    ),
+                    before,
+                    "{attempt} must not install/hold a target or alter transport"
+                );
+                assert_eq!(runtime.timeline_follow_runtime, before_runtime);
+                assert_eq!(runtime.timeline_bank, before_timeline_bank);
+                assert_eq!(
+                    runtime
+                        .timeline_follow_transition
+                        .as_ref()
+                        .map(|transition| {
+                            (
+                                transition.generation,
+                                transition.source_timeline_id,
+                                transition.target_timeline_id,
+                                transition.accepted_settlement_acknowledgements.clone(),
+                            )
+                        }),
+                    before_transition,
+                    "{attempt} must not record the final consumer ACK"
+                );
+                assert_eq!(
+                    runtime.timeline_follow_transport.as_ref().map(|transport| {
+                        (
+                            transport.active,
+                            transport.previous_position_ms,
+                            transport.position_ms,
+                            transport.direct_paused,
+                            transport.direct_paused_at.is_some(),
+                        )
+                    }),
+                    before_follow_transport,
+                    "{attempt} must not retire the Follow transport"
+                );
+                assert!(runtime
+                    .timeline_follow_terminal_settlement_receipt
+                    .is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn timeline_follow_terminal_ack_commits_once_then_replays_terminal_receipt() {
+        let now = Instant::now();
+
+        for (fault_policy, result, expected_outcome) in [
+            (
+                protocol::TimelineFollowFaultPolicy::Hold,
+                TimelineFollowSettlementAckResult::Applied,
+                protocol::TimelineFollowOutcome::Completed,
+            ),
+            (
+                protocol::TimelineFollowFaultPolicy::Cut,
+                TimelineFollowSettlementAckResult::Fault {
+                    fault: "Cut consumer fault".to_string(),
+                },
+                protocol::TimelineFollowOutcome::Cut,
+            ),
+        ] {
+            let mut runtime = timeline_follow_settling_runtime(fault_policy, now);
+            let authority_before = TimelineTransportAuthority {
+                epoch: runtime.timeline_transport_epoch,
+                generation: runtime.timeline_transport_generation,
+            };
+            let acknowledgement = TimelineFollowSettlementAck {
+                epoch: runtime.output_ownership_gate.status().epoch,
+                generation: runtime.timeline_follow_runtime.generation,
+                domain: TimelineFollowSettlementDomain::Audio,
+                consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                result,
+            };
+
+            runtime
+                .acknowledge_timeline_follow_settlement(acknowledgement.clone(), now)
+                .unwrap();
+            assert_eq!(runtime.timeline_id, TimelineId(8_102));
+            assert!(runtime.timeline_playing);
+            assert!(runtime.timeline_follow_transition.is_none());
+            assert!(runtime.timeline_follow_transport.is_none());
+            assert_eq!(
+                runtime.timeline_follow_runtime.outcome,
+                Some(expected_outcome)
+            );
+            assert_eq!(
+                TimelineTransportAuthority {
+                    epoch: runtime.timeline_transport_epoch,
+                    generation: runtime.timeline_transport_generation,
+                },
+                TimelineTransportAuthority {
+                    epoch: authority_before.epoch,
+                    generation: authority_before.generation + 1,
+                }
+            );
+            let installed = (
+                runtime.timeline_id,
+                runtime.timeline_playing,
+                runtime.timeline_position_ms,
+                runtime.timeline_audio_transport_revision,
+                runtime.timeline_transport_epoch,
+                runtime.timeline_transport_generation,
+                runtime.timeline_follow_runtime.clone(),
+                runtime.timeline_bank.clone(),
+            );
+            let receipt = runtime
+                .timeline_follow_terminal_settlement_receipt
+                .as_ref()
+                .expect("terminal ACK must leave an exact retry receipt");
+            assert_eq!(receipt.acknowledgements, vec![acknowledgement.clone()]);
+
+            // A lost reply retries the same terminal ACK. The receipt is the
+            // only path now: no second target install or authority advance.
+            runtime
+                .acknowledge_timeline_follow_settlement(acknowledgement, now)
+                .unwrap();
+            assert_eq!(
+                (
+                    runtime.timeline_id,
+                    runtime.timeline_playing,
+                    runtime.timeline_position_ms,
+                    runtime.timeline_audio_transport_revision,
+                    runtime.timeline_transport_epoch,
+                    runtime.timeline_transport_generation,
+                    runtime.timeline_follow_runtime.clone(),
+                    runtime.timeline_bank.clone(),
+                ),
+                installed
+            );
+        }
+    }
+
+    #[test]
+    fn timeline_transport_authority_multiwrap_preflight_is_exact_and_atomic() {
+        let max = protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER;
+        let loop_runtime = || {
+            let mut runtime = runtime_with_lfo_effects(&[]);
+            runtime.timeline_phases = vec![TimelinePhaseSummary {
+                id: TimelinePhaseId(73_001),
+                label: "One millisecond loop proof".to_string(),
+                role: protocol::TimelinePhaseRole::Verse,
+                start_ms: 0,
+                end_ms: 100,
+            }];
+            runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+                generation: 1,
+                status: TimelineLoopRuntimeStatus::Looping,
+                a_ms: Some(10),
+                b_ms: Some(11),
+                musical_length_millibeats: None,
+                wrap_count: 0,
+            };
+            runtime.timeline_playing = true;
+            runtime.timeline_count_in_until = None;
+            runtime.timeline_external_sync_source = None;
+            runtime
+        };
+
+        let mut boundary = loop_runtime();
+        boundary.timeline_position_ms = 9;
+        boundary.last_tick_interval = Duration::from_millis(1);
+        assert_eq!(boundary.timeline_loop_wraps_for_next_tick(), 0);
+        boundary.last_tick_interval = Duration::from_millis(2);
+        assert_eq!(boundary.timeline_loop_wraps_for_next_tick(), 1);
+        boundary.timeline_position_ms = 10;
+        boundary.last_tick_interval = Duration::ZERO;
+        assert_eq!(boundary.timeline_loop_wraps_for_next_tick(), 0);
+        boundary.last_tick_interval = Duration::from_millis(1);
+        assert_eq!(boundary.timeline_loop_wraps_for_next_tick(), 1);
+        boundary.timeline_position_ms = 11;
+        assert_eq!(boundary.timeline_loop_wraps_for_next_tick(), 0);
+        boundary.timeline_position_ms = 10;
+        boundary.timeline_loop_runtime.b_ms = Some(10);
+        assert_eq!(boundary.timeline_loop_wraps_for_next_tick(), 0);
+        boundary.timeline_loop_runtime.b_ms = Some(101);
+        assert_eq!(boundary.timeline_loop_wraps_for_next_tick(), 0);
+
+        let mut large_delta = loop_runtime();
+        large_delta.timeline_position_ms = 10;
+        large_delta.last_tick_interval = Duration::from_millis(u64::MAX);
+        assert_eq!(
+            large_delta.timeline_loop_wraps_for_next_tick(),
+            u128::from(u64::MAX),
+            "width-one loop count must be arithmetic, not iterative"
+        );
+
+        let mut one_wrap = loop_runtime();
+        one_wrap.timeline_position_ms = 10;
+        one_wrap.last_tick_interval = Duration::from_millis(1);
+        one_wrap.timeline_transport_epoch = max;
+        one_wrap.timeline_transport_generation = max - 1;
+        one_wrap.advance_timeline(Instant::now());
+        assert_eq!(one_wrap.timeline_position_ms, 10);
+        assert_eq!(one_wrap.timeline_loop_runtime.wrap_count, 1);
+        assert_eq!(
+            (
+                one_wrap.timeline_transport_epoch,
+                one_wrap.timeline_transport_generation,
+            ),
+            (max, max),
+            "one exact wrap may consume the final successor"
+        );
+
+        let mut two_wraps = loop_runtime();
+        two_wraps.timeline_position_ms = 10;
+        two_wraps.last_tick_interval = Duration::from_millis(2);
+        two_wraps.timeline_transport_epoch = max;
+        two_wraps.timeline_transport_generation = max - 1;
+        let before = (
+            two_wraps.timeline_position_ms,
+            two_wraps.timeline_playing,
+            two_wraps.timeline_loop_runtime.clone(),
+            two_wraps.timeline_transport_epoch,
+            two_wraps.timeline_transport_generation,
+            two_wraps.timeline_audio_transport_revision,
+            two_wraps.timeline_guide_cues.clone(),
+        );
+        two_wraps.advance_timeline(Instant::now());
+        assert_eq!(
+            (
+                two_wraps.timeline_position_ms,
+                two_wraps.timeline_playing,
+                two_wraps.timeline_loop_runtime.clone(),
+                two_wraps.timeline_transport_epoch,
+                two_wraps.timeline_transport_generation,
+                two_wraps.timeline_audio_transport_revision,
+                two_wraps.timeline_guide_cues.clone(),
+            ),
+            before,
+            "two wraps at the terminal-adjacent pair must fail before any tick mutation"
+        );
+        assert!(two_wraps
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("exhausted")));
+    }
+
+    #[test]
+    fn midi_song_position_pointer_invalidates_transport_and_stales_prior_worker_authority() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut seeded = engine.snapshot();
+        seeded.timeline.phases.push(TimelinePhaseSummary {
+            id: TimelinePhaseId(991),
+            label: "SPP test range".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 0,
+            end_ms: 10_000,
+        });
+        engine.load_project_snapshot_and_wait(seeded).unwrap();
+        let before = engine.timeline_transport_authority();
+        engine
+            .send(EngineCommand::MidiSongPositionPointer(16))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while engine.timeline_transport_authority() == before {
+            assert!(
+                Instant::now() < deadline,
+                "SPP worker did not publish its authority invalidation"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.timeline.position_ms, 2_000);
+        assert_eq!(
+            engine.timeline_transport_authority(),
+            TimelineTransportAuthority {
+                epoch: before.epoch,
+                generation: before.generation + 1,
+            }
+        );
+        assert!(engine
+            .set_timeline_playing_published(
+                before.epoch,
+                before.generation,
+                true,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err()
+            .contains("stale"));
+
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_audio_duration_ms = 10_000;
+        runtime.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+            generation: 17,
+            status: protocol::TimelineFollowRuntimeStatus::Armed,
+            ..TimelineFollowRuntimeSummary::default()
+        };
+        let direct_before = TimelineTransportAuthority {
+            epoch: runtime.timeline_transport_epoch,
+            generation: runtime.timeline_transport_generation,
+        };
+        runtime.apply_command(EngineCommand::MidiSongPositionPointer(1));
+        assert_eq!(runtime.timeline_position_ms, 125);
+        assert_eq!(
+            runtime.timeline_external_sync_source,
+            Some(ClockSource::MidiClock)
+        );
+        assert_eq!(
+            runtime.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Aborting,
+            "SPP must abort an armed Follow as a clock discontinuity"
+        );
+        assert_eq!(runtime.timeline_follow_runtime.generation, 18);
+        assert_eq!(
+            (
+                runtime.timeline_transport_epoch,
+                runtime.timeline_transport_generation,
+            ),
+            (direct_before.epoch, direct_before.generation + 1)
+        );
+    }
+
+    #[test]
     fn timeline_follow_captures_next_id_runs_dual_video_slews_bpm_and_completes_once() {
         let mut runtime = runtime_with_lfo_effects(&[]);
         let mut outgoing_source = clip_slot_engine_test_source("timeline-follow-out", 1_000);
@@ -96949,6 +98904,49 @@ mod tests {
         runtime
             .apply_timeline_bank_state(vec![source, target], TimelineId(8_101), true)
             .unwrap();
+        runtime
+    }
+
+    fn timeline_follow_settling_runtime(
+        fault_policy: protocol::TimelineFollowFaultPolicy,
+        now: Instant,
+    ) -> EngineRuntime {
+        let mut runtime = timeline_follow_ltl5_runtime(fault_policy);
+        let source_clip = TimelineAudioClipSummary {
+            id: 80_901,
+            layer_id: 2,
+            media_asset_id: None,
+            path: "follow-source.wav".to_string(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        };
+        let target_clip = TimelineAudioClipSummary {
+            id: 80_902,
+            path: "follow-target.wav".to_string(),
+            ..source_clip.clone()
+        };
+        let audio_layer = default_timeline_audio_layer(2);
+        runtime.timeline_layers = vec![audio_layer.clone()];
+        runtime.timeline_bank[0].layers = vec![audio_layer.clone()];
+        runtime.timeline_bank[1].layers = vec![audio_layer];
+        runtime.timeline_audio_clips = vec![source_clip.clone()];
+        runtime.timeline_bank[0].audio_clips = vec![source_clip];
+        runtime.timeline_bank[1].audio_clips = vec![target_clip];
+        runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        runtime.advance_timeline_follow(now + Duration::from_millis(100));
+        assert!(matches!(
+            runtime.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Settling
+        ));
         runtime
     }
 
@@ -98981,8 +100979,9 @@ mod tests {
             .send(EngineCommand::SetTimelinePlaying(true))
             .unwrap();
         std::thread::sleep(Duration::from_millis(30));
-        let status = engine.timeline_follow_runtime_status(77);
-        assert_eq!(status.epoch, 77);
+        let epoch = engine.output_ownership_status().epoch;
+        let status = engine.timeline_follow_runtime_status(epoch);
+        assert_eq!(status.epoch, epoch);
         assert!(matches!(
             status.status,
             protocol::TimelineFollowRuntimeStatus::Armed
@@ -98990,6 +100989,15 @@ mod tests {
         let authored_before = engine.persistence_snapshot().unwrap().timeline;
         assert!(engine
             .abort_timeline_follow_published(
+                epoch.saturating_add(1),
+                status.generation,
+                Instant::now() + Duration::from_secs(1)
+            )
+            .unwrap_err()
+            .contains("output epoch is stale"));
+        assert!(engine
+            .abort_timeline_follow_published(
+                epoch,
                 status.generation.saturating_add(1),
                 Instant::now() + Duration::from_secs(1)
             )
@@ -98997,11 +101005,12 @@ mod tests {
             .contains("stale"));
         engine
             .abort_timeline_follow_published(
+                epoch,
                 status.generation,
                 Instant::now() + Duration::from_secs(1),
             )
             .unwrap();
-        let aborted = engine.timeline_follow_runtime_status(77);
+        let aborted = engine.timeline_follow_runtime_status(epoch);
         assert!(matches!(
             aborted.outcome,
             Some(protocol::TimelineFollowOutcome::Aborted {
@@ -99022,6 +101031,7 @@ mod tests {
         );
         engine
             .abort_timeline_follow_published(
+                epoch,
                 aborted.generation,
                 Instant::now() + Duration::from_secs(1),
             )
@@ -99035,10 +101045,12 @@ mod tests {
             .unwrap();
         busy.send(EngineCommand::SetTimelinePlaying(true)).unwrap();
         std::thread::sleep(Duration::from_millis(30));
-        let before_busy = busy.timeline_follow_runtime_status(88);
+        let busy_epoch = busy.output_ownership_status().epoch;
+        let before_busy = busy.timeline_follow_runtime_status(busy_epoch);
         busy.force_next_pending_publication_failure_for_tests();
         assert!(busy
             .abort_timeline_follow_published(
+                busy_epoch,
                 before_busy.generation,
                 Instant::now() + Duration::from_secs(1)
             )
@@ -99049,6 +101061,7 @@ mod tests {
         // therefore fail stale rather than execute a second abort.
         assert!(busy
             .abort_timeline_follow_published(
+                busy_epoch,
                 before_busy.generation,
                 Instant::now() + Duration::from_secs(1)
             )

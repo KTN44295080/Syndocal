@@ -40,7 +40,7 @@ pub trait AuthoredPayloadV1: sealed::Payload + Clone + PartialEq + Eq + Serializ
 /// Exact project image required before an authored mutation can be admitted.
 /// Process/session values come from the local query adapter, never the
 /// renderer's own clock or an external identity claim.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProjectMutationFenceV1 {
     pub process_incarnation: u64,
     pub session_incarnation: u64,
@@ -660,6 +660,2299 @@ fn validate_lower_hex_sha256(value: &str) -> Result<(), AuthoredControlPlaneVali
     }
 }
 
+// ---------------------------------------------------------------------------
+// Runtime-only Timeline transport vertical (AI3).
+//
+// This is deliberately separate from the authored effect mutation above.  A
+// Timeline Play/Pause changes live transport state, never project history, and
+// its stale fence includes the engine-owned transport generation in addition
+// to the redacted project E/R/H publication fence.
+
+pub const TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID: &str =
+    "syndocal.runtime.timeline.transport.set_playing.v1";
+/// Discovery identity for the narrow, owner-bound authority bundle. Its
+/// response names the target mutation separately, so a caller cannot confuse
+/// query permission with execution permission.
+pub const TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID: &str =
+    "syndocal.query.runtime.timeline.transport.authority.v1";
+pub const TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1: &str = "timeline.transport";
+pub const TIMELINE_TRANSPORT_SET_PLAYING_SHAPE_DOMAIN_V1: &[u8] =
+    b"syndocal.runtime-control-plane.timeline-transport.set-playing.shape.v1\0";
+/// An opaque authority is exactly 128 random bits, encoded as canonical
+/// unpadded base64url. It deliberately is not an identity claim: the native
+/// adapter retains the owner/window binding server-side.
+pub const TIMELINE_TRANSPORT_AUTHORITY_ID_BYTES: usize = 16;
+
+/// The complete server-issued capability required by the local Timeline
+/// transport command.  It intentionally contains no renderer principal,
+/// window label, owner incarnation, path or credential: those are retained by
+/// the local adapter and bound into its receipt key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TimelineTransportRuntimeFenceV1 {
+    pub project: ProjectMutationFenceV1,
+    pub domain: String,
+    pub source_runtime_epoch: u64,
+    pub source_runtime_generation: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimelineTransportRuntimeFenceV1Wire {
+    project: ProjectMutationFenceV1,
+    domain: String,
+    source_runtime_epoch: u64,
+    source_runtime_generation: u64,
+}
+
+impl TimelineTransportRuntimeFenceV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        self.project
+            .validate()
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        if self.domain != TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1 {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedRuntimeDomain);
+        }
+        if self.source_runtime_epoch == 0
+            || self.source_runtime_epoch > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.source_runtime_generation == 0
+            || self.source_runtime_generation > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err(RuntimeCommandValidationErrorV1::InvalidJavaScriptSafeInteger);
+        }
+        Ok(())
+    }
+
+    fn append_canonical_bytes(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<(), RuntimeCommandValidationErrorV1> {
+        self.validate()?;
+        self.project
+            .append_canonical_bytes(output)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_ascii(output, &self.domain)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_u64(output, self.source_runtime_epoch);
+        append_u64(output, self.source_runtime_generation);
+        Ok(())
+    }
+}
+
+impl Serialize for TimelineTransportRuntimeFenceV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("TimelineTransportRuntimeFenceV1", 4)?;
+        state.serialize_field("project", &self.project)?;
+        state.serialize_field("domain", &self.domain)?;
+        state.serialize_field("source_runtime_epoch", &self.source_runtime_epoch)?;
+        state.serialize_field("source_runtime_generation", &self.source_runtime_generation)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TimelineTransportRuntimeFenceV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = TimelineTransportRuntimeFenceV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            project: wire.project,
+            domain: wire.domain,
+            source_runtime_epoch: wire.source_runtime_epoch,
+            source_runtime_generation: wire.source_runtime_generation,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+/// Redacted, server-minted authority bundle for exactly one local runtime
+/// command. The owner/window binding and single-use record remain entirely in
+/// the native adapter; the renderer sees only the project fence and the exact
+/// engine-owned Timeline transport generation it must echo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCommandAuthorityBundleV1 {
+    pub operation_id: String,
+    pub authority_id: String,
+    pub fence: TimelineTransportRuntimeFenceV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeCommandAuthorityBundleV1Wire {
+    operation_id: String,
+    authority_id: String,
+    fence: TimelineTransportRuntimeFenceV1,
+}
+
+impl RuntimeCommandAuthorityBundleV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_runtime_authority_id(&self.authority_id)?;
+        self.fence.validate()
+    }
+}
+
+impl Serialize for RuntimeCommandAuthorityBundleV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("RuntimeCommandAuthorityBundleV1", 3)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("authority_id", &self.authority_id)?;
+        state.serialize_field("fence", &self.fence)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeCommandAuthorityBundleV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RuntimeCommandAuthorityBundleV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            authority_id: wire.authority_id,
+            fence: wire.fence,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetTimelinePlayingRuntimePayloadV1 {
+    pub playing: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetTimelinePlayingRuntimePayloadV1Wire {
+    playing: bool,
+}
+
+impl SetTimelinePlayingRuntimePayloadV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        Ok(())
+    }
+
+    fn append_canonical_bytes(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<(), RuntimeCommandValidationErrorV1> {
+        self.validate()?;
+        output.push(u8::from(self.playing));
+        Ok(())
+    }
+}
+
+impl Serialize for SetTimelinePlayingRuntimePayloadV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("SetTimelinePlayingRuntimePayloadV1", 1)?;
+        state.serialize_field("playing", &self.playing)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SetTimelinePlayingRuntimePayloadV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = SetTimelinePlayingRuntimePayloadV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            playing: wire.playing,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+/// Strict, versioned request for the runtime-only Timeline transport lane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCommandRequestV1 {
+    pub operation_id: String,
+    pub authority_id: String,
+    pub request_id: u64,
+    pub expected_fence: TimelineTransportRuntimeFenceV1,
+    pub payload: SetTimelinePlayingRuntimePayloadV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeCommandRequestV1Wire {
+    operation_id: String,
+    authority_id: String,
+    request_id: u64,
+    expected_fence: TimelineTransportRuntimeFenceV1,
+    payload: SetTimelinePlayingRuntimePayloadV1,
+}
+
+impl RuntimeCommandRequestV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_runtime_authority_id(&self.authority_id)?;
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        self.expected_fence.validate()?;
+        self.payload.validate()
+    }
+
+    /// Stable typed bytes for server-side shape hashing. JSON object ordering,
+    /// whitespace and extensions cannot influence idempotency.
+    pub fn canonical_shape_bytes(&self) -> Result<Vec<u8>, RuntimeCommandValidationErrorV1> {
+        self.validate()?;
+        let mut output = Vec::with_capacity(192);
+        append_ascii(&mut output, "runtime_command_request_v1")
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_ascii(&mut output, &self.operation_id)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_ascii(&mut output, &self.authority_id)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_u64(&mut output, self.request_id);
+        self.expected_fence.append_canonical_bytes(&mut output)?;
+        self.payload.append_canonical_bytes(&mut output)?;
+        Ok(output)
+    }
+}
+
+impl Serialize for RuntimeCommandRequestV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("RuntimeCommandRequestV1", 5)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("authority_id", &self.authority_id)?;
+        state.serialize_field("request_id", &self.request_id)?;
+        state.serialize_field("expected_fence", &self.expected_fence)?;
+        state.serialize_field("payload", &self.payload)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeCommandRequestV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RuntimeCommandRequestV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            authority_id: wire.authority_id,
+            request_id: wire.request_id,
+            expected_fence: wire.expected_fence,
+            payload: wire.payload,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCommandErrorCodeV1 {
+    InvalidRequest,
+    Forbidden,
+    StaleFence,
+    Conflict,
+    Busy,
+    Overloaded,
+    PublicationFailed,
+    Internal,
+}
+
+/// Fixed-code runtime failure data. No adapter or worker error string crosses
+/// this DTO.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCommandErrorV1 {
+    pub code: RuntimeCommandErrorCodeV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeCommandErrorV1Wire {
+    code: RuntimeCommandErrorCodeV1,
+}
+
+impl RuntimeCommandErrorV1 {
+    pub const fn new(code: RuntimeCommandErrorCodeV1) -> Self {
+        Self { code }
+    }
+}
+
+impl Serialize for RuntimeCommandErrorV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("RuntimeCommandErrorV1", 1)?;
+        state.serialize_field("code", &self.code)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeCommandErrorV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RuntimeCommandErrorV1Wire::deserialize(deserializer)?;
+        Ok(Self { code: wire.code })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCommandReceiptOutcomeV1 {
+    Applied,
+    NoOp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCommandReceiptV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub fence_before: TimelineTransportRuntimeFenceV1,
+    pub requested_playing: bool,
+    pub epoch_after: u64,
+    pub generation_after: u64,
+    pub shape_sha256: String,
+    pub outcome: RuntimeCommandReceiptOutcomeV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeCommandReceiptV1Wire {
+    operation_id: String,
+    request_id: u64,
+    fence_before: TimelineTransportRuntimeFenceV1,
+    requested_playing: bool,
+    epoch_after: u64,
+    generation_after: u64,
+    shape_sha256: String,
+    outcome: RuntimeCommandReceiptOutcomeV1,
+}
+
+impl RuntimeCommandReceiptV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        self.fence_before.validate()?;
+        if self.epoch_after == 0
+            || self.epoch_after > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.generation_after == 0
+            || self.generation_after > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err(RuntimeCommandValidationErrorV1::InvalidJavaScriptSafeInteger);
+        }
+        validate_lower_hex_sha256(&self.shape_sha256)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        match self.outcome {
+            RuntimeCommandReceiptOutcomeV1::NoOp
+                if self.epoch_after != self.fence_before.source_runtime_epoch
+                    || self.generation_after != self.fence_before.source_runtime_generation =>
+            {
+                return Err(RuntimeCommandValidationErrorV1::InvalidNoOpAuthority);
+            }
+            RuntimeCommandReceiptOutcomeV1::Applied
+                if next_timeline_transport_authority(
+                    self.fence_before.source_runtime_epoch,
+                    self.fence_before.source_runtime_generation,
+                ) != Some((self.epoch_after, self.generation_after)) =>
+            {
+                return Err(RuntimeCommandValidationErrorV1::InvalidAppliedAuthority);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for RuntimeCommandReceiptV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("RuntimeCommandReceiptV1", 8)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("request_id", &self.request_id)?;
+        state.serialize_field("fence_before", &self.fence_before)?;
+        state.serialize_field("requested_playing", &self.requested_playing)?;
+        state.serialize_field("epoch_after", &self.epoch_after)?;
+        state.serialize_field("generation_after", &self.generation_after)?;
+        state.serialize_field("shape_sha256", &self.shape_sha256)?;
+        state.serialize_field("outcome", &self.outcome)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeCommandReceiptV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RuntimeCommandReceiptV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            fence_before: wire.fence_before,
+            requested_playing: wire.requested_playing,
+            epoch_after: wire.epoch_after,
+            generation_after: wire.generation_after,
+            shape_sha256: wire.shape_sha256,
+            outcome: wire.outcome,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCommandRejectionV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub fence_before: TimelineTransportRuntimeFenceV1,
+    pub error: RuntimeCommandErrorV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeCommandRejectionV1Wire {
+    operation_id: String,
+    request_id: u64,
+    fence_before: TimelineTransportRuntimeFenceV1,
+    error: RuntimeCommandErrorV1,
+}
+
+impl RuntimeCommandRejectionV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        self.fence_before.validate()
+    }
+}
+
+impl Serialize for RuntimeCommandRejectionV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("RuntimeCommandRejectionV1", 4)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("request_id", &self.request_id)?;
+        state.serialize_field("fence_before", &self.fence_before)?;
+        state.serialize_field("error", &self.error)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeCommandRejectionV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RuntimeCommandRejectionV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            fence_before: wire.fence_before,
+            error: wire.error,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "result",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum RuntimeCommandResponseV1 {
+    Receipt(RuntimeCommandReceiptV1),
+    Rejected(RuntimeCommandRejectionV1),
+}
+
+impl RuntimeCommandResponseV1 {
+    pub fn receipt(&self) -> Option<&RuntimeCommandReceiptV1> {
+        match self {
+            Self::Receipt(receipt) => Some(receipt),
+            Self::Rejected(_) => None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        match self {
+            Self::Receipt(receipt) => receipt.validate(),
+            Self::Rejected(rejection) => rejection.validate(),
+        }
+    }
+}
+
+pub const TIMELINE_FOLLOW_ABORT_OPERATION_ID: &str = "syndocal.runtime.timeline.follow.abort.v1";
+pub const TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID: &str =
+    "syndocal.query.runtime.timeline.follow.abort.authority.v1";
+pub const TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1: &str = "timeline.follow.abort";
+pub const TIMELINE_FOLLOW_ABORT_SHAPE_DOMAIN_V1: &[u8] =
+    b"syndocal.runtime-control-plane.timeline-follow.abort.shape.v1\0";
+
+/// Exact project/output/Follow identity captured by one server-issued abort
+/// capability. The output epoch and Follow generation form one ABA fence; no
+/// window, principal, credential, path or authored Timeline payload crosses
+/// this wire contract.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TimelineFollowAbortRuntimeFenceV1 {
+    pub project: ProjectMutationFenceV1,
+    pub domain: String,
+    pub output_ownership_epoch: u64,
+    pub follow_generation: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimelineFollowAbortRuntimeFenceV1Wire {
+    project: ProjectMutationFenceV1,
+    domain: String,
+    output_ownership_epoch: u64,
+    follow_generation: u64,
+}
+
+impl TimelineFollowAbortRuntimeFenceV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        self.project
+            .validate()
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        if self.domain != TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1 {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedRuntimeDomain);
+        }
+        if self.output_ownership_epoch == 0
+            || self.output_ownership_epoch > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.follow_generation == 0
+            || self.follow_generation > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err(RuntimeCommandValidationErrorV1::InvalidJavaScriptSafeInteger);
+        }
+        Ok(())
+    }
+
+    fn append_canonical_bytes(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<(), RuntimeCommandValidationErrorV1> {
+        self.validate()?;
+        self.project
+            .append_canonical_bytes(output)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_ascii(output, &self.domain)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_u64(output, self.output_ownership_epoch);
+        append_u64(output, self.follow_generation);
+        Ok(())
+    }
+}
+
+impl Serialize for TimelineFollowAbortRuntimeFenceV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("TimelineFollowAbortRuntimeFenceV1", 4)?;
+        state.serialize_field("project", &self.project)?;
+        state.serialize_field("domain", &self.domain)?;
+        state.serialize_field("output_ownership_epoch", &self.output_ownership_epoch)?;
+        state.serialize_field("follow_generation", &self.follow_generation)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TimelineFollowAbortRuntimeFenceV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = TimelineFollowAbortRuntimeFenceV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            project: wire.project,
+            domain: wire.domain,
+            output_ownership_epoch: wire.output_ownership_epoch,
+            follow_generation: wire.follow_generation,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineFollowAbortAuthorityBundleV1 {
+    pub operation_id: String,
+    pub authority_id: String,
+    pub fence: TimelineFollowAbortRuntimeFenceV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimelineFollowAbortAuthorityBundleV1Wire {
+    operation_id: String,
+    authority_id: String,
+    fence: TimelineFollowAbortRuntimeFenceV1,
+}
+
+impl TimelineFollowAbortAuthorityBundleV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_FOLLOW_ABORT_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_runtime_authority_id(&self.authority_id)?;
+        self.fence.validate()
+    }
+}
+
+impl Serialize for TimelineFollowAbortAuthorityBundleV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("TimelineFollowAbortAuthorityBundleV1", 3)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("authority_id", &self.authority_id)?;
+        state.serialize_field("fence", &self.fence)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TimelineFollowAbortAuthorityBundleV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = TimelineFollowAbortAuthorityBundleV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            authority_id: wire.authority_id,
+            fence: wire.fence,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineFollowAbortRuntimeRequestV1 {
+    pub operation_id: String,
+    pub authority_id: String,
+    pub request_id: u64,
+    pub expected_fence: TimelineFollowAbortRuntimeFenceV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimelineFollowAbortRuntimeRequestV1Wire {
+    operation_id: String,
+    authority_id: String,
+    request_id: u64,
+    expected_fence: TimelineFollowAbortRuntimeFenceV1,
+}
+
+impl TimelineFollowAbortRuntimeRequestV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_FOLLOW_ABORT_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_runtime_authority_id(&self.authority_id)?;
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        self.expected_fence.validate()
+    }
+
+    pub fn canonical_shape_bytes(&self) -> Result<Vec<u8>, RuntimeCommandValidationErrorV1> {
+        self.validate()?;
+        let mut output = Vec::with_capacity(192);
+        append_ascii(&mut output, "timeline_follow_abort_runtime_request_v1")
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_ascii(&mut output, &self.operation_id)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_ascii(&mut output, &self.authority_id)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_u64(&mut output, self.request_id);
+        self.expected_fence.append_canonical_bytes(&mut output)?;
+        Ok(output)
+    }
+}
+
+impl Serialize for TimelineFollowAbortRuntimeRequestV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("TimelineFollowAbortRuntimeRequestV1", 4)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("authority_id", &self.authority_id)?;
+        state.serialize_field("request_id", &self.request_id)?;
+        state.serialize_field("expected_fence", &self.expected_fence)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TimelineFollowAbortRuntimeRequestV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = TimelineFollowAbortRuntimeRequestV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            authority_id: wire.authority_id,
+            request_id: wire.request_id,
+            expected_fence: wire.expected_fence,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineFollowAbortRuntimeReceiptV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub fence_before: TimelineFollowAbortRuntimeFenceV1,
+    pub output_ownership_epoch_after: u64,
+    pub follow_generation_after: u64,
+    pub shape_sha256: String,
+    pub outcome: RuntimeCommandReceiptOutcomeV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimelineFollowAbortRuntimeReceiptV1Wire {
+    operation_id: String,
+    request_id: u64,
+    fence_before: TimelineFollowAbortRuntimeFenceV1,
+    output_ownership_epoch_after: u64,
+    follow_generation_after: u64,
+    shape_sha256: String,
+    outcome: RuntimeCommandReceiptOutcomeV1,
+}
+
+impl TimelineFollowAbortRuntimeReceiptV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_FOLLOW_ABORT_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        self.fence_before.validate()?;
+        if self.output_ownership_epoch_after == 0
+            || self.output_ownership_epoch_after > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.follow_generation_after == 0
+            || self.follow_generation_after > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err(RuntimeCommandValidationErrorV1::InvalidJavaScriptSafeInteger);
+        }
+        validate_lower_hex_sha256(&self.shape_sha256)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        let same_authority = self.output_ownership_epoch_after
+            == self.fence_before.output_ownership_epoch
+            && self.follow_generation_after == self.fence_before.follow_generation;
+        match self.outcome {
+            RuntimeCommandReceiptOutcomeV1::NoOp if !same_authority => {
+                Err(RuntimeCommandValidationErrorV1::InvalidNoOpAuthority)
+            }
+            RuntimeCommandReceiptOutcomeV1::Applied
+                if self.output_ownership_epoch_after
+                    != self.fence_before.output_ownership_epoch
+                    || self.fence_before.follow_generation == MAX_SAFE_JAVASCRIPT_INTEGER
+                    || self.follow_generation_after != self.fence_before.follow_generation + 1 =>
+            {
+                Err(RuntimeCommandValidationErrorV1::InvalidAppliedAuthority)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+impl Serialize for TimelineFollowAbortRuntimeReceiptV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("TimelineFollowAbortRuntimeReceiptV1", 7)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("request_id", &self.request_id)?;
+        state.serialize_field("fence_before", &self.fence_before)?;
+        state.serialize_field(
+            "output_ownership_epoch_after",
+            &self.output_ownership_epoch_after,
+        )?;
+        state.serialize_field("follow_generation_after", &self.follow_generation_after)?;
+        state.serialize_field("shape_sha256", &self.shape_sha256)?;
+        state.serialize_field("outcome", &self.outcome)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TimelineFollowAbortRuntimeReceiptV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = TimelineFollowAbortRuntimeReceiptV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            fence_before: wire.fence_before,
+            output_ownership_epoch_after: wire.output_ownership_epoch_after,
+            follow_generation_after: wire.follow_generation_after,
+            shape_sha256: wire.shape_sha256,
+            outcome: wire.outcome,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineFollowAbortRuntimeRejectionV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub fence_before: TimelineFollowAbortRuntimeFenceV1,
+    pub error: RuntimeCommandErrorV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimelineFollowAbortRuntimeRejectionV1Wire {
+    operation_id: String,
+    request_id: u64,
+    fence_before: TimelineFollowAbortRuntimeFenceV1,
+    error: RuntimeCommandErrorV1,
+}
+
+impl TimelineFollowAbortRuntimeRejectionV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_FOLLOW_ABORT_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        self.fence_before.validate()
+    }
+}
+
+impl Serialize for TimelineFollowAbortRuntimeRejectionV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("TimelineFollowAbortRuntimeRejectionV1", 4)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("request_id", &self.request_id)?;
+        state.serialize_field("fence_before", &self.fence_before)?;
+        state.serialize_field("error", &self.error)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TimelineFollowAbortRuntimeRejectionV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = TimelineFollowAbortRuntimeRejectionV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            fence_before: wire.fence_before,
+            error: wire.error,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "result",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum TimelineFollowAbortRuntimeResponseV1 {
+    Receipt(TimelineFollowAbortRuntimeReceiptV1),
+    Rejected(TimelineFollowAbortRuntimeRejectionV1),
+}
+
+impl TimelineFollowAbortRuntimeResponseV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        match self {
+            Self::Receipt(receipt) => receipt.validate(),
+            Self::Rejected(rejection) => rejection.validate(),
+        }
+    }
+}
+
+pub const SAFETY_BLACKOUT_ENGAGE_OPERATION_ID: &str = "syndocal.safety.blackout.engage.v1";
+pub const SAFETY_BLACKOUT_ENGAGE_SHAPE_DOMAIN_V1: &[u8] =
+    b"syndocal.safety.blackout.engage.shape.v1\0";
+pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
+    "syndocal.query.output.control.authority.v1";
+pub const OUTPUT_CONSENT_PREPARE_OPERATION_ID: &str = "syndocal.output.consent.prepare.v1";
+pub const OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID: &str =
+    "syndocal.query.output.consent.status.v1";
+pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v1";
+pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v1";
+pub const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID: &str = "syndocal.output.standby.takeover.v1";
+pub const OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V1: &[u8] =
+    b"syndocal.output-control.argument-fingerprint.v1\0";
+pub const OUTPUT_CONTROL_SHAPE_DOMAIN_V1: &[u8] = b"syndocal.output-control.command-shape.v1\0";
+
+/// Safer-direction-only emergency request. Intentionally no `enabled`,
+/// `target`, or other payload field exists on the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SafetyBlackoutEngageRequestV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SafetyBlackoutEngageRequestV1Wire {
+    operation_id: String,
+    request_id: u64,
+}
+
+impl SafetyBlackoutEngageRequestV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        Ok(())
+    }
+
+    pub fn canonical_shape_bytes(&self) -> Result<Vec<u8>, RuntimeCommandValidationErrorV1> {
+        self.validate()?;
+        let mut output = Vec::with_capacity(96);
+        append_ascii(&mut output, "safety_blackout_engage_request_v1")
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_ascii(&mut output, &self.operation_id)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_u64(&mut output, self.request_id);
+        Ok(output)
+    }
+}
+
+impl Serialize for SafetyBlackoutEngageRequestV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("SafetyBlackoutEngageRequestV1", 2)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("request_id", &self.request_id)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SafetyBlackoutEngageRequestV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = SafetyBlackoutEngageRequestV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SafetyBlackoutEngageOutcomeV1 {
+    Applied,
+    NoOp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SafetyBlackoutEngageReceiptV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub shape_sha256: String,
+    pub audit_sequence: u64,
+    pub outcome: SafetyBlackoutEngageOutcomeV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SafetyBlackoutEngageReceiptV1Wire {
+    operation_id: String,
+    request_id: u64,
+    shape_sha256: String,
+    audit_sequence: u64,
+    outcome: SafetyBlackoutEngageOutcomeV1,
+}
+
+impl SafetyBlackoutEngageReceiptV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        if self.request_id == 0
+            || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.audit_sequence == 0
+            || self.audit_sequence > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err(RuntimeCommandValidationErrorV1::InvalidJavaScriptSafeInteger);
+        }
+        validate_lower_hex_sha256(&self.shape_sha256)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)
+    }
+}
+
+impl Serialize for SafetyBlackoutEngageReceiptV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("SafetyBlackoutEngageReceiptV1", 5)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("request_id", &self.request_id)?;
+        state.serialize_field("shape_sha256", &self.shape_sha256)?;
+        state.serialize_field("audit_sequence", &self.audit_sequence)?;
+        state.serialize_field("outcome", &self.outcome)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SafetyBlackoutEngageReceiptV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = SafetyBlackoutEngageReceiptV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            shape_sha256: wire.shape_sha256,
+            audit_sequence: wire.audit_sequence,
+            outcome: wire.outcome,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SafetyBlackoutEngageRejectionV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub error: RuntimeCommandErrorV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SafetyBlackoutEngageRejectionV1Wire {
+    operation_id: String,
+    request_id: u64,
+    error: RuntimeCommandErrorV1,
+}
+
+impl SafetyBlackoutEngageRejectionV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for SafetyBlackoutEngageRejectionV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("SafetyBlackoutEngageRejectionV1", 3)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("request_id", &self.request_id)?;
+        state.serialize_field("error", &self.error)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SafetyBlackoutEngageRejectionV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = SafetyBlackoutEngageRejectionV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            error: wire.error,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "result",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SafetyBlackoutEngageResponseV1 {
+    Receipt(SafetyBlackoutEngageReceiptV1),
+    Rejected(SafetyBlackoutEngageRejectionV1),
+}
+
+impl SafetyBlackoutEngageResponseV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        match self {
+            Self::Receipt(receipt) => receipt.validate(),
+            Self::Rejected(rejection) => rejection.validate(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeCommandValidationErrorV1 {
+    UnexpectedOperationId,
+    UnexpectedRuntimeDomain,
+    InvalidRequestId,
+    InvalidAuthorityId,
+    InvalidJavaScriptSafeInteger,
+    InvalidNoOpAuthority,
+    InvalidAppliedAuthority,
+    Authored(AuthoredControlPlaneValidationError),
+}
+
+impl RuntimeCommandValidationErrorV1 {
+    fn from_authored(error: AuthoredControlPlaneValidationError) -> Self {
+        Self::Authored(error)
+    }
+}
+
+impl fmt::Display for RuntimeCommandValidationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedOperationId => formatter.write_str("unexpected runtime operation ID"),
+            Self::UnexpectedRuntimeDomain => formatter.write_str("unexpected runtime domain"),
+            Self::InvalidRequestId => {
+                formatter.write_str("request ID must be JavaScript-safe and non-zero")
+            }
+            Self::InvalidAuthorityId => {
+                formatter.write_str("authority ID must be canonical base64url")
+            }
+            Self::InvalidJavaScriptSafeInteger => {
+                formatter.write_str("runtime generation must be JavaScript-safe and non-zero")
+            }
+            Self::InvalidNoOpAuthority => {
+                formatter.write_str("NoOp receipt changed its runtime authority")
+            }
+            Self::InvalidAppliedAuthority => formatter
+                .write_str("Applied receipt did not advance runtime authority exactly once"),
+            Self::Authored(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeCommandValidationErrorV1 {}
+
+fn validate_runtime_authority_id(value: &str) -> Result<(), RuntimeCommandValidationErrorV1> {
+    if value.len() != 22 || !value.is_ascii() {
+        return Err(RuntimeCommandValidationErrorV1::InvalidAuthorityId);
+    }
+    let mut last = None;
+    for byte in value.bytes() {
+        let decoded = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'-' => 62,
+            b'_' => 63,
+            _ => return Err(RuntimeCommandValidationErrorV1::InvalidAuthorityId),
+        };
+        last = Some(decoded);
+    }
+    // 16 bytes occupy 22 unpadded base64url characters; the final sextet has
+    // only two payload bits, so canonical encoding requires its low four bits
+    // to be zero. That also rules out alternate textual encodings of one ID.
+    if last.is_none_or(|decoded| decoded & 0x0f != 0) {
+        return Err(RuntimeCommandValidationErrorV1::InvalidAuthorityId);
+    }
+    Ok(())
+}
+
+/// The exact non-saturating successor shared by the wire receipt contract and
+/// the engine worker. Once both counters reach JavaScript's safe maximum there
+/// is deliberately no next transport authority.
+pub fn next_timeline_transport_authority(epoch: u64, generation: u64) -> Option<(u64, u64)> {
+    if epoch == 0
+        || generation == 0
+        || epoch > MAX_SAFE_JAVASCRIPT_INTEGER
+        || generation > MAX_SAFE_JAVASCRIPT_INTEGER
+    {
+        return None;
+    }
+    if generation < MAX_SAFE_JAVASCRIPT_INTEGER {
+        Some((epoch, generation + 1))
+    } else if epoch < MAX_SAFE_JAVASCRIPT_INTEGER {
+        Some((epoch + 1, 1))
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputControlValidationErrorV1 {
+    UnexpectedOperationId,
+    OperationActionMismatch,
+    InvalidRequestId,
+    InvalidFence,
+    InvalidOpaqueId,
+    InvalidFingerprint,
+    InvalidStandbyIdentity,
+    InvalidReceiptOutcome,
+}
+
+impl fmt::Display for OutputControlValidationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::UnexpectedOperationId => "unexpected output-control operation ID",
+            Self::OperationActionMismatch => "output-control operation does not match its action",
+            Self::InvalidRequestId => "request ID must be JavaScript-safe and non-zero",
+            Self::InvalidFence => "output-control fence is invalid",
+            Self::InvalidOpaqueId => "opaque output-control ID must be canonical base64url",
+            Self::InvalidFingerprint => "output-control fingerprint must be lowercase SHA-256",
+            Self::InvalidStandbyIdentity => "standby takeover identity is invalid",
+            Self::InvalidReceiptOutcome => "output-control receipt outcome is invalid",
+        })
+    }
+}
+
+impl std::error::Error for OutputControlValidationErrorV1 {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OutputControlFenceV1 {
+    pub process_incarnation: u64,
+    pub session_incarnation: u64,
+    pub project_epoch: u64,
+    pub project_revision: u64,
+    pub project_checkpoint_hash: String,
+    pub project_publication_generation: u64,
+    pub output_epoch: u64,
+    pub output_generation: u64,
+    pub safety_blackout_epoch: u64,
+    pub safety_blackout_generation: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputControlFenceV1Wire {
+    process_incarnation: u64,
+    session_incarnation: u64,
+    project_epoch: u64,
+    project_revision: u64,
+    project_checkpoint_hash: String,
+    project_publication_generation: u64,
+    output_epoch: u64,
+    output_generation: u64,
+    safety_blackout_epoch: u64,
+    safety_blackout_generation: u64,
+}
+
+impl OutputControlFenceV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if self.process_incarnation == 0
+            || self.session_incarnation == 0
+            || self.output_epoch == 0
+            || self.output_generation == 0
+            || self.safety_blackout_epoch == 0
+            || self.safety_blackout_generation == 0
+            || [
+                self.process_incarnation,
+                self.session_incarnation,
+                self.project_epoch,
+                self.project_revision,
+                self.project_publication_generation,
+                self.output_epoch,
+                self.output_generation,
+                self.safety_blackout_epoch,
+                self.safety_blackout_generation,
+            ]
+            .into_iter()
+            .any(|value| value > MAX_SAFE_JAVASCRIPT_INTEGER)
+            || validate_lower_hex_sha256(&self.project_checkpoint_hash).is_err()
+        {
+            return Err(OutputControlValidationErrorV1::InvalidFence);
+        }
+        Ok(())
+    }
+
+    fn wire(&self) -> OutputControlFenceV1Wire {
+        OutputControlFenceV1Wire {
+            process_incarnation: self.process_incarnation,
+            session_incarnation: self.session_incarnation,
+            project_epoch: self.project_epoch,
+            project_revision: self.project_revision,
+            project_checkpoint_hash: self.project_checkpoint_hash.clone(),
+            project_publication_generation: self.project_publication_generation,
+            output_epoch: self.output_epoch,
+            output_generation: self.output_generation,
+            safety_blackout_epoch: self.safety_blackout_epoch,
+            safety_blackout_generation: self.safety_blackout_generation,
+        }
+    }
+
+    fn append_canonical_bytes(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<(), OutputControlValidationErrorV1> {
+        self.validate()?;
+        for value in [
+            self.process_incarnation,
+            self.session_incarnation,
+            self.project_epoch,
+            self.project_revision,
+        ] {
+            append_u64(output, value);
+        }
+        append_ascii(output, &self.project_checkpoint_hash)
+            .map_err(|_| OutputControlValidationErrorV1::InvalidFence)?;
+        for value in [
+            self.project_publication_generation,
+            self.output_epoch,
+            self.output_generation,
+            self.safety_blackout_epoch,
+            self.safety_blackout_generation,
+        ] {
+            append_u64(output, value);
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for OutputControlFenceV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        self.wire().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputControlFenceV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputControlFenceV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            process_incarnation: wire.process_incarnation,
+            session_incarnation: wire.session_incarnation,
+            project_epoch: wire.project_epoch,
+            project_revision: wire.project_revision,
+            project_checkpoint_hash: wire.project_checkpoint_hash,
+            project_publication_generation: wire.project_publication_generation,
+            output_epoch: wire.output_epoch,
+            output_generation: wire.output_generation,
+            safety_blackout_epoch: wire.safety_blackout_epoch,
+            safety_blackout_generation: wire.safety_blackout_generation,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputControlTargetRoleV1 {
+    Lighting,
+    Video,
+    Both,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputControlActionV1 {
+    Arm {
+        role: OutputControlTargetRoleV1,
+    },
+    ReleaseBlackout,
+    TakeOverStandby {
+        force: bool,
+        standby_session_id: String,
+        standby_generation: u64,
+    },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum OutputControlActionV1Wire {
+    Arm {
+        role: OutputControlTargetRoleV1,
+    },
+    ReleaseBlackout,
+    TakeOverStandby {
+        force: bool,
+        standby_session_id: String,
+        standby_generation: u64,
+    },
+}
+
+impl OutputControlActionV1 {
+    pub const fn operation_id(&self) -> &'static str {
+        match self {
+            Self::Arm { .. } => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+            Self::ReleaseBlackout => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            Self::TakeOverStandby { .. } => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if let Self::TakeOverStandby {
+            standby_session_id,
+            standby_generation,
+            ..
+        } = self
+        {
+            if standby_session_id.is_empty()
+                || standby_session_id.len() > 128
+                || !standby_session_id.is_ascii()
+                || standby_session_id
+                    .bytes()
+                    .any(|byte| byte.is_ascii_control() || matches!(byte, b'/' | b'\\'))
+                || *standby_generation == 0
+                || *standby_generation > MAX_SAFE_JAVASCRIPT_INTEGER
+            {
+                return Err(OutputControlValidationErrorV1::InvalidStandbyIdentity);
+            }
+        }
+        Ok(())
+    }
+
+    fn wire(&self) -> OutputControlActionV1Wire {
+        match self {
+            Self::Arm { role } => OutputControlActionV1Wire::Arm { role: *role },
+            Self::ReleaseBlackout => OutputControlActionV1Wire::ReleaseBlackout,
+            Self::TakeOverStandby {
+                force,
+                standby_session_id,
+                standby_generation,
+            } => OutputControlActionV1Wire::TakeOverStandby {
+                force: *force,
+                standby_session_id: standby_session_id.clone(),
+                standby_generation: *standby_generation,
+            },
+        }
+    }
+
+    fn append_canonical_bytes(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<(), OutputControlValidationErrorV1> {
+        self.validate()?;
+        match self {
+            Self::Arm { role } => {
+                output.push(0);
+                output.push(match role {
+                    OutputControlTargetRoleV1::Lighting => 0,
+                    OutputControlTargetRoleV1::Video => 1,
+                    OutputControlTargetRoleV1::Both => 2,
+                });
+            }
+            Self::ReleaseBlackout => output.push(1),
+            Self::TakeOverStandby {
+                force,
+                standby_session_id,
+                standby_generation,
+            } => {
+                output.push(2);
+                output.push(u8::from(*force));
+                append_ascii(output, standby_session_id)
+                    .map_err(|_| OutputControlValidationErrorV1::InvalidStandbyIdentity)?;
+                append_u64(output, *standby_generation);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for OutputControlActionV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        self.wire().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputControlActionV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputControlActionV1Wire::deserialize(deserializer)?;
+        let value = match wire {
+            OutputControlActionV1Wire::Arm { role } => Self::Arm { role },
+            OutputControlActionV1Wire::ReleaseBlackout => Self::ReleaseBlackout,
+            OutputControlActionV1Wire::TakeOverStandby {
+                force,
+                standby_session_id,
+                standby_generation,
+            } => Self::TakeOverStandby {
+                force,
+                standby_session_id,
+                standby_generation,
+            },
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputControlAuthorityBundleV1 {
+    pub operation_id: String,
+    pub fence: OutputControlFenceV1,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputControlAuthorityBundleV1Wire {
+    operation_id: String,
+    fence: OutputControlFenceV1,
+}
+
+impl OutputControlAuthorityBundleV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if self.operation_id != OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID {
+            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
+        }
+        self.fence.validate()
+    }
+}
+
+impl Serialize for OutputControlAuthorityBundleV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        OutputControlAuthorityBundleV1Wire {
+            operation_id: self.operation_id.clone(),
+            fence: self.fence.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputControlAuthorityBundleV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputControlAuthorityBundleV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            fence: wire.fence,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputConsentPrepareRequestV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub expected_fence: OutputControlFenceV1,
+    pub action: OutputControlActionV1,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputConsentPrepareRequestV1Wire {
+    operation_id: String,
+    request_id: u64,
+    expected_fence: OutputControlFenceV1,
+    action: OutputControlActionV1,
+}
+
+impl OutputConsentPrepareRequestV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if self.operation_id != OUTPUT_CONSENT_PREPARE_OPERATION_ID {
+            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_output_request_id(self.request_id)?;
+        self.expected_fence.validate()?;
+        self.action.validate()
+    }
+
+    pub fn argument_fingerprint_bytes(&self) -> Result<Vec<u8>, OutputControlValidationErrorV1> {
+        self.validate()?;
+        let mut bytes = OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V1.to_vec();
+        append_ascii(&mut bytes, self.action.operation_id())
+            .map_err(|_| OutputControlValidationErrorV1::UnexpectedOperationId)?;
+        self.action.append_canonical_bytes(&mut bytes)?;
+        Ok(bytes)
+    }
+}
+
+impl Serialize for OutputConsentPrepareRequestV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        OutputConsentPrepareRequestV1Wire {
+            operation_id: self.operation_id.clone(),
+            request_id: self.request_id,
+            expected_fence: self.expected_fence.clone(),
+            action: self.action.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputConsentPrepareRequestV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputConsentPrepareRequestV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            expected_fence: wire.expected_fence,
+            action: wire.action,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputConsentChallengeV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub target_operation_id: String,
+    pub challenge_id: String,
+    pub consent_token: String,
+    pub display_code: String,
+    pub argument_fingerprint: String,
+    pub expires_at_unix_ms: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputConsentChallengeV1Wire {
+    operation_id: String,
+    request_id: u64,
+    target_operation_id: String,
+    challenge_id: String,
+    consent_token: String,
+    display_code: String,
+    argument_fingerprint: String,
+    expires_at_unix_ms: u64,
+}
+
+impl OutputConsentChallengeV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if self.operation_id != OUTPUT_CONSENT_PREPARE_OPERATION_ID
+            || !matches!(
+                self.target_operation_id.as_str(),
+                OUTPUT_OWNERSHIP_ARM_OPERATION_ID
+                    | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                    | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+            )
+        {
+            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_output_request_id(self.request_id)?;
+        validate_opaque_output_id(&self.challenge_id)?;
+        validate_opaque_output_id(&self.consent_token)?;
+        validate_lower_hex_fingerprint(&self.argument_fingerprint)?;
+        if self.display_code.len() != 6
+            || !self.display_code.bytes().all(|byte| byte.is_ascii_digit())
+            || self.expires_at_unix_ms == 0
+            || self.expires_at_unix_ms > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err(OutputControlValidationErrorV1::InvalidOpaqueId);
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for OutputConsentChallengeV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        OutputConsentChallengeV1Wire {
+            operation_id: self.operation_id.clone(),
+            request_id: self.request_id,
+            target_operation_id: self.target_operation_id.clone(),
+            challenge_id: self.challenge_id.clone(),
+            consent_token: self.consent_token.clone(),
+            display_code: self.display_code.clone(),
+            argument_fingerprint: self.argument_fingerprint.clone(),
+            expires_at_unix_ms: self.expires_at_unix_ms,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputConsentChallengeV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputConsentChallengeV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            target_operation_id: wire.target_operation_id,
+            challenge_id: wire.challenge_id,
+            consent_token: wire.consent_token,
+            display_code: wire.display_code,
+            argument_fingerprint: wire.argument_fingerprint,
+            expires_at_unix_ms: wire.expires_at_unix_ms,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputConsentStatusRequestV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub challenge_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputConsentStatusRequestV1Wire {
+    operation_id: String,
+    request_id: u64,
+    challenge_id: String,
+}
+
+impl OutputConsentStatusRequestV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if self.operation_id != OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID {
+            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_output_request_id(self.request_id)?;
+        validate_opaque_output_id(&self.challenge_id)
+    }
+}
+
+impl Serialize for OutputConsentStatusRequestV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        OutputConsentStatusRequestV1Wire {
+            operation_id: self.operation_id.clone(),
+            request_id: self.request_id,
+            challenge_id: self.challenge_id.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputConsentStatusRequestV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputConsentStatusRequestV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            challenge_id: wire.challenge_id,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputConsentPhysicalStateV1 {
+    PendingPhysicalInput,
+    Ready,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputConsentStatusV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub challenge_id: String,
+    pub state: OutputConsentPhysicalStateV1,
+    pub expires_at_unix_ms: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputConsentStatusV1Wire {
+    operation_id: String,
+    request_id: u64,
+    challenge_id: String,
+    state: OutputConsentPhysicalStateV1,
+    expires_at_unix_ms: u64,
+}
+
+impl OutputConsentStatusV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if self.operation_id != OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID {
+            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_output_request_id(self.request_id)?;
+        validate_opaque_output_id(&self.challenge_id)?;
+        if self.expires_at_unix_ms == 0 || self.expires_at_unix_ms > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(OutputControlValidationErrorV1::InvalidFence);
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for OutputConsentStatusV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        OutputConsentStatusV1Wire {
+            operation_id: self.operation_id.clone(),
+            request_id: self.request_id,
+            challenge_id: self.challenge_id.clone(),
+            state: self.state,
+            expires_at_unix_ms: self.expires_at_unix_ms,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputConsentStatusV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputConsentStatusV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            challenge_id: wire.challenge_id,
+            state: wire.state,
+            expires_at_unix_ms: wire.expires_at_unix_ms,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputControlCommandRequestV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub expected_fence: OutputControlFenceV1,
+    pub consent_token: String,
+    pub action: OutputControlActionV1,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputControlCommandRequestV1Wire {
+    operation_id: String,
+    request_id: u64,
+    expected_fence: OutputControlFenceV1,
+    consent_token: String,
+    action: OutputControlActionV1,
+}
+
+impl OutputControlCommandRequestV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if self.operation_id != self.action.operation_id() {
+            return Err(OutputControlValidationErrorV1::OperationActionMismatch);
+        }
+        validate_output_request_id(self.request_id)?;
+        self.expected_fence.validate()?;
+        validate_opaque_output_id(&self.consent_token)?;
+        self.action.validate()
+    }
+
+    pub fn canonical_shape_bytes(&self) -> Result<Vec<u8>, OutputControlValidationErrorV1> {
+        self.validate()?;
+        let mut bytes = OUTPUT_CONTROL_SHAPE_DOMAIN_V1.to_vec();
+        append_ascii(&mut bytes, &self.operation_id)
+            .map_err(|_| OutputControlValidationErrorV1::UnexpectedOperationId)?;
+        self.expected_fence.append_canonical_bytes(&mut bytes)?;
+        self.action.append_canonical_bytes(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    pub fn argument_fingerprint_bytes(&self) -> Result<Vec<u8>, OutputControlValidationErrorV1> {
+        self.validate()?;
+        let mut bytes = OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V1.to_vec();
+        append_ascii(&mut bytes, &self.operation_id)
+            .map_err(|_| OutputControlValidationErrorV1::UnexpectedOperationId)?;
+        self.action.append_canonical_bytes(&mut bytes)?;
+        Ok(bytes)
+    }
+}
+
+impl Serialize for OutputControlCommandRequestV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        OutputControlCommandRequestV1Wire {
+            operation_id: self.operation_id.clone(),
+            request_id: self.request_id,
+            expected_fence: self.expected_fence.clone(),
+            consent_token: self.consent_token.clone(),
+            action: self.action.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputControlCommandRequestV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputControlCommandRequestV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            expected_fence: wire.expected_fence,
+            consent_token: wire.consent_token,
+            action: wire.action,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputControlReceiptOutcomeV1 {
+    Applied,
+    NoOp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputControlErrorCodeV1 {
+    InvalidRequest,
+    Forbidden,
+    StaleFence,
+    ConsentMissing,
+    ConsentExpired,
+    ConsentPending,
+    ConsentReplayed,
+    ConsentWrongBinding,
+    ConsentDeviceRemoved,
+    Busy,
+    Overloaded,
+    PublicationFailed,
+    Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputControlReceiptV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub shape_sha256: String,
+    pub argument_fingerprint: String,
+    pub audit_sequence: u64,
+    pub fence_before: OutputControlFenceV1,
+    pub fence_after: OutputControlFenceV1,
+    pub outcome: OutputControlReceiptOutcomeV1,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputControlReceiptV1Wire {
+    operation_id: String,
+    request_id: u64,
+    shape_sha256: String,
+    argument_fingerprint: String,
+    audit_sequence: u64,
+    fence_before: OutputControlFenceV1,
+    fence_after: OutputControlFenceV1,
+    outcome: OutputControlReceiptOutcomeV1,
+}
+
+impl OutputControlReceiptV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if !matches!(
+            self.operation_id.as_str(),
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID
+                | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+        ) {
+            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_output_request_id(self.request_id)?;
+        validate_lower_hex_fingerprint(&self.shape_sha256)?;
+        validate_lower_hex_fingerprint(&self.argument_fingerprint)?;
+        if self.audit_sequence == 0 || self.audit_sequence > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
+        self.fence_before.validate()?;
+        self.fence_after.validate()?;
+        match self.outcome {
+            OutputControlReceiptOutcomeV1::NoOp if self.fence_before != self.fence_after => {
+                Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
+            }
+            OutputControlReceiptOutcomeV1::Applied if self.fence_before == self.fence_after => {
+                Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+impl Serialize for OutputControlReceiptV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        OutputControlReceiptV1Wire {
+            operation_id: self.operation_id.clone(),
+            request_id: self.request_id,
+            shape_sha256: self.shape_sha256.clone(),
+            argument_fingerprint: self.argument_fingerprint.clone(),
+            audit_sequence: self.audit_sequence,
+            fence_before: self.fence_before.clone(),
+            fence_after: self.fence_after.clone(),
+            outcome: self.outcome,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputControlReceiptV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputControlReceiptV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            shape_sha256: wire.shape_sha256,
+            argument_fingerprint: wire.argument_fingerprint,
+            audit_sequence: wire.audit_sequence,
+            fence_before: wire.fence_before,
+            fence_after: wire.fence_after,
+            outcome: wire.outcome,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputControlRejectionV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub error: OutputControlErrorCodeV1,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputControlRejectionV1Wire {
+    operation_id: String,
+    request_id: u64,
+    error: OutputControlErrorCodeV1,
+}
+
+impl OutputControlRejectionV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if !matches!(
+            self.operation_id.as_str(),
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID
+                | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+        ) {
+            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_output_request_id(self.request_id)
+    }
+}
+
+impl Serialize for OutputControlRejectionV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        OutputControlRejectionV1Wire {
+            operation_id: self.operation_id.clone(),
+            request_id: self.request_id,
+            error: self.error,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputControlRejectionV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputControlRejectionV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            request_id: wire.request_id,
+            error: wire.error,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputControlResponseV1 {
+    Receipt(OutputControlReceiptV1),
+    Rejected(OutputControlRejectionV1),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum OutputControlResponseV1Wire {
+    Receipt { receipt: OutputControlReceiptV1 },
+    Rejected { rejection: OutputControlRejectionV1 },
+}
+
+impl OutputControlResponseV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        match self {
+            Self::Receipt(receipt) => receipt.validate(),
+            Self::Rejected(rejection) => rejection.validate(),
+        }
+    }
+}
+
+impl Serialize for OutputControlResponseV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        match self {
+            Self::Receipt(receipt) => OutputControlResponseV1Wire::Receipt {
+                receipt: receipt.clone(),
+            },
+            Self::Rejected(rejection) => OutputControlResponseV1Wire::Rejected {
+                rejection: rejection.clone(),
+            },
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputControlResponseV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputControlResponseV1Wire::deserialize(deserializer)?;
+        let value = match wire {
+            OutputControlResponseV1Wire::Receipt { receipt } => Self::Receipt(receipt),
+            OutputControlResponseV1Wire::Rejected { rejection } => Self::Rejected(rejection),
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
+fn validate_output_request_id(request_id: u64) -> Result<(), OutputControlValidationErrorV1> {
+    if request_id == 0 || request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+        Err(OutputControlValidationErrorV1::InvalidRequestId)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_opaque_output_id(value: &str) -> Result<(), OutputControlValidationErrorV1> {
+    validate_runtime_authority_id(value)
+        .map_err(|_| OutputControlValidationErrorV1::InvalidOpaqueId)
+}
+
+fn validate_lower_hex_fingerprint(value: &str) -> Result<(), OutputControlValidationErrorV1> {
+    if value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(OutputControlValidationErrorV1::InvalidFingerprint)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,6 +3007,43 @@ mod tests {
             start_fence: request.expected_fence,
             error: AuthoredCommandErrorV1::new(AuthoredCommandErrorCodeV1::Conflict),
         })
+    }
+
+    fn runtime_fence() -> TimelineTransportRuntimeFenceV1 {
+        TimelineTransportRuntimeFenceV1 {
+            project: fence(),
+            domain: TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1.to_string(),
+            source_runtime_epoch: 6,
+            source_runtime_generation: 7,
+        }
+    }
+
+    fn runtime_request() -> RuntimeCommandRequestV1 {
+        RuntimeCommandRequestV1 {
+            operation_id: TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID.to_string(),
+            authority_id: "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            request_id: 10,
+            expected_fence: runtime_fence(),
+            payload: SetTimelinePlayingRuntimePayloadV1 { playing: true },
+        }
+    }
+
+    fn follow_abort_fence() -> TimelineFollowAbortRuntimeFenceV1 {
+        TimelineFollowAbortRuntimeFenceV1 {
+            project: fence(),
+            domain: TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1.to_string(),
+            output_ownership_epoch: 11,
+            follow_generation: 23,
+        }
+    }
+
+    fn follow_abort_request() -> TimelineFollowAbortRuntimeRequestV1 {
+        TimelineFollowAbortRuntimeRequestV1 {
+            operation_id: TIMELINE_FOLLOW_ABORT_OPERATION_ID.to_string(),
+            authority_id: "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            request_id: 12,
+            expected_fence: follow_abort_fence(),
+        }
     }
 
     fn set_fence_numeric_field(fence: &mut ProjectMutationFenceV1, field: &str, value: u64) {
@@ -966,5 +3296,368 @@ mod tests {
         let mut unknown_outcome = response;
         unknown_outcome["result"]["outcome"]["kind"] = serde_json::json!("future_outcome");
         assert!(serde_json::from_value::<SetEffectEnabledResponseV1>(unknown_outcome).is_err());
+    }
+
+    #[test]
+    fn runtime_transport_wire_is_strict_typed_and_noop_generation_cannot_drift() {
+        let request = runtime_request();
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            serde_json::from_value::<RuntimeCommandRequestV1>(encoded.clone()).unwrap(),
+            request
+        );
+        let mut unknown = encoded;
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("principal".to_string(), serde_json::json!("forged"));
+        assert!(serde_json::from_value::<RuntimeCommandRequestV1>(unknown).is_err());
+
+        let mut wrong_domain = runtime_request();
+        wrong_domain.expected_fence.domain = "timeline.follow".to_string();
+        assert!(wrong_domain.validate().is_err());
+        let mut lossy_generation = runtime_request();
+        lossy_generation.expected_fence.source_runtime_generation = MAX_SAFE_JAVASCRIPT_INTEGER + 1;
+        assert!(serde_json::to_value(lossy_generation).is_err());
+        let mut forged_authority = runtime_request();
+        forged_authority.authority_id = "not-a-canonical-authority".to_string();
+        assert!(forged_authority.validate().is_err());
+
+        let receipt = RuntimeCommandReceiptV1 {
+            operation_id: TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID.to_string(),
+            request_id: request.request_id,
+            fence_before: request.expected_fence.clone(),
+            requested_playing: request.payload.playing,
+            epoch_after: request.expected_fence.source_runtime_epoch,
+            generation_after: request.expected_fence.source_runtime_generation,
+            shape_sha256: hash('c'),
+            outcome: RuntimeCommandReceiptOutcomeV1::NoOp,
+        };
+        let response = RuntimeCommandResponseV1::Receipt(receipt.clone());
+        assert_eq!(
+            serde_json::from_value::<RuntimeCommandResponseV1>(
+                serde_json::to_value(&response).unwrap()
+            )
+            .unwrap(),
+            response
+        );
+        let mut drifted = receipt;
+        drifted.generation_after += 1;
+        assert!(drifted.validate().is_err());
+
+        let mut applied = RuntimeCommandReceiptV1 {
+            operation_id: TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID.to_string(),
+            request_id: request.request_id,
+            fence_before: request.expected_fence.clone(),
+            requested_playing: request.payload.playing,
+            epoch_after: request.expected_fence.source_runtime_epoch,
+            generation_after: request.expected_fence.source_runtime_generation + 1,
+            shape_sha256: hash('d'),
+            outcome: RuntimeCommandReceiptOutcomeV1::Applied,
+        };
+        applied.validate().unwrap();
+        applied.generation_after += 1;
+        assert!(
+            applied.validate().is_err(),
+            "Applied must advance exactly once"
+        );
+
+        let mut rollover = runtime_request();
+        rollover.expected_fence.source_runtime_epoch = 9;
+        rollover.expected_fence.source_runtime_generation = MAX_SAFE_JAVASCRIPT_INTEGER;
+        let rollover_receipt = RuntimeCommandReceiptV1 {
+            operation_id: TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID.to_string(),
+            request_id: rollover.request_id,
+            fence_before: rollover.expected_fence.clone(),
+            requested_playing: rollover.payload.playing,
+            epoch_after: 10,
+            generation_after: 1,
+            shape_sha256: hash('e'),
+            outcome: RuntimeCommandReceiptOutcomeV1::Applied,
+        };
+        rollover_receipt.validate().unwrap();
+        let terminal_receipt = RuntimeCommandReceiptV1 {
+            epoch_after: MAX_SAFE_JAVASCRIPT_INTEGER,
+            generation_after: MAX_SAFE_JAVASCRIPT_INTEGER,
+            fence_before: TimelineTransportRuntimeFenceV1 {
+                source_runtime_epoch: MAX_SAFE_JAVASCRIPT_INTEGER,
+                source_runtime_generation: MAX_SAFE_JAVASCRIPT_INTEGER,
+                ..rollover.expected_fence
+            },
+            ..rollover_receipt
+        };
+        assert!(
+            terminal_receipt.validate().is_err(),
+            "terminal pair cannot be Applied"
+        );
+
+        let rejected = RuntimeCommandResponseV1::Rejected(RuntimeCommandRejectionV1 {
+            operation_id: TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID.to_string(),
+            request_id: request.request_id,
+            fence_before: request.expected_fence,
+            error: RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Conflict),
+        });
+        let json = serde_json::to_value(rejected).unwrap();
+        assert_eq!(
+            json["result"]["error"],
+            serde_json::json!({ "code": "conflict" })
+        );
+    }
+
+    #[test]
+    fn timeline_follow_abort_wire_is_strict_and_applied_advances_exactly_once() {
+        let request = follow_abort_request();
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            serde_json::from_value::<TimelineFollowAbortRuntimeRequestV1>(encoded.clone()).unwrap(),
+            request
+        );
+        let mut unknown = encoded;
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("owner_id".to_string(), serde_json::json!("forged"));
+        assert!(serde_json::from_value::<TimelineFollowAbortRuntimeRequestV1>(unknown).is_err());
+
+        let receipt = TimelineFollowAbortRuntimeReceiptV1 {
+            operation_id: TIMELINE_FOLLOW_ABORT_OPERATION_ID.to_string(),
+            request_id: request.request_id,
+            fence_before: request.expected_fence.clone(),
+            output_ownership_epoch_after: request.expected_fence.output_ownership_epoch,
+            follow_generation_after: request.expected_fence.follow_generation + 1,
+            shape_sha256: hash('f'),
+            outcome: RuntimeCommandReceiptOutcomeV1::Applied,
+        };
+        let response = TimelineFollowAbortRuntimeResponseV1::Receipt(receipt.clone());
+        assert_eq!(
+            serde_json::from_value::<TimelineFollowAbortRuntimeResponseV1>(
+                serde_json::to_value(&response).unwrap()
+            )
+            .unwrap(),
+            response
+        );
+        let mut skipped = receipt.clone();
+        skipped.follow_generation_after += 1;
+        assert!(skipped.validate().is_err());
+        let mut wrong_epoch = receipt;
+        wrong_epoch.output_ownership_epoch_after += 1;
+        assert!(wrong_epoch.validate().is_err());
+
+        let mut max_request = follow_abort_request();
+        max_request.expected_fence.follow_generation = MAX_SAFE_JAVASCRIPT_INTEGER;
+        let terminal = TimelineFollowAbortRuntimeReceiptV1 {
+            operation_id: TIMELINE_FOLLOW_ABORT_OPERATION_ID.to_string(),
+            request_id: max_request.request_id,
+            fence_before: max_request.expected_fence.clone(),
+            output_ownership_epoch_after: max_request.expected_fence.output_ownership_epoch,
+            follow_generation_after: MAX_SAFE_JAVASCRIPT_INTEGER,
+            shape_sha256: hash('a'),
+            outcome: RuntimeCommandReceiptOutcomeV1::Applied,
+        };
+        assert!(
+            terminal.validate().is_err(),
+            "Follow generation MAX cannot report an ABA-unsafe Applied receipt"
+        );
+        let noop = TimelineFollowAbortRuntimeReceiptV1 {
+            outcome: RuntimeCommandReceiptOutcomeV1::NoOp,
+            ..terminal
+        };
+        noop.validate().unwrap();
+
+        let mut unknown_kind = serde_json::to_value(response).unwrap();
+        unknown_kind["kind"] = serde_json::json!("future_terminal");
+        assert!(
+            serde_json::from_value::<TimelineFollowAbortRuntimeResponseV1>(unknown_kind).is_err()
+        );
+    }
+
+    #[test]
+    fn safety_blackout_wire_has_no_release_payload_and_is_strict() {
+        let request = SafetyBlackoutEngageRequestV1 {
+            operation_id: SAFETY_BLACKOUT_ENGAGE_OPERATION_ID.to_string(),
+            request_id: 71,
+        };
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "operation_id": SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
+                "request_id": 71
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<SafetyBlackoutEngageRequestV1>(encoded.clone()).unwrap(),
+            request
+        );
+        for (field, value) in [
+            ("enabled", serde_json::json!(false)),
+            ("target", serde_json::json!("release")),
+            ("toggle", serde_json::json!(true)),
+        ] {
+            let mut forged = encoded.clone();
+            forged
+                .as_object_mut()
+                .unwrap()
+                .insert(field.to_string(), value);
+            assert!(
+                serde_json::from_value::<SafetyBlackoutEngageRequestV1>(forged).is_err(),
+                "unexpected safety field {field}"
+            );
+        }
+
+        let response = SafetyBlackoutEngageResponseV1::Receipt(SafetyBlackoutEngageReceiptV1 {
+            operation_id: SAFETY_BLACKOUT_ENGAGE_OPERATION_ID.to_string(),
+            request_id: request.request_id,
+            shape_sha256: hash('b'),
+            audit_sequence: 1,
+            outcome: SafetyBlackoutEngageOutcomeV1::Applied,
+        });
+        let response_json = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            serde_json::from_value::<SafetyBlackoutEngageResponseV1>(response_json.clone())
+                .unwrap(),
+            response
+        );
+        let mut unknown_outcome = response_json.clone();
+        unknown_outcome["result"]["outcome"] = serde_json::json!("released");
+        assert!(serde_json::from_value::<SafetyBlackoutEngageResponseV1>(unknown_outcome).is_err());
+        let mut unknown_terminal = response_json;
+        unknown_terminal["kind"] = serde_json::json!("future_receipt");
+        assert!(
+            serde_json::from_value::<SafetyBlackoutEngageResponseV1>(unknown_terminal).is_err()
+        );
+
+        let mut zero_audit = match response {
+            SafetyBlackoutEngageResponseV1::Receipt(receipt) => receipt,
+            SafetyBlackoutEngageResponseV1::Rejected(_) => unreachable!(),
+        };
+        zero_audit.audit_sequence = 0;
+        assert!(serde_json::to_value(zero_audit).is_err());
+        let mut lossy = request;
+        lossy.request_id = MAX_SAFE_JAVASCRIPT_INTEGER + 1;
+        assert!(serde_json::to_value(lossy).is_err());
+    }
+
+    fn output_fence() -> OutputControlFenceV1 {
+        OutputControlFenceV1 {
+            process_incarnation: 11,
+            session_incarnation: 12,
+            project_epoch: 3,
+            project_revision: 4,
+            project_checkpoint_hash: hash('a'),
+            project_publication_generation: 5,
+            output_epoch: 6,
+            output_generation: 7,
+            safety_blackout_epoch: 8,
+            safety_blackout_generation: 9,
+        }
+    }
+
+    #[test]
+    fn output_consent_and_r4_command_wire_are_strict_and_exactly_bound() {
+        let action = OutputControlActionV1::TakeOverStandby {
+            force: true,
+            standby_session_id: "primary-session-1".to_string(),
+            standby_generation: 91,
+        };
+        let prepared = OutputConsentPrepareRequestV1 {
+            operation_id: OUTPUT_CONSENT_PREPARE_OPERATION_ID.to_string(),
+            request_id: 22,
+            expected_fence: output_fence(),
+            action: action.clone(),
+        };
+        let encoded = serde_json::to_value(&prepared).unwrap();
+        assert_eq!(
+            serde_json::from_value::<OutputConsentPrepareRequestV1>(encoded.clone()).unwrap(),
+            prepared
+        );
+        let mut unknown = encoded.clone();
+        unknown["approved"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<OutputConsentPrepareRequestV1>(unknown).is_err());
+        let mut unknown_action = encoded;
+        unknown_action["action"]["target_path"] = serde_json::json!("C:\\secret");
+        assert!(serde_json::from_value::<OutputConsentPrepareRequestV1>(unknown_action).is_err());
+
+        let command = OutputControlCommandRequestV1 {
+            operation_id: OUTPUT_STANDBY_TAKEOVER_OPERATION_ID.to_string(),
+            request_id: 23,
+            expected_fence: output_fence(),
+            consent_token: "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            action,
+        };
+        command.validate().unwrap();
+        let command_json = serde_json::to_value(&command).unwrap();
+        assert_eq!(
+            serde_json::from_value::<OutputControlCommandRequestV1>(command_json.clone()).unwrap(),
+            command
+        );
+        let mut wrong_operation = command.clone();
+        wrong_operation.operation_id = OUTPUT_OWNERSHIP_ARM_OPERATION_ID.to_string();
+        assert!(serde_json::to_value(wrong_operation).is_err());
+        let mut wrong_generation = command.clone();
+        wrong_generation.expected_fence.output_generation = 0;
+        assert!(serde_json::to_value(wrong_generation).is_err());
+        let mut wrong_token = command;
+        wrong_token.consent_token = "not-base64".to_string();
+        assert!(serde_json::to_value(wrong_token).is_err());
+
+        let challenge = OutputConsentChallengeV1 {
+            operation_id: OUTPUT_CONSENT_PREPARE_OPERATION_ID.to_string(),
+            request_id: 22,
+            target_operation_id: OUTPUT_STANDBY_TAKEOVER_OPERATION_ID.to_string(),
+            challenge_id: "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            consent_token: "BBBBBBBBBBBBBBBBBBBBBA".to_string(),
+            display_code: "123456".to_string(),
+            argument_fingerprint: hash('c'),
+            expires_at_unix_ms: 100,
+        };
+        let challenge_json = serde_json::to_value(&challenge).unwrap();
+        assert_eq!(
+            serde_json::from_value::<OutputConsentChallengeV1>(challenge_json).unwrap(),
+            challenge
+        );
+
+        let fence_before = output_fence();
+        let mut fence_after = fence_before.clone();
+        fence_after.safety_blackout_generation += 1;
+        let response = OutputControlResponseV1::Receipt(OutputControlReceiptV1 {
+            operation_id: OUTPUT_BLACKOUT_RELEASE_OPERATION_ID.to_string(),
+            request_id: 24,
+            shape_sha256: hash('d'),
+            argument_fingerprint: hash('e'),
+            audit_sequence: 1,
+            fence_before,
+            fence_after,
+            outcome: OutputControlReceiptOutcomeV1::Applied,
+        });
+        let response_json = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            serde_json::from_value::<OutputControlResponseV1>(response_json.clone()).unwrap(),
+            response
+        );
+        let mut unknown_terminal = response_json;
+        unknown_terminal["type"] = serde_json::json!("future_terminal");
+        assert!(serde_json::from_value::<OutputControlResponseV1>(unknown_terminal).is_err());
+
+        let mut invalid_noop = match response {
+            OutputControlResponseV1::Receipt(receipt) => receipt,
+            OutputControlResponseV1::Rejected(_) => unreachable!(),
+        };
+        invalid_noop.outcome = OutputControlReceiptOutcomeV1::NoOp;
+        assert!(serde_json::to_value(invalid_noop).is_err());
+
+        let rejection = OutputControlResponseV1::Rejected(OutputControlRejectionV1 {
+            operation_id: OUTPUT_OWNERSHIP_ARM_OPERATION_ID.to_string(),
+            request_id: 25,
+            error: OutputControlErrorCodeV1::ConsentPending,
+        });
+        let rejection_json = serde_json::to_value(&rejection).unwrap();
+        assert_eq!(
+            serde_json::from_value::<OutputControlResponseV1>(rejection_json.clone()).unwrap(),
+            rejection
+        );
+        let mut unknown_error = rejection_json;
+        unknown_error["rejection"]["error"] = serde_json::json!("future_error");
+        assert!(serde_json::from_value::<OutputControlResponseV1>(unknown_error).is_err());
     }
 }

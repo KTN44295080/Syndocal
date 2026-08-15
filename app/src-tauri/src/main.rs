@@ -38,8 +38,13 @@ use protocol::DmxControlAction;
 use protocol::{
     canonical_video_output_mapping_field,
     control_plane_command::{
-        AuthoredRequestV1, ProjectMutationFenceV1, SetEffectEnabledPayload,
-        SetEffectEnabledResponseV1,
+        AuthoredRequestV1, OutputConsentChallengeV1, OutputConsentPrepareRequestV1,
+        OutputConsentStatusRequestV1, OutputConsentStatusV1, OutputControlAuthorityBundleV1,
+        OutputControlCommandRequestV1, OutputControlResponseV1, ProjectMutationFenceV1,
+        RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorV1, RuntimeCommandRequestV1,
+        RuntimeCommandResponseV1, SafetyBlackoutEngageRequestV1, SafetyBlackoutEngageResponseV1,
+        SetEffectEnabledPayload, SetEffectEnabledResponseV1, TimelineFollowAbortAuthorityBundleV1,
+        TimelineFollowAbortRuntimeRequestV1, TimelineFollowAbortRuntimeResponseV1,
     },
     normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
     validate_engine_ready_video_clip_slots, validate_engine_ready_video_effect_chains,
@@ -102,6 +107,8 @@ mod authored_control_plane;
 mod capture_transport;
 mod control_plane;
 mod control_plane_query;
+mod control_plane_runtime;
+mod control_plane_security;
 mod dvc_import;
 mod ndi_transport;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -316,6 +323,8 @@ struct AppState {
     /// Bounded, typed receipt state for server-authoritative authored
     /// mutations which retain the legacy local Tauri source name.
     authored_control_plane: authored_control_plane::AuthoredControlPlaneState,
+    runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState,
+    control_plane_security: control_plane_security::ControlPlaneSecurityState,
     /// The single background reaper for `media_asset_operations`, installed once
     /// during setup. Holding it here keeps the thread owned by `AppState` and
     /// joined on teardown instead of leaked.
@@ -9419,6 +9428,7 @@ fn abort_timeline_follow_authoritative_command_impl(
                 );
             }
             state.engine.abort_timeline_follow_published(
+                request.expected_follow_epoch,
                 request.expected_generation,
                 Instant::now() + Duration::from_secs(2),
             )?;
@@ -32322,6 +32332,100 @@ fn set_effect_enabled(
     authored_control_plane::set_effect_enabled_authoritative(&window, &state, &query_state, request)
 }
 
+/// Issue a redacted, owner-bound, single-use Timeline transport capability.
+/// The returned fence contains no window/principal claim; those remain native
+/// state and are checked again by the canonical runtime command.
+#[tauri::command]
+fn query_timeline_transport_authority_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+) -> Result<RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorV1> {
+    control_plane_runtime::issue_timeline_transport_authority(&window, &state, &query_state)
+}
+
+#[tauri::command]
+fn set_timeline_transport_playing_runtime_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: RuntimeCommandRequestV1,
+) -> RuntimeCommandResponseV1 {
+    control_plane_runtime::set_timeline_transport_playing(&window, &state, &query_state, request)
+}
+
+/// Issue one opaque, local-owner-bound capability for the exact active Follow
+/// generation. This narrow read remains available during Full Lock.
+#[tauri::command]
+fn query_timeline_follow_abort_authority_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+) -> Result<TimelineFollowAbortAuthorityBundleV1, RuntimeCommandErrorV1> {
+    control_plane_runtime::issue_timeline_follow_abort_authority(&window, &state, &query_state)
+}
+
+#[tauri::command]
+fn abort_timeline_follow_runtime_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: TimelineFollowAbortRuntimeRequestV1,
+) -> TimelineFollowAbortRuntimeResponseV1 {
+    control_plane_runtime::abort_timeline_follow_runtime(&window, &state, &query_state, request)
+}
+
+#[tauri::command]
+fn query_output_control_authority_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+) -> Result<OutputControlAuthorityBundleV1, String> {
+    control_plane_runtime::issue_output_control_authority(&window, &state, &query_state)
+}
+
+#[tauri::command]
+fn prepare_output_consent_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: OutputConsentPrepareRequestV1,
+) -> Result<OutputConsentChallengeV1, String> {
+    control_plane_runtime::prepare_output_consent(&window, &state, &query_state, request)
+}
+
+#[tauri::command]
+fn query_output_consent_status_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: OutputConsentStatusRequestV1,
+) -> Result<OutputConsentStatusV1, String> {
+    control_plane_runtime::output_consent_status(&window, &state, request)
+}
+
+#[tauri::command]
+fn execute_output_control_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    control_plane_runtime::execute_output_control(&app, &window, &state, &query_state, request)
+}
+
+/// Engage the safer-direction, runtime-only DMX safety latch. There is no
+/// target boolean and therefore no release/toggle interpretation on this
+/// Full-Lock-capable emergency path.
+#[tauri::command]
+fn safety_blackout_engage_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: SafetyBlackoutEngageRequestV1,
+) -> SafetyBlackoutEngageResponseV1 {
+    control_plane_runtime::engage_safety_blackout(&window, &state, request)
+}
+
 #[tauri::command]
 fn set_effect_video_target_position(
     state: State<'_, AppState>,
@@ -35020,6 +35124,7 @@ fn register_project_transaction_owner(
                 .media_asset_operations
                 .purge_video_effect_catalog_authoritative_for_owner(retired_owner);
             state.authored_control_plane.retire_principal(retired_owner);
+            state.runtime_control_plane.retire_principal(retired_owner);
         }
     }
     Ok(recovered)
@@ -35125,6 +35230,7 @@ fn retire_project_transaction_owner_for_window(
             .media_asset_operations
             .purge_video_effect_catalog_authoritative_for_owner(retired_owner);
         state.authored_control_plane.retire_principal(retired_owner);
+        state.runtime_control_plane.retire_principal(retired_owner);
     }
     Ok(recovered)
 }
@@ -37676,8 +37782,7 @@ fn standby_sync_status(state: State<'_, AppState>) -> Result<StandbySyncStatus, 
         .map_err(|_| "Standby synchronization status lock was poisoned".to_string())
 }
 
-#[tauri::command]
-fn take_over_standby(state: State<'_, AppState>, force: bool) -> Result<ProjectLoadResult, String> {
+fn take_over_standby_core(state: &AppState, force: bool) -> Result<ProjectLoadResult, String> {
     let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
         let error = "Standby synchronization lifecycle lock was poisoned".to_string();
         state
@@ -37730,7 +37835,7 @@ fn take_over_standby(state: State<'_, AppState>, force: bool) -> Result<ProjectL
     // replacement. The current ownership role is Standby, so the replacement
     // cannot re-arm physical outputs while the checkpoint is applied.
     let load_result = load_project_from_file_with_control_mappings_in_scope(
-        &state,
+        state,
         checkpoint.project,
         checkpoint.mappings,
         format!(
@@ -37741,6 +37846,11 @@ fn take_over_standby(state: State<'_, AppState>, force: bool) -> Result<ProjectL
         ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
     )?;
     Ok(load_result)
+}
+
+#[tauri::command]
+fn take_over_standby(state: State<'_, AppState>, force: bool) -> Result<ProjectLoadResult, String> {
+    take_over_standby_core(&state, force)
 }
 
 fn diagnostic_zip_file_name(path: PathBuf) -> PathBuf {
@@ -53865,6 +53975,9 @@ pub(crate) mod tests {
                 vj_preview_renderer_reset_pending: AtomicBool::new(false),
                 media_asset_operations: Arc::new(MediaAssetOperationRegistry::default()),
                 authored_control_plane: authored_control_plane::AuthoredControlPlaneState::default(
+                ),
+                runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState::default(),
+                control_plane_security: control_plane_security::ControlPlaneSecurityState::default(
                 ),
                 media_asset_reaper: Mutex::new(None),
                 media_asset_authoritative_publish_attempts: AtomicU64::new(0),
@@ -78093,6 +78206,355 @@ mod live_audio_input_tests {
     }
 
     #[test]
+    fn canonical_timeline_follow_abort_full_lock_retry_is_one_publish_and_history_free() {
+        let harness = MediaAssetA6CommandHarness::new();
+        harness
+            .state
+            .engine
+            .set_output_ownership_role(MachineOutputRole::Standby)
+            .expect("establish a non-zero output ownership epoch");
+        let audio_layer = protocol::TimelineLayerSummary {
+            id: 96_512,
+            label: "Canonical Follow audio".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: false,
+            kind: TimelineLayerKind::Audio,
+        };
+        let mut source = TimelineSnapshot {
+            id: TimelineId(96_510),
+            label: "Canonical Follow abort source".to_string(),
+            layers: vec![audio_layer.clone()],
+            audio_clips: vec![TimelineAudioClipSummary {
+                id: 96_513,
+                layer_id: audio_layer.id,
+                media_asset_id: None,
+                path: "memory://canonical-follow-abort-source.wav".to_string(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 100,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            duration_ms: 100,
+            ..TimelineSnapshot::default()
+        };
+        source.follow = Some(TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: TimelineId(96_511),
+            duration: VideoClipTakeDuration::milliseconds(60_000),
+            curve: VideoLayerTransitionCurve::Linear,
+            video_kind: VideoClipTakeKind::Crossfade,
+            lighting_policy: protocol::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: None,
+            preroll_ms: 0,
+            trans_cadence_bars: 4,
+            fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
+        });
+        let target = TimelineSnapshot {
+            id: TimelineId(96_511),
+            label: "Canonical Follow abort target".to_string(),
+            layers: vec![audio_layer.clone()],
+            audio_clips: vec![TimelineAudioClipSummary {
+                id: 96_514,
+                layer_id: audio_layer.id,
+                media_asset_id: None,
+                path: "memory://canonical-follow-abort-target.wav".to_string(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 100,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            duration_ms: 100,
+            ..TimelineSnapshot::default()
+        };
+        harness
+            .state
+            .engine
+            .apply_timeline_bank_published(vec![source, target], TimelineId(96_510), false)
+            .expect("install a real Follow bank");
+        harness
+            .state
+            .engine
+            .send(EngineCommand::SeekTimeline(90))
+            .expect("seek source near its Follow boundary");
+        harness
+            .state
+            .engine
+            .send(EngineCommand::SetTimelinePlaying(true))
+            .expect("start the source Timeline");
+        let output_ownership_epoch = harness.state.engine.output_ownership_status().epoch;
+        let follow_deadline = Instant::now() + Duration::from_secs(2);
+        let before_runtime = loop {
+            let runtime = harness
+                .state
+                .engine
+                .timeline_follow_runtime_status(output_ownership_epoch);
+            if matches!(
+                runtime.status,
+                protocol::TimelineFollowRuntimeStatus::Transitioning
+            ) {
+                break runtime;
+            }
+            assert!(
+                Instant::now() < follow_deadline,
+                "canonical fixture never entered a real Follow transition: {runtime:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let mut full_policy = sample_operator_policy();
+        full_policy.lock_mode = OperatorLockMode::Full;
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("install Full Lock policy for canonical Follow abort")
+            .ancillary
+            .operator_policy = Some(full_policy);
+        c1_stabilize_fixture_authority(&harness);
+
+        let project = {
+            let coordinator = harness
+                .state
+                .project_coordinator
+                .lock()
+                .expect("capture canonical Follow project fence");
+            ProjectMutationFenceV1 {
+                process_incarnation: 1,
+                session_incarnation: 1,
+                project_epoch: coordinator.epoch,
+                project_revision: coordinator.revision,
+                project_checkpoint_hash: coordinator.checkpoint_hash.clone(),
+                project_publication_generation: coordinator.publication_generation,
+            }
+        };
+        let fence = protocol::control_plane_command::TimelineFollowAbortRuntimeFenceV1 {
+            project,
+            domain: protocol::control_plane_command::TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1
+                .to_string(),
+            output_ownership_epoch,
+            follow_generation: before_runtime.generation,
+        };
+        let authority_id = "AAAAAAAAAAAAAAAAAAAAAA".to_string();
+        control_plane_runtime::issue_timeline_follow_abort_authority_for_test_window(
+            &harness.state,
+            "media-asset-a6",
+            fence.clone(),
+            authority_id.clone(),
+            Instant::now(),
+        )
+        .expect("issue owner-bound canonical Follow abort authority");
+        let request = TimelineFollowAbortRuntimeRequestV1 {
+            operation_id: protocol::control_plane_command::TIMELINE_FOLLOW_ABORT_OPERATION_ID
+                .to_string(),
+            authority_id,
+            request_id: 96_501,
+            expected_fence: fence,
+        };
+        let baseline = harness.mutation_baseline();
+        let applied = control_plane_runtime::abort_timeline_follow_runtime_for_test_window(
+            &harness.state,
+            "media-asset-a6",
+            request.clone(),
+            Instant::now(),
+        );
+        let retried = control_plane_runtime::abort_timeline_follow_runtime_for_test_window(
+            &harness.state,
+            "media-asset-a6",
+            request,
+            Instant::now(),
+        );
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::to_value(&retried).unwrap(),
+            "reply-loss retry returns the exact retained canonical receipt"
+        );
+        let TimelineFollowAbortRuntimeResponseV1::Receipt(receipt) = applied else {
+            panic!("canonical Follow abort must return an applied receipt");
+        };
+        assert_eq!(
+            receipt.outcome,
+            protocol::control_plane_command::RuntimeCommandReceiptOutcomeV1::Applied
+        );
+        assert_eq!(
+            receipt.follow_generation_after,
+            receipt.fence_before.follow_generation + 1,
+            "the real EngineHandle mutation advances the Follow ABA fence exactly once"
+        );
+        let after = harness.mutation_baseline();
+        assert_eq!(
+            (
+                after.revision,
+                after.history_generation,
+                after.undo_len,
+                after.next_transaction_id,
+                after.publication_generation,
+            ),
+            (
+                baseline.revision,
+                baseline.history_generation,
+                baseline.undo_len,
+                baseline.next_transaction_id,
+                baseline.publication_generation,
+            ),
+            "canonical Follow abort stays runtime-only under Full Lock"
+        );
+    }
+
+    #[test]
+    fn canonical_safety_blackout_full_lock_retry_is_latched_and_history_free() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let mut full_policy = sample_operator_policy();
+        full_policy.lock_mode = OperatorLockMode::Full;
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("install Full Lock for S0 blackout")
+            .ancillary
+            .operator_policy = Some(full_policy);
+
+        let baseline = harness.mutation_baseline();
+        let persistence_a = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("capture pre-S0 persistence A");
+        let request = SafetyBlackoutEngageRequestV1 {
+            operation_id: protocol::control_plane_command::SAFETY_BLACKOUT_ENGAGE_OPERATION_ID
+                .to_string(),
+            request_id: 96_601,
+        };
+        let applied = control_plane_runtime::engage_safety_blackout_for_test_window(
+            &harness.state,
+            "media-asset-a6",
+            request.clone(),
+            Instant::now(),
+        );
+        let retried = control_plane_runtime::engage_safety_blackout_for_test_window(
+            &harness.state,
+            "media-asset-a6",
+            request,
+            Instant::now(),
+        );
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::to_value(&retried).unwrap(),
+            "lost IPC reply recovers the exact retained S0 receipt"
+        );
+        let SafetyBlackoutEngageResponseV1::Receipt(first_receipt) = applied else {
+            panic!("first S0 request must return a receipt")
+        };
+        assert_eq!(
+            first_receipt.outcome,
+            protocol::control_plane_command::SafetyBlackoutEngageOutcomeV1::Applied
+        );
+        assert!(harness.state.engine.snapshot().blackout);
+        assert_eq!(
+            project_snapshot_for_save(harness.state.engine.persistence_snapshot().unwrap()),
+            project_snapshot_for_save(persistence_a.clone()),
+            "the runtime safety latch never enters authored persistence"
+        );
+        let after_s0 = harness.mutation_baseline();
+        assert_eq!(
+            (
+                after_s0.revision,
+                after_s0.history_generation,
+                after_s0.undo_len,
+                after_s0.next_transaction_id,
+                after_s0.publication_generation,
+            ),
+            (
+                baseline.revision,
+                baseline.history_generation,
+                baseline.undo_len,
+                baseline.next_transaction_id,
+                baseline.publication_generation,
+            ),
+            "S0 engage stays revision/history/publication neutral"
+        );
+
+        harness
+            .state
+            .engine
+            .send(EngineCommand::Blackout(true))
+            .expect("set the legacy authored blackout true");
+        let wait_deadline = Instant::now() + Duration::from_secs(2);
+        while !harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("observe authored blackout true")
+            .blackout
+        {
+            assert!(
+                Instant::now() < wait_deadline,
+                "legacy blackout true did not apply"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        harness
+            .state
+            .engine
+            .send(EngineCommand::Blackout(false))
+            .expect("attempt a legacy blackout release");
+        let wait_deadline = Instant::now() + Duration::from_secs(2);
+        while harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("observe authored blackout false")
+            .blackout
+        {
+            assert!(
+                Instant::now() < wait_deadline,
+                "legacy blackout false did not apply"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            harness.state.engine.snapshot().blackout,
+            "ordinary authored release cannot clear the S0 runtime latch"
+        );
+        harness
+            .state
+            .engine
+            .load_project_snapshot_and_wait(persistence_a)
+            .expect("replace the authored project beneath the S0 latch");
+        assert!(
+            harness.state.engine.snapshot().blackout,
+            "project replacement cannot clear the S0 runtime latch"
+        );
+
+        let second = control_plane_runtime::engage_safety_blackout_for_test_window(
+            &harness.state,
+            "media-asset-a6",
+            SafetyBlackoutEngageRequestV1 {
+                operation_id: protocol::control_plane_command::SAFETY_BLACKOUT_ENGAGE_OPERATION_ID
+                    .to_string(),
+                request_id: 96_602,
+            },
+            Instant::now(),
+        );
+        let SafetyBlackoutEngageResponseV1::Receipt(second_receipt) = second else {
+            panic!("second S0 request must return a receipt")
+        };
+        assert_eq!(
+            second_receipt.outcome,
+            protocol::control_plane_command::SafetyBlackoutEngageOutcomeV1::NoOp
+        );
+        assert_eq!(
+            second_receipt.audit_sequence,
+            first_receipt.audit_sequence + 1
+        );
+    }
+
+    #[test]
     fn video_effect_catalog_authoritative_success_reply_loss_and_event_persistence_are_atomic() {
         let harness = MediaAssetA6CommandHarness::new();
         let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
@@ -84798,6 +85260,11 @@ fn main() {
                 *configured_directory = Some(directory);
             }
             let state = app.state::<AppState>();
+            if let Err(error) = state.control_plane_security.start_physical_input_monitor() {
+                // R4/R5 preparation remains fail-closed, while the local S0
+                // safety path and Standby controls stay available.
+                eprintln!("physical consent remains unavailable: {error}");
+            }
             // Install the single media-operation reaper up front so expired
             // prepared handles are released at TTL for the whole session.
             install_media_asset_operation_reaper(
@@ -84848,6 +85315,8 @@ fn main() {
             vj_preview_renderer_reset_pending: AtomicBool::new(false),
             media_asset_operations: Arc::new(MediaAssetOperationRegistry::default()),
             authored_control_plane: authored_control_plane::AuthoredControlPlaneState::default(),
+            runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState::default(),
+            control_plane_security: control_plane_security::ControlPlaneSecurityState::default(),
             media_asset_reaper: Mutex::new(None),
             #[cfg(test)]
             media_asset_authoritative_publish_attempts: AtomicU64::new(0),
@@ -85299,6 +85768,15 @@ fn main() {
             save_node_graph_preset_file,
             load_node_graph_preset_file,
             set_effect_enabled,
+            query_timeline_transport_authority_v1,
+            set_timeline_transport_playing_runtime_v1,
+            query_timeline_follow_abort_authority_v1,
+            abort_timeline_follow_runtime_v1,
+            query_output_control_authority_v1,
+            prepare_output_consent_v1,
+            query_output_consent_status_v1,
+            execute_output_control_v1,
+            safety_blackout_engage_v1,
             set_effect_video_target_position,
             move_effect,
             duplicate_effect,

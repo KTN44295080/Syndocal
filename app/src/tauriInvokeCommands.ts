@@ -1,7 +1,7 @@
 // Generated authority for the finite frontend-to-Tauri command surface.
 // `check:frontend-invokes` proves this tuple, the JSON manifest, and every AST call site agree.
 export const FRONTEND_TAURI_INVOKE_COMMANDS = [
-  "abort_timeline_follow",
+  "abort_timeline_follow_runtime_v1",
   "acknowledge_project_recovery_applied",
   "add_builtin_video_isf_effect",
   "add_chaser_effect",
@@ -113,7 +113,6 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "get_snapshot",
   "get_snapshot_delta",
   "get_timeline_advanced_operation_terminal_result",
-  "get_timeline_follow_operation_terminal_result",
   "get_timeline_follow_runtime",
   "get_timeline_guide_audio_status",
   "get_video_clip_slot_operation_terminal_result",
@@ -182,6 +181,8 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "prepare_reserved_media_assets",
   "preview_custom_fixture_profile",
   "pulse_video_layer_isf_event",
+  "query_timeline_follow_abort_authority_v1",
+  "query_timeline_transport_authority_v1",
   "queue_video_clip_slot_authoritative",
   "recolor_fixture_group",
   "redo_project_transaction",
@@ -218,6 +219,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "reset_engine_telemetry",
   "reset_video_layer_isf_effect",
   "run_phase1_smoke",
+  "safety_blackout_engage_v1",
   "save_custom_fixture_profile",
   "save_engine_telemetry_report",
   "save_fixture_preset",
@@ -311,6 +313,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "set_timeline_metronome",
   "set_timeline_playing",
   "set_timeline_scene_block",
+  "set_timeline_transport_playing_runtime_v1",
   "set_timeline_video_automation",
   "set_touch_surface",
   "set_video_ab_mix",

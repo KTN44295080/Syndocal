@@ -1,0 +1,36 @@
+You are Luna Max, the exclusive implementation owner for a follow-up correction to the acknowledged project snapshot load in C:\Users\kouty\Documents\KDMX.
+
+Exclusive file ownership: crates/engine/src/lib.rs only. Continue from the existing uncommitted implementation. Do not edit protocol, app, docs, RELEASE_STATUS.md, qa/CODEX_*, or any other file. Do not commit/stage/push/reset/checkout, launch native Syndocal, kill processes, or run a native/release build.
+
+The first checkpoint is rejected by independent adversarial review. Fix both P1 findings as real atomicity defects, not by weakening comments or tests.
+
+P1 deadline/admission race:
+- Handle currently uses one deadline for command expiry and recv_timeout.
+- Runtime checks expiry only before applying, but publication can spin another 5ms. If apply begins just before deadline, caller can return timeout Err; then engine can publish B and send Ok to a disconnected receiver.
+- The API must guarantee: if caller returns Err/timeout, this request can never later publish B. Once engine atomically admits/claims the request before the deadline, caller must await a definitive publish-or-fail result instead of independently timing out. If the caller atomically cancels while still queued/not admitted, runtime must observe cancellation and not mutate.
+- Use an explicit shared atomic admission/cancellation state or an equally linearizable protocol. Merely adding a few milliseconds to caller timeout is not acceptable.
+- Add a deterministic regression that holds publication, drives the caller to its admission deadline, then releases after the old caller timeout but within/after publication work. Prove either cancellation+old A remains after Err, or admitted call waits and returns definitive Ok with B. There must be no Err followed by later B.
+
+P1 post-apply publication rollback is not exact:
+- Current publication failure calls load_project_snapshot_checked(old EngineSnapshot) and ignores Result. That reload is fallible and does not restore runtime-only state cleared by project load (child/direct transports, pending cues/fades, overrides, strobes, clock/telemetry/sender state, etc.). Existing test checks only stage_map and overclaims runtime restoration.
+- Do not rely on a fallible EngineSnapshot reload as rollback after mutation.
+- Preferred direction: once admitted, retain the project publication barrier and retry/await shared snapshot publication before acknowledging and before consuming later commands; make publication of the already-applied transaction definitive. Or acquire the required publication capability before mutation/stage the whole replacement so commit+publish cannot enter an Err-with-applied split.
+- If you choose rollback instead, it must be an infallible complete runtime transaction snapshot and tests must prove runtime-only state exactness. A project EngineSnapshot is not sufficient.
+- Preserve command ordering: the acknowledged load is a publication barrier. Later command C must not be applied/published as part of B before B's ack.
+
+Required proof:
+1. Existing success and all reject tests remain green.
+2. Deterministic queued cancellation: deadline wins before admission -> Err and A remains permanently.
+3. Deterministic admitted contention: admission wins, caller does not synthesize timeout, then publication succeeds -> Ok and B; no later command C is visible at B ack.
+4. Publication contention longer than old 5ms cannot return Err-with-applied state. If the design retains/retries publication, prove B ack only after the read lock releases.
+5. Rejection paths (invalid layer, invalid audio clip, ISF overbudget, reconform invalid) preserve authoritative A. Add any missing cases.
+6. No fallible ignored rollback remains for this command.
+
+Run at least:
+- cargo fmt --all -- --check (you may run cargo fmt first if needed)
+- cargo test -p engine project_snapshot --locked -- --nocapture
+- focused conform/source-budget tests if not matched by name filter
+- cargo check -p engine --locked
+- git diff --check -- crates/engine/src/lib.rs
+
+At completion report the exact linearization rule, changed tests, gates, and remaining boundary. Leave uncommitted and stop editing.

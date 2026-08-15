@@ -2998,6 +2998,10 @@ export interface TimelineSnapshot {
   metronome_enabled?: boolean;
   count_in_beats?: number;
   count_in_remaining_ms?: number;
+  /** Exact engine-owned runtime fence epoch; never authored/persisted. */
+  transport_epoch?: number;
+  /** Exact engine-owned runtime fence generation; never authored/persisted. */
+  transport_generation?: number;
   playing: boolean;
   position_ms: number;
   duration_ms: number;

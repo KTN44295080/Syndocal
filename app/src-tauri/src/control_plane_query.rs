@@ -13,6 +13,7 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use protocol::{
+    control_plane_command::OutputControlFenceV1,
     control_plane_command::{ProjectMutationFenceV1, MAX_SAFE_JAVASCRIPT_INTEGER},
     control_plane_query::{
         CanonicalObservationEventPayload, CapabilityDescriptor, CapabilityDiscovery,
@@ -37,6 +38,9 @@ const MAX_HANDOFFS_PER_WINDOW: usize = 32;
 const AUTHORED_MUTATION_FENCE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_AUTHORED_MUTATION_FENCES_PER_WINDOW: usize = 64;
 const MAX_AUTHORED_MUTATION_FENCES_PER_PROCESS: usize = 256;
+const OUTPUT_CONTROL_FENCE_TTL: Duration = Duration::from_secs(60);
+const MAX_OUTPUT_CONTROL_FENCES_PER_WINDOW: usize = 64;
+const MAX_OUTPUT_CONTROL_FENCES_PER_PROCESS: usize = 256;
 const MAX_EVENT_RING: usize = 2_048;
 const MAX_CAPTURE_ATTEMPTS: usize = 8;
 
@@ -55,6 +59,7 @@ const SCHEMA_EVENT_PAGE: &str = "syndocal.events.observations.event_page.v1";
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeCandidate {
     domain: String,
+    source_epoch: u64,
     source_generation: u64,
     active: bool,
 }
@@ -83,6 +88,7 @@ struct WindowOwner {
 
 #[derive(Debug, Clone)]
 struct RuntimeObservation {
+    source_epoch: u64,
     source_generation: u64,
     payload: RuntimeGenerationPayload,
 }
@@ -126,6 +132,14 @@ struct IssuedAuthoredMutationFence {
 }
 
 #[derive(Debug, Clone)]
+struct IssuedOutputControlFence {
+    fence: OutputControlFenceV1,
+    owner_incarnation: u64,
+    expires_at: Instant,
+    last_used: u64,
+}
+
+#[derive(Debug, Clone)]
 struct EventRecord {
     event: ControlPlaneEvent<CanonicalObservationEventPayload>,
     /// Exact canonical state after `event` has been applied. The first
@@ -139,6 +153,7 @@ struct QueryInner {
     window_incarnations: HashMap<String, u64>,
     handoffs: HashMap<WindowOwner, VecDeque<IssuedHandoff>>,
     authored_mutation_fences: HashMap<WindowOwner, VecDeque<IssuedAuthoredMutationFence>>,
+    output_control_fences: HashMap<WindowOwner, VecDeque<IssuedOutputControlFence>>,
     cursors: HashMap<String, CursorEntry>,
     lru_sequence: u64,
     runtime: BTreeMap<String, RuntimeObservation>,
@@ -169,6 +184,7 @@ impl ControlPlaneQueryState {
                 window_incarnations: HashMap::new(),
                 handoffs: HashMap::new(),
                 authored_mutation_fences: HashMap::new(),
+                output_control_fences: HashMap::new(),
                 cursors: HashMap::new(),
                 lru_sequence: 0,
                 runtime: BTreeMap::new(),
@@ -192,6 +208,10 @@ impl ControlPlaneQueryState {
                     incarnation,
                 });
                 inner.authored_mutation_fences.remove(&WindowOwner {
+                    label: label.to_string(),
+                    incarnation,
+                });
+                inner.output_control_fences.remove(&WindowOwner {
                     label: label.to_string(),
                     incarnation,
                 });
@@ -310,6 +330,90 @@ impl ControlPlaneQueryState {
         Ok(())
     }
 
+    pub(crate) fn issue_output_control_fence_for_window(
+        &self,
+        window_label: &str,
+        app: &AppState,
+    ) -> Result<OutputControlFenceV1, QueryError> {
+        for _ in 0..MAX_CAPTURE_ATTEMPTS {
+            let safety_before = app.engine.safety_blackout_authority();
+            let view = self.capture_for_window(window_label, app, false)?;
+            let safety_after = app.engine.safety_blackout_authority();
+            if safety_before != safety_after {
+                std::hint::spin_loop();
+                continue;
+            }
+            let owner_incarnation = registered_owner_incarnation_for_window(app, window_label)?;
+            let fence = OutputControlFenceV1 {
+                process_incarnation: view.fence.process_incarnation,
+                session_incarnation: view.fence.session_incarnation,
+                project_epoch: view.fence.project_epoch,
+                project_revision: view.fence.project_revision,
+                project_checkpoint_hash: view.fence.project_checkpoint_hash.clone(),
+                project_publication_generation: view.fence.project_publication_generation,
+                output_epoch: view.fence.output_epoch,
+                output_generation: view.fence.output_generation,
+                safety_blackout_epoch: safety_after.epoch,
+                safety_blackout_generation: safety_after.generation,
+            };
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| query_error(QueryErrorCode::Internal))?;
+            if inner.window_incarnations.get(window_label) != Some(&view.owner.incarnation) {
+                return Err(query_error(QueryErrorCode::Forbidden));
+            }
+            return record_output_control_fence(
+                &mut inner,
+                &view.owner,
+                fence,
+                owner_incarnation,
+                Instant::now(),
+            );
+        }
+        Err(query_error(QueryErrorCode::Unavailable))
+    }
+
+    pub(super) fn validate_output_control_fence_window(
+        &self,
+        window_label: &str,
+        fence: &OutputControlFenceV1,
+        owner_incarnation: u64,
+    ) -> Result<(), QueryError> {
+        fence
+            .validate()
+            .map_err(|_| query_error(QueryErrorCode::InvalidRequest))?;
+        let now = Instant::now();
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| query_error(QueryErrorCode::Internal))?;
+        let Some(window_incarnation) = inner.window_incarnations.get(window_label).copied() else {
+            return Err(query_error(QueryErrorCode::Forbidden));
+        };
+        if owner_incarnation == 0 || fence.process_incarnation != self.process_incarnation {
+            return Err(query_error(QueryErrorCode::Forbidden));
+        }
+        let owner = WindowOwner {
+            label: window_label.to_string(),
+            incarnation: window_incarnation,
+        };
+        let last_used = inner.lru_sequence.wrapping_add(1);
+        inner.lru_sequence = last_used;
+        let Some(issued) = inner.output_control_fences.get_mut(&owner) else {
+            return Err(query_error(QueryErrorCode::Forbidden));
+        };
+        issued.retain(|entry| entry.expires_at > now);
+        let Some(entry) = issued
+            .iter_mut()
+            .find(|entry| entry.fence == *fence && entry.owner_incarnation == owner_incarnation)
+        else {
+            return Err(query_error(QueryErrorCode::Forbidden));
+        };
+        entry.last_used = last_used;
+        Ok(())
+    }
+
     fn capture_for_window(
         &self,
         label: &str,
@@ -367,6 +471,7 @@ impl ControlPlaneQueryState {
                 .iter()
                 .map(|payload| RuntimeDomainGeneration {
                     domain: payload.domain.clone(),
+                    epoch: payload.epoch,
                     generation: payload.generation,
                 })
                 .collect(),
@@ -639,6 +744,55 @@ fn record_authored_mutation_fence(
     Ok(fence)
 }
 
+fn record_output_control_fence(
+    inner: &mut QueryInner,
+    owner: &WindowOwner,
+    fence: OutputControlFenceV1,
+    owner_incarnation: u64,
+    now: Instant,
+) -> Result<OutputControlFenceV1, QueryError> {
+    fence
+        .validate()
+        .map_err(|_| query_error(QueryErrorCode::Internal))?;
+    let last_used = inner.lru_sequence.wrapping_add(1);
+    inner.lru_sequence = last_used;
+    {
+        let entries = inner
+            .output_control_fences
+            .entry(owner.clone())
+            .or_default();
+        entries
+            .retain(|entry| entry.expires_at > now && entry.owner_incarnation == owner_incarnation);
+        if let Some(existing) = entries.iter_mut().find(|entry| entry.fence == fence) {
+            existing.expires_at = now + OUTPUT_CONTROL_FENCE_TTL;
+            existing.last_used = last_used;
+            return Ok(existing.fence.clone());
+        }
+        if entries.len() >= MAX_OUTPUT_CONTROL_FENCES_PER_WINDOW {
+            return Err(query_error(QueryErrorCode::Overloaded));
+        }
+    }
+    let total = inner
+        .output_control_fences
+        .values()
+        .map(VecDeque::len)
+        .sum::<usize>();
+    if total >= MAX_OUTPUT_CONTROL_FENCES_PER_PROCESS {
+        return Err(query_error(QueryErrorCode::Overloaded));
+    }
+    inner
+        .output_control_fences
+        .entry(owner.clone())
+        .or_default()
+        .push_back(IssuedOutputControlFence {
+            fence: fence.clone(),
+            owner_incarnation,
+            expires_at: now + OUTPUT_CONTROL_FENCE_TTL,
+            last_used,
+        });
+    Ok(fence)
+}
+
 fn same_project_mutation_fence_ignoring_session(
     left: &ProjectMutationFenceV1,
     right: &ProjectMutationFenceV1,
@@ -716,18 +870,31 @@ fn capture_source_once(app: &AppState) -> Result<SourceCapture, QueryError> {
     let snapshot = app.engine.snapshot();
     let output = output_projection(&app.engine.output_ownership_status())?;
     let runtime = vec![
+        // Unlike observer-only runtime domains, this generation is itself the
+        // canonical engine fence for the local Timeline transport command.
+        // Preserve it exactly; do not replace it with a query-observation
+        // sequence that could be behind a worker's stale check.
+        RuntimeCandidate {
+            domain: "timeline.transport".to_string(),
+            source_epoch: snapshot.timeline.transport_epoch,
+            source_generation: snapshot.timeline.transport_generation,
+            active: snapshot.timeline.playing,
+        },
         RuntimeCandidate {
             domain: "timeline.follow".to_string(),
+            source_epoch: 1,
             source_generation: snapshot.timeline.follow_runtime.generation,
             active: snapshot.timeline.follow_runtime.status != TimelineFollowRuntimeStatus::Idle,
         },
         RuntimeCandidate {
             domain: "timeline.loop".to_string(),
+            source_epoch: 1,
             source_generation: snapshot.timeline.loop_runtime.generation,
             active: snapshot.timeline.loop_runtime.status != TimelineLoopRuntimeStatus::Disabled,
         },
         RuntimeCandidate {
             domain: "video.clip_slots".to_string(),
+            source_epoch: 1,
             source_generation: app
                 .video_clip_slot_runtime_generation
                 .load(std::sync::atomic::Ordering::Acquire),
@@ -740,6 +907,7 @@ fn capture_source_once(app: &AppState) -> Result<SourceCapture, QueryError> {
         },
         RuntimeCandidate {
             domain: "video.transitions".to_string(),
+            source_epoch: 1,
             source_generation: app
                 .video_transition_runtime_generation
                 .load(std::sync::atomic::Ordering::Acquire),
@@ -844,21 +1012,27 @@ fn reconcile_observations(
             .runtime
             .get(&candidate.domain)
             .map_or(true, |current| {
-                current.source_generation != candidate.source_generation
+                current.source_epoch != candidate.source_epoch
+                    || current.source_generation != candidate.source_generation
                     || current.payload.active != candidate.active
             });
         if !changed {
             continue;
         }
-        let generation = inner
-            .runtime
-            .get(&candidate.domain)
-            .map(|current| current.payload.generation)
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| query_error(QueryErrorCode::Unavailable))?;
+        let generation = if candidate.domain == "timeline.transport" {
+            candidate.source_generation
+        } else {
+            inner
+                .runtime
+                .get(&candidate.domain)
+                .map(|current| current.payload.generation)
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| query_error(QueryErrorCode::Unavailable))?
+        };
         let payload = RuntimeGenerationPayload {
             domain: candidate.domain.clone(),
+            epoch: candidate.source_epoch,
             generation,
             active: candidate.active,
         };
@@ -868,6 +1042,7 @@ fn reconcile_observations(
         inner.runtime.insert(
             candidate.domain.clone(),
             RuntimeObservation {
+                source_epoch: candidate.source_epoch,
                 source_generation: candidate.source_generation,
                 payload: payload.clone(),
             },
@@ -946,6 +1121,7 @@ fn canonical_fence_from_inner(
             .values()
             .map(|observation| RuntimeDomainGeneration {
                 domain: observation.payload.domain.clone(),
+                epoch: observation.payload.epoch,
                 generation: observation.payload.generation,
             })
             .collect(),
@@ -1443,6 +1619,7 @@ mod tests {
             output: test_output(),
             runtime: vec![RuntimeCandidate {
                 domain: "timeline.follow".to_string(),
+                source_epoch: 1,
                 source_generation: 0,
                 active: false,
             }],
@@ -1477,6 +1654,7 @@ mod tests {
                 .iter()
                 .map(|payload| RuntimeDomainGeneration {
                     domain: payload.domain.clone(),
+                    epoch: payload.epoch,
                     generation: payload.generation,
                 })
                 .collect(),
@@ -1489,6 +1667,52 @@ mod tests {
             output: source.output,
             runtime,
         }
+    }
+
+    #[test]
+    fn timeline_transport_runtime_query_generation_is_the_exact_engine_source_generation() {
+        let state = ControlPlaneQueryState::new().unwrap();
+        let first = SourceCapture {
+            project: test_project("project-a"),
+            output: test_output(),
+            runtime: vec![RuntimeCandidate {
+                domain: "timeline.transport".to_string(),
+                source_epoch: 6,
+                source_generation: 41,
+                active: false,
+            }],
+        };
+        let mut inner = state.inner.lock().unwrap();
+        reconcile_observations(
+            &mut inner,
+            &first,
+            state.process_incarnation,
+            state.session_incarnation,
+        )
+        .unwrap();
+        assert_eq!(inner.runtime["timeline.transport"].payload.generation, 41);
+        assert_eq!(inner.runtime["timeline.transport"].payload.epoch, 6);
+
+        let second = SourceCapture {
+            runtime: vec![RuntimeCandidate {
+                domain: "timeline.transport".to_string(),
+                source_epoch: 7,
+                source_generation: 73,
+                active: true,
+            }],
+            ..first
+        };
+        reconcile_observations(
+            &mut inner,
+            &second,
+            state.process_incarnation,
+            state.session_incarnation,
+        )
+        .unwrap();
+        let payload = &inner.runtime["timeline.transport"].payload;
+        assert_eq!(payload.epoch, 7);
+        assert_eq!(payload.generation, 73);
+        assert!(payload.active);
     }
 
     #[test]
@@ -1872,6 +2096,7 @@ mod tests {
                 view.runtime[0].clone(),
                 RuntimeGenerationPayload {
                     domain: "video.transitions".to_string(),
+                    epoch: 1,
                     generation: 1,
                     active: false,
                 },
@@ -1925,6 +2150,7 @@ mod tests {
             output: test_output(),
             runtime: vec![RuntimeCandidate {
                 domain: "timeline.follow".to_string(),
+                source_epoch: 1,
                 source_generation: 0,
                 active: false,
             }],
@@ -1961,6 +2187,7 @@ mod tests {
                     CanonicalObservationEventPayload::RuntimeGenerationChanged(
                         RuntimeGenerationPayload {
                             domain: "timeline.follow".to_string(),
+                            epoch: 1,
                             generation: generation as u64 + 2,
                             active: false,
                         },
@@ -1996,6 +2223,7 @@ mod tests {
             output: test_output_lighting(),
             runtime: vec![RuntimeCandidate {
                 domain: "timeline.follow".to_string(),
+                source_epoch: 1,
                 source_generation: 1,
                 active: true,
             }],
@@ -2161,6 +2389,7 @@ mod tests {
             output: test_output(),
             runtime: vec![RuntimeCandidate {
                 domain: "timeline.follow".to_string(),
+                source_epoch: 1,
                 source_generation: 0,
                 active: false,
             }],
@@ -2170,6 +2399,7 @@ mod tests {
             output: test_output_lighting(),
             runtime: vec![RuntimeCandidate {
                 domain: "timeline.follow".to_string(),
+                source_epoch: 1,
                 source_generation: 1,
                 active: true,
             }],

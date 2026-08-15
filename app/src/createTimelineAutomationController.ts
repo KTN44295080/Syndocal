@@ -43,6 +43,8 @@ interface TimelineAutomationControllerOptions {
   setTimelineVideoAutomationDrafts: Setter<Record<number, TimelineVideoAutomationDraft>>;
   snapTimeMs: (timeMs: number) => number;
   invoke: Invoke;
+  /** Main Timeline routes this through the strict runtime vertical. */
+  setTimelinePlaying: (playing: boolean) => Promise<void>;
   setMessage: (message: string) => unknown;
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
 }
@@ -242,7 +244,7 @@ export function createTimelineAutomationController(options: TimelineAutomationCo
 
   const setTimelinePlaying = async (playing: boolean) => {
     try {
-      await options.invoke("set_timeline_playing", { playing });
+      await options.setTimelinePlaying(playing);
       options.setMessage(playing ? "Timeline playing." : "Timeline paused.");
       await options.refreshSnapshot();
     } catch (error) {

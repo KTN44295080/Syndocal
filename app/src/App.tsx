@@ -341,9 +341,6 @@ import type {
   TimelineAdvancedAuthoritativeResult,
   TimelineAdvancedMutationRequest,
   TimelineAutomationSummary,
-  TimelineFollowAbortAuthoritativeResult,
-  TimelineFollowAbortRequest,
-  TimelineFollowOperationTerminalEnvelope,
   TimelineFollowRuntimeReport,
   TimelineFollowRuntimeSummary,
   TimelineFollowSummary,
@@ -499,6 +496,9 @@ import { groupStrobeCompatibleFixtureCount } from "./groupStrobe";
 import { createTimelineOverviewAutomationController } from "./createTimelineOverviewAutomationController";
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
+import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
+import { createTimelineFollowAbortRuntimeController } from "./timelineFollowAbortRuntimeController";
+import { createTimelineTransportRuntimeController } from "./timelineTransportRuntimeController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
 import { videoClipSlotDropTarget, videoClipSlotReorderedIds } from "./videoClipSlotBankModel";
 import {
@@ -2350,7 +2350,6 @@ export default function App() {
   let appliedTimelineFollowRuntime: Pick<TimelineFollowRuntimeSummary, "epoch" | "generation"> | null = null;
   let timelineFollowRuntimeRequestSerial = 0;
   let appliedTimelineFollowRuntimeRequestSerial = 0;
-  let timelineFollowAbortRequestId = Math.max(1, Date.now());
   const timelineFollowAbortLease = createTimelineFollowAbortLease();
   const timelineFollowAbortFocusFence = createTimelineFollowAbortFocusFence();
   let timelineFollowRuntimeLastError = "";
@@ -9106,9 +9105,6 @@ export default function App() {
     if (childCueId === null) {
       return invoke<T>(command, args);
     }
-    if (command === "set_timeline_playing") {
-      return invoke<T>("set_direct_child_timeline_playing", { cueId: childCueId, ...args });
-    }
     if (command === "seek_timeline") {
       return invoke<T>("seek_direct_child_timeline", { cueId: childCueId, ...args });
     }
@@ -13636,23 +13632,6 @@ export default function App() {
     return true;
   };
 
-  const applyTimelineFollowAbortRuntime = (
-    runtime: TimelineFollowRuntimeSummary,
-    authority: ProjectAuthorityToken,
-    requestSerial: number,
-  ) => {
-    if (!isProjectAuthorityIdentityCurrent(authority)
-      || requestSerial < appliedTimelineFollowRuntimeRequestSerial
-      || !timelineFollowRuntimeCanApply(appliedTimelineFollowRuntime, runtime)) {
-      return false;
-    }
-    appliedTimelineFollowRuntime = { epoch: runtime.epoch, generation: runtime.generation };
-    appliedTimelineFollowRuntimeRequestSerial = requestSerial;
-    timelineFollowRuntimeLastError = "";
-    setTimelineFollowRuntime(runtime);
-    return true;
-  };
-
   const refreshTimelineFollowRuntime = async (showError = false) => {
     if (!isTauriRuntime()) return null;
     const authority = captureProjectAuthorityIdentity();
@@ -13675,6 +13654,21 @@ export default function App() {
     }
   };
 
+  const invokeTimelineFollowAbortRuntime = async <T,>(
+    command: FrontendTauriInvokeCommand,
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
+    if (command !== "query_timeline_follow_abort_authority_v1"
+      && command !== "abort_timeline_follow_runtime_v1") {
+      throw new Error("Timeline Follow abort dispatcher rejected an unknown command.");
+    }
+    if (!isTauriRuntime()) throw new Error(tauriBackendUnavailableMessage);
+    return tauriInvoke<T>(command, args);
+  };
+  const timelineFollowAbortRuntime = createTimelineFollowAbortRuntimeController({
+    invoke: invokeTimelineFollowAbortRuntime,
+  });
+
   const abortTimelineFollow = async (): Promise<boolean> => {
     if (!isTauriRuntime()) return false;
     const observed = timelineFollowRuntime();
@@ -13682,50 +13676,22 @@ export default function App() {
     const abortLease = timelineFollowAbortLease.begin();
     setTimelineFollowAbortBusy(true);
     const authority = captureProjectAuthorityIdentity();
-    const request: TimelineFollowAbortRequest = {
-      expected_follow_epoch: observed.epoch,
-      expected_generation: observed.generation,
-    };
-    const requestId = ++timelineFollowAbortRequestId;
     const requestSerial = ++timelineFollowRuntimeRequestSerial;
-    const args = {
-      request,
-      requestId,
-      expectedEpoch: authority.project_epoch,
-      expectedRevision: authority.project_revision,
-      expectedCheckpointHash: authority.checkpoint_hash,
-      ownerId: projectTransactionOwnerId,
-    };
     try {
-      let result: TimelineFollowAbortAuthoritativeResult;
       try {
-        result = await invoke<TimelineFollowAbortAuthoritativeResult>("abort_timeline_follow", args);
+        await timelineFollowAbortRuntime.abort();
       } catch (error) {
-        // An abort can have reached the engine before its IPC reply was lost.
-        // Query the immutable terminal receipt with the identical E/R/H, owner,
-        // request id, and runtime epoch/generation instead of issuing a second
-        // abort that could target a later Follow generation.
-        const terminal = await invoke<TimelineFollowOperationTerminalEnvelope | null>(
-          "get_timeline_follow_operation_terminal_result",
-          args,
-        ).catch(() => null);
-        if (!terminal) {
-          timelineFollowAbortLease.reportFailure(abortLease, () =>
-            setMessage(`Timeline Follow abort failed: ${String(error)}`),
-          );
-          return false;
-        }
-        if (typeof terminal.shape_fingerprint !== "string" || terminal.shape_fingerprint.length === 0) {
-          timelineFollowAbortLease.reportFailure(abortLease, () =>
-            setMessage("Timeline Follow abort receipt omitted its request-shape fingerprint."),
-          );
-          return false;
-        }
-        result = terminal.terminal;
-      }
-      if (!applyTimelineFollowAbortRuntime(result.runtime, authority, requestSerial)) {
+        timelineFollowAbortLease.reportFailure(abortLease, () =>
+          setMessage(`Timeline Follow abort failed: ${String(error)}`),
+        );
         return false;
       }
+      if (!timelineFollowAbortLease.isCurrent(abortLease)
+        || !isProjectAuthorityIdentityCurrent(authority)
+        || requestSerial < appliedTimelineFollowRuntimeRequestSerial) {
+        return false;
+      }
+      await refreshTimelineFollowRuntime(false);
       return true;
     } finally {
       if (timelineFollowAbortLease.release(abortLease)) {
@@ -15550,9 +15516,30 @@ export default function App() {
     }
   };
 
+  const invokeSafetyBlackoutRuntime = async <T,>(
+    command: FrontendTauriInvokeCommand,
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
+    if (command !== "safety_blackout_engage_v1") {
+      throw new Error("Safety blackout dispatcher rejected an unknown command.");
+    }
+    if (!isTauriRuntime()) throw new Error(tauriBackendUnavailableMessage);
+    return tauriInvoke<T>(command, args);
+  };
+  const safetyBlackoutRuntime = createSafetyBlackoutRuntimeController({
+    invoke: invokeSafetyBlackoutRuntime,
+  });
+
   const setBlackout = async (enabled: boolean) => {
     try {
-      await invoke("set_blackout", { enabled });
+      if (enabled) {
+        await safetyBlackoutRuntime.engage();
+      } else {
+        // Safety release is intentionally not part of the S0 lane. This
+        // legacy local release remains outside Full Lock until the R4
+        // ownership/consent contract replaces it.
+        await invoke("set_blackout", { enabled: false });
+      }
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -17406,6 +17393,34 @@ export default function App() {
   const refreshTimelineEditingSnapshot = () => timelineChildCueId() === null
     ? refreshSnapshot()
     : Promise.resolve(snapshot());
+  // This narrow dispatcher is deliberately separate from the generic
+  // renderer transaction facade. The Rust endpoint owns all authority,
+  // operator-lock and receipt checks for this runtime-only command.
+  const invokeTimelineTransportRuntime = async <T,>(
+    command: FrontendTauriInvokeCommand,
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
+    if (command !== "query_timeline_transport_authority_v1"
+      && command !== "set_timeline_transport_playing_runtime_v1") {
+      throw new Error("Timeline transport dispatcher rejected an unknown command.");
+    }
+    if (!isTauriRuntime()) throw new Error(tauriBackendUnavailableMessage);
+    return tauriInvoke<T>(command, args);
+  };
+  // The rendered root Timeline controls and AppShortcut executor both receive
+  // these same callbacks below. Child timelines are a separate transport
+  // surface and use their own direct-child command until separately versioned.
+  const timelineTransportRuntime = createTimelineTransportRuntimeController({
+    invoke: invokeTimelineTransportRuntime,
+  });
+  const setCanonicalTimelinePlaying = async (playing: boolean) => {
+    const childCueId = timelineChildCueId();
+    if (childCueId !== null) {
+      await invoke("set_direct_child_timeline_playing", { cueId: childCueId, playing });
+      return;
+    }
+    await timelineTransportRuntime.setPlaying(playing);
+  };
 
   const {
     moveTimelineAutomationRangeToTime,
@@ -17498,6 +17513,7 @@ export default function App() {
     setTimelineVideoAutomationDrafts,
     snapTimeMs,
     invoke: invokeTimelineEditingCommand,
+    setTimelinePlaying: setCanonicalTimelinePlaying,
     setMessage,
     refreshSnapshot: refreshTimelineEditingSnapshot,
   });

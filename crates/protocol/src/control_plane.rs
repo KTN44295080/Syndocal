@@ -57,6 +57,9 @@ pub enum OperationRisk {
     R3,
     R4,
     R5,
+    /// Safer-direction-only emergency operations. This is not ordered above
+    /// R5 and never implies a general administrator capability.
+    S0,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -67,6 +70,13 @@ pub enum OperationCapability {
     /// A bounded, server-authoritative project mutation. This does not imply
     /// a remote, HTTP, MCP, or Full-Lock adapter.
     AuthoritativeProjectMutation,
+    /// A typed, local-window-only runtime mutation. Unlike project mutation,
+    /// it never writes history or persistence; it remains separately fenced
+    /// by an engine-owned runtime generation.
+    AuthoritativeRuntimeMutation,
+    /// Narrow safer-direction capability for emergency lighting blackout
+    /// engagement. It cannot authorize release or any other S0 operation.
+    SafetyBlackoutEngage,
     /// Marks an internal source-family inventory entry.  It grants neither a
     /// local-window invocation nor an external execution adapter.
     InternalInventory,
@@ -102,6 +112,9 @@ pub enum OperationIdempotency {
 pub enum OperationAuditRequirement {
     NotApplicable,
     RequiredBeforeExternalExecution,
+    /// Every accepted attempt is appended to the immutable safety audit
+    /// before a terminal receipt is returned.
+    Immutable,
 }
 
 /// Namespace that owns the raw operation source identifier. Additional source

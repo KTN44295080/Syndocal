@@ -203,6 +203,16 @@ pub enum AdapterPolicy {
     /// separate from the read policy: it has no Full-Lock allowance and must
     /// retain an exact terminal receipt.
     LocalWindowAuthoritativeMutation,
+    /// A typed local runtime mutation with engine-generation fencing. It has
+    /// its own admission/rate policy and never grants a project/history write.
+    LocalWindowAuthoritativeRuntimeMutation,
+    /// A typed local safety-direction runtime mutation. It remains available
+    /// during Full Lock, but otherwise has the same exact receipt, rate and
+    /// owner-bound adapter requirements as an authoritative runtime mutation.
+    LocalWindowRuntimeSafetyMutation,
+    /// The named S0 emergency blackout engagement. Its request has no target
+    /// value, requires immutable audit, and is never a release capability.
+    LocalWindowEmergencySafetyMutation,
     /// No adapter is exposed.  This is the only policy available before a
     /// separately reviewed adapter is introduced.
     FailClosed,
@@ -217,11 +227,13 @@ pub enum ReceiptPolicy {
     ExactTerminalReceipt,
 }
 
-/// Rate handling deliberately has no enabled implementation in v2.
+/// Rate handling is fail-closed except for the one reviewed local runtime
+/// mutation policy, whose concrete token bucket is named exactly here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RatePolicy {
     FailClosed,
+    TokenBucket4PerSecondBurst8,
 }
 
 /// Payload adaptation deliberately has no enabled implementation in v2.
@@ -236,6 +248,9 @@ pub enum PayloadPolicy {
 #[serde(rename_all = "snake_case")]
 pub enum ConsentPolicy {
     FailClosed,
+    /// S0 does not consume an R4/R5 confirmation token; authority is the
+    /// narrow named capability plus strict rate and immutable audit.
+    NotRequiredForSafetyOnly,
 }
 
 /// The only reviewed schema projection at this stage is exact identity.
@@ -265,6 +280,11 @@ pub enum SourceDisposition {
     InternalStepOf {
         target: SourceKey,
     },
+    /// A keyboard shortcut has no invocation authority of its own: its code
+    /// path is structurally required to reach the target local Tauri command.
+    StructuralRoute {
+        target: SourceKey,
+    },
     PresentationOnly,
     Unclassified {
         reason: String,
@@ -278,6 +298,7 @@ impl SourceDisposition {
             Self::AliasOfSource { .. } => "alias_of_source",
             Self::DispatchesToFamily { .. } => "dispatches_to_family",
             Self::InternalStepOf { .. } => "internal_step_of",
+            Self::StructuralRoute { .. } => "structural_route",
             Self::PresentationOnly => "presentation_only",
             Self::Unclassified { .. } => "unclassified",
         }
@@ -289,9 +310,9 @@ impl SourceDisposition {
                 canonical_operation_id,
                 ..
             } => 128 + json_string_byte_bound(canonical_operation_id),
-            Self::AliasOfSource { target } | Self::InternalStepOf { target } => {
-                96 + target.wire_byte_bound()
-            }
+            Self::AliasOfSource { target }
+            | Self::InternalStepOf { target }
+            | Self::StructuralRoute { target } => 96 + target.wire_byte_bound(),
             Self::DispatchesToFamily { .. } => 128,
             Self::PresentationOnly => 64,
             Self::Unclassified { reason } => 96 + json_string_byte_bound(reason),
@@ -508,6 +529,104 @@ impl CanonicalOperationDescriptor {
                     }
                 }
             }
+            AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation => {
+                if self.class != OperationClass::Mutation
+                    || self.risk != OperationRisk::R0
+                    || self.idempotency != OperationIdempotency::Mutating
+                    || self.audit != OperationAuditRequirement::NotApplicable
+                    || self.capabilities
+                        != vec![
+                            OperationCapability::LocalWindowBound,
+                            OperationCapability::AuthoritativeRuntimeMutation,
+                        ]
+                    || self.receipt_policy != ReceiptPolicy::ExactTerminalReceipt
+                    || self.rate_policy != RatePolicy::TokenBucket4PerSecondBurst8
+                    || self.payload_policy != PayloadPolicy::FailClosed
+                    || self.consent_policy != ConsentPolicy::FailClosed
+                {
+                    return Err(
+                        CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(
+                            self.operation_id.clone(),
+                        ),
+                    );
+                }
+                for adapter in &self.derived_adapters {
+                    adapter.validate_shape()?;
+                    if adapter.adapter != AdapterKind::LocalTauriWindow {
+                        return Err(
+                            CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(
+                                self.operation_id.clone(),
+                            ),
+                        );
+                    }
+                }
+            }
+            AdapterPolicy::LocalWindowRuntimeSafetyMutation => {
+                if self.class != OperationClass::Mutation
+                    || self.risk != OperationRisk::R0
+                    || self.idempotency != OperationIdempotency::Mutating
+                    || self.audit != OperationAuditRequirement::NotApplicable
+                    || self.capabilities
+                        != vec![
+                            OperationCapability::LocalWindowBound,
+                            OperationCapability::AuthoritativeRuntimeMutation,
+                            OperationCapability::AllowedDuringFullLock,
+                        ]
+                    || self.receipt_policy != ReceiptPolicy::ExactTerminalReceipt
+                    || self.rate_policy != RatePolicy::TokenBucket4PerSecondBurst8
+                    || self.payload_policy != PayloadPolicy::FailClosed
+                    || self.consent_policy != ConsentPolicy::FailClosed
+                {
+                    return Err(
+                        CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(
+                            self.operation_id.clone(),
+                        ),
+                    );
+                }
+                for adapter in &self.derived_adapters {
+                    adapter.validate_shape()?;
+                    if adapter.adapter != AdapterKind::LocalTauriWindow {
+                        return Err(
+                            CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(
+                                self.operation_id.clone(),
+                            ),
+                        );
+                    }
+                }
+            }
+            AdapterPolicy::LocalWindowEmergencySafetyMutation => {
+                if self.class != OperationClass::Mutation
+                    || self.risk != OperationRisk::S0
+                    || self.idempotency != OperationIdempotency::Mutating
+                    || self.audit != OperationAuditRequirement::Immutable
+                    || self.capabilities
+                        != vec![
+                            OperationCapability::LocalWindowBound,
+                            OperationCapability::SafetyBlackoutEngage,
+                            OperationCapability::AllowedDuringFullLock,
+                        ]
+                    || self.receipt_policy != ReceiptPolicy::ExactTerminalReceipt
+                    || self.rate_policy != RatePolicy::TokenBucket4PerSecondBurst8
+                    || self.payload_policy != PayloadPolicy::FailClosed
+                    || self.consent_policy != ConsentPolicy::NotRequiredForSafetyOnly
+                {
+                    return Err(
+                        CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(
+                            self.operation_id.clone(),
+                        ),
+                    );
+                }
+                for adapter in &self.derived_adapters {
+                    adapter.validate_shape()?;
+                    if adapter.adapter != AdapterKind::LocalTauriWindow {
+                        return Err(
+                            CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(
+                                self.operation_id.clone(),
+                            ),
+                        );
+                    }
+                }
+            }
             AdapterPolicy::FailClosed => {
                 if !self.derived_adapters.is_empty() {
                     return Err(
@@ -525,7 +644,11 @@ impl CanonicalOperationDescriptor {
         self.validate_metadata()?;
         if matches!(
             self.adapter_policy,
-            AdapterPolicy::LocalWindowReadOnly | AdapterPolicy::LocalWindowAuthoritativeMutation
+            AdapterPolicy::LocalWindowReadOnly
+                | AdapterPolicy::LocalWindowAuthoritativeMutation
+                | AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation
+                | AdapterPolicy::LocalWindowRuntimeSafetyMutation
+                | AdapterPolicy::LocalWindowEmergencySafetyMutation
         ) {
             if self.derived_adapters.is_empty() {
                 return Err(CanonicalRegistryValidationError::MissingDerivedAdapter(
@@ -742,6 +865,19 @@ impl SourceInventoryDescriptor {
                     );
                 }
             }
+            SourceDisposition::StructuralRoute { target } => {
+                target.validate()?;
+                if self.role != SourceRole::KeyboardAppShortcut
+                    || target.family != CanonicalSourceFamily::TauriCommand
+                {
+                    return Err(
+                        CanonicalRegistryValidationError::InvalidDispositionForFamily(
+                            self.source_key.clone(),
+                            self.disposition.kind_name(),
+                        ),
+                    );
+                }
+            }
             SourceDisposition::PresentationOnly => {
                 if self.role != SourceRole::FrontendInvocation {
                     return Err(
@@ -859,9 +995,9 @@ impl CanonicalControlPlaneRegistry {
         self.validate()
     }
 
-    /// Resolve a source through aliases/internal steps to its canonical
-    /// operation.  Structural and unclassified sources intentionally resolve
-    /// to `None`; they never gain an adapter through this query.
+    /// Resolve a source through aliases, internal steps, and verified
+    /// structural routes to its canonical operation. Structural sources still
+    /// never derive an adapter: resolution only proves their fixed route.
     pub fn canonical_operation_for_source(
         &self,
         source_key: &SourceKey,
@@ -920,6 +1056,9 @@ impl CanonicalControlPlaneRegistry {
                 operation.adapter_policy,
                 AdapterPolicy::LocalWindowReadOnly
                     | AdapterPolicy::LocalWindowAuthoritativeMutation
+                    | AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation
+                    | AdapterPolicy::LocalWindowRuntimeSafetyMutation
+                    | AdapterPolicy::LocalWindowEmergencySafetyMutation
             ) && expected.is_empty()
             {
                 return Err(
@@ -1039,6 +1178,9 @@ impl CanonicalControlPlaneRegistry {
                             canonical.adapter_policy,
                             AdapterPolicy::LocalWindowReadOnly
                                 | AdapterPolicy::LocalWindowAuthoritativeMutation
+                                | AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation
+                                | AdapterPolicy::LocalWindowRuntimeSafetyMutation
+                                | AdapterPolicy::LocalWindowEmergencySafetyMutation
                         )
                     {
                         return Err(CanonicalRegistryValidationError::FamilyAdapterMismatch(
@@ -1079,6 +1221,13 @@ impl CanonicalControlPlaneRegistry {
                     }
                 }
                 SourceDisposition::InternalStepOf { target } => {
+                    if !sources.contains_key(target) {
+                        return Err(CanonicalRegistryValidationError::MissingSourceTarget(
+                            target.clone(),
+                        ));
+                    }
+                }
+                SourceDisposition::StructuralRoute { target } => {
                     if !sources.contains_key(target) {
                         return Err(CanonicalRegistryValidationError::MissingSourceTarget(
                             target.clone(),
@@ -1322,6 +1471,9 @@ fn resolve_canonical_operation_id(
                 resolve_canonical_operation_id(target, sources, canonical_ids, visiting)
             }
             SourceDisposition::InternalStepOf { target } => {
+                resolve_canonical_operation_id(target, sources, canonical_ids, visiting)
+            }
+            SourceDisposition::StructuralRoute { target } => {
                 resolve_canonical_operation_id(target, sources, canonical_ids, visiting)
             }
             SourceDisposition::DispatchesToFamily { .. }
@@ -1979,6 +2131,197 @@ mod tests {
         ));
 
         let mut external = mutation;
+        external.derived_adapters[0].adapter = AdapterKind::ExternalMcp;
+        assert!(matches!(
+            external.validate(),
+            Err(CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(_))
+        ));
+    }
+
+    #[test]
+    fn authoritative_runtime_mutation_requires_generation_rate_policy_and_no_full_lock_capability()
+    {
+        let operation_id = "syndocal.runtime.timeline.transport.set_playing.v1";
+        let mut runtime = authoritative_mutation_operation();
+        runtime.operation_id = operation_id.to_string();
+        runtime.request_schema = SchemaIdentity {
+            name: format!("{operation_id}.request"),
+            version: 1,
+        };
+        runtime.response_schema = SchemaIdentity {
+            name: format!("{operation_id}.response"),
+            version: 1,
+        };
+        runtime.capabilities = vec![
+            OperationCapability::LocalWindowBound,
+            OperationCapability::AuthoritativeRuntimeMutation,
+        ];
+        runtime.adapter_policy = AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation;
+        runtime.rate_policy = RatePolicy::TokenBucket4PerSecondBurst8;
+        let source_key = SourceKey::new(
+            CanonicalSourceFamily::TauriCommand,
+            "set_timeline_transport_playing_runtime_v1",
+        );
+        runtime.derived_adapters.push(DerivedAdapterBinding {
+            adapter: AdapterKind::LocalTauriWindow,
+            binding_id: source_key.binding_id(),
+            source_key,
+        });
+        runtime.validate().unwrap();
+
+        let mut forged_full_lock = runtime.clone();
+        forged_full_lock
+            .capabilities
+            .insert(1, OperationCapability::AllowedDuringFullLock);
+        assert!(matches!(
+            forged_full_lock.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+
+        let mut wrong_rate = runtime.clone();
+        wrong_rate.rate_policy = RatePolicy::FailClosed;
+        assert!(matches!(
+            wrong_rate.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+
+        let mut project_write = runtime.clone();
+        project_write.capabilities[1] = OperationCapability::AuthoritativeProjectMutation;
+        assert!(matches!(
+            project_write.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+
+        let mut external = runtime;
+        external.derived_adapters[0].adapter = AdapterKind::ExternalMcp;
+        assert!(matches!(
+            external.validate(),
+            Err(CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(_))
+        ));
+    }
+
+    #[test]
+    fn runtime_safety_mutation_requires_full_lock_receipt_rate_and_local_window_only() {
+        let operation_id = "syndocal.runtime.timeline.follow.abort.v1";
+        let mut safety = authoritative_mutation_operation();
+        safety.operation_id = operation_id.to_string();
+        safety.request_schema = SchemaIdentity {
+            name: format!("{operation_id}.request"),
+            version: 1,
+        };
+        safety.response_schema = SchemaIdentity {
+            name: format!("{operation_id}.response"),
+            version: 1,
+        };
+        safety.capabilities = vec![
+            OperationCapability::LocalWindowBound,
+            OperationCapability::AuthoritativeRuntimeMutation,
+            OperationCapability::AllowedDuringFullLock,
+        ];
+        safety.adapter_policy = AdapterPolicy::LocalWindowRuntimeSafetyMutation;
+        safety.rate_policy = RatePolicy::TokenBucket4PerSecondBurst8;
+        let source_key = SourceKey::new(
+            CanonicalSourceFamily::TauriCommand,
+            "abort_timeline_follow_runtime_v1",
+        );
+        safety.derived_adapters.push(DerivedAdapterBinding {
+            adapter: AdapterKind::LocalTauriWindow,
+            binding_id: source_key.binding_id(),
+            source_key,
+        });
+        safety.validate().unwrap();
+
+        let mut missing_full_lock = safety.clone();
+        missing_full_lock.capabilities.pop();
+        assert!(matches!(
+            missing_full_lock.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+
+        let mut forged_project_write = safety.clone();
+        forged_project_write.capabilities[1] = OperationCapability::AuthoritativeProjectMutation;
+        assert!(matches!(
+            forged_project_write.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+
+        let mut wrong_rate = safety.clone();
+        wrong_rate.rate_policy = RatePolicy::FailClosed;
+        assert!(matches!(
+            wrong_rate.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+
+        let mut external = safety;
+        external.derived_adapters[0].adapter = AdapterKind::ExternalMcp;
+        assert!(matches!(
+            external.validate(),
+            Err(CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(_))
+        ));
+    }
+
+    #[test]
+    fn emergency_s0_requires_named_capability_immutable_audit_and_no_consent() {
+        let operation_id = "syndocal.safety.blackout.engage.v1";
+        let mut safety = authoritative_mutation_operation();
+        safety.operation_id = operation_id.to_string();
+        safety.request_schema = SchemaIdentity {
+            name: format!("{operation_id}.request"),
+            version: 1,
+        };
+        safety.response_schema = SchemaIdentity {
+            name: format!("{operation_id}.response"),
+            version: 1,
+        };
+        safety.risk = OperationRisk::S0;
+        safety.capabilities = vec![
+            OperationCapability::LocalWindowBound,
+            OperationCapability::SafetyBlackoutEngage,
+            OperationCapability::AllowedDuringFullLock,
+        ];
+        safety.audit = OperationAuditRequirement::Immutable;
+        safety.adapter_policy = AdapterPolicy::LocalWindowEmergencySafetyMutation;
+        safety.rate_policy = RatePolicy::TokenBucket4PerSecondBurst8;
+        safety.consent_policy = ConsentPolicy::NotRequiredForSafetyOnly;
+        let source_key = SourceKey::new(
+            CanonicalSourceFamily::TauriCommand,
+            "safety_blackout_engage_v1",
+        );
+        safety.derived_adapters.push(DerivedAdapterBinding {
+            adapter: AdapterKind::LocalTauriWindow,
+            binding_id: source_key.binding_id(),
+            source_key,
+        });
+        safety.validate().unwrap();
+
+        for forged in [
+            {
+                let mut value = safety.clone();
+                value.risk = OperationRisk::R4;
+                value
+            },
+            {
+                let mut value = safety.clone();
+                value.capabilities[1] = OperationCapability::AuthoritativeRuntimeMutation;
+                value
+            },
+            {
+                let mut value = safety.clone();
+                value.audit = OperationAuditRequirement::NotApplicable;
+                value
+            },
+            {
+                let mut value = safety.clone();
+                value.consent_policy = ConsentPolicy::FailClosed;
+                value
+            },
+        ] {
+            assert!(matches!(
+                forged.validate(),
+                Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+            ));
+        }
+        let mut external = safety;
         external.derived_adapters[0].adapter = AdapterKind::ExternalMcp;
         assert!(matches!(
             external.validate(),

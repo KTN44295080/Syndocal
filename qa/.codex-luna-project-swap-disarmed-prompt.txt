@@ -1,0 +1,41 @@
+The supervising agent confirms that `crates/engine/src/lib.rs` is now free and its prior allocator tranche is frozen and independently approved. Begin now.
+
+You implement the additive `ProjectSwapDisarmed` ownership status across the shared KDMX worktree. Do not stage, commit, push, reset, checkout, or touch `RELEASE_STATUS.md`, `qa/CODEX_*`, project-swap docs, or unrelated files.
+
+Exclusive file ownership for this task:
+- `crates/protocol/src/lib.rs`
+- `crates/engine/src/lib.rs`
+- `app/src/types.ts`
+- `app/src/App.tsx`
+- `app/src/components/StandbySyncPanel.tsx`
+- `app/src/components/VideoControlOutputsPanel.tsx`
+- `app/src/uiLocalization.ts`
+- `app/scripts/check-output-ownership.mjs`
+
+Another agent owns `app/src-tauri/src/main.rs`; do not edit it. It will connect your engine API after your stable checkpoint.
+
+Goal: a successful fenced project replacement must be represented truthfully as intentionally disarmed, not as failure and not as armed Standby.
+
+Required protocol status:
+- Add `OutputOwnershipReason::ProjectSwapDisarmed`.
+- Add a fail-safe constructor such as `OutputOwnershipStatus::project_swap_disarmed(desired_role, persisted_role, generation, epoch)`.
+- Exact result: `state=Ready`; `role/effective_role=Standby`; desired and persisted values preserved exactly; lighting/video allowed false; both reasons ProjectSwapDisarmed; error None.
+- Do not serialize machine role into EngineSnapshot/ProjectFile.
+- Add an exact protocol test for every field.
+
+Required engine transition:
+- Add `OutputOwnershipTransition::complete_project_swap_disarmed()` (and a gate helper if needed).
+- It must require the active transition and zero in-flight permits/creation/teardown leases, finish the transition atomically, preserve the pre-transition desired/persisted preference, deny both capabilities, and notify waiters.
+- Do not route real failures to this status. `TransitionFailed` remains for retirement/publication/reset/commit failure.
+- Prove: Ready Both with persisted Both -> transition -> ProjectSwapDisarmed exact status -> both output permit acquisitions denied -> a later explicit begin/complete to preserved desired Both succeeds.
+
+Required frontend truth:
+- Add the reason to TypeScript unions.
+- Localized label should truthfully mean `Project changed — outputs disarmed` / `プロジェクト変更 — 出力停止中` (wording can be polished but must not call it an error or generic machine-role block).
+- Update App external transport reason, Standby ownership presentation, and Video output blocked reason. Do not add buttons or persistent panels. Existing Arm remains the explicit re-enable action.
+- Add Japanese localization coverage for every new visible literal.
+
+Required static gate:
+- Extend `check-output-ownership.mjs` with non-vacuous marker/slice checks for protocol constructor, engine completion, TS union, all three display paths, and preserved desired-role arm behavior. All marker indices must be checked for existence.
+
+Run: protocol focused test, engine focused output_ownership tests, TypeScript noEmit, output-ownership static gate, localization gate, frontend build, fmt/check/diff-check for owned files. Report exact counts and remaining main.rs connection boundary. Native/release is out of scope until main connects it.

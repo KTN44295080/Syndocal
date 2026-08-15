@@ -1,0 +1,23 @@
+You are the implementation owner for a narrow Syndocal engine snapshot-load acknowledgement tranche in C:\Users\kouty\Documents\KDMX.
+
+Use Luna Max reasoning. Work autonomously. This checkout is shared with other agents.
+
+Exclusive file ownership:
+- crates/engine/src/lib.rs
+- crates/protocol/src/lib.rs only if an externally visible additive type is truly required; prefer an engine-internal ack/result and do not edit protocol otherwise.
+- engine-focused tests inside crates/engine/src/lib.rs.
+
+Do not edit app/src-tauri/src/main.rs, frontend files, docs, RELEASE_STATUS.md, qa/CODEX_*, NDI/Spout/video crates, or any other file. Another agent owns main.rs concurrently. Never commit, stage, push, reset, checkout, launch native Syndocal, kill processes, or run a native release build.
+
+Problem: EngineHandle::load_project_snapshot currently returns after enqueuing EngineCommand::LoadProjectSnapshot. The runtime later validates and may reject the snapshot by setting last_error, so callers cannot atomically commit project metadata or know that actual runtime publication completed.
+
+Implement the smallest robust acknowledgement-bearing API that returns Result only after runtime validation and actual snapshot publication completes. Preserve the existing non-waiting API for compatibility if needed, but add a bounded synchronous/waiting path suitable for a fenced project transaction (for example load_project_snapshot_and_wait with a clear timeout). Use the repository's existing EngineCommand acknowledgement patterns if available. Do not fake success with a later snapshot poll. The result must carry the exact runtime validation/publication failure. Timeout/disconnected engine must return an error. Do not hold engine internal locks while blocking on a reply. Ensure every runtime branch replies exactly once, including validation rejection and any early return. A successful reply must mean the new snapshot is already authoritative to subsequent engine commands/snapshots. FIFO ordering must remain intact.
+
+Add focused deterministic tests proving:
+1. success reply occurs only after actual snapshot publication and the observed snapshot is new;
+2. a runtime-invalid snapshot returns Err and the old authoritative snapshot remains unchanged;
+3. disconnected/timeout behavior is bounded and fail-closed;
+4. existing async API compatibility, allocator sync, and command ordering do not regress.
+Inspect all validation/early-return paths rather than only one test case.
+
+Run cargo fmt, focused engine tests, cargo check -p engine --locked, and git diff --check on owned files. Do not run release/native/full workspace gates. Report exact API, error/timeout semantics, changed files, tests/gates, and remaining integration boundary. Then stop editing and leave changes uncommitted.

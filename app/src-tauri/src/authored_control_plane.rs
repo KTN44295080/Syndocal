@@ -34,6 +34,7 @@ use super::{
 // even after its admission capability has expired; only a new mutation needs
 // a freshly issued fence.
 const TERMINAL_RECEIPT_TTL: Duration = Duration::from_secs(15 * 60);
+
 const RETIRED_KEY_TOMBSTONE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_TERMINAL_RECEIPTS: usize = 256;
 const MAX_PUBLICATION_LANES: usize = 256;

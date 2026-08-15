@@ -105,6 +105,7 @@ const fullLockEmergencyCommands = new Set([
   "get_operator_policy",
   "get_snapshot",
   "get_snapshot_delta",
+  "safety_blackout_engage_v1",
   "set_blackout",
   "set_all_blackout",
   "set_video_blackout",

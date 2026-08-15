@@ -1,0 +1,45 @@
+You are Luna Max, the implementation owner for a narrow follow-up to the Syndocal VJ media-import reachability tranche in C:\Users\kouty\Documents\KDMX. Continue from the existing uncommitted diff. Work autonomously.
+
+Exclusive file ownership:
+- app/src/components/VideoClipGridPanel.tsx
+- app/src/components/VideoControlPanel.tsx
+- app/src/styles.css
+- app/scripts/check-vj-media-import-access.mjs
+
+Do not edit any other file. Do not commit, stage, push, reset, checkout, launch native Syndocal, kill processes, or run a native build. Other agents are editing Rust concurrently.
+
+An independent adversarial review rejected the current checkpoint. Fix every item below without weakening the original exactly-one-import-entry contract.
+
+P1 first-run reconciliation race:
+- During production first-run post-commit refresh, App.tsx can have firstRunBusy=true while firstRunAvailable has already flipped false. Current component predicates then expose an enabled ordinary importer/source surface before refreshSnapshot completes.
+- Treat firstRunBusy as authoritative guarded first-run state even when availability flips. Empty first-run or reconciliation state must keep exactly one first-run surface and must not expose ordinary Import Media or VideoSourceCreatePanel until reconciliation ends.
+- The first-run action itself must be disabled when firstRunAvailable is false, while retaining truthful progress/error presentation.
+- After a refresh failure with an empty snapshot, retain a guarded first-run error/retry surface rather than exposing the ordinary importer.
+- Do not hide the normal source-create surface merely because an unrelated preview-staging error exists when layers are already populated.
+
+P1 accessible naming/localization:
+- The compact disclosure is a panel toggle, while the button inside is the actual batch import. They must not both have the accessible name Import Multiple.
+- Reuse the existing localized `Import Media` label for the disclosure summary and its aria-label. Keep the inner actual action `Import Multiple`.
+- Do not introduce untranslated strings such as `Import / Add Media` or `Import or add media source`.
+
+P1 harness proof:
+- Strengthen app/scripts/check-vj-media-import-access.mjs so it non-vacuously proves the mixer disclosure is enclosed by the exact mixer + populated predicate and does not mount in populated normal mode.
+- Scope every CSS assertion to the exact selector block it intends to prove. Global styles.includes('position: absolute') or generic min-height presence is unacceptable.
+- Assert every slice/index marker exists before order comparisons.
+- Cover empty available, empty busy/reconciling, empty error, populated normal, populated mixer, full bank/page, and distinguish disclosure accessible name from the inner actual import action.
+
+Layout:
+- Preserve existing typography/control/icon/hit-target sizes. Do not increase the 40px clip header/bank row height. Fit the closed disclosure within existing geometry using reflow/overlay/absolute positioning scoped to that header; opening may overlay within the clip pane without removing clips.
+- Add focused viewport measurement only if the existing viewport harness supports this route without a full all-viewports run; otherwise keep an honest remaining browser/native boundary. Do not make unverified containment claims.
+
+Callback truth remains unchanged: importMediaFiles catches production failures and reports through the app-wide message path. Do not add fake local error handling.
+
+Run:
+- pnpm --dir app exec tsc --noEmit
+- node app/scripts/check-vj-media-import-access.mjs
+- pnpm --dir app run check:vj-first-run
+- pnpm --dir app run check:live-audio
+- pnpm --dir app run check:localization
+- git diff --check on the four owned files
+
+Report exact changed files, old/new behavior, gates, and remaining browser/native boundary. Leave uncommitted and stop editing.

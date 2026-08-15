@@ -22,6 +22,22 @@ const {
   `data:text/javascript;base64,${Buffer.from(typesOutput).toString("base64")}`
 );
 
+const abortControllerSource = await read("src/timelineFollowAbortRuntimeController.ts");
+const abortControllerOutput = ts.transpileModule(abortControllerSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+    importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
+  },
+  fileName: "timelineFollowAbortRuntimeController.ts",
+}).outputText;
+const {
+  createTimelineFollowAbortRuntimeController,
+  timelineFollowAbortOperationId,
+} = await import(
+  `data:text/javascript;base64,${Buffer.from(abortControllerOutput).toString("base64")}`
+);
+
 const current = { epoch: 9, generation: 24 };
 assert.equal(timelineFollowRuntimeCanApply(null, current), true, "the first runtime report establishes its fence");
 assert.equal(
@@ -54,6 +70,115 @@ const deferred = () => {
   });
   return { promise, resolve, reject };
 };
+
+const projectFence = {
+  process_incarnation: 1,
+  session_incarnation: 2,
+  project_epoch: 3,
+  project_revision: 4,
+  project_checkpoint_hash: "a".repeat(64),
+  project_publication_generation: 5,
+};
+const authority = (authorityId, generation) => ({
+  operation_id: timelineFollowAbortOperationId,
+  authority_id: authorityId,
+  fence: {
+    project: projectFence,
+    domain: "timeline.follow.abort",
+    output_ownership_epoch: 7,
+    follow_generation: generation,
+  },
+});
+const appliedReceipt = (request) => ({
+  kind: "receipt",
+  result: {
+    operation_id: timelineFollowAbortOperationId,
+    request_id: request.request_id,
+    fence_before: request.expected_fence,
+    output_ownership_epoch_after: request.expected_fence.output_ownership_epoch,
+    follow_generation_after: request.expected_fence.follow_generation + 1,
+    shape_sha256: "b".repeat(64),
+    outcome: "applied",
+  },
+});
+
+const replyLossCalls = [];
+let replyLossApplied = false;
+const replyLossController = createTimelineFollowAbortRuntimeController({
+  invoke: async (command, args) => {
+    replyLossCalls.push({ command, args });
+    if (command === "query_timeline_follow_abort_authority_v1") {
+      return authority("AAAAAAAAAAAAAAAAAAAAAA", 24);
+    }
+    const request = args.request;
+    if (!replyLossApplied) {
+      replyLossApplied = true;
+      throw new Error("synthetic IPC reply loss after native apply");
+    }
+    return appliedReceipt(request);
+  },
+});
+await replyLossController.abort();
+assert.equal(
+  replyLossCalls.filter(({ command }) => command === "query_timeline_follow_abort_authority_v1").length,
+  1,
+  "reply loss reuses the original authority rather than querying a second one",
+);
+const replyLossRequests = replyLossCalls
+  .filter(({ command }) => command === "abort_timeline_follow_runtime_v1")
+  .map(({ args }) => args.request);
+assert.equal(replyLossRequests.length, 2, "one generic reply loss gets one bounded exact resend");
+assert.strictEqual(replyLossRequests[0], replyLossRequests[1], "reply loss resends the same request object");
+assert.deepEqual(replyLossRequests[0], replyLossRequests[1], "authority, request ID and fence remain byte-equivalent");
+
+const staleCalls = [];
+let staleAuthority = 0;
+const staleController = createTimelineFollowAbortRuntimeController({
+  invoke: async (command, args) => {
+    staleCalls.push({ command, args });
+    if (command === "query_timeline_follow_abort_authority_v1") {
+      staleAuthority += 1;
+      return authority(
+        staleAuthority === 1 ? "AQEBAQEBAQEBAQEBAQEBAQ" : "AgICAgICAgICAgICAgICAg",
+        30 + staleAuthority,
+      );
+    }
+    const request = args.request;
+    if (staleAuthority === 1) {
+      return {
+        kind: "rejected",
+        result: {
+          operation_id: timelineFollowAbortOperationId,
+          request_id: request.request_id,
+          fence_before: request.expected_fence,
+          error: { code: "stale_fence" },
+        },
+      };
+    }
+    return appliedReceipt(request);
+  },
+});
+await staleController.abort();
+const staleRequests = staleCalls
+  .filter(({ command }) => command === "abort_timeline_follow_runtime_v1")
+  .map(({ args }) => args.request);
+assert.equal(staleAuthority, 2, "typed stale fence obtains exactly one fresh authority");
+assert.equal(staleRequests.length, 2, "typed stale fence performs two bounded sends");
+assert.notEqual(staleRequests[0].authority_id, staleRequests[1].authority_id, "fresh attempt cannot reuse authority");
+assert.notEqual(staleRequests[0].request_id, staleRequests[1].request_id, "fresh attempt has a distinct request ID");
+
+let malformedSends = 0;
+const malformedController = createTimelineFollowAbortRuntimeController({
+  invoke: async (command, args) => {
+    if (command === "query_timeline_follow_abort_authority_v1") {
+      return authority("AwMDAwMDAwMDAwMDAwMDAw", 40);
+    }
+    malformedSends += 1;
+    return { kind: "future_terminal", result: appliedReceipt(args.request).result };
+  },
+});
+await assert.rejects(() => malformedController.abort(), /invalid response/);
+assert.equal(malformedSends, 1, "unknown terminal discriminators fail closed without replay");
 const abortLease = createTimelineFollowAbortLease();
 const abortFocusFence = createTimelineFollowAbortFocusFence();
 let abortBusy = false;
@@ -141,15 +266,16 @@ const [app, bank, operator, performance, cuePanel, localization, backend] = awai
 
 for (const command of [
   "get_timeline_follow_runtime",
-  "abort_timeline_follow",
-  "get_timeline_follow_operation_terminal_result",
+  "query_timeline_follow_abort_authority_v1",
+  "abort_timeline_follow_runtime_v1",
 ]) {
   assert.match(app, new RegExp(`"${command}"`), `${command} is routed through the renderer owner/lock facade`);
   assert.match(backend, new RegExp(`\\b${command}\\b`), `${command} is registered by the native ABI`);
 }
 assert.match(app, /expectedEpoch: authority\.project_epoch,[\s\S]*expectedRevision: authority\.project_revision,[\s\S]*expectedCheckpointHash: authority\.checkpoint_hash,[\s\S]*ownerId: projectTransactionOwnerId/, "Follow runtime read carries exact E/R/H and owner authority");
-assert.match(app, /request: TimelineFollowAbortRequest[\s\S]*expected_follow_epoch: observed\.epoch,[\s\S]*expected_generation: observed\.generation/, "Abort is bound to the observed output epoch and Follow generation");
-assert.match(app, /get_timeline_follow_operation_terminal_result[\s\S]*args,[\s\S]*\.catch\(\(\) => null\)/, "lost abort replies query the immutable terminal using the same exact args");
+assert.match(app, /createTimelineFollowAbortRuntimeController\(\{[\s\S]*invoke: invokeTimelineFollowAbortRuntime/, "Abort uses the strict canonical runtime controller");
+assert.match(app, /query_timeline_follow_abort_authority_v1[\s\S]*abort_timeline_follow_runtime_v1/, "the narrow dispatcher allows only authority query and canonical Abort");
+assert.doesNotMatch(app, /invoke<[^>]+>\("abort_timeline_follow"/, "the rendered UI cannot call the legacy C1 Abort route");
 assert.match(app, /requestSerial < appliedTimelineFollowRuntimeRequestSerial/, "late polling replies lose to a newer runtime/abort application serial");
 assert.match(app, /timelineFollowRuntimeCanApply\(appliedTimelineFollowRuntime, report\.runtime\)/, "the UI applies the tested epoch/generation fence");
 assert.match(app, /timelineFollowAbortLease\.reset\(\)[\s\S]*setTimelineFollowAbortBusy\(false\)/, "project replacement invalidates an old Abort lease before clearing busy");

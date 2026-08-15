@@ -10,6 +10,8 @@ use serde::{
     de::Error as _, ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer,
 };
 
+use crate::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER;
+
 macro_rules! impl_validated_struct_serialize {
     ($type:ty, $name:literal, $validator:ident, [$($field:ident),+ $(,)?]) => {
         impl Serialize for $type {
@@ -235,6 +237,7 @@ impl<'de> Deserialize<'de> for QueryError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeDomainGeneration {
     pub domain: String,
+    pub epoch: u64,
     pub generation: u64,
 }
 
@@ -242,12 +245,15 @@ pub struct RuntimeDomainGeneration {
 #[serde(deny_unknown_fields)]
 struct RuntimeDomainGenerationWire {
     domain: String,
+    epoch: u64,
     generation: u64,
 }
 
 impl RuntimeDomainGeneration {
     pub fn validate(&self) -> Result<(), QueryContractValidationError> {
-        validate_dotted_id(&self.domain, MAX_DOMAIN_ID_BYTES)
+        validate_dotted_id(&self.domain, MAX_DOMAIN_ID_BYTES)?;
+        validate_runtime_authority_counter(self.epoch)?;
+        validate_runtime_authority_counter(self.generation)
     }
 }
 
@@ -255,7 +261,7 @@ impl_validated_struct_serialize!(
     RuntimeDomainGeneration,
     "RuntimeDomainGeneration",
     validate,
-    [domain, generation]
+    [domain, epoch, generation]
 );
 
 impl<'de> Deserialize<'de> for RuntimeDomainGeneration {
@@ -266,6 +272,7 @@ impl<'de> Deserialize<'de> for RuntimeDomainGeneration {
         let wire = RuntimeDomainGenerationWire::deserialize(deserializer)?;
         let generation = Self {
             domain: wire.domain,
+            epoch: wire.epoch,
             generation: wire.generation,
         };
         generation.validate().map_err(D::Error::custom)?;
@@ -846,6 +853,9 @@ impl ControlPlaneQueryPayload for CapabilityDescriptor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeGenerationPayload {
     pub domain: String,
+    /// Source-owned epoch for a runtime authority. The Timeline transport
+    /// domain exposes this exact value rather than a query-observer counter.
+    pub epoch: u64,
     pub generation: u64,
     pub active: bool,
 }
@@ -854,13 +864,14 @@ impl_validated_struct_serialize!(
     RuntimeGenerationPayload,
     "RuntimeGenerationPayload",
     validate,
-    [domain, generation, active]
+    [domain, epoch, generation, active]
 );
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RuntimeGenerationPayloadWire {
     domain: String,
+    epoch: u64,
     generation: u64,
     active: bool,
 }
@@ -868,10 +879,8 @@ struct RuntimeGenerationPayloadWire {
 impl RuntimeGenerationPayload {
     pub fn validate(&self) -> Result<(), QueryContractValidationError> {
         validate_dotted_id(&self.domain, MAX_DOMAIN_ID_BYTES)?;
-        if self.generation == 0 {
-            return Err(QueryContractValidationError::ZeroEventGeneration);
-        }
-        Ok(())
+        validate_runtime_authority_counter(self.epoch)?;
+        validate_runtime_authority_counter(self.generation)
     }
 }
 
@@ -883,6 +892,7 @@ impl<'de> Deserialize<'de> for RuntimeGenerationPayload {
         let wire = RuntimeGenerationPayloadWire::deserialize(deserializer)?;
         let payload = Self {
             domain: wire.domain,
+            epoch: wire.epoch,
             generation: wire.generation,
             active: wire.active,
         };
@@ -1665,6 +1675,16 @@ fn validate_dotted_id(value: &str, max_bytes: usize) -> Result<(), QueryContract
     Ok(())
 }
 
+fn validate_runtime_authority_counter(value: u64) -> Result<(), QueryContractValidationError> {
+    if value == 0 {
+        return Err(QueryContractValidationError::ZeroEventGeneration);
+    }
+    if value > MAX_SAFE_JAVASCRIPT_INTEGER {
+        return Err(QueryContractValidationError::InvalidRuntimeAuthorityCounter);
+    }
+    Ok(())
+}
+
 fn validate_versioned_id(
     value: &str,
     max_bytes: usize,
@@ -1706,6 +1726,7 @@ pub enum QueryContractValidationError {
     InconsistentOutputOwnership,
     ZeroEventStreamEpoch,
     ZeroEventGeneration,
+    InvalidRuntimeAuthorityCounter,
     TooManyRuntimeDomains,
     DuplicateRuntimeDomain,
     UnsortedRuntimeDomains,
@@ -1748,6 +1769,9 @@ impl fmt::Display for QueryContractValidationError {
             }
             Self::ZeroEventStreamEpoch => "event stream epoch must be non-zero",
             Self::ZeroEventGeneration => "event generation must be non-zero",
+            Self::InvalidRuntimeAuthorityCounter => {
+                "runtime authority counters must be JavaScript-safe and non-zero"
+            }
             Self::TooManyRuntimeDomains => "runtime-domain fence exceeds its bound",
             Self::DuplicateRuntimeDomain => "runtime-domain fence contains a duplicate",
             Self::UnsortedRuntimeDomains => "runtime-domain fence is not sorted",
@@ -1820,10 +1844,12 @@ mod tests {
             runtime_domains: vec![
                 RuntimeDomainGeneration {
                     domain: "audio.transport".to_string(),
+                    epoch: 1,
                     generation: 9,
                 },
                 RuntimeDomainGeneration {
                     domain: "video.output".to_string(),
+                    epoch: 1,
                     generation: 10,
                 },
             ],
@@ -1848,6 +1874,7 @@ mod tests {
     fn runtime_payload(generation: u64, active: bool) -> RuntimeGenerationPayload {
         RuntimeGenerationPayload {
             domain: "audio.transport".to_string(),
+            epoch: 1,
             generation,
             active,
         }
@@ -2235,6 +2262,7 @@ mod tests {
         rejected(&QueryProtocolVersion { major: 1, minor: 1 });
         rejected(&RuntimeDomainGeneration {
             domain: "C:\\secret".to_string(),
+            epoch: 1,
             generation: 1,
         });
 
@@ -2281,6 +2309,7 @@ mod tests {
 
         let invalid_payload = RuntimeGenerationPayload {
             domain: "C:\\secret".to_string(),
+            epoch: 0,
             generation: 0,
             active: true,
         };
@@ -2362,6 +2391,7 @@ mod tests {
         oversized.runtime_domains = (0..=MAX_RUNTIME_DOMAIN_GENERATIONS)
             .map(|index| RuntimeDomainGeneration {
                 domain: format!("domain.d{index:02}"),
+                epoch: 1,
                 generation: index as u64,
             })
             .collect();

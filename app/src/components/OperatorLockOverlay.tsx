@@ -40,7 +40,8 @@ export function OperatorLockOverlay(props: OperatorLockOverlayProps) {
               type="button"
               class={props.blackout ? "danger active" : ""}
               aria-pressed={props.blackout}
-              onClick={() => props.onSetBlackout(!props.blackout)}
+              disabled={props.blackout}
+              onClick={() => props.onSetBlackout(true)}
             >
               {props.blackout ? "DMX BLACKOUT ON" : "DMX BLACKOUT"}
             </button>
@@ -52,8 +53,8 @@ export function OperatorLockOverlay(props: OperatorLockOverlayProps) {
             >
               ALL BLACKOUT
             </button>
-            <button type="button" class="safe" onClick={() => props.onSetAllBlackout(false)}>
-              ALL CLEAR
+            <button type="button" class="safe" disabled>
+              BLACKOUT RELEASE LOCKED
             </button>
           </div>
         </Show>

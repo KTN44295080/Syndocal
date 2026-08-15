@@ -1,0 +1,32 @@
+You own ONLY `crates/engine/src/lib.rs`. Continue from the stable v4 allocator-capacity implementation. Do not edit any other file. No stage/commit/push/reset/checkout.
+
+Confirmed remaining systemic P1: project snapshot allocator reservation is safe, but explicit entity-creating/replacing commands are not comprehensively covered by `validate_allocator_capacity_for_command` / `sync_allocator_counters_for_command`.
+
+Concrete reproductions from the current code:
+- `upsert_node_graph` accepts a caller-owned graph ID and publishes it, but `UpsertNodeGraphPublished` is omitted from reservation. Fresh engine + graph id=1 succeeds, then `allocate_node_graph_id()` returns duplicate 1.
+- Published/raw effect creation commands accept explicit `effect_id` but are omitted.
+- Published/raw cue creation accepts explicit `cue_id` but is omitted.
+- Raw/published video layer/composition/output creation/upsert commands with explicit IDs are omitted.
+- Similar omissions may exist for fixtures, timeline events/automations, cue lists/palettes/executors, stage objects/presets, and child-timeline authored IDs.
+
+Fix systemically, not as three special cases.
+
+Required:
+- Inventory every `EngineCommand` variant that can create, upsert, replace, bootstrap, import, or publish an entity carrying an ID in any of the 15 allocator domains: fixtures, effects, cues, cue lists, palettes, executors, timeline events, timeline layers, audio clips, automations, video layers, compositions, outputs, node graphs, stage objects.
+- Include IDs hidden in nested payloads and references that the allocator synchronization contract already treats as authored candidates: cue effect targets, cue child timelines, timeline jump targets/cue IDs, automation fixture/layer IDs, authored video, stage-map preset objects, bootstrap/import batches.
+- Centralize command observation/validation/reservation so raw and published variants cannot drift. Do not make a manually duplicated match where a helper over a command's candidate maxima can be shared.
+- Before enqueue, validate MAX/MAX-1 (u64 or u32) and return `EngineError::InvalidAllocatorCapacity` with exact domain/maximum. Queue must remain unchanged and runtime/shared snapshot unchanged.
+- For any accepted explicit ID, reserve monotonically before enqueue so a concurrent or subsequent `allocate_*_id` is strictly greater. Failed runtime publication may leave a safe gap, never lower/reuse.
+- Preserve v4 project snapshot behavior, checked exhaustion sentinel, allocator gate, acknowledged load admission/publication contracts.
+- Correct the false comment: validator rejects >= MAX-1, so MAX-2 is the last admissible authored maximum. Remove or actually use unused capacity helper warnings.
+
+Tests:
+- Table-driven coverage over every entity-creating command/domain family, including raw+published/ack variants where both exist. A fresh engine accepts explicit id=1, then the domain allocator returns >1.
+- MAX and MAX-1 explicit commands return exact pre-enqueue error, queue length remains zero, authoritative snapshot unchanged, allocator counter unchanged.
+- MAX-2 accepted explicit command: next allocation returns MAX-1 exactly once; following allocation fails closed; never MAX or 0.
+- Deterministic concurrent explicit-command enqueue vs allocator race for at least node graph, effect, cue, video layer, and timeline layer.
+- Add a structural test or exhaustive helper design proving every entity-creating `EngineCommand` is routed, so future variants cannot silently bypass.
+
+Run focused explicit allocator tests, `project_snapshot`, allocator tests, full `cargo test -p engine --locked`, fmt/check/diff-check. Report exact counts and any commands intentionally excluded with evidence why they cannot introduce an authored candidate.
+
+Native/release out of scope.

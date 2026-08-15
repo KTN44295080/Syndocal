@@ -1,0 +1,108 @@
+You implement MediaAsset Library Tranche 1 for Syndocal after the supervising agent confirms the current project-coordinator tranche and all listed files are free. Use gpt-5.6-luna with maximum reasoning. Do not begin early. Do not stage, commit, push, reset, checkout, or touch `RELEASE_STATUS.md`, `qa/CODEX_*`, frontend UI files, `crates/video/**`, or unrelated files.
+
+Exclusive files for this tranche:
+- `crates/protocol/src/lib.rs`
+- `crates/engine/src/lib.rs`
+- `app/src-tauri/src/main.rs`
+- root `Cargo.toml`
+- `app/src-tauri/Cargo.toml`
+- `Cargo.lock`
+
+Goal
+====
+
+Add a first-class reusable MediaAsset catalog, deterministic lossless legacy migration, content identity, availability/relink IPC, and atomic multi-file import. This is the data/runtime foundation for the approved Edit > Video model. Do not implement or fake Clip Slots, Clip FX, Transition Bus, renderer/UI changes, or native behavior in this tranche.
+
+Protocol schema and compatibility
+=================================
+
+- Add `pub type MediaAssetId = u64`.
+- Add `MediaHashAlgorithm::Sha256`, `MediaContentHash { algorithm, hex }`, and `MediaAssetSummary { id, label, source, content_hash, byte_size }`.
+- `VideoSnapshot` gets `#[serde(default, skip_serializing_if = "Vec::is_empty")] media_assets`.
+- `VideoLayerSummary` gets `#[serde(default, skip_serializing_if = "Option::is_none")] media_asset_id`.
+- Keep `VideoLayerSummary.source` required and unchanged. In tranche 1 it is the compatibility projection and must exactly equal the referenced asset source.
+- Keep project version/root wire shape compatible. Old files deserialize with empty catalog/ref None; old readers ignore new fields and still get exact legacy layer source.
+- Availability is machine-local IPC truth and must never be serialized into `.sdc`.
+- Add domain DTOs for `AvailableVerified`, `AvailableUnverified`, `Missing`, `HashMismatch`, `Unreadable`, `LiveSource`, and relink outcomes. Do not collapse mismatch/needs-adoption into generic strings.
+
+Lossless idempotent migration
+=============================
+
+Add public pure `normalize_legacy_video_media_assets(video: &mut VideoSnapshot) -> Result<MediaAssetMigrationReport,String>`.
+
+- Validate nonzero/unique existing asset IDs first.
+- Process layers in serialized order. A layer without a ref creates exactly one asset using the exact existing label/source; assign deterministic ascending IDs starting above max(existing asset ID, layer ID). Never derive IDs from path/hash.
+- Existing refs require an existing asset and exact `layer.source == asset.source`.
+- Duplicate/zero/dangling/mismatch/overflow rejects the whole load with no partial mutation.
+- Orphan assets are legal library entries.
+- Second normalization is byte/semantic idempotent and creates nothing.
+- Apply after authored-video selection, before project validation. Do not rewrite a file on load; explicit save is the only migration write.
+- Defend all direct engine load APIs and runtime checked load with the same idempotent normalization/validation.
+
+Engine model and allocator
+==========================
+
+- Add a MediaAsset allocator integrated with the current shared allocator gate and exhaustive EngineCommand candidate inventory. Follow the established monotonic/exhaustion contract: no reuse, no decrease, never issue 0/MAX, explicit candidate >= MAX-1 rejected before enqueue; MAX-2 authored permits MAX-1 once then fails closed.
+- Propagate catalog/ref through runtime, authored/rendered/persistence/video snapshots.
+- Duplicate layer shares the same asset ID; remove layer leaves the asset in the library.
+- Add acknowledged atomic commands/APIs for a vector of prepared asset+layer imports and for updating one asset.
+- Import validates every entry before mutation, publishes all prepared successes in one transaction, and rolls back assets/layers/compositions/public snapshot on invalid/expired/busy/publication failure.
+- Asset update/relink changes the asset and every referencing layer compatibility source atomically.
+- A direct `SetVideoLayerSource` on a referenced layer must be rejected or routed through an acknowledged asset update; metadata refresh must use the asset transaction.
+- Bootstrap first-run payload/rollback must include assets; clearing a bootstrapped VJ show clears exactly assets created by that transaction.
+
+Hash identity and dependency
+============================
+
+- Add pinned workspace `sha2 = "=0.10.9"` and app dependency; update Cargo.lock only as needed.
+- Stream SHA-256 from one open handle in 1 MiB chunks. Hash bytes only: path/case/drive/mtime are not identity.
+- Check cancellation before/after chunks. Compare same-handle metadata length/modified before/after; reject `Media changed while hashing` if changed.
+- Lowercase 64-hex validation.
+- Dedupe key is `(source kind, sha256, byte_size)`, never path. Same content at another absolute path reuses stable asset ID and does not silently rewrite existing asset path/label.
+
+Tauri operations and cancellation
+=================================
+
+Add an AppState operation registry `request_id -> Arc<AtomicBool>` with nonzero/unique active IDs and an RAII guard that always removes on success/error/cancel/join failure/panic propagation.
+
+Heavy file I/O/probe/hash must run in `tauri::async_runtime::spawn_blocking`:
+
+- `import_local_media_assets(request_id, kind, paths) -> MediaAssetImportReport`
+- `cancel_media_asset_operation(request_id) -> Result<bool,String>`
+- `inspect_media_asset_availability(request_id, asset_ids, verify_hash)`
+- `relink_media_asset(request_id, asset_id, replacement_path, policy)`
+
+Prepare each path independently. The rich import reports input-order imported/reused/skipped/failed results, then commits every successful prepared entry with one engine publication. Zero successes means no mutation. Cancellation before engine admission discards all prepared state; after admission it waits for definitive commit/rollback.
+
+Preserve the exact existing IPC names and return shapes for `add_video_file_layer`, `add_still_image_layer`, `add_local_media_layers`, and `bootstrap_vj_show`; internally route through the same asset transaction. Existing fail-fast batch wrapper remains all-or-nothing for compatibility.
+
+Availability and relink truth
+=============================
+
+- `verify_hash=false`: readable local file is AvailableUnverified, never Verified.
+- `verify_hash=true`: expected hash match Verified; mismatch HashMismatch; missing Missing; I/O failure Unreadable. Live sources are LiveSource with no hash/size.
+- Relink policies: `RequireContentMatch` and explicit `AdoptReplacement`.
+- Expected hash exists: only matching bytes commit.
+- Legacy no hash + old file readable: hash both and only matching replacement commits, backfilling hash/size.
+- Legacy no hash + old file missing: RequireContentMatch returns NeedsExplicitAdoption with no mutation; only explicit adoption changes identity/path/hash/size/probed metadata.
+
+Validation
+==========
+
+Validate asset ID nonzero/unique, label/source, supported hash algorithm, lowercase 64 hex, local byte_size > 0, live source has no hash/size, referenced layer exists and exact source mirror. Legacy ref None is allowed only before normalization; engine-ready snapshots require every layer ref. Preserve orphans.
+
+Required focused proof
+======================
+
+1. Legacy JSON without fields deserializes; new roundtrip; availability absent; legacy reader ignores new fields and exact source survives.
+2. Legacy two-layer migration preserves every existing layer field exactly, deterministic IDs; second pass unchanged; mixed new+legacy; all invalid/overflow cases all-or-nothing.
+3. Load alone leaves source file bytes/mtime unchanged; explicit save emits new fields.
+4. Authored-video selection/migration and rendered/authored/persistence catalogs match.
+5. Media allocator ID1/MAX/MAX-1/MAX-2, rejected-candidate monotonic gaps, race with explicit import/update under the shared gate.
+6. Atomic multi-import success/rollback/busy/expiry; duplicate layer shares asset; remove layer retains asset; asset update mirrors all referencing layers.
+7. SHA-256 `abc`, zero-length policy, 1 MiB boundary, large streaming, same bytes/different absolute paths, file mutation, cancellation and request-ID reuse.
+8. Rich partial report commits successful subset once and preserves order; legacy wrapper mixed-invalid leaves zero mutation and unchanged return contract.
+9. All availability states and all relink policies/outcomes with no mutation on mismatch/needs-adoption.
+10. Existing four IPC shapes remain compile/static-contract compatible.
+
+Run fmt/diff-check, focused protocol/engine/syndocal tests, cargo check for owned packages, and any existing static contract. Report exact pass counts, unrun native/SDK boundaries, and leave all frontend/Clip Slot work explicitly for the next tranche.
