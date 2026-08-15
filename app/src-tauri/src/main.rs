@@ -38830,7 +38830,7 @@ fn load_project_from_file_with_control_mappings_and_disposition(
 }
 
 fn load_project_from_file_with_control_mappings_in_scope(
-    state: &State<'_, AppState>,
+    state: &AppState,
     project: ProjectFile,
     mappings: ProjectControlMappings,
     path_label: String,
@@ -38849,7 +38849,7 @@ fn load_project_from_file_with_control_mappings_in_scope(
 }
 
 fn load_project_from_file_with_control_mappings_in_scope_and_disposition(
-    state: &State<'_, AppState>,
+    state: &AppState,
     project: ProjectFile,
     mappings: ProjectControlMappings,
     path_label: String,
