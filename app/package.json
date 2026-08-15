@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "check:frontend-invokes": "node scripts/check-frontend-tauri-invokes.mjs",
     "check:dmx-addressing": "node scripts/check-dmx-addressing-helpers.mjs",
     "check:clock-display": "node scripts/check-clock-display.mjs",
     "check:chaser-draft": "node scripts/check-chaser-draft.mjs",

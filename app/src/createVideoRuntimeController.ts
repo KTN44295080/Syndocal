@@ -1,4 +1,5 @@
 import type { Accessor, Setter } from "solid-js";
+import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import { videoFrameToDataUrl } from "./videoFrameCanvas";
 import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLayerDefaults";
 import {
@@ -58,7 +59,32 @@ import type {
   VideoSourceKind,
 } from "./types";
 
-type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+type Invoke = FrontendTauriInvoke;
+
+type LegacyVideoEffectInvokeCommand =
+  | "set_video_layer_isf_effect"
+  | "add_video_layer_isf_effect"
+  | "add_builtin_video_isf_effect"
+  | "move_video_layer_isf_effect"
+  | "remove_video_layer_isf_effect"
+  | "set_video_layer_isf_effect_enabled"
+  | "reset_video_layer_isf_effect"
+  | "set_video_layer_isf_control";
+
+type VideoClipSlotAuthoredInvokeCommand =
+  | "create_video_clip_slot_authoritative"
+  | "assign_video_clip_slot_asset_authoritative"
+  | "update_video_clip_slot_authoritative"
+  | "remove_video_clip_slot_authoritative"
+  | "duplicate_video_clip_slot_authoritative"
+  | "set_default_video_clip_slot_authoritative"
+  | "reorder_video_clip_slots_authoritative";
+
+type VideoClipSlotRuntimeInvokeCommand =
+  | "queue_video_clip_slot_authoritative"
+  | "cancel_queued_video_clip_slot_authoritative"
+  | "launch_video_clip_slot_authoritative"
+  | "seek_video_clip_slot_authoritative";
 
 interface VideoRuntimeControllerOptions {
   invoke: Invoke;
@@ -263,7 +289,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     return applyVideoEffectCatalog(catalog);
   };
   const invokeLegacyVideoEffectAuthoritative = async <T,>(
-    command: string,
+    command: LegacyVideoEffectInvokeCommand,
     commandArgs: Record<string, unknown>,
   ): Promise<{ value: T | null; recovered: boolean } | null> => {
     const beforePreflight = options.getCurrentProjectAuthority();
@@ -506,7 +532,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     }
   };
   const runVideoClipSlotAuthored = async <T extends Record<string, unknown>>(
-    command: string,
+    command: VideoClipSlotAuthoredInvokeCommand,
     request: T,
   ): Promise<VideoClipSlotAuthoritativeAuthoredResult | null> => {
     const authority = options.getCurrentProjectAuthority();
@@ -542,7 +568,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     }
   };
   const runVideoClipSlotRuntime = async <T extends Record<string, unknown>>(
-    command: string,
+    command: VideoClipSlotRuntimeInvokeCommand,
     request: T,
   ): Promise<VideoClipSlotAuthoritativeRuntimeResult | null> => {
     const authority = options.getCurrentProjectAuthority();

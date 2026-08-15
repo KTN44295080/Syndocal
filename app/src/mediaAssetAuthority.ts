@@ -17,10 +17,11 @@ import type {
   VjFirstRunSetupResult,
   VideoSourceKind,
 } from "./types";
+import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type { ProjectAuthorityToken } from "./projectAuthority";
 
 /** The raw IPC surface used before a project history ticket exists. */
-export type MediaAssetInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+export type MediaAssetInvoke = FrontendTauriInvoke;
 
 /**
  * A renderer-local ID has to be globally unlikely to collide because the

@@ -1,12 +1,13 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { VideoFrame } from "../types";
+import type { FrontendTauriInvokeCommand } from "../tauriInvokeCommands";
 import { drawVideoFrameToCanvas } from "../videoFrameCanvas";
 
 const isTauriRuntime = () =>
   typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
-const invoke = <T,>(command: string, args?: Record<string, unknown>) => {
+const invoke = <T,>(command: FrontendTauriInvokeCommand, args?: Record<string, unknown>) => {
   if (!isTauriRuntime()) {
     return Promise.reject(new Error("Syndocal desktop backend is not connected in this output window."));
   }

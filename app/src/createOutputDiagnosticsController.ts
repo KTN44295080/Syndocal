@@ -1,4 +1,5 @@
 import { createSignal, type Accessor, type Setter } from "solid-js";
+import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type {
   DmxOutputConfig,
   DmxTestFrameResult,
@@ -7,7 +8,7 @@ import type {
   SerialPortSummary,
 } from "./types";
 
-type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+type Invoke = FrontendTauriInvoke;
 
 export const defaultOutput: DmxOutputConfig = {
   enabled: true,

@@ -1,9 +1,10 @@
 import { sortedTimelineLayers, timelineLayerKindOrder } from "./timelineLayers";
+import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type { TimelineLayerKind, TimelineLayerSummary } from "./types";
 
 interface TimelineLayerControllerOptions {
   layers: () => TimelineLayerSummary[];
-  invoke: <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
+  invoke: FrontendTauriInvoke;
   setMessage: (message: string) => void;
   refreshSnapshot: () => Promise<unknown>;
 }

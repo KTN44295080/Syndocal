@@ -1,4 +1,5 @@
 import type { TimelineEventDraft } from "./editorDrafts";
+import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type { ClockSource, CueSummary, TimelineCueEventSummary, TimelineTrackKind, VideoLayerSummary } from "./types";
 import { projectTimelineBlockStretch, type TimelineStretchMode } from "./timelineBlockGestures";
 
@@ -37,7 +38,7 @@ export interface TimelineSceneBlockPlacementUpdate {
 }
 
 interface TimelineSceneBlockControllerOptions {
-  invoke: <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
+  invoke: FrontendTauriInvoke;
   snapTimeMs: (timeMs: number) => number;
   /** Returns beat intent for Beat/Bar snap, or undefined when the current snap mode is not musical. */
   snappedTimeBeats: (timeMs: number) => number | null | undefined;

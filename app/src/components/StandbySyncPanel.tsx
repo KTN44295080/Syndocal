@@ -1,4 +1,5 @@
 import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
+import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import type { MachineOutputRole, OutputOwnershipStatus } from "../types";
 
 type StandbySyncRole = "primary" | "standby";
@@ -107,7 +108,7 @@ function ownershipStateLabel(state: OutputOwnershipStatus["state"]): string {
 
 interface StandbySyncPanelProps {
   backendAvailable: boolean;
-  invokeCommand: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+  invokeCommand: FrontendTauriInvoke;
 }
 
 export function StandbySyncPanel(props: StandbySyncPanelProps) {

@@ -1,4 +1,5 @@
 import type { Accessor, Setter } from "solid-js";
+import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type { TimelineOverviewAutomationRange } from "./components/TimelineOverview";
 import {
   timelineAutomationDraftFromSummary,
@@ -15,7 +16,7 @@ import {
 } from "./timelineAutomationHelpers";
 import type { EngineSnapshot } from "./types";
 
-type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+type Invoke = FrontendTauriInvoke;
 
 interface TimelineOverviewAutomationControllerOptions {
   snapshot: Accessor<EngineSnapshot>;

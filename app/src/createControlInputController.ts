@@ -1,4 +1,5 @@
 import { createEffect, onCleanup, type Accessor, type Setter } from "solid-js";
+import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import {
   isFixtureFlagMappingAction,
   isGroupFlagMappingAction,
@@ -32,7 +33,7 @@ import {
   type ProjectAuthorityToken,
 } from "./projectAuthority";
 
-type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+type Invoke = FrontendTauriInvoke;
 
 interface MidiFeedbackRuntimeStatus {
   enabled: boolean;

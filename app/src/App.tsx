@@ -3,6 +3,7 @@ import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import type { FrontendTauriInvokeCommand } from "./tauriInvokeCommands";
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { SceneMatrixPanel } from "./components/SceneMatrixPanel";
 import {
@@ -1232,7 +1233,10 @@ const projectMutationCoalesceKey = (command: string, args?: Record<string, unkno
   return targetEntries.length > 0 ? `${command}:${JSON.stringify(Object.fromEntries(targetEntries))}` : "";
 };
 
-const invoke = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+const invoke = async <T,>(
+  command: FrontendTauriInvokeCommand,
+  args?: Record<string, unknown>,
+): Promise<T> => {
   if (!isTauriRuntime()) {
     throw new Error(tauriBackendUnavailableMessage);
   }
@@ -9064,7 +9068,7 @@ export default function App() {
     keyframes.reduce((duration, keyframe) => Math.max(duration, Math.max(0, keyframe.time_ms)), 0);
 
   const invokeTimelineEditingCommand = async <T,>(
-    command: string,
+    command: FrontendTauriInvokeCommand,
     args?: Record<string, unknown>,
   ): Promise<T> => {
     const childCueId = timelineChildCueId();
@@ -9216,7 +9220,10 @@ export default function App() {
     return invoke<T>(command, args);
   };
 
-  const invokeTimelineSceneBlockCommand = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+  const invokeTimelineSceneBlockCommand = async <T,>(
+    command: FrontendTauriInvokeCommand,
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
     const childCueId = timelineChildCueId();
     if (childCueId !== null) {
       const current = activeTimeline();
@@ -9491,7 +9498,10 @@ export default function App() {
       : refreshSnapshot(),
   });
 
-  const invokeTimelineLayerCommand = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+  const invokeTimelineLayerCommand = async <T,>(
+    command: FrontendTauriInvokeCommand,
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
     const childCueId = timelineChildCueId();
     if (childCueId !== null) {
       if (command === "add_timeline_layer") {
@@ -17648,8 +17658,14 @@ export default function App() {
     });
     return request;
   };
+  type VjPreviewTransportInvokeCommand =
+    | "stage_vj_preview_layer"
+    | "clear_vj_preview"
+    | "set_vj_preview_playing"
+    | "seek_vj_preview"
+    | "set_vj_preview_speed";
   const runVjPreviewTransportCommand = async (
-    command: string,
+    command: VjPreviewTransportInvokeCommand,
     args?: Record<string, unknown>,
     options?: {
       resultIsCurrent?: () => boolean;

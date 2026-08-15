@@ -1,4 +1,5 @@
 import type { Accessor, Setter } from "solid-js";
+import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type { MappingViewPreset } from "./mappingViewPresets";
 import { stageObjectDefaultColor } from "./stageObjects";
 import type { StageWorldBounds } from "./stageGeometry";
@@ -10,7 +11,7 @@ import type {
   StageObjectSummary,
 } from "./types";
 
-type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+type Invoke = FrontendTauriInvoke;
 
 interface StageMapControllerOptions {
   invoke: Invoke;

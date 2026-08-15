@@ -119,6 +119,7 @@ pub enum OperationSourceFamily {
     OscInputEvent,
     DmxInputProtocol,
     DmxInputEvent,
+    FrontendInvoke,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -236,7 +237,8 @@ fn validate_unavailable_descriptor(
         | OperationSourceFamily::OscControlAction
         | OperationSourceFamily::OscInputEvent
         | OperationSourceFamily::DmxInputProtocol
-        | OperationSourceFamily::DmxInputEvent => OperationCapability::InternalInventory,
+        | OperationSourceFamily::DmxInputEvent
+        | OperationSourceFamily::FrontendInvoke => OperationCapability::InternalInventory,
     };
     if descriptor.capabilities != vec![expected_capability] {
         return Err(OperationDescriptorValidationError::UnsafeUnavailableOperation);
@@ -417,7 +419,8 @@ fn validate_source_id(
         | OperationSourceFamily::OscControlAction
         | OperationSourceFamily::OscInputEvent
         | OperationSourceFamily::DmxInputProtocol
-        | OperationSourceFamily::DmxInputEvent => is_lower_snake_case(source_id),
+        | OperationSourceFamily::DmxInputEvent
+        | OperationSourceFamily::FrontendInvoke => is_lower_snake_case(source_id),
     };
     if valid {
         Ok(())
@@ -649,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn midi_osc_dmx_inventory_families_cannot_be_forged_as_read_local_or_full_lock() {
+    fn internal_inventory_families_cannot_be_forged_as_read_local_or_full_lock() {
         let families = [
             OperationSourceFamily::MidiControlMessage,
             OperationSourceFamily::MidiControlAction,
@@ -659,6 +662,7 @@ mod tests {
             OperationSourceFamily::OscInputEvent,
             OperationSourceFamily::DmxInputProtocol,
             OperationSourceFamily::DmxInputEvent,
+            OperationSourceFamily::FrontendInvoke,
         ];
         for (index, source_family) in families.into_iter().enumerate() {
             let operation_id = format!("syndocal.inventory.io.family_{index}.v1");

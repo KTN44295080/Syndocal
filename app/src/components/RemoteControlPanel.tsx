@@ -1,10 +1,11 @@
 import { For, Show } from "solid-js";
+import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import type { RemoteControlStatus } from "../types";
 import { StandbySyncPanel } from "./StandbySyncPanel";
 
 interface RemoteControlPanelProps {
   backendAvailable: boolean;
-  invokeCommand: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+  invokeCommand: FrontendTauriInvoke;
   bindIp: string;
   port: number;
   pairingPin: string;

@@ -1,4 +1,5 @@
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
+import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import {
   parseLiveVideoMonitorPacket,
   type LiveVideoMonitorKind,
@@ -44,7 +45,7 @@ export const emptyLiveVideoMonitorBusState = (
 });
 
 interface LiveVideoMonitorControllerOptions {
-  invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+  invoke: FrontendTauriInvoke;
   backendAvailable: Accessor<boolean>;
   active: Accessor<boolean>;
   layerCount: Accessor<number>;

@@ -15,8 +15,9 @@ use protocol::control_plane::{
     OperationSourceFamily, SchemaIdentity, CONTROL_PLANE_SCHEMA_VERSION,
 };
 
-const MAX_REGISTERED_OPERATIONS: usize = 1024;
+const MAX_REGISTERED_OPERATIONS: usize = 2048;
 const MAIN_RS_SOURCE: &str = include_str!("main.rs");
+const FRONTEND_INVOKE_MANIFEST: &str = include_str!("../../src/tauri-invoke-manifest.json");
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -30,6 +31,9 @@ pub enum ControlPlaneRegistryError {
     HandlerClosingBracketMissing,
     InvalidCommandName(String),
     DuplicateCommandName(String),
+    InvalidFrontendInvokeManifest,
+    DuplicateFrontendInvokeCommand(String),
+    UnregisteredFrontendInvokeCommand(String),
     TooManyOperations(usize),
     MissingRegistryDescriptor(String),
     UnexpectedRegistryDescriptor(String),
@@ -54,6 +58,18 @@ impl fmt::Display for ControlPlaneRegistryError {
             }
             Self::DuplicateCommandName(name) => {
                 write!(formatter, "duplicate Tauri command name: {name}")
+            }
+            Self::InvalidFrontendInvokeManifest => {
+                formatter.write_str("frontend invoke manifest is invalid or not byte-sorted")
+            }
+            Self::DuplicateFrontendInvokeCommand(name) => {
+                write!(formatter, "duplicate frontend invoke command: {name}")
+            }
+            Self::UnregisteredFrontendInvokeCommand(name) => {
+                write!(
+                    formatter,
+                    "frontend invoke command is not registered with Tauri: {name}"
+                )
             }
             Self::TooManyOperations(count) => write!(
                 formatter,
@@ -95,13 +111,20 @@ pub fn registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
 
 fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
     let command_names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE)?;
+    let frontend_invoke_names = frontend_invoke_names_from_manifest(FRONTEND_INVOKE_MANIFEST)?;
+    for name in &frontend_invoke_names {
+        if command_names.binary_search(name).is_err() {
+            return Err(ControlPlaneRegistryError::UnregisteredFrontendInvokeCommand(name.clone()));
+        }
+    }
     let engine_descriptors = control_plane_engine_command_descriptors();
     let remote_descriptors = control_plane_remote_descriptors();
     let midi_osc_dmx_descriptors = control_plane_midi_osc_dmx_descriptors();
     let total_operations = command_names.len()
         + engine_descriptors.len()
         + remote_descriptors.len()
-        + midi_osc_dmx_descriptors.len();
+        + midi_osc_dmx_descriptors.len()
+        + frontend_invoke_names.len();
     if total_operations > MAX_REGISTERED_OPERATIONS {
         return Err(ControlPlaneRegistryError::TooManyOperations(
             total_operations,
@@ -114,6 +137,11 @@ fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
     operations.extend(engine_descriptors);
     operations.extend(remote_descriptors);
     operations.extend(midi_osc_dmx_descriptors);
+    operations.extend(
+        frontend_invoke_names
+            .iter()
+            .map(|name| unavailable_frontend_invoke_descriptor(name)),
+    );
     operations.sort_by(|left, right| {
         (left.source_family, &left.source_id).cmp(&(right.source_family, &right.source_id))
     });
@@ -173,6 +201,49 @@ fn unavailable_descriptor(operation_id: &str) -> OperationDescriptor {
         request_schema: command_schema(&semantic_operation_id, "request"),
         response_schema: command_schema(&semantic_operation_id, "response"),
     }
+}
+
+fn unavailable_frontend_invoke_descriptor(source_id: &str) -> OperationDescriptor {
+    let operation_id = format!("syndocal.inventory.frontend.invoke.{source_id}.v1");
+    OperationDescriptor {
+        schema: SchemaIdentity::descriptor(),
+        operation_id: operation_id.clone(),
+        source_family: OperationSourceFamily::FrontendInvoke,
+        source_id: source_id.to_string(),
+        class: OperationClass::Mutation,
+        risk: OperationRisk::R5,
+        capabilities: vec![OperationCapability::InternalInventory],
+        availability: OperationAvailability::Unavailable,
+        idempotency: OperationIdempotency::Mutating,
+        audit: OperationAuditRequirement::RequiredBeforeExternalExecution,
+        request_schema: command_schema(&operation_id, "request"),
+        response_schema: command_schema(&operation_id, "response"),
+    }
+}
+
+fn frontend_invoke_names_from_manifest(
+    source: &str,
+) -> Result<Vec<String>, ControlPlaneRegistryError> {
+    let names = serde_json::from_str::<Vec<String>>(source)
+        .map_err(|_| ControlPlaneRegistryError::InvalidFrontendInvokeManifest)?;
+    let mut prior: Option<&str> = None;
+    for name in &names {
+        if !is_lower_snake_case(name) {
+            return Err(ControlPlaneRegistryError::InvalidFrontendInvokeManifest);
+        }
+        if let Some(prior) = prior {
+            if name == prior {
+                return Err(ControlPlaneRegistryError::DuplicateFrontendInvokeCommand(
+                    name.clone(),
+                ));
+            }
+            if name.as_str() < prior {
+                return Err(ControlPlaneRegistryError::InvalidFrontendInvokeManifest);
+            }
+        }
+        prior = Some(name);
+    }
+    Ok(names)
 }
 
 fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
@@ -296,12 +367,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
+        const FRONTEND_INVOKE_COUNT: usize = 386;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            438 + ENGINE_COMMAND_COUNT + REMOTE_OPERATION_COUNT + MIDI_OSC_DMX_OPERATION_COUNT
+            438 + ENGINE_COMMAND_COUNT
+                + REMOTE_OPERATION_COUNT
+                + MIDI_OSC_DMX_OPERATION_COUNT
+                + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1007);
+        assert_eq!(registry.operations.len(), 1393);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -311,7 +386,10 @@ mod tests {
         assert_eq!(r0.len(), 1);
         assert_eq!(
             registry.operations.len() - r0.len(),
-            437 + ENGINE_COMMAND_COUNT + REMOTE_OPERATION_COUNT + MIDI_OSC_DMX_OPERATION_COUNT
+            437 + ENGINE_COMMAND_COUNT
+                + REMOTE_OPERATION_COUNT
+                + MIDI_OSC_DMX_OPERATION_COUNT
+                + FRONTEND_INVOKE_COUNT
         );
         assert_eq!(r0[0].operation_id, R0_ALLOWLIST[0]);
         assert_eq!(r0[0].source_family, OperationSourceFamily::TauriCommand);
@@ -497,6 +575,46 @@ mod tests {
                 vec![OperationCapability::InternalInventory]
             );
         }
+        let frontend_manifest =
+            frontend_invoke_names_from_manifest(FRONTEND_INVOKE_MANIFEST).unwrap();
+        assert_eq!(frontend_manifest.len(), FRONTEND_INVOKE_COUNT);
+        let frontend_unavailable = registry
+            .operations
+            .iter()
+            .filter(|descriptor| descriptor.source_family == OperationSourceFamily::FrontendInvoke)
+            .collect::<Vec<_>>();
+        assert_eq!(frontend_unavailable.len(), FRONTEND_INVOKE_COUNT);
+        assert_eq!(
+            frontend_unavailable
+                .iter()
+                .map(|descriptor| descriptor.source_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            frontend_manifest
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
+        );
+        for descriptor in frontend_unavailable {
+            assert_eq!(descriptor.class, OperationClass::Mutation);
+            assert_eq!(descriptor.risk, OperationRisk::R5);
+            assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
+            assert_eq!(descriptor.idempotency, OperationIdempotency::Mutating);
+            assert_eq!(
+                descriptor.audit,
+                OperationAuditRequirement::RequiredBeforeExternalExecution
+            );
+            assert_eq!(
+                descriptor.capabilities,
+                vec![OperationCapability::InternalInventory]
+            );
+            assert_eq!(
+                descriptor.operation_id,
+                format!(
+                    "syndocal.inventory.frontend.invoke.{}.v1",
+                    descriptor.source_id
+                )
+            );
+        }
     }
 
     #[test]
@@ -508,6 +626,24 @@ mod tests {
             Err(ControlPlaneRegistryError::DuplicateCommandName(
                 "get_snapshot".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn frontend_manifest_rejects_duplicate_unsorted_and_invalid_commands() {
+        assert_eq!(
+            frontend_invoke_names_from_manifest("[\"get_snapshot\",\"get_snapshot\"]"),
+            Err(ControlPlaneRegistryError::DuplicateFrontendInvokeCommand(
+                "get_snapshot".to_string()
+            ))
+        );
+        assert_eq!(
+            frontend_invoke_names_from_manifest("[\"set_bpm\",\"get_snapshot\"]"),
+            Err(ControlPlaneRegistryError::InvalidFrontendInvokeManifest)
+        );
+        assert_eq!(
+            frontend_invoke_names_from_manifest("[\"GetSnapshot\"]"),
+            Err(ControlPlaneRegistryError::InvalidFrontendInvokeManifest)
         );
     }
 
