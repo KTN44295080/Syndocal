@@ -95,7 +95,10 @@ const errorCodes = new Set<BlackoutReleaseErrorCode>([
 ]);
 
 const lowerHexSha256 = /^[0-9a-f]{64}$/;
-const canonicalOpaqueId = /^[A-Za-z0-9_-]{22}$/;
+// A 16-byte unpadded base64url value is 22 characters. Its final sextet has
+// only two payload bits, so canonical encoding limits the final character to
+// indices 0, 16, 32, or 48 instead of accepting alternate textual encodings.
+const canonicalOpaqueId = /^[A-Za-z0-9_-]{21}[AQgw]$/;
 const sixDigits = /^\d{6}$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -210,8 +213,9 @@ const validateStatus = (
 
 const validateExecutionResponse = (
   value: unknown,
-  requestId: number,
+  prepared: BlackoutReleasePreparedConsent,
 ): BlackoutReleaseReceipt => {
+  const requestId = prepared.execution_request_id;
   if (!isRecord(value) || (value.type !== "receipt" && value.type !== "rejected")) {
     throw new BlackoutReleaseProtocolError("terminal response");
   }
@@ -231,9 +235,10 @@ const validateExecutionResponse = (
     || receipt.operation_id !== blackoutReleaseOperationId
     || receipt.request_id !== requestId
     || !isHash(receipt.shape_sha256)
-    || !isHash(receipt.argument_fingerprint)
+    || receipt.argument_fingerprint !== prepared.challenge.argument_fingerprint
     || !isNonZeroSafeInteger(receipt.audit_sequence)
     || !isFence(receipt.fence_before)
+    || !sameFence(receipt.fence_before, prepared.authority.fence)
     || !isFence(receipt.fence_after)
     || (receipt.outcome !== "applied" && receipt.outcome !== "no_op")) {
     throw new BlackoutReleaseProtocolError("terminal receipt");
@@ -319,7 +324,7 @@ export function createBlackoutReleaseRuntimeController(
     for (let attempt = 0; attempt <= maxReplyLossRetries; attempt += 1) {
       try {
         const response = await options.invoke<unknown>("execute_output_control_v1", { request });
-        return validateExecutionResponse(response, request.request_id);
+        return validateExecutionResponse(response, prepared);
       } catch (error) {
         if (error instanceof BlackoutReleaseCommandError
           || error instanceof BlackoutReleaseProtocolError
