@@ -1,0 +1,46 @@
+name: AI3 Main Diagnostics
+
+on:
+  push:
+    branches:
+      - codex/ai3-r4-blackout-release
+    paths:
+      - .github/workflows/diagnose-ai3-main.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-main:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Print compile-error contexts
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("app/src-tauri/src/main.rs")
+          lines = path.read_text(encoding="utf-8").splitlines()
+
+          def show(start: int, end: int) -> None:
+              print(f"\n--- main.rs:{start}-{end} ---")
+              for number in range(start, min(end, len(lines)) + 1):
+                  print(f"{number:6}: {lines[number - 1]}")
+
+          show(37790, 37870)
+          show(44910, 44970)
+
+          for needle in [
+              "load_project_from_file_with_control_mappings_in_scope",
+              "harvest_failed_workers",
+              "spout.harvest_failed_workers",
+          ]:
+              print(f"\n--- matches: {needle} ---")
+              for index, line in enumerate(lines, start=1):
+                  if needle in line:
+                      print(f"{index:6}: {line}")
+          PY
