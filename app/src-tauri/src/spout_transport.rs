@@ -11,9 +11,13 @@ use std::{
 
 use engine::{
     EngineHandle, OutputOwnershipActivation, OutputOwnershipCreationLease,
-    OutputOwnershipTeardownLease,
+    OutputOwnershipTeardownLease, TimelineFollowVideoRenderSnapshot,
 };
-use protocol::VideoLayerId;
+use protocol::{
+    OutputOwnershipState, TimelineFollowSettlementAck, TimelineFollowSettlementAckResult,
+    TimelineFollowSettlementConsumerId, TimelineFollowSettlementDomain, VideoEffectScope,
+    VideoLayerId, VideoOutputId, VideoTransitionEffectOwner,
+};
 
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
@@ -32,6 +36,533 @@ fn spout_output_effect_render_context(
         clip_runtime: &snapshot.video_clip_runtime,
         project_render_epoch,
     }
+}
+
+// This transport owns its Follow renderer state. Keeping this implementation
+// local prevents the optional Spout feature from depending on the optional NDI
+// output path; both backends use the same engine and video contracts directly.
+const TIMELINE_FOLLOW_SETTLEMENT_ACK_TTL: Duration = Duration::from_secs(1);
+const TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY: Duration = Duration::from_millis(25);
+const TIMELINE_FOLLOW_TERMINAL_RECEIPT_RETRIES: u8 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TimelineFollowOutputFrameKey {
+    epoch: u64,
+    generation: u64,
+    output_id: VideoOutputId,
+    width: u32,
+    height: u32,
+}
+
+/// Engine settlement identity intentionally excludes presentation size.
+/// A resize must invalidate the cached frame without producing another
+/// terminal result for the same Follow output consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TimelineFollowOutputAckKey {
+    epoch: u64,
+    generation: u64,
+    output_id: VideoOutputId,
+}
+
+impl TimelineFollowOutputFrameKey {
+    fn ack_key(self) -> TimelineFollowOutputAckKey {
+        TimelineFollowOutputAckKey {
+            epoch: self.epoch,
+            generation: self.generation,
+            output_id: self.output_id,
+        }
+    }
+
+    fn settlement_ack(
+        self,
+        result: TimelineFollowSettlementAckResult,
+    ) -> TimelineFollowSettlementAck {
+        TimelineFollowSettlementAck {
+            epoch: self.epoch,
+            generation: self.generation,
+            domain: TimelineFollowSettlementDomain::Video,
+            consumer_id: TimelineFollowSettlementConsumerId::VideoOutput {
+                output_id: self.output_id,
+            },
+            result,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PendingTimelineFollowSettlementAck {
+    ack: TimelineFollowSettlementAck,
+    retry_not_before: Instant,
+}
+
+#[derive(Debug, Default)]
+struct TimelineFollowOutputState {
+    active_ack_key: Option<TimelineFollowOutputAckKey>,
+    active_frame_key: Option<TimelineFollowOutputFrameKey>,
+    last_valid: Option<(TimelineFollowOutputFrameKey, video::VideoFrame)>,
+    pending_ack: Option<PendingTimelineFollowSettlementAck>,
+    published_ack: Option<TimelineFollowSettlementAck>,
+}
+
+impl TimelineFollowOutputState {
+    /// Generation/output changes fence stale ACK retries; size changes only
+    /// retire last-valid continuity. The first physical terminal result for a
+    /// single ACK identity remains exact through a lost engine reply.
+    fn observe_key(&mut self, key: TimelineFollowOutputFrameKey) {
+        let ack_key = key.ack_key();
+        if self.active_ack_key != Some(ack_key) {
+            self.active_ack_key = Some(ack_key);
+            self.pending_ack = None;
+            self.published_ack = None;
+        }
+        if self.active_frame_key != Some(key) {
+            self.active_frame_key = Some(key);
+            self.last_valid = None;
+        }
+    }
+
+    fn last_valid(&self, key: TimelineFollowOutputFrameKey) -> Option<&video::VideoFrame> {
+        self.last_valid
+            .as_ref()
+            .and_then(|(cached_key, frame)| (*cached_key == key).then_some(frame))
+    }
+
+    fn update_last_valid(&mut self, key: TimelineFollowOutputFrameKey, frame: video::VideoFrame) {
+        self.observe_key(key);
+        self.last_valid = Some((key, frame));
+    }
+
+    fn queue_ack(
+        &mut self,
+        key: TimelineFollowOutputFrameKey,
+        result: TimelineFollowSettlementAckResult,
+        now: Instant,
+    ) {
+        self.observe_key(key);
+        let ack = key.settlement_ack(result);
+        if self.published_for(key) || self.pending_ack.is_some() {
+            return;
+        }
+        self.pending_ack = Some(PendingTimelineFollowSettlementAck {
+            ack,
+            retry_not_before: now,
+        });
+    }
+
+    fn try_publish_ack(
+        &mut self,
+        now: Instant,
+        mut publish: impl FnMut(&TimelineFollowSettlementAck) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        let Some(pending) = self.pending_ack.as_mut() else {
+            return Ok(false);
+        };
+        if now < pending.retry_not_before {
+            return Ok(false);
+        }
+        let ack = pending.ack.clone();
+        match publish(&ack) {
+            Ok(()) => {
+                self.published_ack = Some(ack);
+                self.pending_ack = None;
+                Ok(true)
+            }
+            Err(error) => {
+                pending.retry_not_before = now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY;
+                Err(error)
+            }
+        }
+    }
+
+    fn published_for(&self, key: TimelineFollowOutputFrameKey) -> bool {
+        let ack_key = key.ack_key();
+        self.published_ack.as_ref().is_some_and(|ack| {
+            ack.epoch == ack_key.epoch
+                && ack.generation == ack_key.generation
+                && ack.consumer_id
+                    == (TimelineFollowSettlementConsumerId::VideoOutput {
+                        output_id: ack_key.output_id,
+                    })
+        })
+    }
+}
+
+#[derive(Debug)]
+enum TimelineFollowOutputRenderDecision {
+    Frame {
+        key: TimelineFollowOutputFrameKey,
+        frame: video::VideoFrame,
+        result: TimelineFollowSettlementAckResult,
+    },
+    NotApplicable {
+        key: TimelineFollowOutputFrameKey,
+        reason: String,
+    },
+}
+
+fn timeline_follow_output_config(
+    snapshot: &protocol::VideoSnapshot,
+    output_id: VideoOutputId,
+) -> Result<&protocol::VideoOutputSummary, String> {
+    snapshot
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+        .ok_or_else(|| format!("Timeline Follow output {output_id} was not found"))
+}
+
+fn timeline_follow_render_fault(
+    label: &str,
+    evidence: &video::VideoOutputRenderEvidence,
+) -> Option<String> {
+    (evidence.freshness != video::VideoOutputRenderFreshness::Fresh).then(|| {
+        evidence.error.clone().unwrap_or_else(|| {
+            format!(
+                "Timeline Follow {label} output used {:?} render evidence",
+                evidence.freshness
+            )
+        })
+    })
+}
+
+/// The output permit fences ownership rotation while it is held. Sampling the
+/// ready owner after acquisition therefore rejects a stale Follow snapshot
+/// before either physical send or Applied acknowledgement.
+fn timeline_follow_epoch_matches_ready_owner(
+    engine: &EngineHandle,
+    key: TimelineFollowOutputFrameKey,
+) -> bool {
+    if key.epoch == 0 {
+        return true;
+    }
+    let ownership = engine.output_ownership_status();
+    ownership.video_allowed
+        && ownership.state == OutputOwnershipState::Ready
+        && ownership.epoch == key.epoch
+}
+
+fn render_timeline_follow_output<P: video::VideoFrameProvider>(
+    renderer: &mut video::VideoPreviewRenderer<P>,
+    engine_snapshot: &protocol::EngineSnapshot,
+    follow: &TimelineFollowVideoRenderSnapshot,
+    output_id: VideoOutputId,
+    state: &mut TimelineFollowOutputState,
+) -> Result<TimelineFollowOutputRenderDecision, String> {
+    let outgoing_output = timeline_follow_output_config(&follow.outgoing_video, output_id)?;
+    let incoming_output = timeline_follow_output_config(&follow.incoming_video, output_id)?;
+    if outgoing_output.width != incoming_output.width
+        || outgoing_output.height != incoming_output.height
+    {
+        return Err(format!(
+            "Timeline Follow output {output_id} dimensions diverged: outgoing {}x{}, incoming {}x{}",
+            outgoing_output.width,
+            outgoing_output.height,
+            incoming_output.width,
+            incoming_output.height
+        ));
+    }
+    let key = TimelineFollowOutputFrameKey {
+        epoch: follow.epoch,
+        generation: follow.generation,
+        output_id,
+        width: outgoing_output.width,
+        height: outgoing_output.height,
+    };
+    state.observe_key(key);
+    if !outgoing_output.enabled || !incoming_output.enabled {
+        return Ok(TimelineFollowOutputRenderDecision::NotApplicable {
+            key,
+            reason: format!("Timeline Follow output {output_id} is disabled"),
+        });
+    }
+
+    let context = video::VideoEffectRenderContext {
+        clip_runtime: &engine_snapshot.video_clip_runtime,
+        project_render_epoch: follow.epoch,
+    };
+    let outgoing = renderer
+        .render_output_with_effects_and_transitions_evidenced(
+            &follow.outgoing_video,
+            context,
+            &engine_snapshot.video_transition_runtime,
+            output_id,
+        )
+        .map_err(|error| format!("Timeline Follow outgoing output render failed: {error:?}"))?;
+    let incoming = renderer
+        .render_output_with_effects_and_transitions_evidenced(
+            &follow.incoming_video,
+            context,
+            &engine_snapshot.video_transition_runtime,
+            output_id,
+        )
+        .map_err(|error| format!("Timeline Follow incoming output render failed: {error:?}"))?;
+    let transition_scope = VideoEffectScope::Transition {
+        owner: VideoTransitionEffectOwner::TimelineFollow {
+            source_timeline_id: follow.source_timeline_id,
+        },
+    };
+    let transition_chain = follow
+        .transition_effect_chain
+        .as_ref()
+        .map(|chain| {
+            if chain.scope != transition_scope {
+                return Err(format!(
+                    "Timeline Follow transition chain {:?} has the wrong owner",
+                    chain.id
+                ));
+            }
+            let mut catalog = protocol::VideoSnapshot::default();
+            catalog.effect_chains.push(chain.clone());
+            video::resolve_video_effect_chain(&catalog, &transition_scope)
+                .map_err(|fault| {
+                    format!(
+                        "Timeline Follow transition chain is invalid: {}",
+                        fault.message
+                    )
+                })?
+                .ok_or_else(|| "Timeline Follow transition chain did not resolve".to_string())
+        })
+        .transpose()?;
+    let combined = renderer
+        .render_follow_output_transition_rgba8(
+            &outgoing.frame,
+            &incoming.frame,
+            follow.kind,
+            follow.curve,
+            follow.progress_millis,
+            follow.source_timeline_id,
+            transition_chain.as_ref(),
+            state.last_valid(key),
+        )
+        .map_err(|error| format!("Timeline Follow output combine failed: {error:?}"))?;
+    let mut faults = Vec::new();
+    if let Some(error) = timeline_follow_render_fault("outgoing", &outgoing.evidence) {
+        faults.push(error);
+    }
+    if let Some(error) = timeline_follow_render_fault("incoming", &incoming.evidence) {
+        faults.push(error);
+    }
+    if combined.evidence.freshness != video::VideoOutputRenderFreshness::Fresh {
+        faults.push(combined.evidence.error.clone().unwrap_or_else(|| {
+            format!(
+                "Timeline Follow transition used {:?} render evidence",
+                combined.evidence.freshness
+            )
+        }));
+    }
+    let result = if faults.is_empty() {
+        state.update_last_valid(key, combined.frame.clone());
+        TimelineFollowSettlementAckResult::Applied
+    } else {
+        TimelineFollowSettlementAckResult::Fault {
+            fault: faults.join("; "),
+        }
+    };
+    Ok(TimelineFollowOutputRenderDecision::Frame {
+        key,
+        frame: combined.frame,
+        result,
+    })
+}
+
+fn timeline_follow_output_key(
+    follow: &TimelineFollowVideoRenderSnapshot,
+    output_id: VideoOutputId,
+) -> TimelineFollowOutputFrameKey {
+    let (width, height) = follow
+        .outgoing_video
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+        .map(|output| (output.width, output.height))
+        .unwrap_or((0, 0));
+    TimelineFollowOutputFrameKey {
+        epoch: follow.epoch,
+        generation: follow.generation,
+        output_id,
+        width,
+        height,
+    }
+}
+
+fn timeline_follow_not_applicable(
+    follow: &TimelineFollowVideoRenderSnapshot,
+    output_id: VideoOutputId,
+    reason: impl Into<String>,
+) -> TimelineFollowOutputRenderDecision {
+    TimelineFollowOutputRenderDecision::NotApplicable {
+        key: timeline_follow_output_key(follow, output_id),
+        reason: reason.into(),
+    }
+}
+
+fn timeline_follow_result_after_physical_send(
+    rendered: TimelineFollowSettlementAckResult,
+    send_error: Option<&str>,
+    backend: &str,
+    output_id: VideoOutputId,
+) -> TimelineFollowSettlementAckResult {
+    match send_error {
+        Some(error) => TimelineFollowSettlementAckResult::Fault {
+            fault: format!("{backend} output route {output_id} send failed: {error}"),
+        },
+        None => rendered,
+    }
+}
+
+fn publish_timeline_follow_output_result(
+    engine: &EngineHandle,
+    state: &mut TimelineFollowOutputState,
+    key: TimelineFollowOutputFrameKey,
+    result: TimelineFollowSettlementAckResult,
+) -> Result<bool, String> {
+    let now = Instant::now();
+    state.queue_ack(key, result, now);
+    state.try_publish_ack(now, |ack| {
+        engine.acknowledge_timeline_follow_settlement_published(
+            ack.clone(),
+            Instant::now() + TIMELINE_FOLLOW_SETTLEMENT_ACK_TTL,
+        )
+    })
+}
+
+fn publish_timeline_follow_output_result_until_resolved(
+    engine: &EngineHandle,
+    state: &mut TimelineFollowOutputState,
+    key: TimelineFollowOutputFrameKey,
+    result: TimelineFollowSettlementAckResult,
+    should_stop: impl FnMut() -> bool,
+) {
+    publish_timeline_follow_output_result_until_resolved_with(
+        engine,
+        state,
+        key,
+        result,
+        should_stop,
+        |ack| {
+            engine.acknowledge_timeline_follow_settlement_published(
+                ack.clone(),
+                Instant::now() + TIMELINE_FOLLOW_SETTLEMENT_ACK_TTL,
+            )
+        },
+    );
+}
+
+/// An issued acknowledgement may have settled Follow even if the caller lost
+/// its reply. Replays are exact and bounded after that terminal transition.
+fn publish_timeline_follow_output_result_until_resolved_with(
+    engine: &EngineHandle,
+    state: &mut TimelineFollowOutputState,
+    key: TimelineFollowOutputFrameKey,
+    result: TimelineFollowSettlementAckResult,
+    mut should_stop: impl FnMut() -> bool,
+    mut publish: impl FnMut(&TimelineFollowSettlementAck) -> Result<(), String>,
+) {
+    let mut issued_publish = false;
+    let mut terminal_receipt_retries = 0;
+    loop {
+        let now = Instant::now();
+        state.queue_ack(key, result.clone(), now);
+        let _ = state.try_publish_ack(now, |ack| {
+            issued_publish = true;
+            publish(ack)
+        });
+        if state.published_for(key) || should_stop() {
+            return;
+        }
+        if engine.output_ownership_status().epoch != key.epoch {
+            return;
+        }
+        match engine.timeline_follow_video_render_snapshot() {
+            Some(follow) if follow.generation == key.generation => {}
+            Some(_) => return,
+            None if issued_publish
+                && terminal_receipt_retries < TIMELINE_FOLLOW_TERMINAL_RECEIPT_RETRIES =>
+            {
+                terminal_receipt_retries += 1;
+            }
+            None => return,
+        }
+        std::thread::sleep(TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY);
+    }
+}
+
+/// Close output admission before an acknowledgement retry can block. The
+/// caller retains the returned lease through its physical teardown path.
+fn fence_timeline_follow_fault_before_ack(
+    engine: &EngineHandle,
+    state: &mut TimelineFollowOutputState,
+    key: TimelineFollowOutputFrameKey,
+    fault: String,
+) -> (
+    engine::OutputOwnershipTeardownLease,
+    TimelineFollowOutputFrameKey,
+) {
+    let failure_lease = engine.begin_output_ownership_failure_fence(fault.clone());
+    // Failure fencing advances ownership epoch; engine acknowledgement must
+    // use that epoch while retaining the original Follow generation/output.
+    let failed_key = TimelineFollowOutputFrameKey {
+        epoch: engine.output_ownership_status().epoch,
+        ..key
+    };
+    state.queue_ack(
+        failed_key,
+        TimelineFollowSettlementAckResult::Fault { fault },
+        Instant::now(),
+    );
+    (failure_lease, failed_key)
+}
+
+#[derive(Default)]
+struct SpoutStartupFailureFenceState {
+    epoch: Option<u64>,
+    lease: Option<engine::OutputOwnershipTeardownLease>,
+}
+
+type SpoutStartupFailureLeaseSlot = Arc<Mutex<SpoutStartupFailureFenceState>>;
+
+fn ensure_spout_startup_failure_fence(
+    engine: &EngineHandle,
+    slot: &SpoutStartupFailureLeaseSlot,
+    reason: impl Into<String>,
+) -> u64 {
+    let mut state = match slot.lock() {
+        Ok(state) => state,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if state.epoch.is_none() {
+        state.lease = Some(engine.begin_output_ownership_failure_fence(reason));
+        state.epoch = Some(engine.output_ownership_status().epoch);
+    }
+    state.epoch.expect("startup failure fence epoch must exist")
+}
+
+fn take_spout_startup_failure_lease(
+    slot: &SpoutStartupFailureLeaseSlot,
+) -> Option<engine::OutputOwnershipTeardownLease> {
+    match slot.lock() {
+        Ok(mut state) => state.lease.take(),
+        Err(poisoned) => poisoned.into_inner().lease.take(),
+    }
+}
+
+fn fence_timeline_follow_fault_before_ack_in_spout_startup(
+    engine: &EngineHandle,
+    state: &mut TimelineFollowOutputState,
+    key: TimelineFollowOutputFrameKey,
+    fault: String,
+    slot: &SpoutStartupFailureLeaseSlot,
+) -> TimelineFollowOutputFrameKey {
+    let failed_key = TimelineFollowOutputFrameKey {
+        epoch: ensure_spout_startup_failure_fence(engine, slot, fault.clone()),
+        ..key
+    };
+    state.queue_ack(
+        failed_key,
+        TimelineFollowSettlementAckResult::Fault { fault },
+        Instant::now(),
+    );
+    failed_key
 }
 
 #[cfg(test)]
@@ -531,15 +1062,33 @@ impl SpoutRouteWorker {
         let worker_failure = Arc::clone(&failure);
         let teardown_lease = Arc::new(Mutex::new(None));
         let worker_teardown_lease = Arc::clone(&teardown_lease);
+        // A render failure is detected inside the render closure, before the
+        // worker can enter its common sender teardown. Transfer that exact
+        // fence back to the worker instead of dropping and reacquiring it.
+        let render_failure_lease = Arc::new(Mutex::new(None));
+        let worker_render_failure_lease = Arc::clone(&render_failure_lease);
+        let startup_failure_lease: SpoutStartupFailureLeaseSlot =
+            Arc::new(Mutex::new(SpoutStartupFailureFenceState::default()));
+        let worker_startup_failure_lease = Arc::clone(&startup_failure_lease);
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
         let (start_sender, start_receiver) = mpsc::sync_channel::<SpoutOutputStartDecision>(1);
         let creation_lease_slot: SpoutCreationLeaseSlot = Arc::new(Mutex::new(None));
         let worker_creation_lease_slot = Arc::clone(&creation_lease_slot);
         let parent_engine = engine.clone();
         let worker = spawn_spout_output_worker(output_id, move || {
+            let mut startup_follow_state = TimelineFollowOutputState::default();
             let creation_lease = match activation.admit_resource_creation() {
                 Ok(lease) => lease,
                 Err(error) => {
+                    if let Some(follow) = engine.timeline_follow_video_render_snapshot() {
+                        publish_timeline_follow_output_result_until_resolved(
+                            &engine,
+                            &mut startup_follow_state,
+                            timeline_follow_output_key(&follow, output_id),
+                            TimelineFollowSettlementAckResult::NotApplicable,
+                            || worker_stop.load(Ordering::Acquire),
+                        );
+                    }
                     let _ = ready_tx.send(Err(error.clone()));
                     return Err(SpoutOutputWorkerStopError { message: error });
                 }
@@ -553,6 +1102,33 @@ impl SpoutRouteWorker {
                 Ok(sender) => sender,
                 Err(error) => {
                     let message = format!("Failed to create Spout sender '{sender_name}': {error}");
+                    let fault = format!("Spout output route {output_id} open failed: {message}");
+                    // The creation lease remains live until below; establish
+                    // the hard ownership fence before an ACK retry can wait.
+                    if let Some(follow) = engine.timeline_follow_video_render_snapshot() {
+                        let failed_key = fence_timeline_follow_fault_before_ack_in_spout_startup(
+                            &engine,
+                            &mut startup_follow_state,
+                            timeline_follow_output_key(&follow, output_id),
+                            fault.clone(),
+                            &worker_startup_failure_lease,
+                        );
+                        publish_timeline_follow_output_result_until_resolved(
+                            &engine,
+                            &mut startup_follow_state,
+                            failed_key,
+                            TimelineFollowSettlementAckResult::Fault {
+                                fault: fault.clone(),
+                            },
+                            || worker_stop.load(Ordering::Acquire),
+                        );
+                    } else {
+                        ensure_spout_startup_failure_fence(
+                            &engine,
+                            &worker_startup_failure_lease,
+                            fault.clone(),
+                        );
+                    }
                     creation_lease.retire();
                     let _ = ready_tx.send(Err(message.clone()));
                     eprintln!("{message}");
@@ -624,6 +1200,8 @@ impl SpoutRouteWorker {
                 video::DecoderBackedFrameProvider::new(decoder).with_prefetch(0, 33),
             );
             let render_engine = engine.clone();
+            let render_worker_stop = Arc::clone(&worker_stop);
+            let render_failure_lease = Arc::clone(&worker_render_failure_lease);
             let result = run_spout_output_worker(
                 output_id,
                 &sender_name,
@@ -631,20 +1209,88 @@ impl SpoutRouteWorker {
                 worker_stop,
                 sender,
                 worker_teardown_lease,
-                move || {
+                worker_render_failure_lease,
+                move |follow_output_state| {
                     let project_render_epoch = render_engine.output_ownership_status().epoch;
                     let snapshot = render_engine.snapshot();
                     renderer
                         .frame_provider_mut()
                         .set_bpm(Some(snapshot.clock.bpm));
-                    renderer
-                        .render_output_with_effects_and_transitions(
-                            &snapshot.video,
-                            spout_output_effect_render_context(&snapshot, project_render_epoch),
-                            &snapshot.video_transition_runtime,
-                            output_id,
-                        )
-                        .map_err(|error| format!("{error:?}"))
+                    let follow = render_engine.timeline_follow_video_render_snapshot();
+                    let rendered = match follow.as_ref() {
+                        Some(follow) => {
+                            let ownership = render_engine.output_ownership_status();
+                            if !ownership.video_allowed
+                                || ownership.state != OutputOwnershipState::Ready
+                            {
+                                Ok(timeline_follow_not_applicable(
+                                    follow,
+                                    output_id,
+                                    "Spout output is not owned by this machine",
+                                ))
+                            } else {
+                                render_timeline_follow_output(
+                                    &mut renderer,
+                                    &snapshot,
+                                    follow,
+                                    output_id,
+                                    follow_output_state,
+                                )
+                            }
+                        }
+                        None => renderer
+                            .render_output_with_effects_and_transitions(
+                                &snapshot.video,
+                                spout_output_effect_render_context(&snapshot, project_render_epoch),
+                                &snapshot.video_transition_runtime,
+                                output_id,
+                            )
+                            .map(|frame| TimelineFollowOutputRenderDecision::Frame {
+                                key: TimelineFollowOutputFrameKey {
+                                    epoch: 0,
+                                    generation: 0,
+                                    output_id,
+                                    width: frame.width,
+                                    height: frame.height,
+                                },
+                                frame,
+                                result: TimelineFollowSettlementAckResult::Applied,
+                            })
+                            .map_err(|error| format!("{error:?}")),
+                    };
+                    if let Err(error) = &rendered {
+                        if let Some(follow) = follow.as_ref() {
+                            let fault =
+                                format!("Spout output route {output_id} render failed: {error}");
+                            let (failure_fence, failed_key) =
+                                fence_timeline_follow_fault_before_ack(
+                                    &render_engine,
+                                    follow_output_state,
+                                    timeline_follow_output_key(follow, output_id),
+                                    fault.clone(),
+                                );
+                            publish_timeline_follow_output_result_until_resolved(
+                                &render_engine,
+                                follow_output_state,
+                                failed_key,
+                                TimelineFollowSettlementAckResult::Fault { fault },
+                                || render_worker_stop.load(Ordering::Acquire),
+                            );
+                            match render_failure_lease.lock() {
+                                Ok(mut slot) => *slot = Some(failure_fence),
+                                Err(poisoned) => *poisoned.into_inner() = Some(failure_fence),
+                            }
+                        } else {
+                            let failure_fence = render_engine.begin_output_ownership_failure_fence(
+                                format!("Spout output route {output_id} render failed: {error}"),
+                            );
+                            match render_failure_lease.lock() {
+                                Ok(mut slot) => *slot = Some(failure_fence),
+                                Err(poisoned) => *poisoned.into_inner() = Some(failure_fence),
+                            }
+                        }
+                    }
+                    rendered
                 },
             );
             if let Err(error) = &result {
@@ -682,9 +1328,24 @@ impl SpoutRouteWorker {
                 stop.store(true, Ordering::Release);
                 drop(ready_rx);
                 drop(start_sender);
-                let failure_lease = parent_engine.begin_output_ownership_failure_fence(format!(
-                    "Spout output startup failed: {error}"
-                ));
+                // Preserve a boundary fence established by sender creation or
+                // the worker itself. The parent owns it until worker join and
+                // physical teardown are acknowledged; do not advance epoch a
+                // second time after a dropped/reacquired gap.
+                let failure_lease = take_spout_startup_failure_lease(&startup_failure_lease)
+                    .or_else(|| match teardown_lease.lock() {
+                        Ok(mut slot) => slot.take(),
+                        Err(poisoned) => poisoned.into_inner().take(),
+                    })
+                    .or_else(|| {
+                        ensure_spout_startup_failure_fence(
+                            &parent_engine,
+                            &startup_failure_lease,
+                            format!("Spout output startup failed: {error}"),
+                        );
+                        take_spout_startup_failure_lease(&startup_failure_lease)
+                    })
+                    .expect("Spout startup failure fence must retain its lease");
                 Err(SpoutOutputWorkerStartError {
                     message: error,
                     pending_startup: Some(SpoutPendingOutputStartup {
@@ -701,7 +1362,13 @@ impl SpoutRouteWorker {
                 drop(start_sender);
                 let message =
                     format!("Spout output worker startup acknowledgement failed: {error}");
-                let failure_lease = parent_engine.begin_output_ownership_failure_fence(&message);
+                ensure_spout_startup_failure_fence(
+                    &parent_engine,
+                    &startup_failure_lease,
+                    &message,
+                );
+                let failure_lease = take_spout_startup_failure_lease(&startup_failure_lease)
+                    .expect("startup timeout fence must retain its lease");
                 Err(SpoutOutputWorkerStartError {
                     message,
                     pending_startup: Some(SpoutPendingOutputStartup {
@@ -882,50 +1549,144 @@ fn run_spout_output_worker<S, R>(
     worker_stop: Arc<AtomicBool>,
     mut sender: S,
     teardown_lease_slot: Arc<Mutex<Option<OutputOwnershipTeardownLease>>>,
+    render_failure_lease: Arc<Mutex<Option<OutputOwnershipTeardownLease>>>,
     mut render: R,
 ) -> Result<(), SpoutOutputWorkerStopError>
 where
     S: SpoutOutputSender,
-    R: FnMut() -> Result<video::VideoFrame, String>,
+    R: FnMut(&mut TimelineFollowOutputState) -> Result<TimelineFollowOutputRenderDecision, String>,
 {
     let target_interval = Duration::from_nanos(1_000_000_000 / 60);
     let mut worker_error = None;
     let mut failure_lease = None;
+    let mut follow_output_state = TimelineFollowOutputState::default();
     while !worker_stop.load(Ordering::Acquire) {
         let started = Instant::now();
-        let result = render().and_then(|frame| {
-            let _permit = loop {
-                match engine.acquire_video_output() {
-                    Ok(permit) => break permit,
-                    Err(_) if worker_stop.load(Ordering::Acquire) => {
-                        return Err("Spout output worker is stopping".to_string());
-                    }
-                    Err(_) => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                }
-            };
-            let send_result = sender.send_image(&frame.data, frame.width, frame.height);
-            if let Err(error) = &send_result {
-                if !worker_stop.load(Ordering::Acquire) {
-                    // The frame permit is still held here, so the failure fence
-                    // closes the admission window atomically with the failed
-                    // physical send before sender teardown begins.
-                    failure_lease = Some(engine.begin_output_ownership_failure_fence(format!(
-                        "Spout output route {output_id} send failed: {error}"
-                    )));
-                }
+        let rendered = render(&mut follow_output_state);
+        let handed_off_failure_lease =
+            rendered
+                .as_ref()
+                .err()
+                .and_then(|_| match render_failure_lease.lock() {
+                    Ok(mut slot) => slot.take(),
+                    Err(poisoned) => poisoned.into_inner().take(),
+                });
+        let result = match rendered {
+            Ok(TimelineFollowOutputRenderDecision::NotApplicable { key, reason }) => {
+                let _ = publish_timeline_follow_output_result(
+                    &engine,
+                    &mut follow_output_state,
+                    key,
+                    TimelineFollowSettlementAckResult::NotApplicable,
+                );
+                let _ = reason;
+                Ok(())
             }
-            send_result
-        });
+            Ok(TimelineFollowOutputRenderDecision::Frame {
+                key,
+                frame,
+                result: follow_result,
+            }) => {
+                let _permit = loop {
+                    match engine.acquire_video_output() {
+                        Ok(permit) => break permit,
+                        Err(_) if worker_stop.load(Ordering::Acquire) => {
+                            return Err(SpoutOutputWorkerStopError {
+                                message: "Spout output worker is stopping".to_string(),
+                            });
+                        }
+                        Err(_) => {
+                            if key.epoch != 0 {
+                                let _ = publish_timeline_follow_output_result(
+                                    &engine,
+                                    &mut follow_output_state,
+                                    key,
+                                    TimelineFollowSettlementAckResult::NotApplicable,
+                                );
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                    }
+                };
+                if key.epoch != 0 && !timeline_follow_epoch_matches_ready_owner(&engine, key) {
+                    let _ = publish_timeline_follow_output_result(
+                        &engine,
+                        &mut follow_output_state,
+                        key,
+                        TimelineFollowSettlementAckResult::NotApplicable,
+                    );
+                    continue;
+                }
+                let send_result = sender.send_image(&frame.data, frame.width, frame.height);
+                let mut failed_follow_key = None;
+                if let Err(error) = &send_result {
+                    // The frame permit is live here. Fence before a Follow
+                    // Fault acknowledgement retry can block this worker.
+                    if key.epoch != 0 {
+                        let (lease, failed_key) = fence_timeline_follow_fault_before_ack(
+                            &engine,
+                            &mut follow_output_state,
+                            key,
+                            format!("Spout output route {output_id} send failed: {error}"),
+                        );
+                        failure_lease = Some(lease);
+                        failed_follow_key = Some(failed_key);
+                    } else {
+                        failure_lease = Some(engine.begin_output_ownership_failure_fence(format!(
+                            "Spout output route {output_id} send failed: {error}"
+                        )));
+                    }
+                }
+                if key.epoch != 0 {
+                    let settlement = timeline_follow_result_after_physical_send(
+                        follow_result,
+                        send_result.as_ref().err().map(String::as_str),
+                        "Spout",
+                        output_id,
+                    );
+                    if send_result.is_err() {
+                        publish_timeline_follow_output_result_until_resolved(
+                            &engine,
+                            &mut follow_output_state,
+                            failed_follow_key.unwrap_or(key),
+                            settlement,
+                            || worker_stop.load(Ordering::Acquire),
+                        );
+                    } else if matches!(&settlement, TimelineFollowSettlementAckResult::Applied) {
+                        // The physical send above succeeded. Keep its exact
+                        // Applied ACK retryable through terminal presenter
+                        // retirement/reply loss.
+                        publish_timeline_follow_output_result_until_resolved(
+                            &engine,
+                            &mut follow_output_state,
+                            key,
+                            settlement,
+                            || worker_stop.load(Ordering::Acquire),
+                        );
+                    } else {
+                        let _ = publish_timeline_follow_output_result(
+                            &engine,
+                            &mut follow_output_state,
+                            key,
+                            settlement,
+                        );
+                    }
+                }
+                send_result
+            }
+            Err(error) => Err(error),
+        };
         if let Err(error) = result {
             if !worker_stop.load(Ordering::Acquire) {
                 if failure_lease.is_none() {
                     // Render failures happen before a frame permit can be
-                    // acquired, so fence immediately at the failure boundary.
-                    failure_lease = Some(engine.begin_output_ownership_failure_fence(format!(
-                        "Spout output route {output_id} render failed: {error}"
-                    )));
+                    // acquired. The inner render path may already have
+                    // fenced and handed off its lease; otherwise fence here.
+                    failure_lease = Some(handed_off_failure_lease.unwrap_or_else(|| {
+                        engine.begin_output_ownership_failure_fence(format!(
+                            "Spout output route {output_id} render failed: {error}"
+                        ))
+                    }));
                 }
                 worker_error = Some(error.clone());
             }
@@ -950,6 +1711,593 @@ where
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn follow_video_snapshot(
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+        enabled: bool,
+    ) -> protocol::VideoSnapshot {
+        protocol::VideoSnapshot {
+            compositions: vec![protocol::CompositionSummary {
+                id: 1,
+                label: "Follow".to_string(),
+                layer_ids: Vec::new(),
+                output_ids: vec![output_id],
+            }],
+            outputs: vec![protocol::VideoOutputSummary {
+                id: output_id,
+                label: "Program".to_string(),
+                kind: protocol::VideoOutputKind::Display,
+                enabled,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: None,
+                width,
+                height,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: protocol::VideoOutputMapping::default(),
+            }],
+            ..protocol::VideoSnapshot::default()
+        }
+    }
+
+    fn follow_render_snapshot(enabled: bool) -> TimelineFollowVideoRenderSnapshot {
+        TimelineFollowVideoRenderSnapshot {
+            epoch: 21,
+            generation: 34,
+            source_timeline_id: protocol::TimelineId(55),
+            target_timeline_id: protocol::TimelineId(56),
+            kind: protocol::VideoClipTakeKind::Wipe,
+            curve: protocol::VideoLayerTransitionCurve::Linear,
+            progress_millis: 500,
+            outgoing_video: follow_video_snapshot(17, 4, 2, enabled),
+            incoming_video: follow_video_snapshot(17, 4, 2, enabled),
+            transition_effect_chain: None,
+        }
+    }
+
+    #[test]
+    fn spout_follow_render_is_local_evidenced_and_send_gated() {
+        let mut renderer = video::VideoPreviewRenderer::new(video::VideoRuntimeConfig::default());
+        let engine_snapshot = protocol::EngineSnapshot::default();
+        let mut state = TimelineFollowOutputState::default();
+        let follow = follow_render_snapshot(true);
+
+        let TimelineFollowOutputRenderDecision::Frame { key, frame, result } =
+            render_timeline_follow_output(&mut renderer, &engine_snapshot, &follow, 17, &mut state)
+                .expect("transparent Follow compositions have a presentable output")
+        else {
+            panic!("enabled Spout Follow output must render");
+        };
+        assert_eq!(
+            (key.epoch, key.generation, key.width, key.height),
+            (21, 34, 4, 2)
+        );
+        assert_eq!((frame.width, frame.height, frame.data.len()), (4, 2, 32));
+        assert_eq!(result, TimelineFollowSettlementAckResult::Applied);
+        assert_eq!(state.last_valid(key), Some(&frame));
+        assert!(matches!(
+            timeline_follow_result_after_physical_send(result, Some("injected"), "Spout", 17),
+            TimelineFollowSettlementAckResult::Fault { .. }
+        ));
+
+        let disabled = follow_render_snapshot(false);
+        assert!(matches!(
+            render_timeline_follow_output(
+                &mut renderer,
+                &engine_snapshot,
+                &disabled,
+                17,
+                &mut state
+            )
+            .unwrap(),
+            TimelineFollowOutputRenderDecision::NotApplicable { .. }
+        ));
+    }
+
+    #[test]
+    fn spout_follow_ack_reply_loss_rollover_retires_old_generation_for_new_send() {
+        let old = TimelineFollowOutputFrameKey {
+            epoch: 21,
+            generation: 34,
+            output_id: 17,
+            width: 4,
+            height: 2,
+        };
+        let new = TimelineFollowOutputFrameKey {
+            generation: 35,
+            ..old
+        };
+        let now = Instant::now();
+        let mut state = TimelineFollowOutputState::default();
+
+        // A successful old send with a lost ACK remains exactly retryable
+        // while old is current.
+        state.queue_ack(old, TimelineFollowSettlementAckResult::Applied, now);
+        assert!(state
+            .try_publish_ack(now, |_| Err("injected old reply loss".to_string()))
+            .is_err());
+
+        // The old presenter then disappears; the next Fresh+sent frame owns
+        // a new key and must not be blocked by that stale retry.
+        state.queue_ack(new, TimelineFollowSettlementAckResult::Applied, now);
+        let mut published = Vec::new();
+        assert!(state
+            .try_publish_ack(now, |ack| {
+                published.push(ack.clone());
+                Ok(())
+            })
+            .unwrap());
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].generation, new.generation);
+        assert_eq!(
+            published[0].result,
+            TimelineFollowSettlementAckResult::Applied
+        );
+        assert!(state.published_for(new));
+        assert!(!state.published_for(old));
+    }
+
+    #[test]
+    fn spout_follow_ack_reply_loss_resize_preserves_ack_but_reseeds_last_valid() {
+        let old = TimelineFollowOutputFrameKey {
+            epoch: 21,
+            generation: 34,
+            output_id: 17,
+            width: 4,
+            height: 2,
+        };
+        let resized = TimelineFollowOutputFrameKey { height: 4, ..old };
+        let now = Instant::now();
+        let mut state = TimelineFollowOutputState::default();
+        let old_frame = video::VideoFrame {
+            layer_id: 0,
+            width: old.width,
+            height: old.height,
+            pts_ms: 0,
+            duration_ms: 33,
+            format: video::VideoPixelFormat::Rgba8,
+            data: vec![0; (old.width * old.height * 4) as usize],
+        };
+
+        state.update_last_valid(old, old_frame);
+        state.queue_ack(old, TimelineFollowSettlementAckResult::Applied, now);
+        assert!(state
+            .try_publish_ack(now, |_| Err("injected old reply loss".to_string()))
+            .is_err());
+
+        state.observe_key(resized);
+        assert!(state.last_valid(old).is_none());
+        assert!(state.last_valid(resized).is_none());
+        let resized_frame = video::VideoFrame {
+            layer_id: 0,
+            width: resized.width,
+            height: resized.height,
+            pts_ms: 0,
+            duration_ms: 33,
+            format: video::VideoPixelFormat::Rgba8,
+            data: vec![0; (resized.width * resized.height * 4) as usize],
+        };
+        state.update_last_valid(resized, resized_frame.clone());
+        state.queue_ack(resized, TimelineFollowSettlementAckResult::Applied, now);
+        assert_eq!(
+            state
+                .pending_ack
+                .as_ref()
+                .map(|pending| &pending.ack.result),
+            Some(&TimelineFollowSettlementAckResult::Applied)
+        );
+        let mut published = Vec::new();
+        assert!(state
+            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, |ack| {
+                published.push(ack.clone());
+                Ok(())
+            })
+            .unwrap());
+        assert_eq!(published.len(), 1);
+        assert_eq!(
+            published[0].result,
+            TimelineFollowSettlementAckResult::Applied
+        );
+        assert!(state.published_for(resized));
+        assert_eq!(state.last_valid(resized), Some(&resized_frame));
+    }
+
+    #[test]
+    fn spout_follow_epoch_fence_rejects_rotated_owner_before_physical_send() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let first = engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .unwrap();
+        first.complete().unwrap();
+        let stale_epoch = engine.output_ownership_status().epoch;
+        let second = engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .unwrap();
+        second.complete().unwrap();
+        let current_epoch = engine.output_ownership_status().epoch;
+        assert_ne!(stale_epoch, current_epoch);
+
+        let stale = TimelineFollowOutputFrameKey {
+            epoch: stale_epoch,
+            generation: 34,
+            output_id: 17,
+            width: 4,
+            height: 2,
+        };
+        let current = TimelineFollowOutputFrameKey {
+            epoch: current_epoch,
+            ..stale
+        };
+        assert!(
+            !timeline_follow_epoch_matches_ready_owner(&engine, stale),
+            "stale Follow frame must be rejected before Spout send or Applied ACK"
+        );
+        assert!(timeline_follow_epoch_matches_ready_owner(&engine, current));
+    }
+
+    #[test]
+    fn spout_follow_fault_fences_before_rejected_ack_then_retries_exactly() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let activation = engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .unwrap();
+        activation.complete().unwrap();
+        let key = TimelineFollowOutputFrameKey {
+            epoch: engine.output_ownership_status().epoch,
+            generation: 34,
+            output_id: 17,
+            width: 4,
+            height: 2,
+        };
+        let mut state = TimelineFollowOutputState::default();
+        let (failure_lease, failed_key) = fence_timeline_follow_fault_before_ack(
+            &engine,
+            &mut state,
+            key,
+            "injected Spout send failure".to_string(),
+        );
+        assert_eq!(
+            engine.output_ownership_status().state,
+            OutputOwnershipState::Failed
+        );
+        assert!(engine.acquire_video_output().is_err());
+        let now = Instant::now();
+        assert!(state
+            .try_publish_ack(now, |_| Err("injected ACK timeout".to_string()))
+            .is_err());
+        assert_eq!(
+            engine.output_ownership_status().state,
+            OutputOwnershipState::Failed
+        );
+        assert!(engine.acquire_video_output().is_err());
+        assert!(state
+            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, |_| Ok(()))
+            .unwrap());
+        assert_ne!(failed_key.epoch, key.epoch);
+        assert!(state.published_for(failed_key));
+        drop(failure_lease);
+    }
+
+    #[test]
+    fn spout_follow_failure_fence_acknowledges_fault_at_failed_epoch_and_resolves_hold() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let activation = engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .unwrap();
+        activation.complete().unwrap();
+        let output_id = 92_201;
+        let output = follow_video_snapshot(output_id, 4, 2, true)
+            .outputs
+            .into_iter()
+            .next()
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::AddVideoOutput(output))
+            .unwrap();
+
+        let audio_layer = protocol::TimelineLayerSummary {
+            id: 2,
+            label: "Audio".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: false,
+            kind: protocol::TimelineLayerKind::Audio,
+        };
+        let mut source = protocol::TimelineSnapshot {
+            id: protocol::TimelineId(92_202),
+            label: "Spout failed-epoch Follow source".to_string(),
+            layers: vec![audio_layer.clone()],
+            audio_clips: vec![protocol::TimelineAudioClipSummary {
+                id: 92_204,
+                layer_id: 2,
+                media_asset_id: None,
+                path: "memory://spout-failed-epoch-follow.wav".to_string(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 100,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            duration_ms: 100,
+            ..protocol::TimelineSnapshot::default()
+        };
+        source.follow = Some(protocol::TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: protocol::TimelineId(92_203),
+            duration: protocol::VideoClipTakeDuration::milliseconds(10),
+            curve: protocol::VideoLayerTransitionCurve::Linear,
+            video_kind: protocol::VideoClipTakeKind::Crossfade,
+            lighting_policy: protocol::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: None,
+            preroll_ms: 0,
+            trans_cadence_bars: 4,
+            fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
+        });
+        let target = protocol::TimelineSnapshot {
+            id: protocol::TimelineId(92_203),
+            label: "Spout failed-epoch Follow target".to_string(),
+            layers: vec![audio_layer],
+            duration_ms: 100,
+            ..protocol::TimelineSnapshot::default()
+        };
+        engine
+            .apply_timeline_bank_published(
+                vec![source, target],
+                protocol::TimelineId(92_202),
+                false,
+            )
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::SeekTimeline(90))
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::SetTimelinePlaying(true))
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let follow = loop {
+            if let Some(follow) = engine.timeline_follow_video_render_snapshot() {
+                if matches!(
+                    engine.timeline_follow_runtime_status(follow.epoch).status,
+                    protocol::TimelineFollowRuntimeStatus::Settling
+                ) {
+                    break follow;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Spout Follow never entered settlement"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let old_key = TimelineFollowOutputFrameKey {
+            epoch: follow.epoch,
+            generation: follow.generation,
+            output_id,
+            width: 4,
+            height: 2,
+        };
+        assert_eq!(old_key.epoch, engine.output_ownership_status().epoch);
+
+        let mut state = TimelineFollowOutputState::default();
+        let (failure_lease, failed_key) = fence_timeline_follow_fault_before_ack(
+            &engine,
+            &mut state,
+            old_key,
+            "injected Spout renderer failure".to_string(),
+        );
+        assert_ne!(failed_key.epoch, old_key.epoch);
+        assert!(engine
+            .acknowledge_timeline_follow_settlement_published(
+                old_key.settlement_ack(TimelineFollowSettlementAckResult::Fault {
+                    fault: "stale pre-fence Spout fault".to_string(),
+                }),
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err()
+            .contains("epoch"));
+        let mut publish_attempts = 0;
+        publish_timeline_follow_output_result_until_resolved_with(
+            &engine,
+            &mut state,
+            failed_key,
+            TimelineFollowSettlementAckResult::Fault {
+                fault: "injected Spout renderer failure".to_string(),
+            },
+            || false,
+            |ack| {
+                publish_attempts += 1;
+                engine.acknowledge_timeline_follow_settlement_published(
+                    ack.clone(),
+                    Instant::now() + Duration::from_secs(1),
+                )?;
+                if publish_attempts == 1 {
+                    assert!(
+                        engine.timeline_follow_video_render_snapshot().is_none(),
+                        "the first physical Fault ACK must retire the presenter"
+                    );
+                    Err("injected terminal ACK reply loss".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert_eq!(
+            publish_attempts, 2,
+            "the exact Fault ACK must replay through the engine terminal receipt"
+        );
+        assert!(state.published_for(failed_key));
+        let runtime = engine.snapshot().timeline.follow_runtime;
+        assert_eq!(runtime.status, protocol::TimelineFollowRuntimeStatus::Held);
+        assert!(matches!(
+            runtime.outcome,
+            Some(protocol::TimelineFollowOutcome::Held)
+        ));
+        drop(failure_lease);
+    }
+
+    #[test]
+    fn spout_follow_applied_final_ack_retries_terminal_receipt_after_reply_loss() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let activation = engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .unwrap();
+        activation.complete().unwrap();
+        let output_id = 94_201;
+        let output = follow_video_snapshot(output_id, 4, 2, true)
+            .outputs
+            .into_iter()
+            .next()
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::AddVideoOutput(output))
+            .unwrap();
+        let audio_layer = protocol::TimelineLayerSummary {
+            id: 2,
+            label: "Audio".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: false,
+            kind: protocol::TimelineLayerKind::Audio,
+        };
+        let mut source = protocol::TimelineSnapshot {
+            id: protocol::TimelineId(94_202),
+            label: "Spout Applied receipt source".to_string(),
+            layers: vec![audio_layer.clone()],
+            audio_clips: vec![protocol::TimelineAudioClipSummary {
+                id: 94_204,
+                layer_id: 2,
+                media_asset_id: None,
+                path: "memory://spout-applied-receipt.wav".to_string(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 100,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            duration_ms: 100,
+            ..protocol::TimelineSnapshot::default()
+        };
+        source.follow = Some(protocol::TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: protocol::TimelineId(94_203),
+            duration: protocol::VideoClipTakeDuration::milliseconds(10),
+            curve: protocol::VideoLayerTransitionCurve::Linear,
+            video_kind: protocol::VideoClipTakeKind::Crossfade,
+            lighting_policy: protocol::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: None,
+            preroll_ms: 0,
+            trans_cadence_bars: 4,
+            fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
+        });
+        let target = protocol::TimelineSnapshot {
+            id: protocol::TimelineId(94_203),
+            label: "Spout Applied receipt target".to_string(),
+            layers: vec![audio_layer],
+            duration_ms: 100,
+            ..protocol::TimelineSnapshot::default()
+        };
+        engine
+            .apply_timeline_bank_published(
+                vec![source, target],
+                protocol::TimelineId(94_202),
+                false,
+            )
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::SeekTimeline(90))
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::SetTimelinePlaying(true))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let follow = loop {
+            if let Some(follow) = engine.timeline_follow_video_render_snapshot() {
+                if matches!(
+                    engine.timeline_follow_runtime_status(follow.epoch).status,
+                    protocol::TimelineFollowRuntimeStatus::Settling
+                ) {
+                    break follow;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Spout Applied Follow never entered settlement"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        engine
+            .acknowledge_timeline_follow_settlement_published(
+                TimelineFollowSettlementAck {
+                    epoch: follow.epoch,
+                    generation: follow.generation,
+                    domain: TimelineFollowSettlementDomain::Audio,
+                    consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                    result: TimelineFollowSettlementAckResult::Applied,
+                },
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        let key = TimelineFollowOutputFrameKey {
+            epoch: follow.epoch,
+            generation: follow.generation,
+            output_id,
+            width: 4,
+            height: 2,
+        };
+        let mut state = TimelineFollowOutputState::default();
+        let mut publish_attempts = 0;
+        publish_timeline_follow_output_result_until_resolved_with(
+            &engine,
+            &mut state,
+            key,
+            TimelineFollowSettlementAckResult::Applied,
+            || false,
+            |ack| {
+                publish_attempts += 1;
+                engine.acknowledge_timeline_follow_settlement_published(
+                    ack.clone(),
+                    Instant::now() + Duration::from_secs(1),
+                )?;
+                if publish_attempts == 1 {
+                    assert!(engine.timeline_follow_video_render_snapshot().is_none());
+                    Err("injected Spout Applied ACK reply loss".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert_eq!(publish_attempts, 2);
+        assert!(state.published_for(key));
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.timeline.id, protocol::TimelineId(94_203));
+        assert!(matches!(
+            snapshot.timeline.follow_runtime.outcome,
+            Some(protocol::TimelineFollowOutcome::Completed)
+        ));
+    }
 
     #[test]
     fn spout_output_effect_context_uses_runtime_clip_truth_and_ownership_epoch() {
@@ -1046,6 +2394,21 @@ mod tests {
         }
     }
 
+    fn injected_spout_render_decision() -> TimelineFollowOutputRenderDecision {
+        let frame = injected_spout_frame();
+        TimelineFollowOutputRenderDecision::Frame {
+            key: TimelineFollowOutputFrameKey {
+                epoch: 0,
+                generation: 0,
+                output_id: 701,
+                width: frame.width,
+                height: frame.height,
+            },
+            frame,
+            result: TimelineFollowSettlementAckResult::Applied,
+        }
+    }
+
     fn run_injected_spout_failure(render_failure: bool) {
         let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
             enabled: false,
@@ -1062,6 +2425,7 @@ mod tests {
         };
         let worker_stop = Arc::new(AtomicBool::new(false));
         let teardown_lease_slot = Arc::new(Mutex::new(None));
+        let render_failure_lease = Arc::new(Mutex::new(None));
         let render_error = render_failure.then(|| "injected Spout render failure".to_string());
         let worker_engine = engine.clone();
         let worker_stop_for_thread = Arc::clone(&worker_stop);
@@ -1074,9 +2438,10 @@ mod tests {
                 worker_stop_for_thread,
                 sender,
                 worker_teardown_lease_slot,
-                move || match &render_error {
+                render_failure_lease,
+                move |_| match &render_error {
                     Some(error) => Err(error.clone()),
-                    None => Ok(injected_spout_frame()),
+                    None => Ok(injected_spout_render_decision()),
                 },
             )
         });
@@ -1129,6 +2494,174 @@ mod tests {
     }
 
     #[test]
+    fn inner_render_fault_ack_retry_transfers_one_fence_through_sender_teardown() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let initial_epoch = engine.output_ownership_status().epoch;
+        let drop_started = Arc::new(AtomicBool::new(false));
+        let allow_drop = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let sender = InjectedSpoutSender {
+            send_error: None,
+            drop_started: Arc::clone(&drop_started),
+            allow_drop: Arc::clone(&allow_drop),
+            dropped: Arc::clone(&dropped),
+        };
+        let worker_stop = Arc::new(AtomicBool::new(false));
+        let teardown_lease_slot = Arc::new(Mutex::new(None));
+        let render_failure_lease = Arc::new(Mutex::new(None));
+        let worker_engine = engine.clone();
+        let render_engine = engine.clone();
+        let worker = std::thread::spawn({
+            let worker_stop = Arc::clone(&worker_stop);
+            let teardown_lease_slot = Arc::clone(&teardown_lease_slot);
+            let render_failure_lease = Arc::clone(&render_failure_lease);
+            move || {
+                run_spout_output_worker(
+                    705,
+                    "Inner render-failure Spout",
+                    worker_engine,
+                    worker_stop,
+                    sender,
+                    teardown_lease_slot,
+                    render_failure_lease.clone(),
+                    move |follow_output_state| {
+                        let fault = "Spout output route 705 render failed: injected inner failure"
+                            .to_string();
+                        let key = TimelineFollowOutputFrameKey {
+                            epoch: render_engine.output_ownership_status().epoch,
+                            generation: 55,
+                            output_id: 705,
+                            width: 1,
+                            height: 1,
+                        };
+                        let (failure_lease, failed_key) = fence_timeline_follow_fault_before_ack(
+                            &render_engine,
+                            follow_output_state,
+                            key,
+                            fault.clone(),
+                        );
+                        // Exercise the actual inner Fault ACK retry before
+                        // handing its already-active fence to the worker.
+                        publish_timeline_follow_output_result_until_resolved(
+                            &render_engine,
+                            follow_output_state,
+                            failed_key,
+                            TimelineFollowSettlementAckResult::Fault {
+                                fault: fault.clone(),
+                            },
+                            || false,
+                        );
+                        match render_failure_lease.lock() {
+                            Ok(mut slot) => *slot = Some(failure_lease),
+                            Err(poisoned) => *poisoned.into_inner() = Some(failure_lease),
+                        }
+                        Err(fault)
+                    },
+                )
+            }
+        });
+
+        while !drop_started.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        let status_during_sender_drop = engine.output_ownership_status();
+        assert_eq!(
+            status_during_sender_drop.epoch,
+            initial_epoch + 1,
+            "inner render fence must transfer instead of being dropped and reacquired"
+        );
+        assert_eq!(
+            status_during_sender_drop.state,
+            protocol::OutputOwnershipState::Failed
+        );
+        assert!(engine.acquire_video_output().is_err());
+        assert!(engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .is_err());
+
+        allow_drop.store(true, Ordering::Release);
+        assert!(worker.join().unwrap().is_err());
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .is_err());
+        drop(teardown_lease_slot.lock().unwrap().take());
+
+        let rearmed = engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .unwrap();
+        rearmed.complete().unwrap();
+    }
+
+    #[test]
+    fn spout_startup_timeout_and_late_constructor_error_share_one_fence() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let activation = engine
+            .admit_output_activation(protocol::MachineOutputRole::Both)
+            .unwrap();
+        let creation_lease = activation.admit_resource_creation().unwrap();
+        let initial_epoch = engine.output_ownership_status().epoch;
+        let startup_failure_lease: SpoutStartupFailureLeaseSlot =
+            Arc::new(Mutex::new(SpoutStartupFailureFenceState::default()));
+        let worker_slot = Arc::clone(&startup_failure_lease);
+        let worker_engine = engine.clone();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (return_error_tx, return_error_rx) = mpsc::sync_channel(1);
+        let (failed_epoch_tx, failed_epoch_rx) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            entered_tx.send(()).unwrap();
+            return_error_rx.recv().unwrap();
+            let mut state = TimelineFollowOutputState::default();
+            let failed_key = fence_timeline_follow_fault_before_ack_in_spout_startup(
+                &worker_engine,
+                &mut state,
+                TimelineFollowOutputFrameKey {
+                    epoch: initial_epoch,
+                    generation: 67,
+                    output_id: 707,
+                    width: 1,
+                    height: 1,
+                },
+                "late Spout constructor error".to_string(),
+                &worker_slot,
+            );
+            creation_lease.retire();
+            failed_epoch_tx.send(failed_key.epoch).unwrap();
+            Err::<(), String>("late Spout constructor error".to_string())
+        });
+        entered_rx.recv().unwrap();
+
+        let timeout_epoch = ensure_spout_startup_failure_fence(
+            &engine,
+            &startup_failure_lease,
+            "Spout startup constructor timeout",
+        );
+        let failure_lease = take_spout_startup_failure_lease(&startup_failure_lease)
+            .expect("timeout must transfer its single fence to parent cleanup");
+        assert_eq!(timeout_epoch, initial_epoch + 1);
+        return_error_tx.send(()).unwrap();
+        assert_eq!(failed_epoch_rx.recv().unwrap(), timeout_epoch);
+        assert!(worker.join().unwrap().is_err());
+        assert_eq!(engine.output_ownership_status().epoch, initial_epoch + 1);
+        assert!(engine.acquire_video_output().is_err());
+        assert!(engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .is_err());
+        drop(failure_lease);
+
+        let rearmed = engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .unwrap();
+        rearmed.complete().unwrap();
+    }
+
+    #[test]
     fn injected_spout_send_failure_fences_while_frame_permit_is_held() {
         run_injected_spout_failure(false);
     }
@@ -1159,7 +2692,8 @@ mod tests {
             worker_stop,
             sender,
             Arc::clone(&teardown_lease_slot),
-            || Ok(injected_spout_frame()),
+            Arc::new(Mutex::new(None)),
+            |_| Ok(injected_spout_render_decision()),
         );
 
         assert!(result.is_ok());
@@ -1203,7 +2737,8 @@ mod tests {
                 worker_stop_for_thread,
                 sender,
                 worker_teardown_lease,
-                || Ok(injected_spout_frame()),
+                Arc::new(Mutex::new(None)),
+                |_| Ok(injected_spout_render_decision()),
             );
             if let Err(error) = &result {
                 record_spout_worker_failure(&worker_failure_for_thread, error.clone());

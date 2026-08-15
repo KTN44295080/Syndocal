@@ -60,16 +60,19 @@ use protocol::{
     RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
     StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary,
     TimelineAdvancedAuthoringSummary, TimelineAudioClipId, TimelineAudioClipSummary,
-    TimelineEventId, TimelineFollowSummary, TimelineGuideCueKind, TimelineGuideCueSummary,
-    TimelineId, TimelineItemGroupId, TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind,
-    TimelineLoopRegionSummary, TimelineLoopScale, TimelinePhaseSummary, TimelineSnapRequest,
-    TimelineSnapshot, TimelineTrackKind, TimelineVideoClipSummary, TouchControlBinding,
-    TouchFeaturePresetTarget, TouchSurfaceSummary, ValueEffectRequest, Vec3,
-    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoClipRuntimeSnapshot,
-    VideoClipSlotId, VideoClipSlotSummary, VideoClipTakeDuration, VideoClipTakeDurationUnit,
-    VideoClipTakeKind, VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary,
-    VideoEffectScope, VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary,
-    VideoIsfEffectSummary, VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
+    TimelineEventId, TimelineFollowRuntimeStatusSnapshot, TimelineFollowSettlementAck,
+    TimelineFollowSettlementAckResult, TimelineFollowSettlementConsumerId,
+    TimelineFollowSettlementDomain, TimelineFollowSettlementState, TimelineFollowSummary,
+    TimelineGuideCueKind, TimelineGuideCueSummary, TimelineId, TimelineItemGroupId,
+    TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind, TimelineLoopRegionSummary,
+    TimelineLoopScale, TimelinePhaseSummary, TimelineSnapRequest, TimelineSnapshot,
+    TimelineTrackKind, TimelineVideoClipSummary, TouchControlBinding, TouchFeaturePresetTarget,
+    TouchSurfaceSummary, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBackendState, VideoBlendMode, VideoClipRuntimeSnapshot, VideoClipSlotId,
+    VideoClipSlotSummary, VideoClipTakeDuration, VideoClipTakeDurationUnit, VideoClipTakeKind,
+    VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary, VideoEffectScope,
+    VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
+    VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
     VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
     VideoLayerTransitionTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
@@ -889,6 +892,33 @@ struct TimelineAdvancedAuthoritativeResult {
     mutation: ProjectHistoryMutationResult,
 }
 
+/// Runtime-only Follow abort input. The caller must bind both the rendered
+/// output epoch and the observed Follow generation; project E/R/H is carried
+/// beside this DTO by the authoritative terminal lane.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TimelineFollowAbortRequest {
+    expected_follow_epoch: u64,
+    expected_generation: u64,
+}
+
+/// Truthful, project-authority-fenced Follow runtime observation. It contains
+/// no authored Timeline data, no history mutation and no synthetic revision.
+#[derive(Debug, Clone, Serialize)]
+struct TimelineFollowRuntimeReport {
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    runtime: TimelineFollowRuntimeStatusSnapshot,
+}
+
+/// Immutable terminal acknowledgement for a successful Follow abort. The
+/// engine owns the physical publication barrier; this receipt only enables an
+/// exact UI retry after its reply was lost.
+#[derive(Debug, Clone, Serialize)]
+struct TimelineFollowAbortAuthoritativeResult {
+    runtime: TimelineFollowRuntimeStatusSnapshot,
+}
+
 /// Legacy ISF commands now share the C1 server-authoritative history lane.
 /// Keep the historic effect-summary shape flat for existing controllers while
 /// exposing the nested mutation envelope the frontend uses to advance E/R/H.
@@ -926,6 +956,13 @@ enum VideoEffectCatalogAuthoritativeTerminalResult {
     Applied(VideoEffectCatalogAuthoritativeResult),
     Timeline(TimelineAdvancedAuthoritativeResult),
     Runtime(VideoLayerTransitionAuthoritativeRuntimeOutcome),
+    TimelineFollowAbort(TimelineFollowAbortAuthoritativeResult),
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TimelineFollowOperationTerminalEnvelope {
+    shape_fingerprint: String,
+    terminal: TimelineFollowAbortAuthoritativeResult,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5435,6 +5472,23 @@ fn timeline_advanced_authoritative_shape(
     })
 }
 
+/// Follow aborts are runtime-only, but an exact retry must still bind the
+/// caller's observed output epoch/generation. Reusing a request ID with a
+/// different ABA token is a shape conflict, never a second abort.
+fn timeline_follow_abort_authoritative_shape(
+    request: &TimelineFollowAbortRequest,
+) -> Result<VideoEffectCatalogAuthoritativeRequestShape, String> {
+    let payload = serde_json::to_vec(request)
+        .map_err(|error| format!("Unable to encode Timeline Follow abort shape: {error}"))?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"syndocal-timeline-follow-abort-authoritative-shape-v1");
+    hasher.update((payload.len() as u64).to_le_bytes());
+    hasher.update(payload);
+    Ok(VideoEffectCatalogAuthoritativeRequestShape {
+        fingerprint: format!("{:x}", hasher.finalize()),
+    })
+}
+
 /// Compatibility commands share the C1 receipt namespace, but their stable
 /// retry shape is the legacy command intent rather than the whole A-derived
 /// catalog. Rebuilding that catalog before receipt lookup would turn a lost
@@ -9000,6 +9054,10 @@ fn apply_video_effect_catalog_authoritative_command_impl(
             "Video effect catalog command received a runtime transition terminal result"
                 .to_string(),
         ),
+        VideoEffectCatalogAuthoritativeTerminalResult::TimelineFollowAbort(_) => Err(
+            "Video effect catalog command received a Timeline Follow abort terminal result"
+                .to_string(),
+        ),
     }
 }
 
@@ -9049,6 +9107,9 @@ fn apply_timeline_advanced_authoritative_command_impl(
         }
         VideoEffectCatalogAuthoritativeTerminalResult::Runtime(_) => {
             Err("Timeline command received a runtime transition terminal result".to_string())
+        }
+        VideoEffectCatalogAuthoritativeTerminalResult::TimelineFollowAbort(_) => {
+            Err("Timeline command received a Timeline Follow abort terminal result".to_string())
         }
     }
 }
@@ -9149,6 +9210,7 @@ fn get_video_effect_catalog_operation_terminal_result_impl(
         }
         VideoEffectCatalogAuthoritativeTerminalResult::Applied(_) => None,
         VideoEffectCatalogAuthoritativeTerminalResult::Timeline(_) => None,
+        VideoEffectCatalogAuthoritativeTerminalResult::TimelineFollowAbort(_) => None,
     };
     Ok(Some(VideoEffectCatalogAuthoritativeTerminalEnvelope {
         shape_fingerprint: record.shape.fingerprint,
@@ -9196,6 +9258,269 @@ fn get_timeline_advanced_operation_terminal_result(
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     get_video_effect_catalog_operation_terminal_result_impl(
         &state,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+/// Read the live Follow transport under the exact project authority which the
+/// caller rendered. Full Operator Lock permits this observation; it is never
+/// an authored mutation and carries no terminal receipt.
+#[allow(clippy::too_many_arguments)]
+fn get_timeline_follow_runtime_impl(
+    state: &AppState,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<TimelineFollowRuntimeReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    if coordinator.epoch != expected_epoch
+        || coordinator.revision != expected_revision
+        || coordinator.checkpoint_hash != expected_checkpoint_hash
+    {
+        return Err(
+            "Project changed since this Timeline Follow runtime read was issued; retry".to_string(),
+        );
+    }
+    let runtime_epoch = state.engine.output_ownership_status().epoch;
+    Ok(TimelineFollowRuntimeReport {
+        project_epoch: coordinator.epoch,
+        project_revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        runtime: state.engine.timeline_follow_runtime_status(runtime_epoch),
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn get_timeline_follow_runtime(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<TimelineFollowRuntimeReport, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    get_timeline_follow_runtime_impl(
+        &state,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn abort_timeline_follow_authoritative_command_impl(
+    state: &AppState,
+    request: TimelineFollowAbortRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<TimelineFollowAbortAuthoritativeResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let key = video_effect_catalog_authoritative_operation_key(
+        request_id,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let expected_authority = video_effect_catalog_authoritative_expected_authority(&key);
+    let shape = timeline_follow_abort_authoritative_shape(&request)?;
+    let terminal = state
+        .media_asset_operations
+        .video_effect_catalog_authoritative_terminal_single_flight(&key, &shape, || {
+            let (_external_admission, mut coordinator) = (
+                lock_project_external_command_admission(state)?,
+                lock_project_coordinator(state)?,
+            );
+            // Follow abort is a runtime safety action.  It deliberately uses
+            // the same E/R/H and transaction fences as the clip-runtime lane,
+            // but not that lane's Full-Lock performance-command policy: an
+            // operator must always be able to abort a live Follow while the
+            // authored project remains immutable.
+            reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+            ensure_project_transaction_owner_registered(state, &owner_id)?;
+            ensure_project_epoch_matches(&coordinator, expected_epoch)?;
+            ensure_no_pending_project_transaction(&coordinator)?;
+            if media_asset_prepare_authority(&coordinator) != expected_authority {
+                return Err(
+                    "Project changed since this Timeline Follow abort was issued; retry"
+                        .to_string(),
+                );
+            }
+            if state.project_transaction_active.load(Ordering::Acquire) {
+                return Err(
+                    "Project transaction is active; retry the Timeline Follow abort".to_string(),
+                );
+            }
+            let current_follow_epoch = state.engine.output_ownership_status().epoch;
+            if current_follow_epoch != request.expected_follow_epoch {
+                return Err(
+                    "Timeline Follow abort output epoch is stale; read runtime and retry"
+                        .to_string(),
+                );
+            }
+            let observed = state
+                .engine
+                .timeline_follow_runtime_status(current_follow_epoch);
+            if observed.generation != request.expected_generation {
+                return Err(
+                    "Timeline Follow abort generation is stale; read runtime and retry".to_string(),
+                );
+            }
+            state.engine.abort_timeline_follow_published(
+                request.expected_generation,
+                Instant::now() + Duration::from_secs(2),
+            )?;
+            let result_epoch = state.engine.output_ownership_status().epoch;
+            Ok(
+                VideoEffectCatalogAuthoritativeTerminalResult::TimelineFollowAbort(
+                    TimelineFollowAbortAuthoritativeResult {
+                        runtime: state.engine.timeline_follow_runtime_status(result_epoch),
+                    },
+                ),
+            )
+        })?;
+    match terminal {
+        VideoEffectCatalogAuthoritativeTerminalResult::TimelineFollowAbort(result) => Ok(result),
+        VideoEffectCatalogAuthoritativeTerminalResult::Applied(_) => {
+            Err("Timeline Follow abort received a video effect catalog terminal result".to_string())
+        }
+        VideoEffectCatalogAuthoritativeTerminalResult::Timeline(_) => {
+            Err("Timeline Follow abort received a Timeline terminal result".to_string())
+        }
+        VideoEffectCatalogAuthoritativeTerminalResult::Runtime(_) => {
+            Err("Timeline Follow abort received a video transition terminal result".to_string())
+        }
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn abort_timeline_follow(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: TimelineFollowAbortRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<TimelineFollowAbortAuthoritativeResult, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    abort_timeline_follow_authoritative_command_impl(
+        &state,
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        Some(binding),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn get_timeline_follow_operation_terminal_result_impl(
+    state: &AppState,
+    request: TimelineFollowAbortRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+    caller_binding: Option<VideoClipSlotCallerBinding>,
+) -> Result<Option<TimelineFollowOperationTerminalEnvelope>, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    let _rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let binding = resolve_video_clip_slot_caller_binding(state, &owner_id, caller_binding)?;
+    let key = video_effect_catalog_authoritative_operation_key(
+        request_id,
+        &binding,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let shape = timeline_follow_abort_authoritative_shape(&request)?;
+    state
+        .media_asset_operations
+        .ensure_video_effect_catalog_authoritative_key_not_retired(&key)?;
+    let Some(record) = state
+        .media_asset_operations
+        .video_effect_catalog_authoritative_receipt(&key)
+    else {
+        return Ok(None);
+    };
+    if record.shape != shape {
+        return Err(format!(
+            "Timeline Follow abort operation completed with shape {}; query using its original epoch and generation",
+            record.shape.fingerprint
+        ));
+    }
+    match record.terminal {
+        VideoEffectCatalogAuthoritativeTerminalResult::TimelineFollowAbort(terminal) => {
+            Ok(Some(TimelineFollowOperationTerminalEnvelope {
+                shape_fingerprint: record.shape.fingerprint,
+                terminal,
+            }))
+        }
+        _ => Err(
+            "Timeline Follow abort operation received a terminal result for another command family"
+                .to_string(),
+        ),
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn get_timeline_follow_operation_terminal_result(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: TimelineFollowAbortRequest,
+    request_id: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<Option<TimelineFollowOperationTerminalEnvelope>, String> {
+    let binding =
+        capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    get_timeline_follow_operation_terminal_result_impl(
+        &state,
+        request,
         request_id,
         expected_epoch,
         expected_revision,
@@ -9372,6 +9697,10 @@ fn run_video_layer_transition_runtime_operation<T: Serialize>(
         VideoEffectCatalogAuthoritativeTerminalResult::Timeline(_) => {
             Err("Video transition runtime command received a Timeline terminal result".to_string())
         }
+        VideoEffectCatalogAuthoritativeTerminalResult::TimelineFollowAbort(_) => Err(
+            "Video transition runtime command received a Timeline Follow abort terminal result"
+                .to_string(),
+        ),
     }
 }
 
@@ -10497,6 +10826,10 @@ struct TimelineGuideAudioPlayback {
     stream: Option<rodio::OutputStream>,
     sink: Option<rodio::Sink>,
     suppress_existing_on_next_sync: bool,
+    /// The engine publishes this revision even when no Guide cue is queued;
+    /// it is the authoritative cancellation fence for a replaced Follow
+    /// generation/project image.
+    last_transport_revision: Option<u64>,
     active_generation: Option<u64>,
     last_sequence: u64,
     last_spoken_label: Option<String>,
@@ -10514,6 +10847,7 @@ impl Default for TimelineGuideAudioPlayback {
             stream: None,
             sink: None,
             suppress_existing_on_next_sync: false,
+            last_transport_revision: None,
             active_generation: None,
             last_sequence: 0,
             last_spoken_label: None,
@@ -10986,6 +11320,44 @@ struct MediaAudioSyncRuntime {
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
+/// Return the one pending captured Audio consumer, if the current Follow
+/// generation actually requires backend audio settlement. Empty/no-audio
+/// quorums are represented by the engine as N/A and must not be fabricated by
+/// the audio worker.
+fn pending_timeline_follow_audio_settlement_ack(
+    engine: &EngineHandle,
+    result: TimelineFollowSettlementAckResult,
+) -> Option<TimelineFollowSettlementAck> {
+    let epoch = engine.output_ownership_status().epoch;
+    let runtime = engine.timeline_follow_runtime_status(epoch);
+    pending_timeline_follow_audio_settlement_ack_from_runtime(&runtime, result)
+}
+
+fn pending_timeline_follow_audio_settlement_ack_from_runtime(
+    runtime: &TimelineFollowRuntimeStatusSnapshot,
+    result: TimelineFollowSettlementAckResult,
+) -> Option<TimelineFollowSettlementAck> {
+    let pending = runtime
+        .settlement
+        .as_ref()?
+        .domains
+        .iter()
+        .find(|domain| domain.domain == TimelineFollowSettlementDomain::Audio)?
+        .consumers
+        .iter()
+        .any(|consumer| {
+            consumer.consumer_id == TimelineFollowSettlementConsumerId::Audio
+                && consumer.state == TimelineFollowSettlementState::Pending
+        });
+    pending.then_some(TimelineFollowSettlementAck {
+        epoch: runtime.epoch,
+        generation: runtime.generation,
+        domain: TimelineFollowSettlementDomain::Audio,
+        consumer_id: TimelineFollowSettlementConsumerId::Audio,
+        result,
+    })
+}
+
 impl MediaAudioSyncRuntime {
     #[cfg(test)]
     fn idle_for_tests(program_handoff: Arc<ProgramAudioHandoffCoordinator>) -> Self {
@@ -11029,21 +11401,46 @@ impl MediaAudioSyncRuntime {
                         snapshot = engine.video_audio_runtime_snapshot();
                     }
 
-                    let active = audio
+                    let (active, timeline_sync_result) = audio
                         .lock()
                         .map(|mut audio| {
                             if !audio.sinks.is_empty() {
                                 audio.sync_to_video_layers(&snapshot.layers);
                             }
-                            audio.sync_to_timeline_audio(&snapshot.timeline_audio);
+                            let timeline_sync_result =
+                                audio.sync_to_timeline_audio_evidenced(&snapshot.timeline_audio);
                             audio.sync_metronome(&snapshot.timeline_audio);
                             audio.sync_timeline_guide(&snapshot.timeline_audio);
-                            !audio.sinks.is_empty()
-                                || !audio.timeline_sinks.is_empty()
-                                || audio.guide.sink.is_some()
-                                || snapshot.timeline_audio.playing
+                            (
+                                !audio.sinks.is_empty()
+                                    || !audio.timeline_sinks.is_empty()
+                                    || audio.guide.sink.is_some()
+                                    || snapshot.timeline_audio.playing,
+                                timeline_sync_result,
+                            )
                         })
-                        .unwrap_or(false);
+                        .unwrap_or_else(|_| {
+                            (
+                                false,
+                                Err("Timeline audio playback lock was poisoned".to_string()),
+                            )
+                        });
+                    // Never hold the Rodio/device mutex across an engine
+                    // publication acknowledgement. The ACK is generation
+                    // fenced, so a Follow that retired while device work was
+                    // in flight simply rejects this stale report.
+                    let audio_ack_result = match timeline_sync_result {
+                        Ok(()) => TimelineFollowSettlementAckResult::Applied,
+                        Err(fault) => TimelineFollowSettlementAckResult::Fault { fault },
+                    };
+                    if let Some(acknowledgement) =
+                        pending_timeline_follow_audio_settlement_ack(&engine, audio_ack_result)
+                    {
+                        let _ = engine.acknowledge_timeline_follow_settlement_published(
+                            acknowledgement,
+                            Instant::now() + Duration::from_secs(2),
+                        );
+                    }
                     let low_latency_poll = worker_handoff
                         .state
                         .lock()
@@ -12445,7 +12842,13 @@ impl MediaAudioPlayback {
         true
     }
 
-    fn sync_to_timeline_audio(&mut self, timeline: &engine::TimelineAudioRuntimeSnapshot) {
+    /// Sync only program Timeline clips. Metronome and Guide are intentionally
+    /// outside this result: neither is a Follow audio-settlement consumer, so
+    /// their device failures must not incorrectly fault a captured Follow.
+    fn sync_to_timeline_audio_evidenced(
+        &mut self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+    ) -> Result<(), String> {
         let now = Instant::now();
         let action = timeline_audio_transport_action(
             self.timeline_transport,
@@ -12462,7 +12865,7 @@ impl MediaAudioPlayback {
         };
         if !self.apply_timeline_transport_barrier(action, timeline.muted) {
             self.timeline_last_sync_error = None;
-            return;
+            return Ok(());
         }
 
         let mut active_clips = timeline
@@ -12591,6 +12994,14 @@ impl MediaAudioPlayback {
             }
         }
         self.timeline_last_sync_error = (!errors.is_empty()).then(|| errors.join("; "));
+        match self.timeline_last_sync_error.clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn sync_to_timeline_audio(&mut self, timeline: &engine::TimelineAudioRuntimeSnapshot) {
+        let _ = self.sync_to_timeline_audio_evidenced(timeline);
     }
 
     fn play_metronome_click(&mut self, accented: bool) -> Result<(), String> {
@@ -12623,6 +13034,14 @@ impl MediaAudioPlayback {
     }
 
     fn sync_timeline_guide(&mut self, timeline: &engine::TimelineAudioRuntimeSnapshot) {
+        // `guide_cues` is intentionally allowed to be empty for a newly
+        // published Follow generation. Transport revision is the durable
+        // engine fence, so it must cancel queued speech before we inspect the
+        // cue delta.
+        if self.guide.last_transport_revision != Some(timeline.transport_revision) {
+            self.guide.cancel_pending();
+            self.guide.last_transport_revision = Some(timeline.transport_revision);
+        }
         if !self.guide.enabled || !timeline.guide_enabled {
             self.guide.cancel_pending();
             self.guide.suppress_existing_on_next_sync = true;
@@ -27376,6 +27795,10 @@ where
         }
         VideoEffectCatalogAuthoritativeTerminalResult::Runtime(_) => Err(
             "Legacy video effect command received a runtime transition terminal result".to_string(),
+        ),
+        VideoEffectCatalogAuthoritativeTerminalResult::TimelineFollowAbort(_) => Err(
+            "Legacy video effect command received a Timeline Follow abort terminal result"
+                .to_string(),
         ),
     }
 }
@@ -47925,19 +48348,287 @@ fn start_native_video_test_pattern(
     ))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NativeTimelineFollowLastValidKey {
+    epoch: u64,
+    generation: u64,
+    output_id: VideoOutputId,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Clone)]
+struct NativeTimelineFollowLastValidFrame {
+    key: NativeTimelineFollowLastValidKey,
+    frame: video::VideoFrame,
+}
+
+#[derive(Debug, Clone)]
+enum NativeVideoOutputFrame {
+    Prepared(video::PreparedVideoOutput),
+    Follow {
+        frame: video::VideoFrame,
+        acknowledgement: TimelineFollowSettlementAck,
+    },
+}
+
+fn acknowledge_native_timeline_follow_video_settlement(
+    engine: &EngineHandle,
+    acknowledgement: TimelineFollowSettlementAck,
+) {
+    // A renderer thread is deliberately outside the engine command worker. A
+    // late acknowledgement is fenced by the captured epoch/generation and is
+    // therefore harmless; no physical present retry is attempted here.
+    let _ = engine.acknowledge_timeline_follow_settlement_published(
+        acknowledgement,
+        Instant::now() + Duration::from_secs(2),
+    );
+}
+
+fn native_timeline_follow_video_ack(
+    follow: &engine::TimelineFollowVideoRenderSnapshot,
+    output_id: VideoOutputId,
+    result: TimelineFollowSettlementAckResult,
+) -> TimelineFollowSettlementAck {
+    TimelineFollowSettlementAck {
+        epoch: follow.epoch,
+        generation: follow.generation,
+        domain: TimelineFollowSettlementDomain::Video,
+        consumer_id: TimelineFollowSettlementConsumerId::VideoOutput { output_id },
+        result,
+    }
+}
+
+fn report_native_timeline_follow_video_result(
+    engine: &EngineHandle,
+    output_id: VideoOutputId,
+    result: TimelineFollowSettlementAckResult,
+) {
+    if let Some(follow) = engine.timeline_follow_video_render_snapshot() {
+        acknowledge_native_timeline_follow_video_settlement(
+            engine,
+            native_timeline_follow_video_ack(&follow, output_id, result),
+        );
+    }
+}
+
+/// Capture the renderer context in the same ownership order as every other
+/// program-output renderer, then accept the Follow input only if its engine
+/// epoch still matches that context. A racing generation is rejected by the
+/// acknowledgement fence rather than being mixed into an unrelated output.
+fn capture_native_timeline_follow_video_render_snapshot(
+    engine: &EngineHandle,
+) -> Option<(
+    VideoOutputPreviewEffectSnapshot,
+    engine::TimelineFollowVideoRenderSnapshot,
+)> {
+    let context = capture_video_output_preview_effect_snapshot(engine);
+    let follow = engine.timeline_follow_video_render_snapshot()?;
+    (follow.epoch == context.project_render_epoch).then_some((context, follow))
+}
+
+fn prepare_native_timeline_follow_video_output(
+    renderer: &mut AppVideoPreviewRenderer,
+    context: &VideoOutputPreviewEffectSnapshot,
+    follow: &engine::TimelineFollowVideoRenderSnapshot,
+    output_id: VideoOutputId,
+    width: u32,
+    height: u32,
+    last_valid: &mut Option<NativeTimelineFollowLastValidFrame>,
+) -> Result<NativeVideoOutputFrame, String> {
+    let outgoing_output = follow
+        .outgoing_video
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+        .ok_or_else(|| format!("Timeline Follow outgoing output {output_id} is missing"))?;
+    let incoming_output = follow
+        .incoming_video
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+        .ok_or_else(|| format!("Timeline Follow incoming output {output_id} is missing"))?;
+    if outgoing_output.width != incoming_output.width
+        || outgoing_output.height != incoming_output.height
+    {
+        return Err(format!(
+            "Timeline Follow output {output_id} dimensions diverged: outgoing {}x{}, incoming {}x{}",
+            outgoing_output.width,
+            outgoing_output.height,
+            incoming_output.width,
+            incoming_output.height,
+        ));
+    }
+    if !outgoing_output.enabled || !incoming_output.enabled {
+        let byte_len = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| "Timeline Follow output dimensions exceed frame capacity".to_string())?;
+        return Ok(NativeVideoOutputFrame::Follow {
+            frame: video::VideoFrame {
+                layer_id: output_id,
+                width,
+                height,
+                pts_ms: 0,
+                duration_ms: 33,
+                format: video::VideoPixelFormat::Rgba8,
+                data: vec![0; byte_len],
+            },
+            acknowledgement: native_timeline_follow_video_ack(
+                follow,
+                output_id,
+                TimelineFollowSettlementAckResult::NotApplicable,
+            ),
+        });
+    }
+    let output_key = NativeTimelineFollowLastValidKey {
+        epoch: follow.epoch,
+        generation: follow.generation,
+        output_id,
+        width,
+        height,
+    };
+    if last_valid
+        .as_ref()
+        .is_some_and(|cached| cached.key != output_key)
+    {
+        last_valid.take();
+    }
+
+    // The evidenced production output renderer retains the established
+    // Clip/Composition/Group/Output chain, blackout and mapping semantics for
+    // each unweighted transport before the canonical Follow combiner runs.
+    // Its evidence remains authoritative: a cached side is never mistaken for
+    // fresh physical settlement evidence.
+    let outgoing = renderer
+        .render_output_preview_with_effects_and_transitions_evidenced(
+            &follow.outgoing_video,
+            context.render_context(),
+            &context.snapshot.video_transition_runtime,
+            output_id,
+            width,
+            height,
+        )
+        .map_err(|error| format!("Timeline Follow outgoing output render failed: {error:?}"))?;
+    let incoming = renderer
+        .render_output_preview_with_effects_and_transitions_evidenced(
+            &follow.incoming_video,
+            context.render_context(),
+            &context.snapshot.video_transition_runtime,
+            output_id,
+            width,
+            height,
+        )
+        .map_err(|error| format!("Timeline Follow incoming output render failed: {error:?}"))?;
+    let transition_chain = follow
+        .transition_effect_chain
+        .as_ref()
+        .map(|expected| {
+            let resolved =
+                video::resolve_video_effect_chain(&follow.outgoing_video, &expected.scope)
+                    .map_err(|fault| {
+                        format!(
+                            "Timeline Follow Transition chain is invalid: {}",
+                            fault.message
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        "Timeline Follow Transition chain disappeared from the source snapshot"
+                            .to_string()
+                    })?;
+            if resolved.chain_id != Some(expected.id) {
+                return Err(
+                    "Timeline Follow Transition chain identity changed before presentation"
+                        .to_string(),
+                );
+            }
+            Ok(resolved)
+        })
+        .transpose()?;
+    let rendered = renderer
+        .render_follow_output_transition_rgba8(
+            &outgoing.frame,
+            &incoming.frame,
+            follow.kind,
+            follow.curve,
+            follow.progress_millis,
+            follow.source_timeline_id,
+            transition_chain.as_ref(),
+            last_valid.as_ref().map(|cached| &cached.frame),
+        )
+        .map_err(|error| format!("Timeline Follow output transition failed: {error:?}"))?;
+    let side_error = outgoing.evidence.freshness != video::VideoOutputRenderFreshness::Fresh
+        || incoming.evidence.freshness != video::VideoOutputRenderFreshness::Fresh;
+    let acknowledgement =
+        if !side_error && rendered.evidence.freshness == video::VideoOutputRenderFreshness::Fresh {
+            last_valid.replace(NativeTimelineFollowLastValidFrame {
+                key: output_key,
+                frame: rendered.frame.clone(),
+            });
+            native_timeline_follow_video_ack(
+                follow,
+                output_id,
+                TimelineFollowSettlementAckResult::Applied,
+            )
+        } else {
+            let mut faults = Vec::new();
+            if let Some(error) = outgoing.evidence.error {
+                faults.push(format!("outgoing: {error}"));
+            }
+            if let Some(error) = incoming.evidence.error {
+                faults.push(format!("incoming: {error}"));
+            }
+            if let Some(error) = rendered.evidence.error {
+                faults.push(format!("transition: {error}"));
+            }
+            native_timeline_follow_video_ack(
+                follow,
+                output_id,
+                TimelineFollowSettlementAckResult::Fault {
+                    fault: if faults.is_empty() {
+                        "Timeline Follow output used non-fresh last-valid evidence".to_string()
+                    } else {
+                        faults.join("; ")
+                    },
+                },
+            )
+        };
+    Ok(NativeVideoOutputFrame::Follow {
+        frame: rendered.frame,
+        acknowledgement,
+    })
+}
+
 fn prepare_native_video_output(
     renderer: &mut AppVideoPreviewRenderer,
     engine: &EngineHandle,
     output_id: VideoOutputId,
     width: u32,
     height: u32,
-) -> Result<video::PreparedVideoOutput, String> {
+    follow_last_valid: &mut Option<NativeTimelineFollowLastValidFrame>,
+) -> Result<NativeVideoOutputFrame, String> {
+    if let Some((context, follow)) = capture_native_timeline_follow_video_render_snapshot(engine) {
+        renderer
+            .frame_provider_mut()
+            .set_bpm(Some(context.snapshot.clock.bpm));
+        return prepare_native_timeline_follow_video_output(
+            renderer,
+            &context,
+            &follow,
+            output_id,
+            width.max(1),
+            height.max(1),
+            follow_last_valid,
+        );
+    }
+    follow_last_valid.take();
     let snapshot = engine.snapshot();
     renderer
         .frame_provider_mut()
         .set_bpm(Some(snapshot.clock.bpm));
     renderer
         .prepare_output_frames(&snapshot.video, output_id, width.max(1), height.max(1))
+        .map(NativeVideoOutputFrame::Prepared)
         .map_err(|error| format!("{error:?}"))
 }
 
@@ -47974,7 +48665,14 @@ fn start_native_video_live_output(
     label: String,
     teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
 ) -> Result<NativeVideoOutputWorker, String> {
-    ensure_video_output_allowed(&engine)?;
+    if let Err(error) = ensure_video_output_allowed(&engine) {
+        report_native_timeline_follow_video_result(
+            &engine,
+            output_id,
+            TimelineFollowSettlementAckResult::NotApplicable,
+        );
+        return Err(error);
+    }
     let initial_size = window.inner_size().map_err(|error| error.to_string())?;
     let window = Arc::new(window);
     let mut presenter = video::GpuSurfacePresenter::new(
@@ -47993,6 +48691,7 @@ fn start_native_video_live_output(
         video::VideoRuntimeConfig::default(),
         video::DecoderBackedFrameProvider::new(decoder).with_prefetch(0, 33),
     );
+    let mut initial_follow_last_valid = None;
     let first_started = Instant::now();
     let first_result = prepare_native_video_output(
         &mut renderer,
@@ -48000,16 +48699,28 @@ fn start_native_video_live_output(
         output_id,
         initial_size.width,
         initial_size.height,
+        &mut initial_follow_last_valid,
     )
     .and_then(|first_output| {
         let _video_permit = engine.acquire_video_output()?;
-        presenter
-            .present_prepared_output(
-                &first_output,
-                initial_size.width.max(1),
-                initial_size.height.max(1),
-            )
-            .map_err(|error| format!("Native video output first frame failed: {error:?}"))
+        match first_output {
+            NativeVideoOutputFrame::Prepared(prepared) => presenter
+                .present_prepared_output(
+                    &prepared,
+                    initial_size.width.max(1),
+                    initial_size.height.max(1),
+                )
+                .map_err(|error| format!("Native video output first frame failed: {error:?}")),
+            NativeVideoOutputFrame::Follow {
+                frame,
+                acknowledgement,
+            } => presenter
+                .present_rgba8(&frame)
+                .map_err(|error| format!("Native Timeline Follow first frame failed: {error:?}"))
+                .map(|()| {
+                    acknowledge_native_timeline_follow_video_settlement(&engine, acknowledgement);
+                }),
+        }
     });
     record_native_video_output_metrics(
         &metrics,
@@ -48020,7 +48731,18 @@ fn start_native_video_live_output(
         renderer.frame_provider().decoder().diagnostics(),
         first_result.as_ref().err().cloned(),
     );
+    if let Err(error) = &first_result {
+        report_native_timeline_follow_video_result(
+            &engine,
+            output_id,
+            TimelineFollowSettlementAckResult::Fault {
+                fault: format!("Native Timeline Follow first output frame failed: {error}"),
+            },
+        );
+    }
     first_result?;
+
+    let mut follow_last_valid = initial_follow_last_valid;
 
     let stop = Arc::new(AtomicBool::new(false));
     let event_stop = Arc::clone(&stop);
@@ -48077,16 +48799,42 @@ fn start_native_video_live_output(
                                 output_id,
                                 size.width,
                                 size.height,
+                                &mut follow_last_valid,
                             )
                         },
-                        |presenter, prepared| {
-                            presenter
+                        |presenter, output| match output {
+                            NativeVideoOutputFrame::Prepared(prepared) => presenter
                                 .present_prepared_output(&prepared, size.width, size.height)
                                 .map_err(|error| {
                                     format!("Native video output present failed: {error:?}")
+                                }),
+                            NativeVideoOutputFrame::Follow {
+                                frame,
+                                acknowledgement,
+                            } => presenter
+                                .present_rgba8(&frame)
+                                .map_err(|error| {
+                                    format!(
+                                        "Native Timeline Follow output present failed: {error:?}"
+                                    )
                                 })
+                                .map(|()| {
+                                    acknowledge_native_timeline_follow_video_settlement(
+                                        &engine,
+                                        acknowledgement,
+                                    );
+                                }),
                         },
                         |error| {
+                            report_native_timeline_follow_video_result(
+                                &engine,
+                                output_id,
+                                TimelineFollowSettlementAckResult::Fault {
+                                    fault: format!(
+                                        "Native Timeline Follow output physical failure: {error}"
+                                    ),
+                                },
+                            );
                             let result = native_video_output_worker_result(
                                 &worker_stop,
                                 engine.output_ownership_status().state,
@@ -48124,8 +48872,18 @@ fn start_native_video_live_output(
                                 == protocol::OutputOwnershipState::Transitioning
                                 && wait_for_native_video_output_transition_retry(&worker_stop)
                             {
+                                report_native_timeline_follow_video_result(
+                                    &engine,
+                                    output_id,
+                                    TimelineFollowSettlementAckResult::NotApplicable,
+                                );
                                 continue;
                             }
+                            report_native_timeline_follow_video_result(
+                                &engine,
+                                output_id,
+                                TimelineFollowSettlementAckResult::NotApplicable,
+                            );
                             break;
                         }
                         Err(NativeVideoOutputLiveFrameError::Physical(error)) => {
@@ -52732,6 +53490,74 @@ pub(crate) mod tests {
         );
         let (_, pending) = timeline_guide_cue_delta(Some(5), 2, &cues);
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn timeline_guide_transport_revision_cancels_even_when_no_cues_are_published() {
+        let mut playback = MediaAudioPlayback::default();
+        playback.guide.enabled = true;
+        playback.guide.last_transport_revision = Some(41);
+        playback.guide.active_generation = Some(41);
+        playback.guide.last_sequence = 9;
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            transport_revision: 42,
+            guide_enabled: true,
+            guide_cues: Vec::new(),
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+
+        playback.sync_timeline_guide(&timeline);
+
+        assert_eq!(playback.guide.last_transport_revision, Some(42));
+        assert_eq!(playback.guide.active_generation, None);
+        assert_eq!(playback.guide.last_sequence, 0);
+        assert!(playback.guide.sink.is_none());
+    }
+
+    #[test]
+    fn timeline_follow_audio_ack_only_targets_the_captured_pending_consumer() {
+        let mut runtime = TimelineFollowRuntimeStatusSnapshot {
+            epoch: 71,
+            generation: 19,
+            settlement: Some(protocol::TimelineFollowSettlementSummary {
+                started_at_ms: 0,
+                deadline_ms: 2_000,
+                state: TimelineFollowSettlementState::Pending,
+                progress_millis: 1_000,
+                fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
+                fault: None,
+                domains: vec![protocol::TimelineFollowSettlementDomainSummary {
+                    domain: TimelineFollowSettlementDomain::Audio,
+                    state: TimelineFollowSettlementState::Pending,
+                    fault: None,
+                    consumers: vec![protocol::TimelineFollowSettlementConsumerSummary {
+                        consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                        state: TimelineFollowSettlementState::Pending,
+                        fault: None,
+                    }],
+                }],
+            }),
+            ..TimelineFollowRuntimeStatusSnapshot::default()
+        };
+        let acknowledgement = pending_timeline_follow_audio_settlement_ack_from_runtime(
+            &runtime,
+            TimelineFollowSettlementAckResult::Applied,
+        )
+        .expect("pending captured audio consumer requires backend evidence");
+        assert_eq!(acknowledgement.epoch, 71);
+        assert_eq!(acknowledgement.generation, 19);
+        assert_eq!(
+            acknowledgement.consumer_id,
+            TimelineFollowSettlementConsumerId::Audio
+        );
+
+        runtime.settlement.as_mut().unwrap().domains[0].consumers[0].state =
+            TimelineFollowSettlementState::Applied;
+        assert!(pending_timeline_follow_audio_settlement_ack_from_runtime(
+            &runtime,
+            TimelineFollowSettlementAckResult::Applied,
+        )
+        .is_none());
     }
 
     #[test]
@@ -76957,6 +77783,164 @@ mod live_audio_input_tests {
     }
 
     #[test]
+    fn timeline_follow_runtime_abort_terminal_is_exact_and_history_free() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let mut full_policy = sample_operator_policy();
+        full_policy.lock_mode = OperatorLockMode::Full;
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("install Full Lock policy for Follow abort")
+            .ancillary
+            .operator_policy = Some(full_policy);
+        c1_stabilize_fixture_authority(&harness);
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let observed = get_timeline_follow_runtime_impl(
+            &harness.state,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("read Follow runtime through the project E/R/H fence");
+        let request = TimelineFollowAbortRequest {
+            expected_follow_epoch: observed.runtime.epoch,
+            expected_generation: observed.runtime.generation,
+        };
+        let baseline = harness.mutation_baseline();
+        let applied = abort_timeline_follow_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            96_401,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("Full Lock must still permit runtime Follow abort safety");
+        let retried = abort_timeline_follow_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            96_401,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("reply-loss retry returns the exact terminal Follow abort receipt");
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::to_value(&retried).unwrap(),
+            "exact retry must not enqueue a second Follow abort"
+        );
+        let after = harness.mutation_baseline();
+        assert_eq!(
+            (
+                after.revision,
+                after.history_generation,
+                after.undo_len,
+                after.next_transaction_id,
+                after.publication_generation,
+            ),
+            (
+                baseline.revision,
+                baseline.history_generation,
+                baseline.undo_len,
+                baseline.next_transaction_id,
+                baseline.publication_generation,
+            ),
+            "Follow abort must never change authored revision/history/dirty state"
+        );
+        let receipt = get_timeline_follow_operation_terminal_result_impl(
+            &harness.state,
+            request.clone(),
+            96_401,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("query Follow terminal receipt")
+        .expect("completed Follow terminal receipt exists");
+        assert_eq!(
+            serde_json::to_value(&receipt.terminal).unwrap(),
+            serde_json::to_value(&applied).unwrap(),
+            "terminal query returns the definitive runtime outcome"
+        );
+        let shape_conflict = TimelineFollowAbortRequest {
+            expected_follow_epoch: request.expected_follow_epoch,
+            expected_generation: request.expected_generation.saturating_add(1),
+        };
+        assert!(abort_timeline_follow_authoritative_command_impl(
+            &harness.state,
+            shape_conflict,
+            96_401,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("same request ID with another Follow ABA token must reject")
+        .contains("already completed with shape"));
+
+        // Re-registering the same owner string under a new backend-issued
+        // WebView incarnation must not let a terminal receipt cross the ABA
+        // boundary. This mirrors the real rotation path's C1 purge.
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .expect("retire Follow owner")
+            .remove("media-asset-a6");
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .expect("retire Follow owner incarnation")
+            .remove("media-asset-a6");
+        harness
+            .state
+            .media_asset_operations
+            .purge_video_effect_catalog_authoritative_for_owner(MEDIA_ASSET_A6_OWNER);
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .expect("re-register Follow owner")
+            .insert(
+                "media-asset-a6".to_string(),
+                MEDIA_ASSET_A6_OWNER.to_string(),
+            );
+        let replacement_incarnation =
+            allocate_project_transaction_owner_incarnation(&harness.state)
+                .expect("allocate Follow replacement incarnation");
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .expect("register Follow replacement incarnation")
+            .insert("media-asset-a6".to_string(), replacement_incarnation);
+        assert!(get_timeline_follow_operation_terminal_result_impl(
+            &harness.state,
+            request,
+            96_401,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("new Follow owner incarnation can query its own namespace")
+        .is_none());
+    }
+
+    #[test]
     fn video_effect_catalog_authoritative_success_reply_loss_and_event_persistence_are_atomic() {
         let harness = MediaAssetA6CommandHarness::new();
         let (layer_id, _asset_id, _alternate_asset_id, _slot_id) =
@@ -84032,6 +85016,9 @@ fn main() {
             get_video_effect_catalog_operation_terminal_result,
             apply_timeline_advanced_authoritative,
             get_timeline_advanced_operation_terminal_result,
+            get_timeline_follow_runtime,
+            abort_timeline_follow,
+            get_timeline_follow_operation_terminal_result,
             launch_video_layer_transition_bus_authoritative,
             release_video_layer_transition_bus_authoritative,
             get_video_layer_transition_runtime,
