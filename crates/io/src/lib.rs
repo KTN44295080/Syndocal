@@ -1,6 +1,7 @@
 use protocol::ClockSource;
 
 pub mod artnet;
+mod control_plane;
 pub mod dmx_input;
 pub mod midi;
 #[cfg(feature = "ndi")]
@@ -11,6 +12,11 @@ pub mod remote_ws;
 pub mod sacn;
 pub mod serial_dmx;
 pub mod serial_rdm;
+
+pub use control_plane::{
+    control_plane_remote_descriptors, remote_client_request_variant_count,
+    remote_input_event_variant_count, remote_wire_operation_count,
+};
 
 pub(crate) fn parse_clock_source_label(source: &str) -> Option<ClockSource> {
     match source.trim().to_ascii_lowercase().as_str() {

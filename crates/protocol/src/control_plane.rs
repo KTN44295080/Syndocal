@@ -108,6 +108,9 @@ pub enum OperationAuditRequirement {
 pub enum OperationSourceFamily {
     TauriCommand,
     EngineCommand,
+    RemoteInputEvent,
+    RemoteClientRequest,
+    RemoteWireOperation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -180,7 +183,7 @@ impl OperationDescriptor {
     pub fn validate(&self) -> Result<(), OperationDescriptorValidationError> {
         validate_schema(&self.schema, OPERATION_DESCRIPTOR_SCHEMA_NAME)?;
         validate_operation_id(&self.operation_id)?;
-        validate_source_id(&self.source_id)?;
+        validate_source_id(self.source_family, &self.source_id)?;
         validate_operation_schema_identity(&self.request_schema, &self.operation_id, "request")?;
         validate_operation_schema_identity(&self.response_schema, &self.operation_id, "response")?;
         if self.capabilities.is_empty() {
@@ -214,7 +217,10 @@ fn validate_unavailable_descriptor(
     }
     let expected_capability = match descriptor.source_family {
         OperationSourceFamily::TauriCommand => OperationCapability::LocalWindowBound,
-        OperationSourceFamily::EngineCommand => OperationCapability::InternalInventory,
+        OperationSourceFamily::EngineCommand
+        | OperationSourceFamily::RemoteInputEvent
+        | OperationSourceFamily::RemoteClientRequest
+        | OperationSourceFamily::RemoteWireOperation => OperationCapability::InternalInventory,
     };
     if descriptor.capabilities != vec![expected_capability] {
         return Err(OperationDescriptorValidationError::UnsafeUnavailableOperation);
@@ -378,12 +384,34 @@ fn validate_operation_id(operation_id: &str) -> Result<(), OperationDescriptorVa
     Ok(())
 }
 
-fn validate_source_id(source_id: &str) -> Result<(), OperationDescriptorValidationError> {
-    if is_lower_snake_case(source_id) {
+fn validate_source_id(
+    source_family: OperationSourceFamily,
+    source_id: &str,
+) -> Result<(), OperationDescriptorValidationError> {
+    let valid = match source_family {
+        OperationSourceFamily::RemoteWireOperation => is_bounded_lower_camel_ascii(source_id),
+        OperationSourceFamily::TauriCommand
+        | OperationSourceFamily::EngineCommand
+        | OperationSourceFamily::RemoteInputEvent
+        | OperationSourceFamily::RemoteClientRequest => is_lower_snake_case(source_id),
+    };
+    if valid {
         Ok(())
     } else {
         Err(OperationDescriptorValidationError::InvalidSourceId)
     }
+}
+
+fn is_bounded_lower_camel_ascii(value: &str) -> bool {
+    const MAX_REMOTE_WIRE_SOURCE_ID_BYTES: usize = 64;
+    if value.len() > MAX_REMOTE_WIRE_SOURCE_ID_BYTES {
+        return false;
+    }
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    first.is_ascii_lowercase() && bytes.all(|byte| byte.is_ascii_alphanumeric())
 }
 
 fn is_lower_snake_case(value: &str) -> bool {
@@ -446,7 +474,9 @@ impl fmt::Display for OperationDescriptorValidationError {
             Self::InvalidOperationId => {
                 "operation id must use lowercase dotted segments and end in vN"
             }
-            Self::InvalidSourceId => "operation source id must be lower_snake_case",
+            Self::InvalidSourceId => {
+                "operation source id does not match its source family's bounded identifier syntax"
+            }
             Self::EmptyCapabilities => "operation capabilities must not be empty",
             Self::DuplicateCapability => "operation capabilities must be unique",
             Self::DuplicateOperationId => "operation ids must be unique",
@@ -586,6 +616,12 @@ mod tests {
             descriptor.validate(),
             Err(OperationDescriptorValidationError::UnsafeLocalAvailability)
         );
+        descriptor.source_family = OperationSourceFamily::RemoteWireOperation;
+        descriptor.source_id = "setBlackout".to_string();
+        assert_eq!(
+            descriptor.validate(),
+            Err(OperationDescriptorValidationError::UnsafeLocalAvailability)
+        );
     }
 
     #[test]
@@ -693,6 +729,26 @@ mod tests {
             descriptor.validate(),
             Err(OperationDescriptorValidationError::InvalidSourceId)
         );
+
+        descriptor = local_read_descriptor();
+        descriptor.source_family = OperationSourceFamily::RemoteWireOperation;
+        descriptor.source_id = "get_snapshot".to_string();
+        assert_eq!(
+            descriptor.validate(),
+            Err(OperationDescriptorValidationError::InvalidSourceId)
+        );
+        for invalid in [
+            "GetSnapshot".to_string(),
+            "get-snapshot".to_string(),
+            "get.snapshot".to_string(),
+            "g".repeat(65),
+        ] {
+            descriptor.source_id = invalid;
+            assert_eq!(
+                descriptor.validate(),
+                Err(OperationDescriptorValidationError::InvalidSourceId)
+            );
+        }
     }
 
     #[test]

@@ -2648,8 +2648,32 @@ const REMOTE_MANIFEST: &str = r##"{"name":"Syndocal Remote","short_name":"Syndoc
 const REMOTE_ICON_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="#111419"/><path d="M28 88h72" stroke="#4aa8ff" stroke-width="10" stroke-linecap="round"/><path d="M36 34v42M64 24v52M92 44v32" stroke="#edf3fb" stroke-width="10" stroke-linecap="round"/><circle cx="36" cy="58" r="12" fill="#f2c14e"/><circle cx="64" cy="42" r="12" fill="#74d99f"/><circle cx="92" cy="66" r="12" fill="#4aa8ff"/></svg>"##;
 const REMOTE_SERVICE_WORKER_JS: &str = r##"const CACHE_NAME="syndocal-remote-v2";const SHELL=["/manifest.webmanifest","/icon.svg"];self.addEventListener("install",event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting()))});self.addEventListener("activate",event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE_NAME).map(key=>caches.delete(key)))).then(()=>self.clients.claim()))});self.addEventListener("fetch",event=>{if(event.request.method!=="GET")return;const url=new URL(event.request.url);if(url.pathname==="/"||url.pathname==="/remote"||url.pathname==="/index.html"||url.pathname==="/ws"||url.searchParams.has("token"))return;event.respondWith(fetch(event.request).then(response=>{const copy=response.clone();if(event.request.url.startsWith(self.location.origin)){caches.open(CACHE_NAME).then(cache=>cache.put(event.request,copy))}return response}).catch(()=>caches.match(event.request)))});"##;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum RemoteInputEvent {
+// The existing event type and AI0 inventory share one declarative source.
+// A new enum variant therefore receives a fail-closed inventory entry without
+// any source parsing or separately maintained mirror.
+macro_rules! define_remote_input_event {
+    ($(
+        $variant:ident
+        $(($($tuple_fields:tt)*))?
+        $({$($struct_fields:tt)*})?
+    ,)*) => {
+        #[derive(Debug, Clone, PartialEq)]
+        pub enum RemoteInputEvent {
+            $(
+                $variant $(($($tuple_fields)*))? $({$($struct_fields)*})?,
+            )*
+        }
+
+        impl RemoteInputEvent {
+            /// Exact variant names generated from this enum declaration.
+            pub const CONTROL_PLANE_VARIANT_NAMES: &'static [&'static str] = &[
+                $(stringify!($variant),)*
+            ];
+        }
+    };
+}
+
+define_remote_input_event! {
     SetAttribute {
         fixture_id: FixtureId,
         attribute: String,
@@ -2819,8 +2843,29 @@ pub enum RemoteInputEvent {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum RemoteClientRequest {
+macro_rules! define_remote_client_request {
+    ($(
+        $variant:ident
+        $(($($tuple_fields:tt)*))?
+        $({$($struct_fields:tt)*})?
+    ,)*) => {
+        #[derive(Debug, Clone, PartialEq)]
+        pub enum RemoteClientRequest {
+            $(
+                $variant $(($($tuple_fields)*))? $({$($struct_fields)*})?,
+            )*
+        }
+
+        impl RemoteClientRequest {
+            /// Exact variant names generated from this enum declaration.
+            pub const CONTROL_PLANE_VARIANT_NAMES: &'static [&'static str] = &[
+                $(stringify!($variant),)*
+            ];
+        }
+    };
+}
+
+define_remote_client_request! {
     Event(RemoteInputEvent),
     GetSnapshot,
     GetVideoRuntimeStatus,
@@ -3102,6 +3147,100 @@ impl Drop for RemoteWsServer {
     }
 }
 
+// Accepted `type` values are generated together with the parser selector and
+// the AI0 wire inventory.  The request parser below matches this enum rather
+// than raw strings, so a newly accepted wire operation cannot bypass the
+// inventory or parser exhaustiveness checks.
+macro_rules! define_remote_wire_operations {
+    ($($variant:ident => $wire_type:literal,)*) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        pub(crate) enum RemoteWireOperation {
+            $($variant,)*
+        }
+
+        impl RemoteWireOperation {
+            pub(crate) const CONTROL_PLANE_OPERATIONS: &'static [(&'static str, &'static str)] = &[
+                $((stringify!($variant), $wire_type),)*
+            ];
+
+            fn from_type(value: &str) -> Option<Self> {
+                match value {
+                    $($wire_type => Some(Self::$variant),)*
+                    _ => None,
+                }
+            }
+
+            #[cfg(test)]
+            fn wire_type(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $wire_type,)*
+                }
+            }
+        }
+    };
+}
+
+define_remote_wire_operations! {
+    GetSnapshot => "getSnapshot",
+    GetVideoRuntimeStatus => "getVideoRuntimeStatus",
+    GetVideoOutputRenderPlans => "getVideoOutputRenderPlans",
+    GetExternalVideoIoPlans => "getExternalVideoIoPlans",
+    GetExternalVideoTransportStatus => "getExternalVideoTransportStatus",
+    SyncExternalVideoTransports => "syncExternalVideoTransports",
+    SetAttribute => "setAttribute",
+    SetOperatorSelection => "setOperatorSelection",
+    SetOperatorFeatureFader => "setOperatorFeatureFader",
+    SetGroupAttribute => "setGroupAttribute",
+    SetFixtureHighlight => "setFixtureHighlight",
+    SetFixtureSolo => "setFixtureSolo",
+    SetFixturePark => "setFixturePark",
+    SetGroupHighlight => "setGroupHighlight",
+    SetGroupSolo => "setGroupSolo",
+    SetGroupPark => "setGroupPark",
+    ClearFixtureFlags => "clearFixtureFlags",
+    Blackout => "blackout",
+    AllBlackout => "allBlackout",
+    LightingMaster => "lightingMaster",
+    SetGroupSubmaster => "setGroupSubmaster",
+    SetBpm => "setBpm",
+    TapBpm => "tapBpm",
+    SyncAbletonLinkClock => "syncAbletonLinkClock",
+    SyncExternalClock => "syncExternalClock",
+    ResetTelemetry => "resetTelemetry",
+    TriggerCue => "triggerCue",
+    TriggerNextCue => "triggerNextCue",
+    TriggerPreviousCue => "triggerPreviousCue",
+    SetCueFadePaused => "setCueFadePaused",
+    SetTimelinePlaying => "setTimelinePlaying",
+    SeekTimeline => "seekTimeline",
+    SeekTimelineBeat => "seekTimelineBeat",
+    SyncTimelineTimecode => "syncTimelineTimecode",
+    SetEffectEnabled => "setEffectEnabled",
+    SetNodeGraphEnabled => "setNodeGraphEnabled",
+    MoveEffect => "moveEffect",
+    RemoveEffect => "removeEffect",
+    SetVideoParam => "setVideoParam",
+    SetVideoLayerEnabled => "setVideoLayerEnabled",
+    SetVideoLayerSolo => "setVideoLayerSolo",
+    SetVideoPlaying => "setVideoPlaying",
+    SeekVideoLayer => "seekVideoLayer",
+    SetVideoLoop => "setVideoLoop",
+    FadeVideoLayerOpacity => "fadeVideoLayerOpacity",
+    AddVideoCuePoint => "addVideoCuePoint",
+    RemoveVideoCuePoint => "removeVideoCuePoint",
+    JumpVideoCuePoint => "jumpVideoCuePoint",
+    JumpVideoCuePointRelative => "jumpVideoCuePointRelative",
+    SetVideoOutputEnabled => "setVideoOutputEnabled",
+    SetVideoOutputOpacity => "setVideoOutputOpacity",
+    FadeVideoOutputOpacity => "fadeVideoOutputOpacity",
+    SetVideoOutputMapping => "setVideoOutputMapping",
+    SetVideoOutputMappingField => "setVideoOutputMappingField",
+    ApplyVideoOutputMappingPreset => "applyVideoOutputMappingPreset",
+    SetVideoOutputBlackout => "setVideoOutputBlackout",
+    VideoMaster => "videoMaster",
+    VideoBlackout => "videoBlackout",
+}
+
 pub fn event_from_text(text: &str) -> Result<RemoteInputEvent, RemoteParseError> {
     match request_from_text(text)? {
         RemoteClientRequest::Event(event) => Ok(event),
@@ -3133,150 +3272,172 @@ pub fn request_from_text(text: &str) -> Result<RemoteClientRequest, RemoteParseE
         .get("type")
         .and_then(Value::as_str)
         .ok_or(RemoteParseError::MissingType)?;
-    match command_type {
-        "getSnapshot" => Ok(RemoteClientRequest::GetSnapshot),
-        "getVideoRuntimeStatus" => Ok(RemoteClientRequest::GetVideoRuntimeStatus),
-        "getVideoOutputRenderPlans" => Ok(RemoteClientRequest::GetVideoOutputRenderPlans),
-        "getExternalVideoIoPlans" => Ok(RemoteClientRequest::GetExternalVideoIoPlans),
-        "getExternalVideoTransportStatus" => {
+    let operation = RemoteWireOperation::from_type(command_type)
+        .ok_or_else(|| RemoteParseError::UnknownType(command_type.to_string()))?;
+    match operation {
+        RemoteWireOperation::GetSnapshot => Ok(RemoteClientRequest::GetSnapshot),
+        RemoteWireOperation::GetVideoRuntimeStatus => {
+            Ok(RemoteClientRequest::GetVideoRuntimeStatus)
+        }
+        RemoteWireOperation::GetVideoOutputRenderPlans => {
+            Ok(RemoteClientRequest::GetVideoOutputRenderPlans)
+        }
+        RemoteWireOperation::GetExternalVideoIoPlans => {
+            Ok(RemoteClientRequest::GetExternalVideoIoPlans)
+        }
+        RemoteWireOperation::GetExternalVideoTransportStatus => {
             Ok(RemoteClientRequest::GetExternalVideoTransportStatus)
         }
-        "syncExternalVideoTransports" => Ok(RemoteClientRequest::SyncExternalVideoTransports),
-        "setAttribute" => Ok(RemoteClientRequest::Event(RemoteInputEvent::SetAttribute {
-            fixture_id: read_u64(&value, "fixture_id")?,
-            attribute: read_string(&value, "attribute")?,
-            value: read_u16_value(&value, "value")?,
-        })),
-        "setOperatorSelection" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SyncExternalVideoTransports => {
+            Ok(RemoteClientRequest::SyncExternalVideoTransports)
+        }
+        RemoteWireOperation::SetAttribute => {
+            Ok(RemoteClientRequest::Event(RemoteInputEvent::SetAttribute {
+                fixture_id: read_u64(&value, "fixture_id")?,
+                attribute: read_string(&value, "attribute")?,
+                value: read_u16_value(&value, "value")?,
+            }))
+        }
+        RemoteWireOperation::SetOperatorSelection => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetOperatorSelection(OperatorSelectionContext {
                 fixture_ids: read_u64_array(&value, "fixture_ids")?,
                 attributes: read_string_array(&value, "attributes")?,
             }),
         )),
-        "setOperatorFeatureFader" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetOperatorFeatureFader => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetOperatorFeatureFader {
                 target_index: read_u64(&value, "target_index")? as usize,
                 value: read_u16_value(&value, "value")?,
             },
         )),
-        "setGroupAttribute" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetGroupAttribute => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetGroupAttribute {
                 group_id: read_string(&value, "group_id")?,
                 attribute: read_string(&value, "attribute")?,
                 value: read_u16_value(&value, "value")?,
             },
         )),
-        "setFixtureHighlight" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetFixtureHighlight => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetFixtureHighlight {
                 fixture_id: read_u64(&value, "fixture_id")?,
                 enabled: read_bool(&value, "enabled")?,
             },
         )),
-        "setFixtureSolo" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetFixtureSolo => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetFixtureSolo {
                 fixture_id: read_u64(&value, "fixture_id")?,
                 enabled: read_bool(&value, "enabled")?,
             },
         )),
-        "setFixturePark" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetFixturePark => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetFixturePark {
                 fixture_id: read_u64(&value, "fixture_id")?,
                 enabled: read_bool(&value, "enabled")?,
             },
         )),
-        "setGroupHighlight" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetGroupHighlight => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetGroupHighlight {
                 group_id: read_string(&value, "group_id")?,
                 enabled: read_bool(&value, "enabled")?,
             },
         )),
-        "setGroupSolo" => Ok(RemoteClientRequest::Event(RemoteInputEvent::SetGroupSolo {
-            group_id: read_string(&value, "group_id")?,
-            enabled: read_bool(&value, "enabled")?,
-        })),
-        "setGroupPark" => Ok(RemoteClientRequest::Event(RemoteInputEvent::SetGroupPark {
-            group_id: read_string(&value, "group_id")?,
-            enabled: read_bool(&value, "enabled")?,
-        })),
-        "clearFixtureFlags" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetGroupSolo => {
+            Ok(RemoteClientRequest::Event(RemoteInputEvent::SetGroupSolo {
+                group_id: read_string(&value, "group_id")?,
+                enabled: read_bool(&value, "enabled")?,
+            }))
+        }
+        RemoteWireOperation::SetGroupPark => {
+            Ok(RemoteClientRequest::Event(RemoteInputEvent::SetGroupPark {
+                group_id: read_string(&value, "group_id")?,
+                enabled: read_bool(&value, "enabled")?,
+            }))
+        }
+        RemoteWireOperation::ClearFixtureFlags => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::ClearFixtureFlags {
                 kind: read_string(&value, "kind")?,
             },
         )),
-        "blackout" => Ok(RemoteClientRequest::Event(RemoteInputEvent::Blackout(
-            read_bool(&value, "enabled")?,
-        ))),
-        "allBlackout" => Ok(RemoteClientRequest::Event(RemoteInputEvent::AllBlackout(
-            read_bool(&value, "enabled")?,
-        ))),
-        "lightingMaster" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::Blackout => Ok(RemoteClientRequest::Event(
+            RemoteInputEvent::Blackout(read_bool(&value, "enabled")?),
+        )),
+        RemoteWireOperation::AllBlackout => Ok(RemoteClientRequest::Event(
+            RemoteInputEvent::AllBlackout(read_bool(&value, "enabled")?),
+        )),
+        RemoteWireOperation::LightingMaster => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::LightingMaster(read_f32(&value, "master")?),
         )),
-        "setGroupSubmaster" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetGroupSubmaster => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetGroupSubmaster {
                 group_id: read_string(&value, "group_id")?,
                 level: read_f32(&value, "level")?,
             },
         )),
-        "setBpm" => Ok(RemoteClientRequest::Event(RemoteInputEvent::SetBpm(
+        RemoteWireOperation::SetBpm => Ok(RemoteClientRequest::Event(RemoteInputEvent::SetBpm(
             read_f32(&value, "bpm")?,
         ))),
-        "tapBpm" => Ok(RemoteClientRequest::Event(RemoteInputEvent::TapBpm)),
-        "syncAbletonLinkClock" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::TapBpm => Ok(RemoteClientRequest::Event(RemoteInputEvent::TapBpm)),
+        RemoteWireOperation::SyncAbletonLinkClock => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SyncExternalClock {
                 bpm: read_f32(&value, "bpm")?,
                 beat_phase: read_f32(&value, "beat_phase")?,
                 source: ClockSource::AbletonLink,
             },
         )),
-        "syncExternalClock" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SyncExternalClock => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SyncExternalClock {
                 bpm: read_f32(&value, "bpm")?,
                 beat_phase: read_f32(&value, "beat_phase")?,
                 source: read_clock_source(&value, "source")?,
             },
         )),
-        "resetTelemetry" => Ok(RemoteClientRequest::Event(RemoteInputEvent::ResetTelemetry)),
-        "triggerCue" => Ok(RemoteClientRequest::Event(RemoteInputEvent::TriggerCue(
-            read_u64(&value, "cue_id")?,
-        ))),
-        "triggerNextCue" => Ok(RemoteClientRequest::Event(RemoteInputEvent::TriggerNextCue)),
-        "triggerPreviousCue" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::ResetTelemetry => {
+            Ok(RemoteClientRequest::Event(RemoteInputEvent::ResetTelemetry))
+        }
+        RemoteWireOperation::TriggerCue => Ok(RemoteClientRequest::Event(
+            RemoteInputEvent::TriggerCue(read_u64(&value, "cue_id")?),
+        )),
+        RemoteWireOperation::TriggerNextCue => {
+            Ok(RemoteClientRequest::Event(RemoteInputEvent::TriggerNextCue))
+        }
+        RemoteWireOperation::TriggerPreviousCue => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::TriggerPreviousCue,
         )),
-        "setCueFadePaused" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetCueFadePaused => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetCueFadePaused(read_bool(&value, "paused")?),
         )),
-        "setTimelinePlaying" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetTimelinePlaying => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetTimelinePlaying(read_bool(&value, "playing")?),
         )),
-        "seekTimeline" => Ok(RemoteClientRequest::Event(RemoteInputEvent::SeekTimeline {
-            position_ms: read_u64(&value, "position_ms")?,
-        })),
-        "seekTimelineBeat" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SeekTimeline => {
+            Ok(RemoteClientRequest::Event(RemoteInputEvent::SeekTimeline {
+                position_ms: read_u64(&value, "position_ms")?,
+            }))
+        }
+        RemoteWireOperation::SeekTimelineBeat => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SeekTimelineBeat {
                 direction: read_i32(&value, "direction")?,
             },
         )),
-        "syncTimelineTimecode" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SyncTimelineTimecode => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SyncTimelineTimecode {
                 position_ms: read_timecode_position_ms(&value, "position_ms")?,
                 source: read_optional_clock_source(&value, "source")?.unwrap_or(ClockSource::Ltc),
             },
         )),
-        "setEffectEnabled" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetEffectEnabled => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetEffectEnabled {
                 effect_id: read_u64(&value, "effect_id")?,
                 enabled: read_bool(&value, "enabled")?,
             },
         )),
-        "setNodeGraphEnabled" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetNodeGraphEnabled => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetNodeGraphEnabled {
                 graph_id: read_u64(&value, "graph_id")?,
                 enabled: read_bool(&value, "enabled")?,
             },
         )),
-        "moveEffect" => {
+        RemoteWireOperation::MoveEffect => {
             let delta = read_i32(&value, "delta")?;
             if delta != -1 && delta != 1 {
                 return Err(RemoteParseError::InvalidField("delta"));
@@ -3286,10 +3447,12 @@ pub fn request_from_text(text: &str) -> Result<RemoteClientRequest, RemoteParseE
                 delta,
             }))
         }
-        "removeEffect" => Ok(RemoteClientRequest::Event(RemoteInputEvent::RemoveEffect {
-            effect_id: read_u64(&value, "effect_id")?,
-        })),
-        "setVideoParam" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::RemoveEffect => {
+            Ok(RemoteClientRequest::Event(RemoteInputEvent::RemoveEffect {
+                effect_id: read_u64(&value, "effect_id")?,
+            }))
+        }
+        RemoteWireOperation::SetVideoParam => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetVideoParam {
                 layer_id: read_u64(&value, "layer_id")?,
                 param: video_param_from_str(&read_string(&value, "param")?)
@@ -3297,118 +3460,119 @@ pub fn request_from_text(text: &str) -> Result<RemoteClientRequest, RemoteParseE
                 value: read_f32(&value, "value")?,
             },
         )),
-        "setVideoLayerEnabled" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetVideoLayerEnabled => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetVideoLayerEnabled {
                 layer_id: read_u64(&value, "layer_id")?,
                 enabled: read_bool(&value, "enabled")?,
             },
         )),
-        "setVideoLayerSolo" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetVideoLayerSolo => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetVideoLayerSolo {
                 layer_id: read_u64(&value, "layer_id")?,
                 solo: read_bool(&value, "solo")?,
             },
         )),
-        "setVideoPlaying" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetVideoPlaying => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetVideoPlaying {
                 layer_id: read_u64(&value, "layer_id")?,
                 playing: read_bool(&value, "playing")?,
             },
         )),
-        "seekVideoLayer" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SeekVideoLayer => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SeekVideoLayer {
                 layer_id: read_u64(&value, "layer_id")?,
                 position_ms: read_u64(&value, "position_ms")?,
             },
         )),
-        "setVideoLoop" => Ok(RemoteClientRequest::Event(RemoteInputEvent::SetVideoLoop {
-            layer_id: read_u64(&value, "layer_id")?,
-            enabled: read_bool(&value, "enabled")?,
-            loop_start_ms: read_optional_u64(&value, "loop_start_ms")?,
-            loop_end_ms: read_optional_u64(&value, "loop_end_ms")?,
-        })),
-        "fadeVideoLayerOpacity" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetVideoLoop => {
+            Ok(RemoteClientRequest::Event(RemoteInputEvent::SetVideoLoop {
+                layer_id: read_u64(&value, "layer_id")?,
+                enabled: read_bool(&value, "enabled")?,
+                loop_start_ms: read_optional_u64(&value, "loop_start_ms")?,
+                loop_end_ms: read_optional_u64(&value, "loop_end_ms")?,
+            }))
+        }
+        RemoteWireOperation::FadeVideoLayerOpacity => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::FadeVideoLayerOpacity {
                 layer_id: read_u64(&value, "layer_id")?,
                 opacity: read_f32(&value, "opacity")?,
                 duration_ms: read_u64(&value, "duration_ms")?,
             },
         )),
-        "addVideoCuePoint" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::AddVideoCuePoint => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::AddVideoCuePoint {
                 layer_id: read_u64(&value, "layer_id")?,
                 position_ms: read_optional_u64(&value, "position_ms")?,
             },
         )),
-        "removeVideoCuePoint" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::RemoveVideoCuePoint => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::RemoveVideoCuePoint {
                 layer_id: read_u64(&value, "layer_id")?,
                 position_ms: read_u64(&value, "position_ms")?,
             },
         )),
-        "jumpVideoCuePoint" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::JumpVideoCuePoint => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::JumpVideoCuePoint {
                 layer_id: read_u64(&value, "layer_id")?,
                 cue_point_index: read_u64(&value, "cue_point_index")? as usize,
             },
         )),
-        "jumpVideoCuePointRelative" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::JumpVideoCuePointRelative => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::JumpVideoCuePointRelative {
                 layer_id: read_u64(&value, "layer_id")?,
                 direction: read_i32(&value, "direction")?,
             },
         )),
-        "setVideoOutputEnabled" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetVideoOutputEnabled => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetVideoOutputEnabled {
                 output_id: read_u64(&value, "output_id")?,
                 enabled: read_bool(&value, "enabled")?,
             },
         )),
-        "setVideoOutputOpacity" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetVideoOutputOpacity => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetVideoOutputOpacity {
                 output_id: read_u64(&value, "output_id")?,
                 opacity: read_f32(&value, "opacity")?,
             },
         )),
-        "fadeVideoOutputOpacity" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::FadeVideoOutputOpacity => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::FadeVideoOutputOpacity {
                 output_id: read_u64(&value, "output_id")?,
                 opacity: read_f32(&value, "opacity")?,
                 duration_ms: read_u64(&value, "duration_ms")?,
             },
         )),
-        "setVideoOutputMapping" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetVideoOutputMapping => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetVideoOutputMapping {
                 output_id: read_u64(&value, "output_id")?,
                 mapping: read_video_output_mapping(&value, "mapping")?,
             },
         )),
-        "setVideoOutputMappingField" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetVideoOutputMappingField => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetVideoOutputMappingField {
                 output_id: read_u64(&value, "output_id")?,
                 field: read_video_output_mapping_field(&value, "field")?,
                 value: read_f32(&value, "value")?,
             },
         )),
-        "applyVideoOutputMappingPreset" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::ApplyVideoOutputMappingPreset => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::ApplyVideoOutputMappingPreset {
                 output_id: read_u64(&value, "output_id")?,
                 label: read_string(&value, "label")?,
             },
         )),
-        "setVideoOutputBlackout" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::SetVideoOutputBlackout => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetVideoOutputBlackout {
                 output_id: read_u64(&value, "output_id")?,
                 blackout: read_bool(&value, "blackout")?,
             },
         )),
-        "videoMaster" => Ok(RemoteClientRequest::Event(
+        RemoteWireOperation::VideoMaster => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::VideoMasterOpacity(read_f32(&value, "opacity")?),
         )),
-        "videoBlackout" => Ok(RemoteClientRequest::Event(RemoteInputEvent::VideoBlackout(
-            read_bool(&value, "enabled")?,
-        ))),
-        other => Err(RemoteParseError::UnknownType(other.to_string())),
+        RemoteWireOperation::VideoBlackout => Ok(RemoteClientRequest::Event(
+            RemoteInputEvent::VideoBlackout(read_bool(&value, "enabled")?),
+        )),
     }
 }
 
@@ -4061,6 +4225,36 @@ fn video_param_from_str(value: &str) -> Option<VideoParam> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_wire_inventory_is_exact_and_parser_recognizes_every_wire_selector() {
+        const EXPECTED_WIRE_OPERATION_COUNT: usize = 58;
+        assert_eq!(
+            RemoteWireOperation::CONTROL_PLANE_OPERATIONS.len(),
+            EXPECTED_WIRE_OPERATION_COUNT
+        );
+        let variants = RemoteWireOperation::CONTROL_PLANE_OPERATIONS
+            .iter()
+            .map(|(variant, _)| *variant)
+            .collect::<std::collections::BTreeSet<_>>();
+        let wire_types = RemoteWireOperation::CONTROL_PLANE_OPERATIONS
+            .iter()
+            .map(|(_, wire_type)| *wire_type)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(variants.len(), EXPECTED_WIRE_OPERATION_COUNT);
+        assert_eq!(wire_types.len(), EXPECTED_WIRE_OPERATION_COUNT);
+        for (_, wire_type) in RemoteWireOperation::CONTROL_PLANE_OPERATIONS {
+            let operation = RemoteWireOperation::from_type(wire_type)
+                .expect("generated wire operation must be accepted");
+            assert_eq!(operation.wire_type(), *wire_type);
+            let parsed = request_from_text(&format!(r#"{{"type":"{wire_type}"}}"#));
+            assert!(
+                !matches!(parsed, Err(RemoteParseError::UnknownType(_))),
+                "the parser must recognize every generated wire selector: {wire_type}"
+            );
+        }
+        assert_eq!(RemoteWireOperation::from_type("unknownOperation"), None);
+    }
 
     #[test]
     fn parses_lighting_and_transport_commands() {

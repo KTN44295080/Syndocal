@@ -8,13 +8,14 @@
 use std::{collections::BTreeSet, fmt, sync::LazyLock};
 
 use engine::control_plane_engine_command_descriptors;
+use io::control_plane_remote_descriptors;
 use protocol::control_plane::{
     OperationAuditRequirement, OperationAvailability, OperationCapability, OperationClass,
     OperationDescriptor, OperationIdempotency, OperationRegistry, OperationRisk,
     OperationSourceFamily, SchemaIdentity, CONTROL_PLANE_SCHEMA_VERSION,
 };
 
-const MAX_REGISTERED_OPERATIONS: usize = 768;
+const MAX_REGISTERED_OPERATIONS: usize = 1024;
 const MAIN_RS_SOURCE: &str = include_str!("main.rs");
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
@@ -95,7 +96,9 @@ pub fn registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
 fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
     let command_names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE)?;
     let engine_descriptors = control_plane_engine_command_descriptors();
-    let total_operations = command_names.len() + engine_descriptors.len();
+    let remote_descriptors = control_plane_remote_descriptors();
+    let total_operations =
+        command_names.len() + engine_descriptors.len() + remote_descriptors.len();
     if total_operations > MAX_REGISTERED_OPERATIONS {
         return Err(ControlPlaneRegistryError::TooManyOperations(
             total_operations,
@@ -106,6 +109,7 @@ fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
         .map(|name| descriptor_for_command(name))
         .collect::<Vec<_>>();
     operations.extend(engine_descriptors);
+    operations.extend(remote_descriptors);
     operations.sort_by(|left, right| {
         (left.source_family, &left.source_id).cmp(&(right.source_family, &right.source_id))
     });
@@ -267,7 +271,15 @@ mod tests {
         const R0_ALLOWLIST: [&str; 1] = ["syndocal.query.control_plane.registry.v1"];
         assert_eq!(names.len(), 438);
         const ENGINE_COMMAND_COUNT: usize = 247;
-        assert_eq!(registry.operations.len(), 438 + ENGINE_COMMAND_COUNT);
+        const REMOTE_INPUT_EVENT_COUNT: usize = 51;
+        const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
+        const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
+        const REMOTE_OPERATION_COUNT: usize =
+            REMOTE_INPUT_EVENT_COUNT + REMOTE_CLIENT_REQUEST_COUNT + REMOTE_WIRE_OPERATION_COUNT;
+        assert_eq!(
+            registry.operations.len(),
+            438 + ENGINE_COMMAND_COUNT + REMOTE_OPERATION_COUNT
+        );
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -277,7 +289,7 @@ mod tests {
         assert_eq!(r0.len(), 1);
         assert_eq!(
             registry.operations.len() - r0.len(),
-            437 + ENGINE_COMMAND_COUNT
+            437 + ENGINE_COMMAND_COUNT + REMOTE_OPERATION_COUNT
         );
         assert_eq!(r0[0].operation_id, R0_ALLOWLIST[0]);
         assert_eq!(r0[0].source_family, OperationSourceFamily::TauriCommand);
@@ -336,6 +348,59 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(engine_unavailable.len(), ENGINE_COMMAND_COUNT);
         for descriptor in engine_unavailable {
+            assert_eq!(descriptor.risk, OperationRisk::R5);
+            assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
+            assert_eq!(descriptor.idempotency, OperationIdempotency::Mutating);
+            assert_eq!(
+                descriptor.audit,
+                OperationAuditRequirement::RequiredBeforeExternalExecution
+            );
+            assert_eq!(
+                descriptor.capabilities,
+                vec![OperationCapability::InternalInventory]
+            );
+        }
+        let remote_unavailable = registry
+            .operations
+            .iter()
+            .filter(|descriptor| {
+                matches!(
+                    descriptor.source_family,
+                    OperationSourceFamily::RemoteInputEvent
+                        | OperationSourceFamily::RemoteClientRequest
+                        | OperationSourceFamily::RemoteWireOperation
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(remote_unavailable.len(), REMOTE_OPERATION_COUNT);
+        assert_eq!(
+            remote_unavailable
+                .iter()
+                .filter(|descriptor| {
+                    descriptor.source_family == OperationSourceFamily::RemoteInputEvent
+                })
+                .count(),
+            REMOTE_INPUT_EVENT_COUNT
+        );
+        assert_eq!(
+            remote_unavailable
+                .iter()
+                .filter(|descriptor| {
+                    descriptor.source_family == OperationSourceFamily::RemoteClientRequest
+                })
+                .count(),
+            REMOTE_CLIENT_REQUEST_COUNT
+        );
+        assert_eq!(
+            remote_unavailable
+                .iter()
+                .filter(|descriptor| {
+                    descriptor.source_family == OperationSourceFamily::RemoteWireOperation
+                })
+                .count(),
+            REMOTE_WIRE_OPERATION_COUNT
+        );
+        for descriptor in remote_unavailable {
             assert_eq!(descriptor.risk, OperationRisk::R5);
             assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
             assert_eq!(descriptor.idempotency, OperationIdempotency::Mutating);
