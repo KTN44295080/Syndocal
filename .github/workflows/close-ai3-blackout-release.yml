@@ -7,6 +7,7 @@ on:
     paths:
       - .github/scripts/patch_blackout_release_receipt.py
       - .github/scripts/patch_blackout_release_runtime_guards.py
+      - .github/scripts/patch_blackout_release_ui_guards.py
       - .github/workflows/close-ai3-blackout-release.yml
 
 permissions:
@@ -121,6 +122,12 @@ jobs:
           set -euo pipefail
           python3 .github/scripts/patch_blackout_release_runtime_guards.py
 
+      - name: Apply Release UI guardrails
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/patch_blackout_release_ui_guards.py
+
       - name: Verify bounded R4 diff
         shell: bash
         run: |
@@ -136,6 +143,8 @@ jobs:
             app/src-tauri/src/main.rs
             app/src/App.tsx
             app/src/blackoutReleaseRuntimeController.ts
+            app/src/components/LightingRuntimeControlsPanel.tsx
+            app/src/components/WorkspaceChrome.tsx
             app/src/tauri-invoke-manifest.json
             app/src/tauriInvokeCommands.ts
             crates/protocol/src/control_plane_command.rs
@@ -155,7 +164,7 @@ jobs:
           done
           for file in "${changed[@]}"; do
             case "$file" in
-              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/src/control_plane.rs|app/src-tauri/src/control_plane_runtime.rs|app/src-tauri/src/main.rs|app/src/App.tsx|app/src/blackoutReleaseRuntimeController.ts|app/src/tauri-invoke-manifest.json|app/src/tauriInvokeCommands.ts|crates/protocol/src/control_plane_command.rs)
+              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/src/control_plane.rs|app/src-tauri/src/control_plane_runtime.rs|app/src-tauri/src/main.rs|app/src/App.tsx|app/src/blackoutReleaseRuntimeController.ts|app/src/components/LightingRuntimeControlsPanel.tsx|app/src/components/WorkspaceChrome.tsx|app/src/tauri-invoke-manifest.json|app/src/tauriInvokeCommands.ts|crates/protocol/src/control_plane_command.rs)
                 ;;
               *)
                 echo "Unexpected changed file in R4 generated patch: $file" >&2
