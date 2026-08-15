@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod control_plane;
 pub mod control_plane_query;
+pub mod control_plane_registry_v2;
 
 pub type FixtureId = u64;
 pub type EffectId = u64;

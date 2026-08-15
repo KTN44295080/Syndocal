@@ -14,6 +14,11 @@ use protocol::control_plane::{
     OperationDescriptor, OperationIdempotency, OperationRegistry, OperationRisk,
     OperationSourceFamily, SchemaIdentity, CONTROL_PLANE_SCHEMA_VERSION,
 };
+use protocol::control_plane_registry_v2::{
+    AdapterPolicy, CanonicalControlPlaneRegistry, CanonicalOperationDescriptor,
+    CanonicalRegistryValidationError, ConsentPolicy, PayloadPolicy, RatePolicy, ReceiptPolicy,
+    SourceDisposition, SourceInventoryDescriptor, SourceKey, SourceRole, TypedSchemaProjection,
+};
 
 const MAX_REGISTERED_OPERATIONS: usize = 2048;
 const MAIN_RS_SOURCE: &str = include_str!("main.rs");
@@ -23,6 +28,9 @@ const FRONTEND_INVOKE_MANIFEST: &str = include_str!("../../src/tauri-invoke-mani
 /// text or make an external request on the invocation path.
 static VALIDATED_REGISTRY: LazyLock<Result<OperationRegistry, ControlPlaneRegistryError>> =
     LazyLock::new(build_registry);
+static VALIDATED_CANONICAL_REGISTRY: LazyLock<
+    Result<CanonicalControlPlaneRegistry, ControlPlaneRegistryError>,
+> = LazyLock::new(build_canonical_registry);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlPlaneRegistryError {
@@ -38,6 +46,9 @@ pub enum ControlPlaneRegistryError {
     MissingRegistryDescriptor(String),
     UnexpectedRegistryDescriptor(String),
     DescriptorInvalid(String),
+    CanonicalRegistryInvalid(String),
+    MissingCanonicalSource(String),
+    UnexpectedCanonicalSource(String),
     MissingWindowBinding,
 }
 
@@ -85,6 +96,18 @@ impl fmt::Display for ControlPlaneRegistryError {
             Self::DescriptorInvalid(message) => {
                 write!(formatter, "invalid control-plane descriptor: {message}")
             }
+            Self::CanonicalRegistryInvalid(message) => {
+                write!(
+                    formatter,
+                    "invalid canonical control-plane registry: {message}"
+                )
+            }
+            Self::MissingCanonicalSource(key) => {
+                write!(formatter, "canonical source inventory is missing: {key}")
+            }
+            Self::UnexpectedCanonicalSource(key) => {
+                write!(formatter, "canonical source inventory is not in v1: {key}")
+            }
             Self::MissingWindowBinding => formatter
                 .write_str("control-plane discovery requires a window-bound Tauri invocation"),
         }
@@ -105,8 +128,24 @@ pub fn registry_for_window(
     registry()
 }
 
+/// Returns the version-2 canonical/source inventory for an injected local
+/// Tauri window. This is discovery metadata only; it creates no external
+/// adapter and carries no caller-owner argument.
+pub fn canonical_registry_for_window(
+    window_label: &str,
+) -> Result<CanonicalControlPlaneRegistry, ControlPlaneRegistryError> {
+    if window_label.is_empty() {
+        return Err(ControlPlaneRegistryError::MissingWindowBinding);
+    }
+    canonical_registry()
+}
+
 pub fn registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
     VALIDATED_REGISTRY.clone()
+}
+
+pub fn canonical_registry() -> Result<CanonicalControlPlaneRegistry, ControlPlaneRegistryError> {
+    VALIDATED_CANONICAL_REGISTRY.clone()
 }
 
 fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
@@ -156,54 +195,221 @@ fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
     Ok(registry)
 }
 
-fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
-    let reviewed = match operation_id {
-        "get_control_plane_operation_registry" => Some((
+/// Builds v2 solely from the already validated exact v1 source inventory.
+/// In particular, the v1 descriptor's source risk is deliberately not read as
+/// canonical authority: only the explicit reviewed query table below creates
+/// a canonical operation.
+fn build_canonical_registry() -> Result<CanonicalControlPlaneRegistry, ControlPlaneRegistryError> {
+    let legacy = registry()?;
+    let mut canonical_operations = legacy
+        .operations
+        .iter()
+        .filter(|descriptor| descriptor.source_family == OperationSourceFamily::TauriCommand)
+        .filter_map(|descriptor| {
+            let reviewed = reviewed_query_operation(&descriptor.source_id)?;
+            Some(CanonicalOperationDescriptor {
+                schema: CanonicalOperationDescriptor::schema_identity(),
+                operation_id: reviewed.operation_id.to_string(),
+                class: reviewed.class,
+                risk: OperationRisk::R0,
+                capabilities: vec![
+                    OperationCapability::ReadOnly,
+                    OperationCapability::LocalWindowBound,
+                    OperationCapability::AllowedDuringFullLock,
+                    reviewed.domain_capability,
+                ],
+                request_schema: descriptor.request_schema.clone(),
+                response_schema: descriptor.response_schema.clone(),
+                idempotency: OperationIdempotency::ReadOnly,
+                audit: OperationAuditRequirement::NotApplicable,
+                adapter_policy: AdapterPolicy::LocalWindowReadOnly,
+                receipt_policy: ReceiptPolicy::FailClosed,
+                rate_policy: RatePolicy::FailClosed,
+                payload_policy: PayloadPolicy::FailClosed,
+                consent_policy: ConsentPolicy::FailClosed,
+                derived_adapters: Vec::new(),
+            })
+        })
+        .collect::<Vec<_>>();
+    canonical_operations.sort_by(|left, right| left.operation_id.cmp(&right.operation_id));
+
+    let mut source_inventory = legacy
+        .operations
+        .iter()
+        .map(canonical_source_inventory_descriptor)
+        .collect::<Vec<_>>();
+    source_inventory.sort_by(|left, right| left.source_key.cmp(&right.source_key));
+
+    let mut canonical = CanonicalControlPlaneRegistry {
+        schema: CanonicalControlPlaneRegistry::schema_identity(),
+        canonical_operations,
+        source_inventory,
+    };
+    canonical
+        .populate_derived_adapters()
+        .map_err(canonical_registry_error)?;
+    verify_canonical_registry_exact_sources(&legacy, &canonical)?;
+    Ok(canonical)
+}
+
+fn canonical_source_inventory_descriptor(
+    descriptor: &OperationDescriptor,
+) -> SourceInventoryDescriptor {
+    let source_key = SourceKey::new(descriptor.source_family, descriptor.source_id.clone());
+    let disposition = match descriptor.source_family {
+        OperationSourceFamily::TauriCommand => {
+            if let Some(reviewed) = reviewed_query_operation(&descriptor.source_id) {
+                SourceDisposition::Operation {
+                    canonical_operation_id: reviewed.operation_id.to_string(),
+                    projection: TypedSchemaProjection::Exact,
+                }
+            } else {
+                SourceDisposition::Unclassified {
+                    reason: unclassified_reason(descriptor.source_family).to_string(),
+                }
+            }
+        }
+        OperationSourceFamily::FrontendInvoke => SourceDisposition::AliasOfSource {
+            target: SourceKey::new(
+                OperationSourceFamily::TauriCommand,
+                descriptor.source_id.clone(),
+            ),
+        },
+        _ => SourceDisposition::Unclassified {
+            reason: unclassified_reason(descriptor.source_family).to_string(),
+        },
+    };
+    SourceInventoryDescriptor {
+        schema: SourceInventoryDescriptor::schema_identity(),
+        binding_id: source_key.binding_id(),
+        source_key,
+        role: SourceRole::for_family(descriptor.source_family),
+        raw_request_schema: descriptor.request_schema.clone(),
+        raw_response_schema: descriptor.response_schema.clone(),
+        disposition,
+    }
+}
+
+fn unclassified_reason(family: OperationSourceFamily) -> &'static str {
+    match family {
+        OperationSourceFamily::TauriCommand => "unreviewed tauri command",
+        OperationSourceFamily::EngineCommand => "unreviewed engine command",
+        OperationSourceFamily::RemoteInputEvent
+        | OperationSourceFamily::RemoteClientRequest
+        | OperationSourceFamily::RemoteWireOperation => "unreviewed remote ingress",
+        OperationSourceFamily::MidiControlMessage
+        | OperationSourceFamily::MidiControlAction
+        | OperationSourceFamily::MidiClockEvent
+        | OperationSourceFamily::MidiControlEvent => "unreviewed midi ingress",
+        OperationSourceFamily::OscControlAction | OperationSourceFamily::OscInputEvent => {
+            "unreviewed osc ingress"
+        }
+        OperationSourceFamily::DmxInputProtocol | OperationSourceFamily::DmxInputEvent => {
+            "unreviewed dmx ingress"
+        }
+        OperationSourceFamily::FrontendInvoke => "unreviewed frontend invocation",
+    }
+}
+
+fn canonical_registry_error(error: CanonicalRegistryValidationError) -> ControlPlaneRegistryError {
+    ControlPlaneRegistryError::CanonicalRegistryInvalid(error.to_string())
+}
+
+pub fn verify_canonical_registry_exact_sources(
+    legacy: &OperationRegistry,
+    canonical: &CanonicalControlPlaneRegistry,
+) -> Result<(), ControlPlaneRegistryError> {
+    let expected = legacy
+        .operations
+        .iter()
+        .map(|descriptor| SourceKey::new(descriptor.source_family, descriptor.source_id.clone()))
+        .collect::<BTreeSet<_>>();
+    let actual = canonical
+        .source_inventory
+        .iter()
+        .map(|source| source.source_key.clone())
+        .collect::<BTreeSet<_>>();
+    if let Some(missing) = expected.difference(&actual).next() {
+        return Err(ControlPlaneRegistryError::MissingCanonicalSource(
+            missing.binding_id(),
+        ));
+    }
+    if let Some(unexpected) = actual.difference(&expected).next() {
+        return Err(ControlPlaneRegistryError::UnexpectedCanonicalSource(
+            unexpected.binding_id(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReviewedQueryOperation {
+    operation_id: &'static str,
+    class: OperationClass,
+    domain_capability: OperationCapability,
+}
+
+fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
+    let (operation_id, class, domain_capability) = match command {
+        "get_control_plane_operation_registry" => (
             "syndocal.query.control_plane.registry.v1",
             OperationClass::Discovery,
             OperationCapability::RegistryDiscovery,
-        )),
-        "get_control_plane_query_schema_catalog" => Some((
+        ),
+        "get_control_plane_canonical_registry" => (
+            "syndocal.query.control_plane.canonical_registry.v2",
+            OperationClass::Discovery,
+            OperationCapability::RegistryDiscovery,
+        ),
+        "get_control_plane_query_schema_catalog" => (
             "syndocal.query.control_plane.schemas.v1",
             OperationClass::Discovery,
             OperationCapability::RegistryDiscovery,
-        )),
-        "get_control_plane_query_capabilities" => Some((
+        ),
+        "get_control_plane_query_capabilities" => (
             "syndocal.query.control_plane.capabilities.v1",
             OperationClass::Discovery,
             OperationCapability::RegistryDiscovery,
-        )),
-        "query_control_plane_project_authority" => Some((
+        ),
+        "query_control_plane_project_authority" => (
             "syndocal.query.project.authority.v1",
             OperationClass::ProjectAuthority,
             OperationCapability::ProjectAuthorityRead,
-        )),
-        "query_control_plane_runtime_generations" => Some((
+        ),
+        "query_control_plane_runtime_generations" => (
             "syndocal.query.runtime.generations.v1",
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
-        )),
-        "query_control_plane_output_ownership" => Some((
+        ),
+        "query_control_plane_output_ownership" => (
             "syndocal.query.output.ownership.v1",
             OperationClass::OutputOwnership,
             OperationCapability::OutputOwnershipRead,
-        )),
-        "poll_control_plane_observation_events" => Some((
+        ),
+        "poll_control_plane_observation_events" => (
             "syndocal.query.events.observations.v1",
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
-        )),
-        _ => None,
+        ),
+        _ => return None,
     };
-    let Some((semantic_operation_id, class, domain_capability)) = reviewed else {
+    Some(ReviewedQueryOperation {
+        operation_id,
+        class,
+        domain_capability,
+    })
+}
+
+fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
+    let Some(reviewed) = reviewed_query_operation(operation_id) else {
         return unavailable_descriptor(operation_id);
     };
     OperationDescriptor {
         schema: SchemaIdentity::descriptor(),
-        operation_id: semantic_operation_id.to_string(),
+        operation_id: reviewed.operation_id.to_string(),
         source_family: OperationSourceFamily::TauriCommand,
         source_id: operation_id.to_string(),
-        class,
+        class: reviewed.class,
         risk: OperationRisk::R0,
         capabilities: vec![
             OperationCapability::ReadOnly,
@@ -211,13 +417,13 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             // Registry discovery remains observable during Full Lock and has
             // no mutation capability.
             OperationCapability::AllowedDuringFullLock,
-            domain_capability,
+            reviewed.domain_capability,
         ],
         availability: OperationAvailability::LocalWindowOnly,
         idempotency: OperationIdempotency::ReadOnly,
         audit: OperationAuditRequirement::NotApplicable,
-        request_schema: command_schema(semantic_operation_id, "request"),
-        response_schema: command_schema(semantic_operation_id, "response"),
+        request_schema: command_schema(reviewed.operation_id, "request"),
+        response_schema: command_schema(reviewed.operation_id, "response"),
     }
 }
 
@@ -379,8 +585,9 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 7] = [
+        const R0_ALLOWLIST: [&str; 8] = [
             "syndocal.query.control_plane.registry.v1",
+            "syndocal.query.control_plane.canonical_registry.v2",
             "syndocal.query.control_plane.capabilities.v1",
             "syndocal.query.control_plane.schemas.v1",
             "syndocal.query.events.observations.v1",
@@ -388,7 +595,7 @@ mod tests {
             "syndocal.query.project.authority.v1",
             "syndocal.query.runtime.generations.v1",
         ];
-        assert_eq!(names.len(), 444);
+        assert_eq!(names.len(), 445);
         const ENGINE_COMMAND_COUNT: usize = 247;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
@@ -415,12 +622,12 @@ mod tests {
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            444 + ENGINE_COMMAND_COUNT
+            445 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1399);
+        assert_eq!(registry.operations.len(), 1400);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -668,6 +875,184 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn canonical_registry_derives_the_exact_current_source_inventory() {
+        let legacy = registry().unwrap();
+        let canonical = canonical_registry().unwrap();
+        canonical.validate().unwrap();
+        verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
+
+        const TAURI_COUNT: usize = 445;
+        const ENGINE_COUNT: usize = 247;
+        const REMOTE_COUNT: usize = 116;
+        const MIDI_OSC_DMX_COUNT: usize = 206;
+        const FRONTEND_COUNT: usize = 386;
+        const SOURCE_TOTAL: usize =
+            TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
+        assert_eq!(SOURCE_TOTAL, 1400);
+        assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
+        assert_eq!(canonical.canonical_operations.len(), 8);
+
+        let count_family = |family| {
+            canonical
+                .source_inventory
+                .iter()
+                .filter(|source| source.source_key.family == family)
+                .count()
+        };
+        assert_eq!(
+            count_family(OperationSourceFamily::TauriCommand),
+            TAURI_COUNT
+        );
+        assert_eq!(
+            count_family(OperationSourceFamily::EngineCommand),
+            ENGINE_COUNT
+        );
+        assert_eq!(
+            count_family(OperationSourceFamily::RemoteInputEvent)
+                + count_family(OperationSourceFamily::RemoteClientRequest)
+                + count_family(OperationSourceFamily::RemoteWireOperation),
+            REMOTE_COUNT
+        );
+        assert_eq!(
+            count_family(OperationSourceFamily::MidiControlMessage)
+                + count_family(OperationSourceFamily::MidiControlAction)
+                + count_family(OperationSourceFamily::MidiClockEvent)
+                + count_family(OperationSourceFamily::MidiControlEvent)
+                + count_family(OperationSourceFamily::OscControlAction)
+                + count_family(OperationSourceFamily::OscInputEvent)
+                + count_family(OperationSourceFamily::DmxInputProtocol)
+                + count_family(OperationSourceFamily::DmxInputEvent),
+            MIDI_OSC_DMX_COUNT
+        );
+        assert_eq!(
+            count_family(OperationSourceFamily::FrontendInvoke),
+            FRONTEND_COUNT
+        );
+
+        let direct = canonical
+            .source_inventory
+            .iter()
+            .filter(|source| matches!(&source.disposition, SourceDisposition::Operation { .. }))
+            .collect::<Vec<_>>();
+        let aliases = canonical
+            .source_inventory
+            .iter()
+            .filter(|source| matches!(&source.disposition, SourceDisposition::AliasOfSource { .. }))
+            .collect::<Vec<_>>();
+        let unclassified = canonical
+            .source_inventory
+            .iter()
+            .filter(|source| matches!(&source.disposition, SourceDisposition::Unclassified { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(direct.len(), 8);
+        assert_eq!(aliases.len(), FRONTEND_COUNT);
+        assert_eq!(unclassified.len(), 1006);
+        assert_eq!(
+            direct.len() + aliases.len() + unclassified.len(),
+            SOURCE_TOTAL
+        );
+
+        for source in &direct {
+            assert_eq!(
+                source.source_key.family,
+                OperationSourceFamily::TauriCommand
+            );
+            assert_eq!(source.role, SourceRole::LocalWindowCommand);
+            assert!(canonical
+                .canonical_operation_for_source(&source.source_key)
+                .unwrap()
+                .is_some());
+        }
+        for source in &aliases {
+            assert_eq!(
+                source.source_key.family,
+                OperationSourceFamily::FrontendInvoke
+            );
+            assert_eq!(source.role, SourceRole::FrontendInvocation);
+            let SourceDisposition::AliasOfSource { target } = &source.disposition else {
+                unreachable!("filtered aliases must retain their disposition");
+            };
+            assert_eq!(target.family, OperationSourceFamily::TauriCommand);
+            assert_eq!(target.source_id, source.source_key.source_id);
+            assert_eq!(
+                canonical
+                    .canonical_operation_for_source(&source.source_key)
+                    .unwrap()
+                    .map(|operation| operation.operation_id.as_str()),
+                canonical
+                    .canonical_operation_for_source(target)
+                    .unwrap()
+                    .map(|operation| operation.operation_id.as_str())
+            );
+        }
+        for source in &unclassified {
+            assert!(canonical
+                .canonical_operation_for_source(&source.source_key)
+                .unwrap()
+                .is_none());
+        }
+        for operation in &canonical.canonical_operations {
+            assert_eq!(operation.risk, OperationRisk::R0);
+            assert_eq!(operation.idempotency, OperationIdempotency::ReadOnly);
+            assert_eq!(operation.audit, OperationAuditRequirement::NotApplicable);
+            assert_eq!(operation.adapter_policy, AdapterPolicy::LocalWindowReadOnly);
+            assert_eq!(operation.derived_adapters.len(), 1);
+        }
+
+        let canonical_json = serde_json::to_value(&canonical).unwrap();
+        for source in canonical_json["source_inventory"].as_array().unwrap() {
+            let source = source.as_object().unwrap();
+            assert!(!source.contains_key("risk"));
+            assert!(!source.contains_key("availability"));
+            assert!(!source.contains_key("adapter_policy"));
+        }
+    }
+
+    #[test]
+    fn canonical_registry_rejects_a_dropped_v1_source() {
+        let legacy = registry().unwrap();
+        let mut canonical = canonical_registry().unwrap();
+        canonical.source_inventory.pop();
+        assert!(matches!(
+            verify_canonical_registry_exact_sources(&legacy, &canonical),
+            Err(ControlPlaneRegistryError::MissingCanonicalSource(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_registry_only_adds_the_canonical_query_endpoint_row() {
+        let legacy = registry().unwrap();
+        let encoded = serde_json::to_value(&legacy).unwrap();
+        let operations = encoded["operations"].as_array().unwrap();
+        let endpoint_rows = operations
+            .iter()
+            .filter(|operation| {
+                operation["source_family"] == "tauri_command"
+                    && operation["source_id"] == "get_control_plane_canonical_registry"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(endpoint_rows.len(), 1);
+        let endpoint = endpoint_rows[0];
+        assert_eq!(
+            endpoint["operation_id"],
+            "syndocal.query.control_plane.canonical_registry.v2"
+        );
+        assert_eq!(endpoint["risk"], "r0");
+        assert_eq!(endpoint["availability"], "local_window_only");
+        assert_eq!(endpoint["idempotency"], "read_only");
+        assert_eq!(endpoint["audit"], "not_applicable");
+        assert_eq!(
+            endpoint["capabilities"],
+            serde_json::json!([
+                "read_only",
+                "local_window_bound",
+                "allowed_during_full_lock",
+                "registry_discovery"
+            ])
+        );
     }
 
     #[test]

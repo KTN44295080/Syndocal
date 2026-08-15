@@ -36544,6 +36544,27 @@ fn get_control_plane_operation_registry(
     control_plane::registry_for_window(window.label()).map_err(|error| error.to_string())
 }
 
+/// Returns the local-only version-2 canonical/source inventory. This remains
+/// window-bound discovery only; no caller-owner or external adapter is
+/// accepted by this command.
+#[tauri::command]
+fn get_control_plane_canonical_registry(
+    window: WebviewWindow,
+) -> Result<protocol::control_plane_registry_v2::CanonicalControlPlaneRegistry, String> {
+    control_plane::canonical_registry_for_window(window.label()).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+#[test]
+fn canonical_registry_command_uses_only_webview_window_injection() {
+    let _: fn(
+        WebviewWindow,
+    ) -> Result<
+        protocol::control_plane_registry_v2::CanonicalControlPlaneRegistry,
+        String,
+    > = get_control_plane_canonical_registry;
+}
+
 #[tauri::command]
 fn get_application_update_configuration(app: tauri::AppHandle) -> ApplicationUpdateConfiguration {
     application_update_configuration_for_version(app.package_info().version.to_string())
@@ -84818,6 +84839,7 @@ fn main() {
         ))
         .invoke_handler(tauri::generate_handler![
             get_control_plane_operation_registry,
+            get_control_plane_canonical_registry,
             get_control_plane_query_schema_catalog,
             get_control_plane_query_capabilities,
             query_control_plane_project_authority,
