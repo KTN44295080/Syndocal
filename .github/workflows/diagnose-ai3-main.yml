@@ -61,15 +61,8 @@ jobs:
 
           path = Path("app/src-tauri/src/main.rs")
           source = path.read_text(encoding="utf-8")
-          old = """    spout
-              .harvest_failed_workers(engine)
-              .map_err(|error| error.to_string())?;
-"""
-          new = """    #[cfg(all(feature = \"spout\", target_os = \"windows\", target_arch = \"x86_64\"))]
-    spout
-              .harvest_failed_workers(engine)
-              .map_err(|error| error.to_string())?;
-"""
+          old = "    spout\n        .harvest_failed_workers(engine)\n        .map_err(|error| error.to_string())?;\n"
+          new = "    #[cfg(all(feature = \"spout\", target_os = \"windows\", target_arch = \"x86_64\"))]\n" + old
           count = source.count(old)
           if count != 1:
               raise SystemExit(f"expected exactly one unguarded Spout harvest block, found {count}")
