@@ -17,6 +17,7 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use getrandom::getrandom;
+use protocol::control_plane_command::OUTPUT_BLACKOUT_RELEASE_OPERATION_ID;
 
 const CONSENT_CHALLENGE_TTL: Duration = Duration::from_secs(30);
 const CONSENT_TOMBSTONE_TTL: Duration = Duration::from_secs(10 * 60);
@@ -282,7 +283,7 @@ fn validate_binding(binding: &ConsentAuthorityBinding) -> Result<(), String> {
     if binding.caller.principal.is_empty()
         || binding.caller.window_label.is_empty()
         || binding.caller.owner_incarnation == 0
-        || binding.operation_id.is_empty()
+        || binding.operation_id != OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
         || binding.argument_fingerprint.len() != 64
         || !binding
             .argument_fingerprint
@@ -690,7 +691,7 @@ mod tests {
     #[test]
     fn prepared_consent_is_physical_single_use_and_exactly_bound() {
         let state = ControlPlaneSecurityState::default();
-        let authority = binding("syndocal.output.arm.v1", 9);
+        let authority = binding(OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, 9);
         let prepared = state.prepare_consent(authority.clone()).unwrap();
         assert_eq!(prepared.display_code.len(), CHALLENGE_DIGITS);
         assert_eq!(
@@ -729,9 +730,20 @@ mod tests {
     }
 
     #[test]
+    fn prepared_consent_rejects_other_r4_operations() {
+        let state = ControlPlaneSecurityState::default();
+        for operation in [
+            "syndocal.output.ownership.arm.v1",
+            "syndocal.output.standby.takeover.v1",
+        ] {
+            assert!(state.prepare_consent(binding(operation, 9)).is_err(), "{operation}");
+        }
+    }
+
+    #[test]
     fn new_challenge_retires_old_and_device_removal_invalidates_ready_token() {
         let state = ControlPlaneSecurityState::default();
-        let authority = binding("syndocal.output.arm.v1", 9);
+        let authority = binding(OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, 9);
         let first = state.prepare_consent(authority.clone()).unwrap();
         let second = state.prepare_consent(authority.clone()).unwrap();
         assert_eq!(
