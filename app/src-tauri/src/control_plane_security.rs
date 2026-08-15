@@ -19,7 +19,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use getrandom::getrandom;
 use protocol::control_plane_command::OUTPUT_BLACKOUT_RELEASE_OPERATION_ID;
 
-const CONSENT_CHALLENGE_TTL: Duration = Duration::from_secs(30);
+const CONSENT_CHALLENGE_TTL: Duration = Duration::from_secs(15);
 const CONSENT_TOMBSTONE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_CONSENT_RECORDS: usize = 64;
 const CHALLENGE_DIGITS: usize = 6;

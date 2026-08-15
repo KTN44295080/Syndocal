@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import { clockSourceLabel, clockSyncStatusLabel, isExternalClockSource } from "../clockDisplay";
 import type { EngineSnapshot, MidiInputSummary, SubmasterSummary } from "../types";
+import { BlackoutReleaseControl } from "./BlackoutReleaseControl";
 
 interface LightingRuntimeControlsPanelProps {
   lightingMaster: number;
@@ -13,6 +14,7 @@ interface LightingRuntimeControlsPanelProps {
   onLightingMaster: (level: number) => void | Promise<void>;
   onSubmaster: (groupId: string, level: number) => void | Promise<void>;
   onBlackout: (enabled: boolean) => void | Promise<void>;
+  onBlackoutReleased: () => void | Promise<void>;
   onAllBlackout: (enabled: boolean) => void | Promise<void>;
   onBpmDraft: (value: string) => void;
   onApplyBpm: () => void | Promise<void>;
@@ -64,7 +66,7 @@ export function LightingRuntimeControlsPanel(props: LightingRuntimeControlsPanel
       </Show>
       <div class="blackout">
         <button onClick={() => void props.onBlackout(true)}>DMX BO</button>
-        <button onClick={() => void props.onBlackout(false)}>DMX Clear</button>
+        <BlackoutReleaseControl onReleased={props.onBlackoutReleased} />
         <button onClick={() => void props.onAllBlackout(true)}>All BO</button>
         <button onClick={() => void props.onAllBlackout(false)}>All Clear</button>
       </div>

@@ -15,9 +15,10 @@ use protocol::control_plane::{
     OperationSourceFamily, SchemaIdentity, CONTROL_PLANE_SCHEMA_VERSION,
 };
 use protocol::control_plane_command::{
-    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SET_EFFECT_ENABLED_OPERATION_ID,
-    TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
-    TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+    OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
+    SET_EFFECT_ENABLED_OPERATION_ID, TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
+    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
+    TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
 };
 use protocol::control_plane_registry_v2::{
     AdapterPolicy, CanonicalControlPlaneRegistry, CanonicalOperationDescriptor,
@@ -315,6 +316,16 @@ fn canonical_source_inventory_descriptor(
                 ),
             }
         }
+        CanonicalSourceFamily::EngineCommand
+            if descriptor.source_id == "safety_blackout_release_published" =>
+        {
+            SourceDisposition::InternalStepOf {
+                target: SourceKey::new(
+                    CanonicalSourceFamily::TauriCommand,
+                    "execute_output_control_v1",
+                ),
+            }
+        }
         _ => SourceDisposition::Unclassified {
             reason: effect_enabled_unclassified_reason(descriptor)
                 .unwrap_or_else(|| unclassified_reason(source_family))
@@ -521,6 +532,7 @@ enum ReviewedCanonicalOperation {
     SetEffectEnabled,
     SetTimelineTransportPlaying,
     AbortTimelineFollow,
+    ReleaseSafetyBlackout,
     EngageSafetyBlackout,
 }
 
@@ -531,6 +543,7 @@ impl ReviewedCanonicalOperation {
             Self::SetEffectEnabled => SET_EFFECT_ENABLED_OPERATION_ID,
             Self::SetTimelineTransportPlaying => TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
             Self::AbortTimelineFollow => TIMELINE_FOLLOW_ABORT_OPERATION_ID,
+            Self::ReleaseSafetyBlackout => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
             Self::EngageSafetyBlackout => SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
         }
     }
@@ -546,6 +559,7 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
             Some(ReviewedCanonicalOperation::SetTimelineTransportPlaying)
         }
         "abort_timeline_follow_runtime_v1" => Some(ReviewedCanonicalOperation::AbortTimelineFollow),
+        "execute_output_control_v1" => Some(ReviewedCanonicalOperation::ReleaseSafetyBlackout),
         "safety_blackout_engage_v1" => Some(ReviewedCanonicalOperation::EngageSafetyBlackout),
         _ => None,
     }
@@ -599,6 +613,16 @@ fn canonical_descriptor_for_source(
             AdapterPolicy::LocalWindowRuntimeSafetyMutation,
             ReceiptPolicy::ExactTerminalReceipt,
         ),
+        ReviewedCanonicalOperation::ReleaseSafetyBlackout => (
+            OperationClass::Mutation,
+            vec![
+                OperationCapability::LocalWindowBound,
+                OperationCapability::OutputBlackoutRelease,
+            ],
+            OperationIdempotency::Mutating,
+            AdapterPolicy::LocalWindowOutputDisruptiveMutation,
+            ReceiptPolicy::ExactTerminalReceipt,
+        ),
         ReviewedCanonicalOperation::EngageSafetyBlackout => (
             OperationClass::Mutation,
             vec![
@@ -615,16 +639,20 @@ fn canonical_descriptor_for_source(
         schema: CanonicalOperationDescriptor::schema_identity(),
         operation_id: reviewed.operation_id().to_string(),
         class,
-        risk: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
-            OperationRisk::S0
-        } else {
-            OperationRisk::R0
+        risk: match reviewed {
+            ReviewedCanonicalOperation::ReleaseSafetyBlackout => OperationRisk::R4,
+            ReviewedCanonicalOperation::EngageSafetyBlackout => OperationRisk::S0,
+            _ => OperationRisk::R0,
         },
         capabilities,
         request_schema: descriptor.request_schema.clone(),
         response_schema: descriptor.response_schema.clone(),
         idempotency,
-        audit: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
+        audit: if matches!(
+            reviewed,
+            ReviewedCanonicalOperation::ReleaseSafetyBlackout
+                | ReviewedCanonicalOperation::EngageSafetyBlackout
+        ) {
             OperationAuditRequirement::Immutable
         } else {
             OperationAuditRequirement::NotApplicable
@@ -635,6 +663,7 @@ fn canonical_descriptor_for_source(
             reviewed,
             ReviewedCanonicalOperation::SetTimelineTransportPlaying
                 | ReviewedCanonicalOperation::AbortTimelineFollow
+                | ReviewedCanonicalOperation::ReleaseSafetyBlackout
                 | ReviewedCanonicalOperation::EngageSafetyBlackout
         ) {
             RatePolicy::TokenBucket4PerSecondBurst8
@@ -642,10 +671,14 @@ fn canonical_descriptor_for_source(
             RatePolicy::FailClosed
         },
         payload_policy: PayloadPolicy::FailClosed,
-        consent_policy: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
-            ConsentPolicy::NotRequiredForSafetyOnly
-        } else {
-            ConsentPolicy::FailClosed
+        consent_policy: match reviewed {
+            ReviewedCanonicalOperation::ReleaseSafetyBlackout => {
+                ConsentPolicy::PhysicalSingleUse15Seconds
+            }
+            ReviewedCanonicalOperation::EngageSafetyBlackout => {
+                ConsentPolicy::NotRequiredForSafetyOnly
+            }
+            _ => ConsentPolicy::FailClosed,
         },
         derived_adapters: Vec::new(),
     })
@@ -758,6 +791,12 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
         return unavailable_descriptor_for_semantic_operation(
             operation_id,
             TIMELINE_FOLLOW_ABORT_OPERATION_ID,
+        );
+    }
+    if operation_id == "execute_output_control_v1" {
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
         );
     }
     if operation_id == "safety_blackout_engage_v1" {
@@ -1005,7 +1044,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 389;
+        const FRONTEND_INVOKE_COUNT: usize = 393;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -1014,7 +1053,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1410);
+        assert_eq!(registry.operations.len(), 1414);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -1275,17 +1314,17 @@ mod tests {
         const ENGINE_COUNT: usize = 249;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 389;
+        const FRONTEND_COUNT: usize = 393;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1410);
-        assert_eq!(SOURCE_TOTAL, 1443);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1414);
+        assert_eq!(SOURCE_TOTAL, 1447);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 14);
+        assert_eq!(canonical.canonical_operations.len(), 15);
 
         let count_family = |family| {
             canonical
@@ -1386,11 +1425,11 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 14);
+        assert_eq!(direct.len(), 15);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
-        assert_eq!(internal_steps.len(), 4);
+        assert_eq!(internal_steps.len(), 5);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1035);
+        assert_eq!(unclassified.len(), 1033);
         assert_eq!(
             direct.len()
                 + aliases.len()
@@ -1615,6 +1654,28 @@ mod tests {
                 .map(|operation| operation.operation_id.as_str()),
             Some(SAFETY_BLACKOUT_ENGAGE_OPERATION_ID)
         );
+        let blackout_release_direct = direct
+            .iter()
+            .find(|source| source.source_key.source_id == "execute_output_control_v1")
+            .expect("R4 Blackout Release must be a direct canonical source");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&blackout_release_direct.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(OUTPUT_BLACKOUT_RELEASE_OPERATION_ID)
+        );
+        let blackout_release_alias = aliases
+            .iter()
+            .find(|source| source.source_key.source_id == "execute_output_control_v1")
+            .expect("frontend R4 Blackout Release must retain its canonical alias row");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&blackout_release_alias.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(OUTPUT_BLACKOUT_RELEASE_OPERATION_ID)
+        );
         for (source_id, target_id) in [
             ("set_effect_enabled_published", "set_effect_enabled"),
             (
@@ -1625,6 +1686,10 @@ mod tests {
             (
                 "safety_blackout_engage_published",
                 "safety_blackout_engage_v1",
+            ),
+            (
+                "safety_blackout_release_published",
+                "execute_output_control_v1",
             ),
         ] {
             let published_step = internal_steps
@@ -1650,6 +1715,9 @@ mod tests {
         for operation in &canonical.canonical_operations {
             if operation.operation_id == SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
                 assert_eq!(operation.risk, OperationRisk::S0);
+                assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
+            } else if operation.operation_id == OUTPUT_BLACKOUT_RELEASE_OPERATION_ID {
+                assert_eq!(operation.risk, OperationRisk::R4);
                 assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
             } else {
                 assert_eq!(operation.risk, OperationRisk::R0);
@@ -1722,6 +1790,35 @@ mod tests {
                         OperationCapability::AllowedDuringFullLock,
                     ]
                 );
+            } else if operation.operation_id == OUTPUT_BLACKOUT_RELEASE_OPERATION_ID {
+                assert_eq!(operation.class, OperationClass::Mutation);
+                assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
+                assert_eq!(
+                    operation.adapter_policy,
+                    AdapterPolicy::LocalWindowOutputDisruptiveMutation
+                );
+                assert_eq!(
+                    operation.receipt_policy,
+                    ReceiptPolicy::ExactTerminalReceipt
+                );
+                assert_eq!(
+                    operation.rate_policy,
+                    RatePolicy::TokenBucket4PerSecondBurst8
+                );
+                assert_eq!(
+                    operation.consent_policy,
+                    ConsentPolicy::PhysicalSingleUse15Seconds
+                );
+                assert_eq!(
+                    operation.capabilities,
+                    vec![
+                        OperationCapability::LocalWindowBound,
+                        OperationCapability::OutputBlackoutRelease,
+                    ]
+                );
+                assert!(!operation
+                    .capabilities
+                    .contains(&OperationCapability::AllowedDuringFullLock));
             } else if operation.operation_id == SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
                 assert_eq!(operation.class, OperationClass::Mutation);
                 assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
@@ -1912,11 +2009,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1410);
+        assert_eq!(legacy.operations.len(), 1414);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1410);
+        assert_eq!(operations.len(), 1414);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

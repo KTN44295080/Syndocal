@@ -15535,10 +15535,8 @@ export default function App() {
       if (enabled) {
         await safetyBlackoutRuntime.engage();
       } else {
-        // Safety release is intentionally not part of the S0 lane. This
-        // legacy local release remains outside Full Lock until the R4
-        // ownership/consent contract replaces it.
-        await invoke("set_blackout", { enabled: false });
+        setMessage("DMX blackout release requires physical confirmation in Runtime controls.");
+        return;
       }
       await refreshSnapshot();
     } catch (error) {
@@ -24686,6 +24684,7 @@ export default function App() {
             onLightingMaster={setLightingMaster}
             onSubmaster={setGroupSubmaster}
             onBlackout={setBlackout}
+            onBlackoutReleased={refreshSnapshot}
             onAllBlackout={setAllBlackout}
             onBpmDraft={setBpmDraft}
             onApplyBpm={applyBpm}

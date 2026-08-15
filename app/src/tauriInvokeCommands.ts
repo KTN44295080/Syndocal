@@ -85,6 +85,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "duplicate_video_clip_slot_authoritative",
   "duplicate_video_layer",
   "end_media_asset_preview",
+  "execute_output_control_v1",
   "export_diagnostic_package",
   "fade_video_output_opacity",
   "finalize_prepared_media_asset_relink",
@@ -177,10 +178,13 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "patch_fixtures",
   "play_video_layer_audio_monitor",
   "poll_project_authority_bundle",
+  "prepare_output_consent_v1",
   "prepare_reserved_media_asset_relink",
   "prepare_reserved_media_assets",
   "preview_custom_fixture_profile",
   "pulse_video_layer_isf_event",
+  "query_output_consent_status_v1",
+  "query_output_control_authority_v1",
   "query_timeline_follow_abort_authority_v1",
   "query_timeline_transport_authority_v1",
   "queue_video_clip_slot_authoritative",
@@ -389,7 +393,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "update_video_clip_slot_authoritative",
   "use_fixture_profile",
   "video_audio_monitor_status",
-  "video_output_recording_status"
+  "video_output_recording_status",
 ] as const;
 
 export type FrontendTauriInvokeCommand = typeof FRONTEND_TAURI_INVOKE_COMMANDS[number];

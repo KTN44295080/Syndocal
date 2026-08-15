@@ -1,10 +1,8 @@
 /**
- * Staged R4 renderer lane for releasing the runtime safety blackout.
+ * R4 renderer lane for releasing the runtime safety blackout.
  *
- * This controller deliberately does not participate in the generated frontend
- * Tauri invoke authority yet. The four commands below remain unreachable from
- * production UI until the canonical R4 registry row and legacy-release bypass
- * removal land in the same reviewed slice.
+ * The finite command union below is included in the generated frontend invoke
+ * authority only after the canonical R4 registry row is present.
  *
  * The controller never mints or fakes human presence. `prepareRelease` returns
  * the backend challenge so the desktop can display it. Only physical Raw Input

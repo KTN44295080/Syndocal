@@ -210,6 +210,10 @@ pub enum AdapterPolicy {
     /// during Full Lock, but otherwise has the same exact receipt, rate and
     /// owner-bound adapter requirements as an authoritative runtime mutation.
     LocalWindowRuntimeSafetyMutation,
+    /// A typed local R4 output-disruptive mutation. It is not available
+    /// during Full Lock and requires an exact terminal receipt plus backend
+    /// physical, single-use consent bound to the complete output fence.
+    LocalWindowOutputDisruptiveMutation,
     /// The named S0 emergency blackout engagement. Its request has no target
     /// value, requires immutable audit, and is never a release capability.
     LocalWindowEmergencySafetyMutation,
@@ -248,6 +252,10 @@ pub enum PayloadPolicy {
 #[serde(rename_all = "snake_case")]
 pub enum ConsentPolicy {
     FailClosed,
+    /// Backend-issued, physical-input-confirmed consent. The token is bound to
+    /// one caller, operation, argument fingerprint and authority fence, and
+    /// expires no later than fifteen seconds after preparation.
+    PhysicalSingleUse15Seconds,
     /// S0 does not consume an R4/R5 confirmation token; authority is the
     /// narrow named capability plus strict rate and immutable audit.
     NotRequiredForSafetyOnly,
@@ -594,6 +602,38 @@ impl CanonicalOperationDescriptor {
                     }
                 }
             }
+            AdapterPolicy::LocalWindowOutputDisruptiveMutation => {
+                if self.class != OperationClass::Mutation
+                    || self.risk != OperationRisk::R4
+                    || self.idempotency != OperationIdempotency::Mutating
+                    || self.audit != OperationAuditRequirement::Immutable
+                    || self.capabilities
+                        != vec![
+                            OperationCapability::LocalWindowBound,
+                            OperationCapability::OutputBlackoutRelease,
+                        ]
+                    || self.receipt_policy != ReceiptPolicy::ExactTerminalReceipt
+                    || self.rate_policy != RatePolicy::TokenBucket4PerSecondBurst8
+                    || self.payload_policy != PayloadPolicy::FailClosed
+                    || self.consent_policy != ConsentPolicy::PhysicalSingleUse15Seconds
+                {
+                    return Err(
+                        CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(
+                            self.operation_id.clone(),
+                        ),
+                    );
+                }
+                for adapter in &self.derived_adapters {
+                    adapter.validate_shape()?;
+                    if adapter.adapter != AdapterKind::LocalTauriWindow {
+                        return Err(
+                            CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(
+                                self.operation_id.clone(),
+                            ),
+                        );
+                    }
+                }
+            }
             AdapterPolicy::LocalWindowEmergencySafetyMutation => {
                 if self.class != OperationClass::Mutation
                     || self.risk != OperationRisk::S0
@@ -648,6 +688,7 @@ impl CanonicalOperationDescriptor {
                 | AdapterPolicy::LocalWindowAuthoritativeMutation
                 | AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation
                 | AdapterPolicy::LocalWindowRuntimeSafetyMutation
+                | AdapterPolicy::LocalWindowOutputDisruptiveMutation
                 | AdapterPolicy::LocalWindowEmergencySafetyMutation
         ) {
             if self.derived_adapters.is_empty() {
@@ -1058,6 +1099,7 @@ impl CanonicalControlPlaneRegistry {
                     | AdapterPolicy::LocalWindowAuthoritativeMutation
                     | AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation
                     | AdapterPolicy::LocalWindowRuntimeSafetyMutation
+                    | AdapterPolicy::LocalWindowOutputDisruptiveMutation
                     | AdapterPolicy::LocalWindowEmergencySafetyMutation
             ) && expected.is_empty()
             {
@@ -1180,6 +1222,7 @@ impl CanonicalControlPlaneRegistry {
                                 | AdapterPolicy::LocalWindowAuthoritativeMutation
                                 | AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation
                                 | AdapterPolicy::LocalWindowRuntimeSafetyMutation
+                                | AdapterPolicy::LocalWindowOutputDisruptiveMutation
                                 | AdapterPolicy::LocalWindowEmergencySafetyMutation
                         )
                     {
@@ -2253,6 +2296,86 @@ mod tests {
         ));
 
         let mut external = safety;
+        external.derived_adapters[0].adapter = AdapterKind::ExternalMcp;
+        assert!(matches!(
+            external.validate(),
+            Err(CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(_))
+        ));
+    }
+
+    #[test]
+    fn output_disruptive_release_requires_r4_physical_consent_receipt_rate_and_no_full_lock() {
+        let operation_id = "syndocal.output.blackout.release.v1";
+        let mut release = authoritative_mutation_operation();
+        release.operation_id = operation_id.to_string();
+        release.request_schema = SchemaIdentity {
+            name: format!("{operation_id}.request"),
+            version: 1,
+        };
+        release.response_schema = SchemaIdentity {
+            name: format!("{operation_id}.response"),
+            version: 1,
+        };
+        release.risk = OperationRisk::R4;
+        release.capabilities = vec![
+            OperationCapability::LocalWindowBound,
+            OperationCapability::OutputBlackoutRelease,
+        ];
+        release.audit = OperationAuditRequirement::Immutable;
+        release.adapter_policy = AdapterPolicy::LocalWindowOutputDisruptiveMutation;
+        release.rate_policy = RatePolicy::TokenBucket4PerSecondBurst8;
+        release.consent_policy = ConsentPolicy::PhysicalSingleUse15Seconds;
+        let source_key = SourceKey::new(
+            CanonicalSourceFamily::TauriCommand,
+            "execute_output_control_v1",
+        );
+        release.derived_adapters.push(DerivedAdapterBinding {
+            adapter: AdapterKind::LocalTauriWindow,
+            binding_id: source_key.binding_id(),
+            source_key,
+        });
+        release.validate().unwrap();
+
+        for forged in [
+            {
+                let mut value = release.clone();
+                value.risk = OperationRisk::R0;
+                value
+            },
+            {
+                let mut value = release.clone();
+                value.capabilities[1] = OperationCapability::AuthoritativeRuntimeMutation;
+                value
+            },
+            {
+                let mut value = release.clone();
+                value
+                    .capabilities
+                    .push(OperationCapability::AllowedDuringFullLock);
+                value
+            },
+            {
+                let mut value = release.clone();
+                value.audit = OperationAuditRequirement::NotApplicable;
+                value
+            },
+            {
+                let mut value = release.clone();
+                value.rate_policy = RatePolicy::FailClosed;
+                value
+            },
+            {
+                let mut value = release.clone();
+                value.consent_policy = ConsentPolicy::FailClosed;
+                value
+            },
+        ] {
+            assert!(matches!(
+                forged.validate(),
+                Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+            ));
+        }
+        let mut external = release;
         external.derived_adapters[0].adapter = AdapterKind::ExternalMcp;
         assert!(matches!(
             external.validate(),
