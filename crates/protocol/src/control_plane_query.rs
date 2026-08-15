@@ -898,6 +898,362 @@ impl ControlPlaneQueryPayload for RuntimeGenerationPayload {
     }
 }
 
+/// Redacted project authority exposed by the canonical read surface.
+///
+/// This deliberately excludes project contents, paths, mappings, operator
+/// policy, history entries, and every file/device identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectAuthorityQueryPayload {
+    pub project_epoch: u64,
+    pub project_revision: u64,
+    pub project_history_generation: u64,
+    pub project_checkpoint_hash: String,
+    pub project_publication_generation: u64,
+}
+
+impl ProjectAuthorityQueryPayload {
+    pub fn validate(&self) -> Result<(), QueryContractValidationError> {
+        validate_fingerprint(&self.project_checkpoint_hash)
+    }
+}
+
+impl_validated_struct_serialize!(
+    ProjectAuthorityQueryPayload,
+    "ProjectAuthorityQueryPayload",
+    validate,
+    [
+        project_epoch,
+        project_revision,
+        project_history_generation,
+        project_checkpoint_hash,
+        project_publication_generation,
+    ]
+);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectAuthorityQueryPayloadWire {
+    project_epoch: u64,
+    project_revision: u64,
+    project_history_generation: u64,
+    project_checkpoint_hash: String,
+    project_publication_generation: u64,
+}
+
+impl<'de> Deserialize<'de> for ProjectAuthorityQueryPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ProjectAuthorityQueryPayloadWire::deserialize(deserializer)?;
+        let payload = Self {
+            project_epoch: wire.project_epoch,
+            project_revision: wire.project_revision,
+            project_history_generation: wire.project_history_generation,
+            project_checkpoint_hash: wire.project_checkpoint_hash,
+            project_publication_generation: wire.project_publication_generation,
+        };
+        payload.validate().map_err(D::Error::custom)?;
+        Ok(payload)
+    }
+}
+
+impl query_payload_seal::Sealed for ProjectAuthorityQueryPayload {}
+impl ControlPlaneQueryPayload for ProjectAuthorityQueryPayload {
+    fn validate_payload(&self) -> Result<(), QueryContractValidationError> {
+        self.validate()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryOutputOwnershipState {
+    Ready,
+    Transitioning,
+    Activating,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryMachineOutputRole {
+    Lighting,
+    Video,
+    Both,
+    Standby,
+}
+
+impl QueryMachineOutputRole {
+    pub const fn lighting_allowed(self) -> bool {
+        matches!(self, Self::Lighting | Self::Both)
+    }
+
+    pub const fn video_allowed(self) -> bool {
+        matches!(self, Self::Video | Self::Both)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryOutputOwnershipReason {
+    OwnedByMachineRole,
+    BlockedByMachineRole,
+    Transitioning,
+    TransitionFailed,
+    ProjectSwapDisarmed,
+    StartupDenied,
+}
+
+/// Redacted output-ownership state. Raw driver errors and physical endpoint
+/// identities never enter this DTO.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputOwnershipQueryPayload {
+    pub output_epoch: u64,
+    pub output_generation: u64,
+    pub state: QueryOutputOwnershipState,
+    pub effective_role: QueryMachineOutputRole,
+    pub desired_role: QueryMachineOutputRole,
+    pub lighting_allowed: bool,
+    pub video_allowed: bool,
+    pub lighting_reason: QueryOutputOwnershipReason,
+    pub video_reason: QueryOutputOwnershipReason,
+}
+
+impl OutputOwnershipQueryPayload {
+    pub fn validate(&self) -> Result<(), QueryContractValidationError> {
+        if self.output_epoch == 0 || self.output_generation == 0 {
+            return Err(QueryContractValidationError::ZeroOutputGeneration);
+        }
+        let state_reasons_are_consistent = match self.state {
+            QueryOutputOwnershipState::Transitioning | QueryOutputOwnershipState::Activating => {
+                self.lighting_reason == QueryOutputOwnershipReason::Transitioning
+                    && self.video_reason == QueryOutputOwnershipReason::Transitioning
+            }
+            QueryOutputOwnershipState::Failed => {
+                matches!(
+                    self.lighting_reason,
+                    QueryOutputOwnershipReason::TransitionFailed
+                        | QueryOutputOwnershipReason::StartupDenied
+                ) && self.lighting_reason == self.video_reason
+            }
+            QueryOutputOwnershipState::Ready => {
+                let project_swap_disarmed = self.effective_role == QueryMachineOutputRole::Standby
+                    && self.lighting_reason == QueryOutputOwnershipReason::ProjectSwapDisarmed
+                    && self.video_reason == QueryOutputOwnershipReason::ProjectSwapDisarmed;
+                let role_reasons = matches!(
+                    self.lighting_reason,
+                    QueryOutputOwnershipReason::OwnedByMachineRole
+                        | QueryOutputOwnershipReason::BlockedByMachineRole
+                ) && matches!(
+                    self.video_reason,
+                    QueryOutputOwnershipReason::OwnedByMachineRole
+                        | QueryOutputOwnershipReason::BlockedByMachineRole
+                ) && self.desired_role == self.effective_role;
+                project_swap_disarmed || role_reasons
+            }
+        };
+        if self.lighting_allowed != self.effective_role.lighting_allowed()
+            || self.video_allowed != self.effective_role.video_allowed()
+            || self.lighting_allowed
+                != matches!(
+                    self.lighting_reason,
+                    QueryOutputOwnershipReason::OwnedByMachineRole
+                )
+            || self.video_allowed
+                != matches!(
+                    self.video_reason,
+                    QueryOutputOwnershipReason::OwnedByMachineRole
+                )
+            || !state_reasons_are_consistent
+        {
+            return Err(QueryContractValidationError::InconsistentOutputOwnership);
+        }
+        Ok(())
+    }
+}
+
+impl_validated_struct_serialize!(
+    OutputOwnershipQueryPayload,
+    "OutputOwnershipQueryPayload",
+    validate,
+    [
+        output_epoch,
+        output_generation,
+        state,
+        effective_role,
+        desired_role,
+        lighting_allowed,
+        video_allowed,
+        lighting_reason,
+        video_reason,
+    ]
+);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputOwnershipQueryPayloadWire {
+    output_epoch: u64,
+    output_generation: u64,
+    state: QueryOutputOwnershipState,
+    effective_role: QueryMachineOutputRole,
+    desired_role: QueryMachineOutputRole,
+    lighting_allowed: bool,
+    video_allowed: bool,
+    lighting_reason: QueryOutputOwnershipReason,
+    video_reason: QueryOutputOwnershipReason,
+}
+
+impl<'de> Deserialize<'de> for OutputOwnershipQueryPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputOwnershipQueryPayloadWire::deserialize(deserializer)?;
+        let payload = Self {
+            output_epoch: wire.output_epoch,
+            output_generation: wire.output_generation,
+            state: wire.state,
+            effective_role: wire.effective_role,
+            desired_role: wire.desired_role,
+            lighting_allowed: wire.lighting_allowed,
+            video_allowed: wire.video_allowed,
+            lighting_reason: wire.lighting_reason,
+            video_reason: wire.video_reason,
+        };
+        payload.validate().map_err(D::Error::custom)?;
+        Ok(payload)
+    }
+}
+
+impl query_payload_seal::Sealed for OutputOwnershipQueryPayload {}
+impl ControlPlaneQueryPayload for OutputOwnershipQueryPayload {
+    fn validate_payload(&self) -> Result<(), QueryContractValidationError> {
+        self.validate()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "payload",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum CanonicalObservationEventPayload {
+    ProjectAuthorityChanged(ProjectAuthorityQueryPayload),
+    RuntimeGenerationChanged(RuntimeGenerationPayload),
+    OutputOwnershipChanged(OutputOwnershipQueryPayload),
+}
+
+impl Serialize for CanonicalObservationEventPayload {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("CanonicalObservationEventPayload", 2)?;
+        match self {
+            Self::ProjectAuthorityChanged(payload) => {
+                state.serialize_field("kind", "project_authority_changed")?;
+                state.serialize_field("payload", payload)?;
+            }
+            Self::RuntimeGenerationChanged(payload) => {
+                state.serialize_field("kind", "runtime_generation_changed")?;
+                state.serialize_field("payload", payload)?;
+            }
+            Self::OutputOwnershipChanged(payload) => {
+                state.serialize_field("kind", "output_ownership_changed")?;
+                state.serialize_field("payload", payload)?;
+            }
+        }
+        state.end()
+    }
+}
+
+impl CanonicalObservationEventPayload {
+    pub fn validate(&self) -> Result<(), QueryContractValidationError> {
+        match self {
+            Self::ProjectAuthorityChanged(payload) => payload.validate(),
+            Self::RuntimeGenerationChanged(payload) => payload.validate(),
+            Self::OutputOwnershipChanged(payload) => payload.validate(),
+        }
+    }
+}
+
+impl query_payload_seal::Sealed for CanonicalObservationEventPayload {}
+impl ControlPlaneQueryPayload for CanonicalObservationEventPayload {
+    fn validate_payload(&self) -> Result<(), QueryContractValidationError> {
+        self.validate()
+    }
+}
+
+/// Strict event subscription request. Initial handoff supplies the exact
+/// snapshot fence; continuation supplies only the server-owned opaque cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventPageRequest {
+    pub limit: u16,
+    pub expected_fence: Option<QueryFence>,
+    pub cursor: Option<OpaqueCursorToken>,
+}
+
+impl EventPageRequest {
+    pub fn validate(&self) -> Result<(), QueryContractValidationError> {
+        if self.limit == 0 || self.limit > MAX_EVENT_PAGE_EVENTS as u16 {
+            return Err(QueryContractValidationError::InvalidPageLimit);
+        }
+        match (&self.expected_fence, &self.cursor) {
+            (Some(fence), None) => fence.validate(),
+            (None, Some(_)) => Ok(()),
+            _ => Err(QueryContractValidationError::AmbiguousEventPageRequest),
+        }
+    }
+}
+
+impl Serialize for EventPageRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("EventPageRequest", 2)?;
+        state.serialize_field("limit", &self.limit)?;
+        if let Some(fence) = &self.expected_fence {
+            state.serialize_field("expected_fence", fence)?;
+        }
+        if let Some(cursor) = &self.cursor {
+            state.serialize_field("cursor", cursor)?;
+        }
+        state.end()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EventPageRequestWire {
+    #[serde(default = "default_page_limit")]
+    limit: u16,
+    #[serde(default)]
+    expected_fence: Option<QueryFence>,
+    #[serde(default)]
+    cursor: Option<OpaqueCursorToken>,
+}
+
+impl<'de> Deserialize<'de> for EventPageRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = EventPageRequestWire::deserialize(deserializer)?;
+        let request = Self {
+            limit: wire.limit,
+            expected_fence: wire.expected_fence,
+            cursor: wire.cursor,
+        };
+        request.validate().map_err(D::Error::custom)?;
+        Ok(request)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CapabilityDescriptorWire {
@@ -1346,6 +1702,8 @@ pub enum QueryContractValidationError {
     InconsistentQueryError,
     InconsistentResnapshotFlag,
     ZeroIncarnation,
+    ZeroOutputGeneration,
+    InconsistentOutputOwnership,
     ZeroEventStreamEpoch,
     ZeroEventGeneration,
     TooManyRuntimeDomains,
@@ -1356,6 +1714,7 @@ pub enum QueryContractValidationError {
     InvalidIdentifier,
     UnversionedIdentifier,
     InvalidPageLimit,
+    AmbiguousEventPageRequest,
     TooManyPageItems,
     TooManySchemaEntries,
     DuplicateSchemaId,
@@ -1383,6 +1742,10 @@ impl fmt::Display for QueryContractValidationError {
             }
             Self::InconsistentResnapshotFlag => "query result requires an explicit resnapshot flag",
             Self::ZeroIncarnation => "process and session incarnations must be non-zero",
+            Self::ZeroOutputGeneration => "output epoch and generation must be non-zero",
+            Self::InconsistentOutputOwnership => {
+                "output ownership role, permissions, state, and reasons are inconsistent"
+            }
             Self::ZeroEventStreamEpoch => "event stream epoch must be non-zero",
             Self::ZeroEventGeneration => "event generation must be non-zero",
             Self::TooManyRuntimeDomains => "runtime-domain fence exceeds its bound",
@@ -1395,6 +1758,9 @@ impl fmt::Display for QueryContractValidationError {
             Self::InvalidIdentifier => "query identifier is invalid or oversized",
             Self::UnversionedIdentifier => "schema and operation ids must end in canonical vN",
             Self::InvalidPageLimit => "page limit must be between one and the protocol maximum",
+            Self::AmbiguousEventPageRequest => {
+                "event page request requires exactly one expected fence or cursor"
+            }
             Self::TooManyPageItems => "page exceeds the protocol item bound",
             Self::TooManySchemaEntries => "schema catalog exceeds its bound",
             Self::DuplicateSchemaId => "schema catalog contains a duplicate id",
@@ -1641,6 +2007,223 @@ mod tests {
     }
 
     #[test]
+    fn redacted_authority_output_and_observation_contracts_are_closed() {
+        let project = ProjectAuthorityQueryPayload {
+            project_epoch: 2,
+            project_revision: 3,
+            project_history_generation: 4,
+            project_checkpoint_hash: fingerprint('d'),
+            project_publication_generation: 5,
+        };
+        let output = OutputOwnershipQueryPayload {
+            output_epoch: 6,
+            output_generation: 7,
+            state: QueryOutputOwnershipState::Ready,
+            effective_role: QueryMachineOutputRole::Both,
+            desired_role: QueryMachineOutputRole::Both,
+            lighting_allowed: true,
+            video_allowed: true,
+            lighting_reason: QueryOutputOwnershipReason::OwnedByMachineRole,
+            video_reason: QueryOutputOwnershipReason::OwnedByMachineRole,
+        };
+        let events = [
+            CanonicalObservationEventPayload::ProjectAuthorityChanged(project.clone()),
+            CanonicalObservationEventPayload::RuntimeGenerationChanged(runtime_payload(8, true)),
+            CanonicalObservationEventPayload::OutputOwnershipChanged(output.clone()),
+        ];
+        for event in events {
+            event.validate().unwrap();
+            let encoded = serde_json::to_value(&event).unwrap();
+            let object = encoded.as_object().unwrap();
+            assert_eq!(object.len(), 2);
+            assert!(object.contains_key("kind"));
+            assert!(object.contains_key("payload"));
+            let roundtrip: CanonicalObservationEventPayload =
+                serde_json::from_value(encoded).unwrap();
+            assert_eq!(roundtrip, event);
+        }
+
+        let project_json = serde_json::to_value(&project).unwrap();
+        let project_object = project_json.as_object().unwrap();
+        assert_eq!(project_object.len(), 5);
+        for forbidden in [
+            "current_project_path",
+            "snapshot",
+            "profiles",
+            "fixture_groups",
+            "operator_policy",
+            "midi_mappings",
+            "osc_mappings",
+            "dmx_mappings",
+            "history",
+        ] {
+            assert!(!project_object.contains_key(forbidden));
+        }
+        let output_json = serde_json::to_value(&output).unwrap();
+        let output_object = output_json.as_object().unwrap();
+        assert_eq!(output_object.len(), 9);
+        for forbidden in ["error", "endpoint", "device", "path", "pid", "hwnd"] {
+            assert!(!output_object.contains_key(forbidden));
+        }
+
+        let mut unknown_project = project_json;
+        unknown_project["current_project_path"] = json!("C:\\secret.sdc");
+        assert!(serde_json::from_value::<ProjectAuthorityQueryPayload>(unknown_project).is_err());
+        let mut unknown_output = output_json;
+        unknown_output["error"] = json!("device path secret");
+        assert!(serde_json::from_value::<OutputOwnershipQueryPayload>(unknown_output).is_err());
+        let inconsistent_output = OutputOwnershipQueryPayload {
+            lighting_allowed: false,
+            ..output.clone()
+        };
+        assert_eq!(
+            inconsistent_output.validate(),
+            Err(QueryContractValidationError::InconsistentOutputOwnership)
+        );
+        assert!(serde_json::to_value(&inconsistent_output).is_err());
+        let inconsistent_desired = OutputOwnershipQueryPayload {
+            desired_role: QueryMachineOutputRole::Standby,
+            ..output.clone()
+        };
+        assert_eq!(
+            inconsistent_desired.validate(),
+            Err(QueryContractValidationError::InconsistentOutputOwnership)
+        );
+        assert!(serde_json::to_value(&inconsistent_desired).is_err());
+
+        for valid in [
+            output,
+            OutputOwnershipQueryPayload {
+                output_epoch: 6,
+                output_generation: 8,
+                state: QueryOutputOwnershipState::Transitioning,
+                effective_role: QueryMachineOutputRole::Standby,
+                desired_role: QueryMachineOutputRole::Video,
+                lighting_allowed: false,
+                video_allowed: false,
+                lighting_reason: QueryOutputOwnershipReason::Transitioning,
+                video_reason: QueryOutputOwnershipReason::Transitioning,
+            },
+            OutputOwnershipQueryPayload {
+                output_epoch: 6,
+                output_generation: 9,
+                state: QueryOutputOwnershipState::Activating,
+                effective_role: QueryMachineOutputRole::Standby,
+                desired_role: QueryMachineOutputRole::Both,
+                lighting_allowed: false,
+                video_allowed: false,
+                lighting_reason: QueryOutputOwnershipReason::Transitioning,
+                video_reason: QueryOutputOwnershipReason::Transitioning,
+            },
+            OutputOwnershipQueryPayload {
+                output_epoch: 6,
+                output_generation: 10,
+                state: QueryOutputOwnershipState::Failed,
+                effective_role: QueryMachineOutputRole::Standby,
+                desired_role: QueryMachineOutputRole::Lighting,
+                lighting_allowed: false,
+                video_allowed: false,
+                lighting_reason: QueryOutputOwnershipReason::TransitionFailed,
+                video_reason: QueryOutputOwnershipReason::TransitionFailed,
+            },
+            OutputOwnershipQueryPayload {
+                output_epoch: 6,
+                output_generation: 11,
+                state: QueryOutputOwnershipState::Ready,
+                effective_role: QueryMachineOutputRole::Standby,
+                desired_role: QueryMachineOutputRole::Both,
+                lighting_allowed: false,
+                video_allowed: false,
+                lighting_reason: QueryOutputOwnershipReason::ProjectSwapDisarmed,
+                video_reason: QueryOutputOwnershipReason::ProjectSwapDisarmed,
+            },
+        ] {
+            valid.validate().unwrap();
+            let roundtrip: OutputOwnershipQueryPayload =
+                serde_json::from_slice(&serde_json::to_vec(&valid).unwrap()).unwrap();
+            assert_eq!(roundtrip, valid);
+        }
+        assert!(
+            serde_json::from_value::<CanonicalObservationEventPayload>(json!({
+                "kind": "raw_snapshot",
+                "payload": {}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn event_page_request_requires_exactly_one_fence_or_cursor() {
+        let initial = EventPageRequest {
+            limit: 50,
+            expected_fence: Some(fence(40)),
+            cursor: None,
+        };
+        initial.validate().unwrap();
+        let encoded = serde_json::to_value(&initial).unwrap();
+        assert!(encoded.get("expected_fence").is_some());
+        assert!(encoded.get("cursor").is_none());
+        assert_eq!(
+            serde_json::from_value::<EventPageRequest>(encoded).unwrap(),
+            initial
+        );
+
+        let continuation = EventPageRequest {
+            limit: 100,
+            expected_fence: None,
+            cursor: Some(OpaqueCursorToken::try_new("opaque.v1.ABC_123").unwrap()),
+        };
+        continuation.validate().unwrap();
+        let encoded = serde_json::to_value(&continuation).unwrap();
+        assert!(encoded.get("expected_fence").is_none());
+        assert!(encoded.get("cursor").is_some());
+        assert_eq!(
+            serde_json::from_value::<EventPageRequest>(encoded).unwrap(),
+            continuation
+        );
+
+        for invalid in [
+            EventPageRequest {
+                limit: 50,
+                expected_fence: None,
+                cursor: None,
+            },
+            EventPageRequest {
+                limit: 50,
+                expected_fence: Some(fence(40)),
+                cursor: Some(OpaqueCursorToken::try_new("opaque.v1.ABC_123").unwrap()),
+            },
+            EventPageRequest {
+                limit: 0,
+                expected_fence: Some(fence(40)),
+                cursor: None,
+            },
+        ] {
+            assert_eq!(
+                invalid.validate(),
+                Err(if invalid.limit == 0 {
+                    QueryContractValidationError::InvalidPageLimit
+                } else {
+                    QueryContractValidationError::AmbiguousEventPageRequest
+                })
+            );
+            assert!(serde_json::to_value(&invalid).is_err());
+        }
+        assert!(serde_json::from_value::<EventPageRequest>(json!({
+            "limit": 50,
+            "expected_fence": fence(40),
+            "cursor": "opaque.v1.ABC_123"
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<EventPageRequest>(json!({
+            "limit": 50,
+            "expected_fence": fence(40),
+            "owner_id": "forged"
+        }))
+        .is_err());
+    }
+
+    #[test]
     fn invalid_outbound_dtos_cannot_be_serialized() {
         fn rejected(value: &impl Serialize) {
             assert!(
@@ -1702,6 +2285,24 @@ mod tests {
             active: true,
         };
         rejected(&invalid_payload);
+        rejected(&ProjectAuthorityQueryPayload {
+            project_epoch: 1,
+            project_revision: 1,
+            project_history_generation: 1,
+            project_checkpoint_hash: "not-a-hash".to_string(),
+            project_publication_generation: 1,
+        });
+        rejected(&OutputOwnershipQueryPayload {
+            output_epoch: 0,
+            output_generation: 1,
+            state: QueryOutputOwnershipState::Failed,
+            effective_role: QueryMachineOutputRole::Standby,
+            desired_role: QueryMachineOutputRole::Standby,
+            lighting_allowed: false,
+            video_allowed: false,
+            lighting_reason: QueryOutputOwnershipReason::StartupDenied,
+            video_reason: QueryOutputOwnershipReason::StartupDenied,
+        });
         rejected(&ControlPlaneEvent {
             protocol_version: QueryProtocolVersion::CURRENT,
             resource: "syndocal.runtime.transport".to_string(),
