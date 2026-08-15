@@ -95,10 +95,18 @@ use tauri_plugin_updater::UpdaterExt;
 
 mod capture_transport;
 mod control_plane;
+mod control_plane_query;
 mod dvc_import;
 mod ndi_transport;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod spout_transport;
+
+use control_plane_query::{
+    get_control_plane_query_capabilities, get_control_plane_query_schema_catalog,
+    poll_control_plane_observation_events, query_control_plane_output_ownership,
+    query_control_plane_project_authority, query_control_plane_runtime_generations,
+    ControlPlaneQueryState,
+};
 
 type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
     video::DecoderBackedFrameProvider<ndi_transport::NdiAwareVideoFrameDecoder>,
@@ -84527,6 +84535,8 @@ fn main() {
         Arc::clone(&media_audio),
         Arc::clone(&program_audio_handoff),
     );
+    let control_plane_query_state = ControlPlaneQueryState::new()
+        .expect("OS randomness must initialize the local control-plane query session");
     tauri::Builder::default()
         .setup(move |app| {
             #[cfg(target_os = "windows")]
@@ -84777,6 +84787,14 @@ fn main() {
             native_video_output_metrics: Mutex::new(HashMap::new()),
             native_video_output_workers: Mutex::new(HashMap::new()),
         })
+        .manage(control_plane_query_state)
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window
+                    .state::<ControlPlaneQueryState>()
+                    .retire_window(window.label());
+            }
+        })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(
             |app_handle, args, cwd| {
@@ -84800,6 +84818,12 @@ fn main() {
         ))
         .invoke_handler(tauri::generate_handler![
             get_control_plane_operation_registry,
+            get_control_plane_query_schema_catalog,
+            get_control_plane_query_capabilities,
+            query_control_plane_project_authority,
+            query_control_plane_runtime_generations,
+            query_control_plane_output_ownership,
+            poll_control_plane_observation_events,
             get_application_update_configuration,
             check_application_update,
             install_application_update,

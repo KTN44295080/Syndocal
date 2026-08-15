@@ -157,17 +157,53 @@ fn build_registry() -> Result<OperationRegistry, ControlPlaneRegistryError> {
 }
 
 fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
-    if operation_id != "get_control_plane_operation_registry" {
+    let reviewed = match operation_id {
+        "get_control_plane_operation_registry" => Some((
+            "syndocal.query.control_plane.registry.v1",
+            OperationClass::Discovery,
+            OperationCapability::RegistryDiscovery,
+        )),
+        "get_control_plane_query_schema_catalog" => Some((
+            "syndocal.query.control_plane.schemas.v1",
+            OperationClass::Discovery,
+            OperationCapability::RegistryDiscovery,
+        )),
+        "get_control_plane_query_capabilities" => Some((
+            "syndocal.query.control_plane.capabilities.v1",
+            OperationClass::Discovery,
+            OperationCapability::RegistryDiscovery,
+        )),
+        "query_control_plane_project_authority" => Some((
+            "syndocal.query.project.authority.v1",
+            OperationClass::ProjectAuthority,
+            OperationCapability::ProjectAuthorityRead,
+        )),
+        "query_control_plane_runtime_generations" => Some((
+            "syndocal.query.runtime.generations.v1",
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        )),
+        "query_control_plane_output_ownership" => Some((
+            "syndocal.query.output.ownership.v1",
+            OperationClass::OutputOwnership,
+            OperationCapability::OutputOwnershipRead,
+        )),
+        "poll_control_plane_observation_events" => Some((
+            "syndocal.query.events.observations.v1",
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        )),
+        _ => None,
+    };
+    let Some((semantic_operation_id, class, domain_capability)) = reviewed else {
         return unavailable_descriptor(operation_id);
-    }
-
-    let semantic_operation_id = "syndocal.query.control_plane.registry.v1";
+    };
     OperationDescriptor {
         schema: SchemaIdentity::descriptor(),
         operation_id: semantic_operation_id.to_string(),
         source_family: OperationSourceFamily::TauriCommand,
         source_id: operation_id.to_string(),
-        class: OperationClass::Discovery,
+        class,
         risk: OperationRisk::R0,
         capabilities: vec![
             OperationCapability::ReadOnly,
@@ -175,7 +211,7 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             // Registry discovery remains observable during Full Lock and has
             // no mutation capability.
             OperationCapability::AllowedDuringFullLock,
-            OperationCapability::RegistryDiscovery,
+            domain_capability,
         ],
         availability: OperationAvailability::LocalWindowOnly,
         idempotency: OperationIdempotency::ReadOnly,
@@ -343,8 +379,16 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 1] = ["syndocal.query.control_plane.registry.v1"];
-        assert_eq!(names.len(), 438);
+        const R0_ALLOWLIST: [&str; 7] = [
+            "syndocal.query.control_plane.registry.v1",
+            "syndocal.query.control_plane.capabilities.v1",
+            "syndocal.query.control_plane.schemas.v1",
+            "syndocal.query.events.observations.v1",
+            "syndocal.query.output.ownership.v1",
+            "syndocal.query.project.authority.v1",
+            "syndocal.query.runtime.generations.v1",
+        ];
+        assert_eq!(names.len(), 444);
         const ENGINE_COMMAND_COUNT: usize = 247;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
@@ -371,19 +415,19 @@ mod tests {
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            438 + ENGINE_COMMAND_COUNT
+            444 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1393);
+        assert_eq!(registry.operations.len(), 1399);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
             .iter()
             .filter(|descriptor| descriptor.risk == OperationRisk::R0)
             .collect::<Vec<_>>();
-        assert_eq!(r0.len(), 1);
+        assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
             437 + ENGINE_COMMAND_COUNT
@@ -391,19 +435,28 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(r0[0].operation_id, R0_ALLOWLIST[0]);
-        assert_eq!(r0[0].source_family, OperationSourceFamily::TauriCommand);
-        assert_eq!(r0[0].source_id, "get_control_plane_operation_registry");
-        assert_eq!(r0[0].class, OperationClass::Discovery);
         assert_eq!(
-            r0[0].capabilities,
-            vec![
-                OperationCapability::ReadOnly,
-                OperationCapability::LocalWindowBound,
-                OperationCapability::AllowedDuringFullLock,
-                OperationCapability::RegistryDiscovery,
-            ]
+            r0.iter()
+                .map(|descriptor| descriptor.operation_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            R0_ALLOWLIST.into_iter().collect::<BTreeSet<_>>()
         );
+        for descriptor in &r0 {
+            assert_eq!(
+                descriptor.source_family,
+                OperationSourceFamily::TauriCommand
+            );
+            assert_eq!(descriptor.risk, OperationRisk::R0);
+            assert_eq!(
+                descriptor.availability,
+                OperationAvailability::LocalWindowOnly
+            );
+            assert_eq!(descriptor.idempotency, OperationIdempotency::ReadOnly);
+            assert_eq!(descriptor.audit, OperationAuditRequirement::NotApplicable);
+            assert!(descriptor
+                .capabilities
+                .contains(&OperationCapability::AllowedDuringFullLock));
+        }
         let tauri_unavailable = registry.operations.iter().filter(|descriptor| {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())

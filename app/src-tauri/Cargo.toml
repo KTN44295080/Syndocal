@@ -21,6 +21,7 @@ crossbeam-queue.workspace = true
 engine = { path = "../../crates/engine" }
 flate2.workspace = true
 gdtf = { path = "../../crates/gdtf" }
+getrandom = "=0.2.17"
 image.workspace = true
 io = { path = "../../crates/io" }
 minisign-verify.workspace = true
