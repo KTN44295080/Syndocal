@@ -6,6 +6,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 pub mod control_plane;
+pub mod control_plane_query;
 
 pub type FixtureId = u64;
 pub type EffectId = u64;
