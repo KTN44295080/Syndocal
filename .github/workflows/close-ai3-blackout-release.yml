@@ -34,37 +34,25 @@ jobs:
           git merge-base --is-ancestor df7e335c14fe82bb534fbd8867dcd431777e1522 HEAD
           git rev-parse HEAD > "$RUNNER_TEMP/patch-start-head"
 
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            libasound2-dev \
-            libayatana-appindicator3-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libclang-dev \
-            libssl-dev \
-            libswscale-dev \
-            libudev-dev \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            librsvg2-dev \
-            ffmpeg
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: syndocal-ai3-blackout-release-ubuntu
-
       - name: Apply strict Blackout Release patch
-        run: python .github/scripts/patch_blackout_release_receipt.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          patcher="$RUNNER_TEMP/patch_blackout_release_receipt.py"
+          cp .github/scripts/patch_blackout_release_receipt.py "$patcher"
+          python3 - "$patcher" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding="utf-8")
+          old = "if old_count != 1 or new_count != 0:"
+          new = "if old_count != 1 or (new_count != 0 and new not in old):"
+          if source.count(old) != 1 or new in source:
+              raise SystemExit("unexpected replace_exact helper shape")
+          path.write_text(source.replace(old, new, 1), encoding="utf-8")
+          PY
+          python3 "$patcher"
 
       - name: Repair baseline portability guards and helper types
         shell: bash
@@ -165,6 +153,35 @@ jobs:
                 ;;
             esac
           done
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libclang-dev \
+            libssl-dev \
+            libswscale-dev \
+            libudev-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            librsvg2-dev \
+            ffmpeg
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: syndocal-ai3-blackout-release-ubuntu
 
       - name: Format and verify Rust
         shell: bash
