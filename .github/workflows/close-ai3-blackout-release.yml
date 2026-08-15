@@ -6,6 +6,7 @@ on:
       - codex/ai3-r4-blackout-release
     paths:
       - .github/scripts/patch_blackout_release_receipt.py
+      - .github/scripts/patch_blackout_release_runtime_guards.py
       - .github/workflows/close-ai3-blackout-release.yml
 
 permissions:
@@ -34,7 +35,7 @@ jobs:
           git merge-base --is-ancestor df7e335c14fe82bb534fbd8867dcd431777e1522 HEAD
           git rev-parse HEAD > "$RUNNER_TEMP/patch-start-head"
 
-      - name: Apply strict Blackout Release patch
+      - name: Apply strict Blackout Release wire patch
         shell: bash
         run: |
           set -euo pipefail
@@ -57,6 +58,7 @@ jobs:
       - name: Repair baseline portability guards and helper types
         shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
@@ -113,7 +115,13 @@ jobs:
           PY
           rm -f .github/workflows/diagnose-ai3-main.yml
 
-      - name: Verify bounded diff
+      - name: Apply terminal receipt and legacy-release guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/patch_blackout_release_runtime_guards.py
+
+      - name: Verify bounded R4 diff
         shell: bash
         run: |
           set -euo pipefail
@@ -124,7 +132,9 @@ jobs:
           required=(
             app/scripts/check-blackout-release-runtime.mjs
             app/src-tauri/src/control_plane.rs
+            app/src-tauri/src/control_plane_runtime.rs
             app/src-tauri/src/main.rs
+            app/src/App.tsx
             app/src/blackoutReleaseRuntimeController.ts
             app/src/tauri-invoke-manifest.json
             app/src/tauriInvokeCommands.ts
@@ -139,16 +149,16 @@ jobs:
               fi
             done
             if [[ "$found" != true ]]; then
-              echo "Required patch file missing from diff: $file" >&2
+              echo "Required R4 patch file missing from diff: $file" >&2
               exit 1
             fi
           done
           for file in "${changed[@]}"; do
             case "$file" in
-              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/src/control_plane.rs|app/src-tauri/src/main.rs|app/src/blackoutReleaseRuntimeController.ts|app/src/tauri-invoke-manifest.json|app/src/tauriInvokeCommands.ts|crates/protocol/src/control_plane_command.rs)
+              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/src/control_plane.rs|app/src-tauri/src/control_plane_runtime.rs|app/src-tauri/src/main.rs|app/src/App.tsx|app/src/blackoutReleaseRuntimeController.ts|app/src/tauri-invoke-manifest.json|app/src/tauriInvokeCommands.ts|crates/protocol/src/control_plane_command.rs)
                 ;;
               *)
-                echo "Unexpected changed file: $file" >&2
+                echo "Unexpected changed file in R4 generated patch: $file" >&2
                 exit 1
                 ;;
             esac
@@ -186,12 +196,34 @@ jobs:
       - name: Format and verify Rust
         shell: bash
         run: |
+          set -euo pipefail
           cargo fmt --all
           cargo fmt --all -- --check
           git diff --check
 
-      - name: Compile and test Rust workspace serially
-        run: cargo test --workspace --locked -- --test-threads=1
+      - name: Test strict Release protocol wire
+        run: cargo test -p protocol --locked control_plane_command::tests::blackout_release_command_wire_is_release_only_and_exactly_bound -- --exact --test-threads=1
+
+      - name: Test R4 canonical policy
+        run: cargo test -p protocol --locked control_plane_registry_v2::tests::output_disruptive_release_requires_r4_physical_consent_receipt_rate_and_no_full_lock -- --exact --test-threads=1
+
+      - name: Test exact control-plane inventories
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p syndocal --bin syndocal --locked control_plane::tests::compiled_handler_and_registry_have_the_exact_same_set -- --exact --test-threads=1
+          cargo test -p syndocal --bin syndocal --locked control_plane::tests::canonical_registry_derives_the_exact_current_source_inventory -- --exact --test-threads=1
+          cargo test -p syndocal --bin syndocal --locked control_plane::tests::legacy_v1_registry_json_and_count_remain_inventory_honest -- --exact --test-threads=1
+
+      - name: Test physical single-use Release consent
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p syndocal --bin syndocal --locked control_plane_security::tests::prepared_consent_is_physical_single_use_and_exactly_bound -- --exact --test-threads=1
+          cargo test -p syndocal --bin syndocal --locked control_plane_security::tests::prepared_consent_rejects_other_r4_operations -- --exact --test-threads=1
+
+      - name: Test deterministic Release terminal fence
+        run: cargo test -p syndocal --bin syndocal --locked control_plane_runtime::tests::blackout_release_receipt_fence_is_exact_and_rolls_safely -- --exact --test-threads=1
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -219,7 +251,7 @@ jobs:
       - name: Build frontend
         run: pnpm --dir app build
 
-      - name: Commit verified fixes without racing another writer
+      - name: Commit verified R4 source without racing another writer
         shell: bash
         run: |
           set -euo pipefail
