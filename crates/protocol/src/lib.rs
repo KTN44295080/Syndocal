@@ -4343,16 +4343,70 @@ pub struct TimelineAdvancedAuthoringSummary {
 pub enum TimelineFollowRuntimeStatus {
     #[default]
     Idle,
+    /// Legacy runtime spelling retained until the engine publisher has moved
+    /// every caller to `Armed`. New publishers must emit `Armed` instead.
     Pending,
+    /// A Follow is eligible only from the captured normal-playback boundary;
+    /// it is not a synonym for a configured authored Follow.
+    Armed,
     Transitioning,
+    /// Both transports have reached their visual/audio/lighting boundary and
+    /// the runtime is waiting for the single authoritative settlement.
+    Settling,
     Held,
     Fault,
+    /// A generation-fenced teardown is in progress. It remains observable
+    /// until all child transports acknowledge the newer generation.
+    Aborting,
+}
+
+/// The only causes that may admit a Timeline Follow. In particular, seeking
+/// to the end, looping, stopping, project replacement, and a fault are never
+/// natural playback boundaries.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineFollowAdmissionReason {
+    NaturalPlaybackBoundary,
+    PrerollBeforeNaturalPlaybackBoundary,
+}
+
+/// Why an in-flight Follow was cancelled before it could settle. This is
+/// runtime truth, not authored intent; it gives the backend/UI a fail-closed
+/// reason instead of inferring one from a playhead change.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineFollowAbortReason {
+    Stop,
+    ManualSeek,
+    ProjectReplacement,
+    TimelineBankReplacement,
+    LoopWrap,
+    PlaybackFault,
+    ExplicitAbort,
+    ClockDiscontinuity,
+}
+
+/// The terminal disposition for one captured Follow generation. `Cut` is the
+/// selected fault-policy disposition, whereas `Completed` is a settled timed
+/// transition. An abort is deliberately distinct from either result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TimelineFollowOutcome {
+    Completed,
+    Cut,
+    Held,
+    Fault,
+    Aborted { reason: TimelineFollowAbortReason },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TimelineFollowRuntimeSummary {
     pub generation: u64,
     pub status: TimelineFollowRuntimeStatus,
+    #[serde(default)]
+    pub admission_reason: Option<TimelineFollowAdmissionReason>,
+    #[serde(default)]
+    pub outcome: Option<TimelineFollowOutcome>,
     #[serde(default)]
     pub source_timeline_id: Option<TimelineId>,
     #[serde(default)]
@@ -4365,6 +4419,55 @@ pub struct TimelineFollowRuntimeSummary {
     pub progress_millis: u16,
     #[serde(default)]
     pub fault: Option<String>,
+}
+
+/// Bounded public read model for the runtime-only Follow transport. The
+/// backend stamps `epoch` from its output/authority fence when publishing this
+/// DTO; `(epoch, generation)` is therefore the stable stale-read fence for a
+/// UI without ever serializing runtime state into authored Timeline data.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineFollowRuntimeStatusSnapshot {
+    #[serde(default)]
+    pub epoch: u64,
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub status: TimelineFollowRuntimeStatus,
+    #[serde(default)]
+    pub admission_reason: Option<TimelineFollowAdmissionReason>,
+    #[serde(default)]
+    pub outcome: Option<TimelineFollowOutcome>,
+    #[serde(default)]
+    pub source_timeline_id: Option<TimelineId>,
+    #[serde(default)]
+    pub target_timeline_id: Option<TimelineId>,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub progress_millis: u16,
+    #[serde(default)]
+    pub fault: Option<String>,
+}
+
+impl TimelineFollowRuntimeStatusSnapshot {
+    pub fn from_runtime(epoch: u64, runtime: &TimelineFollowRuntimeSummary) -> Self {
+        Self {
+            epoch,
+            generation: runtime.generation,
+            status: runtime.status,
+            admission_reason: runtime.admission_reason,
+            outcome: runtime.outcome.clone(),
+            source_timeline_id: runtime.source_timeline_id,
+            target_timeline_id: runtime.target_timeline_id,
+            elapsed_ms: runtime.elapsed_ms,
+            duration_ms: runtime.duration_ms,
+            progress_millis: runtime.progress_millis,
+            fault: runtime.fault.clone(),
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -4413,7 +4516,10 @@ pub struct TimelineSnapshot {
     pub active_child_transports: Vec<ChildTimelineTransportRuntimeSummary>,
     #[serde(default, skip_serializing)]
     pub loop_runtime: TimelineLoopRuntimeSummary,
-    #[serde(default, skip_serializing)]
+    /// Runtime transport status is supplied only through
+    /// `TimelineFollowRuntimeStatusSnapshot`; project JSON may neither persist
+    /// nor inject a Follow transport.
+    #[serde(default, skip)]
     pub follow_runtime: TimelineFollowRuntimeSummary,
     #[serde(default, skip_serializing)]
     pub guide_cues: Vec<TimelineGuideCueSummary>,
@@ -4467,6 +4573,15 @@ fn default_timeline_label() -> String {
 pub const TIMELINE_MAX_PHASES: usize = 256;
 pub const TIMELINE_MAX_ITEM_GROUPS: usize = 256;
 pub const TIMELINE_MAX_GROUP_MEMBERS: usize = 128;
+/// Follow timing is bounded so an admitted transition cannot hold two
+/// Timeline transports beyond the established Clip Take runtime envelope.
+pub const TIMELINE_FOLLOW_MAX_RESOLVED_DURATION_MS: u64 = 600_000;
+/// At the slowest supported BPM (20), these bounds each resolve to at most ten
+/// minutes: 200 beats and 50 four-beat bars.
+pub const TIMELINE_FOLLOW_MAX_DURATION_BEAT_MILLIUNITS: u64 = 200_000;
+pub const TIMELINE_FOLLOW_MAX_DURATION_BAR_MILLIUNITS: u64 = 50_000;
+pub const TIMELINE_FOLLOW_MAX_PREROLL_MS: u64 = TIMELINE_FOLLOW_MAX_RESOLVED_DURATION_MS;
+pub const TIMELINE_FOLLOW_MAX_TRANS_CADENCE_BARS: u16 = 256;
 
 /// Validate the authored Timeline additions without observing machine-local
 /// media availability. Media identity is checked only against the project
@@ -4726,16 +4841,26 @@ pub fn validate_timeline_authoring(
                 "Timeline Follow requires a different non-zero next Timeline ID".to_string(),
             );
         }
+        let duration_limit = match follow.duration.unit {
+            VideoClipTakeDurationUnit::Milliseconds => TIMELINE_FOLLOW_MAX_RESOLVED_DURATION_MS,
+            VideoClipTakeDurationUnit::Beats => TIMELINE_FOLLOW_MAX_DURATION_BEAT_MILLIUNITS,
+            VideoClipTakeDurationUnit::Bars => TIMELINE_FOLLOW_MAX_DURATION_BAR_MILLIUNITS,
+        };
+        let cut = matches!(follow.video_kind, VideoClipTakeKind::Cut);
         if follow.trans_cadence_bars == 0
+            || follow.trans_cadence_bars > TIMELINE_FOLLOW_MAX_TRANS_CADENCE_BARS
             || follow
                 .destination_bpm
                 .is_some_and(|bpm| !bpm.is_finite() || !(20.0..=300.0).contains(&bpm))
-            || (matches!(follow.video_kind, VideoClipTakeKind::Cut)
-                && follow.duration.value_milliunits != 0)
-            || (!matches!(follow.video_kind, VideoClipTakeKind::Cut)
-                && follow.duration.value_milliunits == 0)
+            || follow.duration.value_milliunits > duration_limit
+            || follow.preroll_ms > TIMELINE_FOLLOW_MAX_PREROLL_MS
+            || (timeline.duration_ms > 0 && follow.preroll_ms > timeline.duration_ms)
+            || (cut && (follow.duration.value_milliunits != 0 || follow.preroll_ms != 0))
+            || (!cut && follow.duration.value_milliunits == 0)
         {
-            return Err("Timeline Follow has invalid timing, BPM, or Guide cadence".to_string());
+            return Err(
+                "Timeline Follow has invalid timing, preroll, BPM, or Guide cadence".to_string(),
+            );
         }
     }
     Ok(())
@@ -4774,7 +4899,19 @@ pub fn validate_timeline_bank(
     media_assets: &[MediaAssetSummary],
 ) -> Result<(), String> {
     if snapshot.timeline_bank.is_empty() {
-        return validate_timeline_authoring(&snapshot.timeline, media_assets);
+        validate_timeline_authoring(&snapshot.timeline, media_assets)?;
+        if snapshot
+            .timeline
+            .follow
+            .as_ref()
+            .is_some_and(|follow| follow.enabled)
+        {
+            return Err(format!(
+                "Timeline {} enables Follow but has no Timeline below it",
+                snapshot.timeline.id.0
+            ));
+        }
+        return Ok(());
     }
     let mut ids = BTreeSet::new();
     for timeline in &snapshot.timeline_bank {
@@ -7940,6 +8077,171 @@ mod tests {
         assert!(super::validate_timeline_bank(&snapshot, &[])
             .unwrap_err()
             .contains("unique"));
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_runtime_contract_is_omitted_from_authored_json_and_epoch_fenced() {
+        let mut timeline = super::TimelineSnapshot::default();
+        timeline.id = super::TimelineId(91);
+        timeline.label = "Runtime-free Follow".to_string();
+        timeline.follow_runtime = super::TimelineFollowRuntimeSummary {
+            generation: 17,
+            status: super::TimelineFollowRuntimeStatus::Aborting,
+            admission_reason: Some(
+                super::TimelineFollowAdmissionReason::PrerollBeforeNaturalPlaybackBoundary,
+            ),
+            outcome: Some(super::TimelineFollowOutcome::Aborted {
+                reason: super::TimelineFollowAbortReason::ManualSeek,
+            }),
+            source_timeline_id: Some(super::TimelineId(91)),
+            target_timeline_id: Some(super::TimelineId(92)),
+            elapsed_ms: 250,
+            duration_ms: 1_000,
+            progress_millis: 250,
+            fault: None,
+        };
+
+        let authored_json = serde_json::to_value(&timeline).unwrap();
+        assert!(authored_json.get("follow_runtime").is_none());
+        let loaded: super::TimelineSnapshot = serde_json::from_value(authored_json).unwrap();
+        assert_eq!(
+            loaded.follow_runtime,
+            super::TimelineFollowRuntimeSummary::default()
+        );
+
+        let runtime_json = serde_json::json!({
+            "generation": 99,
+            "status": "fault",
+            "source_timeline_id": 91,
+            "target_timeline_id": 92,
+            "elapsed_ms": 1_000,
+            "duration_ms": 1_000,
+            "progress_millis": 1_000,
+            "fault": "injected authored runtime must be ignored"
+        });
+        let mut injected = serde_json::to_value(&timeline).unwrap();
+        injected
+            .as_object_mut()
+            .unwrap()
+            .insert("follow_runtime".to_string(), runtime_json);
+        let loaded: super::TimelineSnapshot = serde_json::from_value(injected).unwrap();
+        assert_eq!(
+            loaded.follow_runtime,
+            super::TimelineFollowRuntimeSummary::default()
+        );
+
+        let public =
+            super::TimelineFollowRuntimeStatusSnapshot::from_runtime(44, &timeline.follow_runtime);
+        let public_json = serde_json::to_value(&public).unwrap();
+        assert_eq!(public_json["epoch"], 44);
+        assert_eq!(public_json["status"], "aborting");
+        assert_eq!(
+            public_json["admission_reason"],
+            "preroll_before_natural_playback_boundary"
+        );
+        assert_eq!(public_json["outcome"]["kind"], "aborted");
+        assert_eq!(public_json["outcome"]["reason"], "manual_seek");
+        assert_eq!(
+            serde_json::from_value::<super::TimelineFollowRuntimeStatusSnapshot>(public_json)
+                .unwrap(),
+            public
+        );
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_standalone_bank_requires_a_real_next_timeline() {
+        let mut snapshot = super::EngineSnapshot::default();
+        snapshot.timeline.id = super::TimelineId(111);
+        snapshot.timeline.label = "Standalone Follow".to_string();
+        snapshot.timeline.follow = Some(super::TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: super::TimelineId(112),
+            duration: super::VideoClipTakeDuration::milliseconds(1_000),
+            curve: super::VideoLayerTransitionCurve::Linear,
+            video_kind: super::VideoClipTakeKind::Crossfade,
+            lighting_policy: super::TimelineFollowLightingPolicy::HoldThenCut,
+            destination_bpm: None,
+            preroll_ms: 0,
+            trans_cadence_bars: 4,
+            fault_policy: super::TimelineFollowFaultPolicy::Hold,
+        });
+        assert!(super::validate_timeline_bank(&snapshot, &[])
+            .unwrap_err()
+            .contains("no Timeline below"));
+
+        snapshot.timeline.follow.as_mut().unwrap().enabled = false;
+        super::validate_timeline_bank(&snapshot, &[]).unwrap();
+        snapshot.timeline.follow = None;
+        super::validate_timeline_bank(&snapshot, &[]).unwrap();
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_validation_bounds_and_legacy_defaults_are_fail_closed() {
+        let mut timeline = super::TimelineSnapshot::default();
+        timeline.id = super::TimelineId(101);
+        timeline.label = "Follow bounds".to_string();
+        timeline.duration_ms = super::TIMELINE_FOLLOW_MAX_PREROLL_MS;
+        timeline.follow = Some(super::TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: super::TimelineId(102),
+            duration: super::VideoClipTakeDuration {
+                unit: super::VideoClipTakeDurationUnit::Beats,
+                value_milliunits: super::TIMELINE_FOLLOW_MAX_DURATION_BEAT_MILLIUNITS,
+            },
+            curve: super::VideoLayerTransitionCurve::EaseInOut,
+            video_kind: super::VideoClipTakeKind::Crossfade,
+            lighting_policy: super::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: Some(20.0),
+            preroll_ms: super::TIMELINE_FOLLOW_MAX_PREROLL_MS,
+            trans_cadence_bars: super::TIMELINE_FOLLOW_MAX_TRANS_CADENCE_BARS,
+            fault_policy: super::TimelineFollowFaultPolicy::Cut,
+        });
+        super::validate_timeline_authoring(&timeline, &[]).unwrap();
+
+        timeline.follow.as_mut().unwrap().duration.value_milliunits += 1;
+        assert!(super::validate_timeline_authoring(&timeline, &[])
+            .unwrap_err()
+            .contains("invalid timing"));
+        timeline.follow.as_mut().unwrap().duration.value_milliunits = 1_000;
+        timeline.follow.as_mut().unwrap().preroll_ms = timeline.duration_ms + 1;
+        assert!(super::validate_timeline_authoring(&timeline, &[])
+            .unwrap_err()
+            .contains("invalid timing"));
+        timeline.follow.as_mut().unwrap().preroll_ms = 0;
+        timeline.follow.as_mut().unwrap().trans_cadence_bars = 0;
+        assert!(super::validate_timeline_authoring(&timeline, &[])
+            .unwrap_err()
+            .contains("Guide cadence"));
+        timeline.follow.as_mut().unwrap().trans_cadence_bars = 4;
+        timeline.follow.as_mut().unwrap().video_kind = super::VideoClipTakeKind::Cut;
+        timeline.follow.as_mut().unwrap().duration.value_milliunits = 0;
+        timeline.follow.as_mut().unwrap().preroll_ms = 1;
+        assert!(super::validate_timeline_authoring(&timeline, &[])
+            .unwrap_err()
+            .contains("invalid timing"));
+
+        let mut legacy_json = serde_json::to_value(super::TimelineSnapshot::default()).unwrap();
+        legacy_json.as_object_mut().unwrap().remove("follow");
+        legacy_json
+            .as_object_mut()
+            .unwrap()
+            .remove("follow_runtime");
+        let legacy: super::TimelineSnapshot = serde_json::from_value(legacy_json).unwrap();
+        assert!(legacy.follow.is_none());
+        assert_eq!(
+            legacy.follow_runtime,
+            super::TimelineFollowRuntimeSummary::default()
+        );
+
+        let valid_follow = serde_json::to_value(timeline.follow.unwrap()).unwrap();
+        for key in ["curve", "video_kind", "lighting_policy", "fault_policy"] {
+            let mut invalid = valid_follow.clone();
+            invalid.as_object_mut().unwrap().insert(
+                key.to_string(),
+                serde_json::Value::String("not_a_follow_variant".to_string()),
+            );
+            assert!(serde_json::from_value::<super::TimelineFollowSummary>(invalid).is_err());
+        }
     }
 
     #[test]
