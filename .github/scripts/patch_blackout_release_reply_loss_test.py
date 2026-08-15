@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 
 
 def replace_exact(path: Path, old: str, new: str, label: str) -> None:
@@ -9,6 +10,7 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+runpy.run_path(".github/scripts/patch_blackout_release_receipt_expiry.py", run_name="__main__")
 runtime = Path("app/src-tauri/src/control_plane_runtime.rs")
 
 anchor = '''    fn test_binding(principal: &str, window_label: &str, owner_incarnation: u64) -> CallerBinding {
