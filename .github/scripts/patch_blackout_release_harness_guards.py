@@ -50,6 +50,7 @@ assert.match(appSource, /blackoutReleaseDisabled=\\{operatorLockMode\\(\\) === "
 assert.doesNotMatch(panelSource, />All Clear</);
 assert.match(controlSource, /disabled=\\{busy\\(\\) \\|\\| props\\.disabled\\}/);
 assert.doesNotMatch(controlSource, /Date\\.now\\(\\) >= consent\\.challenge\\.expires_at_unix_ms/);
+assert.match(controllerSource, /"receipt_expired"/);
 assert.doesNotMatch(workspaceSource, /onSetBlackout\\(!props\\.blackout\\)/);
 assert.doesNotMatch(workspaceSource, /onSetAllBlackout\\(!\\(props\\.blackout && props\\.videoBlackout\\)\\)/);
 assert.match(workspaceSource, /onSetBlackout\\(true\\)/);
