@@ -82,7 +82,6 @@
     "check:timeline-follow-runtime": "node scripts/check-timeline-follow-runtime.mjs",
     "check:timeline-transport-runtime": "node scripts/check-timeline-transport-runtime.mjs",
     "check:safety-blackout-runtime": "node scripts/check-safety-blackout-runtime.mjs",
-    "check:blackout-release-runtime": "node scripts/check-blackout-release-runtime.mjs",
     "check:timeline-overlap-clusters": "node scripts/check-timeline-overlap-clusters.mjs",
     "check:timeline-slim": "node scripts/check-viewport-containment.mjs --timeline-slim-only",
     "check:timeline-layered": "node scripts/check-viewport-containment.mjs --timeline-layered-only",
