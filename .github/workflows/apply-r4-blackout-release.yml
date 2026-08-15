@@ -1,0 +1,59 @@
+name: Apply R4 Blackout Release canonical patch
+
+on:
+  push:
+    branches:
+      - codex/ai3-r4-blackout-release
+    paths:
+      - .github/workflows/apply-r4-blackout-release.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-r4-blackout-release
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out exact work branch
+        uses: actions/checkout@v5
+        with:
+          ref: codex/ai3-r4-blackout-release
+          fetch-depth: 0
+
+      - name: Install Rust formatter
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Apply assertive patch
+        run: python tools/apply_r4_blackout_release.py
+
+      - name: Format Rust
+        run: cargo fmt --all
+
+      - name: Run protocol policy gate
+        run: cargo test -p protocol --locked output_disruptive_release_requires_r4_physical_consent_receipt_rate_and_no_full_lock -- --nocapture
+
+      - name: Verify patch cleanliness
+        run: git diff --check
+
+      - name: Commit canonical slice
+        run: |
+          git config user.name "KTN"
+          git config user.email "47689501+KTN44295080@users.noreply.github.com"
+          git add crates/protocol/src/control_plane_registry_v2.rs \
+                  app/src-tauri/src/control_plane.rs \
+                  app/src-tauri/src/control_plane_security.rs \
+                  app/src/tauri-invoke-manifest.json \
+                  app/src/tauriInvokeCommands.ts \
+                  app/src/blackoutReleaseRuntimeController.ts \
+                  app/src/components/LightingRuntimeControlsPanel.tsx \
+                  app/src/App.tsx \
+                  app/package.json
+          git commit -m "feat: expose consent-bound blackout release"
+          git push origin HEAD:codex/ai3-r4-blackout-release
