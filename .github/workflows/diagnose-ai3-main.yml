@@ -31,13 +31,16 @@ jobs:
               for number in range(start, min(end, len(lines)) + 1):
                   print(f"{number:6}: {lines[number - 1]}")
 
-          show(37790, 37870)
+          show(37640, 37870)
+          show(38755, 38895)
+          show(44645, 44690)
           show(44910, 44970)
 
           for needle in [
+              "fn take_over_standby_core",
               "load_project_from_file_with_control_mappings_in_scope",
+              "load_project_from_file_with_control_mappings_in_scope_and_disposition",
               "harvest_failed_workers",
-              "spout.harvest_failed_workers",
           ]:
               print(f"\n--- matches: {needle} ---")
               for index, line in enumerate(lines, start=1):
