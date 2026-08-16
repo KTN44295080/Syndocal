@@ -13,75 +13,46 @@ registry = Path("app/src-tauri/src/control_plane.rs")
 runtime = Path("app/src-tauri/src/control_plane_runtime.rs")
 app = Path("app/src/App.tsx")
 
-# The strict-wire patch adds one engine source and exposes the four already-
-# registered output-control support calls to the frontend manifest. The source
-# parser also sees four more Tauri handlers than the older fixed inventory.
-# Keep these assertions exact instead of weakening/removing them.
+# The strict Release wire renames existing Tauri/frontend sources; it does not
+# add four handlers or a new EngineCommand descriptor. The original receipt
+# generator predates that rename-in-place design and temporarily increments the
+# engine/source inventory by one. Normalize those stale intermediate assertions
+# here before any tests or later count-sensitive patches run.
 replace_exact(
     registry,
-    "        assert_eq!(names.len(), 450);",
-    "        assert_eq!(names.len(), 454);",
-    "Tauri handler inventory count",
-)
-replace_exact(
-    registry,
-    "            450 + ENGINE_COMMAND_COUNT",
-    "            454 + ENGINE_COMMAND_COUNT",
-    "registry Tauri formula",
+    "        const ENGINE_COMMAND_COUNT: usize = 250;",
+    "        const ENGINE_COMMAND_COUNT: usize = 249;",
+    "normalize strict Release engine inventory count",
 )
 replace_exact(
     registry,
     "        assert_eq!(registry.operations.len(), 1415);",
-    "        assert_eq!(registry.operations.len(), 1419);",
-    "legacy registry total after strict patch",
+    "        assert_eq!(registry.operations.len(), 1414);",
+    "normalize strict Release legacy registry total",
 )
 replace_exact(
     registry,
-    "            440 + ENGINE_COMMAND_COUNT",
-    "            444 + ENGINE_COMMAND_COUNT",
-    "unavailable Tauri formula",
-)
-replace_exact(
-    registry,
-    "        assert_eq!(tauri_unavailable.clone().count(), 440);",
-    "        assert_eq!(tauri_unavailable.clone().count(), 444);",
-    "unavailable Tauri count",
-)
-replace_exact(
-    registry,
-    "        const TAURI_COUNT: usize = 450;",
-    "        const TAURI_COUNT: usize = 454;",
-    "canonical Tauri source count",
+    "        const ENGINE_COUNT: usize = 250;",
+    "        const ENGINE_COUNT: usize = 249;",
+    "normalize canonical engine source count",
 )
 replace_exact(
     registry,
     "        assert_eq!(LEGACY_SOURCE_TOTAL, 1415);",
-    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1419);",
-    "canonical legacy source total",
+    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1414);",
+    "normalize canonical legacy source total",
 )
 replace_exact(
     registry,
     "        assert_eq!(SOURCE_TOTAL, 1448);",
-    "        assert_eq!(SOURCE_TOTAL, 1452);",
-    "canonical complete source total",
+    "        assert_eq!(SOURCE_TOTAL, 1447);",
+    "normalize canonical complete source total",
 )
 replace_exact(
     registry,
     "        assert_eq!(unclassified.len(), 1034);",
-    "        assert_eq!(unclassified.len(), 1038);",
-    "canonical unclassified source total",
-)
-replace_exact(
-    registry,
-    "        assert_eq!(legacy.operations.len(), 1414);",
-    "        assert_eq!(legacy.operations.len(), 1419);",
-    "legacy registry JSON source total",
-)
-replace_exact(
-    registry,
-    "        assert_eq!(operations.len(), 1414);",
-    "        assert_eq!(operations.len(), 1419);",
-    "legacy registry JSON encoded total",
+    "        assert_eq!(unclassified.len(), 1033);",
+    "normalize canonical unclassified source count",
 )
 
 # A Release receipt must describe exactly the Release commit boundary. Re-read
