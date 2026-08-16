@@ -39,7 +39,39 @@ replace_exact(
 )
 replace_exact(
     security,
-    '''    if record.expires_at <= now || record.matched_device.is_some() {
+    '''    prune_security_inner(&mut inner, now);
+    inner.removed_devices.remove(&device);
+    let Some(record) = inner.active.as_mut() else {
+        return;
+    };
+    if record.expires_at <= now || record.matched_device.is_some() {
+        return;
+    }
+''',
+    '''    prune_security_inner(&mut inner, now);
+    // Once a challenge is Ready, removing its matched device permanently
+    // invalidates that token. A later input event with a recycled OS handle
+    // must not clear the removal tombstone and resurrect the proof.
+    if inner
+        .active
+        .as_ref()
+        .is_some_and(|record| record.matched_device.is_some())
+    {
+        return;
+    }
+    inner.removed_devices.remove(&device);
+    let Some(record) = inner.active.as_mut() else {
+        return;
+    };
+    if record.expires_at <= now {
+        return;
+    }
+''',
+    "ready device removal cannot resurrect on handle reuse",
+)
+replace_exact(
+    security,
+    '''    if record.expires_at <= now {
         return;
     }
     if record.display_code[record.progress] == digit {
@@ -51,7 +83,7 @@ replace_exact(
         record.progress = usize::from(record.display_code[0] == digit);
     }
 ''',
-    '''    if record.expires_at <= now || record.matched_device.is_some() {
+    '''    if record.expires_at <= now {
         return;
     }
     if record
@@ -132,7 +164,21 @@ replace_exact(
     }
 
     #[test]
+    fn ready_consent_device_removal_cannot_resurrect_on_handle_reuse() {
+        let state = ControlPlaneSecurityState::default();
+        let authority = binding(OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, 9);
+        let prepared = state.prepare_consent(authority.clone()).unwrap();
+        enter_code(&state, &prepared.display_code, 0x4444);
+        state.remove_physical_device_for_test(0x4444);
+        state.observe_physical_digit_for_test(1, 0x4444);
+        assert_eq!(
+            state.consume_consent(&authority, &prepared.consent_token),
+            Err(ConsentConsumeError::DeviceRemoved)
+        );
+    }
+
+    #[test]
     fn prepared_consent_rejects_other_r4_operations() {
 ''',
-    "single-device physical consent focused test",
+    "single-device physical consent focused tests",
 )
