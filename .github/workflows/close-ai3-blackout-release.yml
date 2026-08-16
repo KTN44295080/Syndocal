@@ -66,6 +66,7 @@ jobs:
           python3 .github/scripts/patch_blackout_release_all_blackout_s0.py
           python3 .github/scripts/patch_blackout_release_strict_consent_prepare.py
           python3 .github/scripts/patch_blackout_release_strict_consent_challenge.py
+          python3 .github/scripts/patch_blackout_release_request_shape_consent.py
           python3 .github/scripts/patch_blackout_release_workflow_sources.py
           python3 .github/scripts/patch_blackout_release_physical_device_binding.py
           python3 .github/scripts/patch_blackout_release_consent_expiry.py
@@ -188,6 +189,7 @@ jobs:
       - name: Enable pnpm
         shell: bash
         run: |
+          set -euo pipefail
           corepack enable
           corepack prepare pnpm@10.15.0 --activate
 
