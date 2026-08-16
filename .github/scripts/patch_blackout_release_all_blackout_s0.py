@@ -60,9 +60,11 @@ replace_exact(
     "All Blackout S0 convergence",
 )
 
-# Legacy local Tauri commands remain in the inventory during migration, but
-# their energizing direction must not be an alternate R4 source. Safer-direction
-# engagement stays compatible; release fails closed and names the canonical path.
+# The legacy target-valued blackout setters are incompatible with the split S0
+# engage / R4 release model. Allowing even `true` here would assert the ordinary
+# `blackout` bit, while R4 Release clears only the emergency safety latch; that
+# can create a blackout which the canonical Release cannot clear. Keep these
+# names inventory-visible but unavailable until their callers migrate.
 replace_exact(
     main,
     '''#[tauri::command]
@@ -74,20 +76,16 @@ fn set_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), String>
 }
 ''',
     '''#[tauri::command]
-fn set_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    if !enabled {
-        return Err(
-            "Legacy DMX blackout release is disabled; use the physical R4 Blackout Release control"
-                .to_string(),
-        );
+fn set_blackout(_state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    Err(if enabled {
+        "Legacy DMX blackout engage is disabled; use safety_blackout_engage_v1"
+    } else {
+        "Legacy DMX blackout release is disabled; use the physical R4 Blackout Release control"
     }
-    state
-        .engine
-        .send(EngineCommand::Blackout(true))
-        .map_err(|error| error.to_string())
+    .to_string())
 }
 ''',
-    "legacy Tauri DMX release guard",
+    "disable legacy target-valued DMX blackout setter",
 )
 replace_exact(
     main,
@@ -100,52 +98,50 @@ fn set_all_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), Str
 }
 ''',
     '''#[tauri::command]
-fn set_all_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    if !enabled {
-        return Err(
-            "Legacy All Blackout clear is disabled; release DMX through the physical R4 control and clear video separately"
-                .to_string(),
-        );
+fn set_all_blackout(_state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    Err(if enabled {
+        "Legacy All Blackout is disabled; engage DMX through safety_blackout_engage_v1 and video blackout separately"
+    } else {
+        "Legacy All Blackout clear is disabled; release DMX through the physical R4 control and clear video separately"
     }
-    state
-        .engine
-        .send(EngineCommand::SetAllBlackout(true))
-        .map_err(|error| error.to_string())
+    .to_string())
 }
 ''',
-    "legacy Tauri All Blackout release guard",
+    "disable legacy target-valued All Blackout setter",
 )
 
-# MIDI, OSC and Remote WebSocket are legacy adapters over the same engine. They
-# may still move toward the safer blackout-on state during migration, but they
-# must never clear DMX/All blackout without the local prepared-consent R4 lane.
+# MIDI, OSC, DMX-control mappings (which become OscInputEvent), and Remote
+# WebSocket do not yet have the canonical principal/capability/request identity
+# required by S0/R4. Drop both directions. Retaining their old `true` path would
+# create the non-safety `blackout` bit described above; retaining `false` would
+# bypass physical consent.
 replace_all(
     main,
     '''            MidiControlEvent::Blackout(enabled) => EngineCommand::Blackout(enabled),
             MidiControlEvent::AllBlackout(enabled) => EngineCommand::SetAllBlackout(enabled),
 ''',
-    '''            MidiControlEvent::Blackout(false) | MidiControlEvent::AllBlackout(false) => {
-                eprintln!("Ignoring MIDI blackout release; use local physical R4 Blackout Release");
+    '''            MidiControlEvent::Blackout(_) | MidiControlEvent::AllBlackout(_) => {
+                eprintln!(
+                    "Ignoring legacy MIDI blackout control until it is migrated to canonical S0/R4"
+                );
                 return;
             }
-            MidiControlEvent::Blackout(true) => EngineCommand::Blackout(true),
-            MidiControlEvent::AllBlackout(true) => EngineCommand::SetAllBlackout(true),
 ''',
-    "MIDI legacy blackout release guards",
+    "disable legacy MIDI blackout setter",
 )
 replace_all(
     main,
     '''        OscInputEvent::Blackout(enabled) => EngineCommand::Blackout(enabled),
         OscInputEvent::AllBlackout(enabled) => EngineCommand::SetAllBlackout(enabled),
 ''',
-    '''        OscInputEvent::Blackout(false) | OscInputEvent::AllBlackout(false) => {
-            eprintln!("Ignoring {source} blackout release; use local physical R4 Blackout Release");
+    '''        OscInputEvent::Blackout(_) | OscInputEvent::AllBlackout(_) => {
+            eprintln!(
+                "Ignoring legacy {source} blackout control until it is migrated to canonical S0/R4"
+            );
             return;
         }
-        OscInputEvent::Blackout(true) => EngineCommand::Blackout(true),
-        OscInputEvent::AllBlackout(true) => EngineCommand::SetAllBlackout(true),
 ''',
-    "OSC legacy blackout release guards",
+    "disable legacy OSC/DMX blackout setter",
 )
 replace_all(
     main,
@@ -154,17 +150,13 @@ replace_all(
                             EngineCommand::SetAllBlackout(enabled)
                         }
 ''',
-    '''                        RemoteInputEvent::Blackout(false)
-                        | RemoteInputEvent::AllBlackout(false) => {
+    '''                        RemoteInputEvent::Blackout(_)
+                        | RemoteInputEvent::AllBlackout(_) => {
                             eprintln!(
-                                "Ignoring remote blackout release; use local physical R4 Blackout Release"
+                                "Ignoring legacy remote blackout control until it is migrated to canonical S0/R4"
                             );
                             return;
                         }
-                        RemoteInputEvent::Blackout(true) => EngineCommand::Blackout(true),
-                        RemoteInputEvent::AllBlackout(true) => {
-                            EngineCommand::SetAllBlackout(true)
-                        }
 ''',
-    "Remote legacy blackout release guards",
+    "disable legacy Remote blackout setter",
 )
