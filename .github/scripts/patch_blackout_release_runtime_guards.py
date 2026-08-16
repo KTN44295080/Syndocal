@@ -9,6 +9,7 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+registry = Path("app/src-tauri/src/control_plane.rs")
 runtime = Path("app/src-tauri/src/control_plane_runtime.rs")
 app = Path("app/src/App.tsx")
 
@@ -17,6 +18,20 @@ app = Path("app/src/App.tsx")
 # legitimate: the Engine enum already contains both SafetyBlackout published
 # variants, so the generated engine inventory is 250 even though the app-side
 # registry assertion was stale at 249. Do not fabricate any Tauri +4 change.
+# The legacy JSON test has two separate fixed totals which the receipt generator
+# predates, so align those with the same real 250-engine inventory here.
+replace_exact(
+    registry,
+    "        assert_eq!(legacy.operations.len(), 1414);",
+    "        assert_eq!(legacy.operations.len(), 1415);",
+    "legacy registry JSON source total after real engine count",
+)
+replace_exact(
+    registry,
+    "        assert_eq!(operations.len(), 1414);",
+    "        assert_eq!(operations.len(), 1415);",
+    "legacy registry JSON encoded total after real engine count",
+)
 
 # A Release receipt must describe exactly the Release commit boundary. Re-read
 # of current project/output state after the engine ACK can accidentally absorb
