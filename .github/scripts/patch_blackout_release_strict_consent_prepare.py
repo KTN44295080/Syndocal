@@ -110,47 +110,49 @@ pub struct OutputConsentPrepareRequestV1 {
     "release-only consent prepare request DTO",
 )
 
+# Fold the prepare-wire assertions into the existing exact R4 wire test so the
+# focused workflow proves both preparation and execution with one stable test.
 replace_exact(
     protocol,
-    '''    #[test]
-    fn blackout_release_command_wire_is_release_only_and_exactly_bound() {
+    '''    fn blackout_release_command_wire_is_release_only_and_exactly_bound() {
+        let request = BlackoutReleaseCommandRequestV1 {
 ''',
-    '''    #[test]
-    fn blackout_release_consent_prepare_wire_is_release_only() {
-        let request = BlackoutReleaseConsentPrepareRequestV1 {
+    '''    fn blackout_release_command_wire_is_release_only_and_exactly_bound() {
+        let prepare = BlackoutReleaseConsentPrepareRequestV1 {
             operation_id: OUTPUT_CONSENT_PREPARE_OPERATION_ID.to_string(),
             request_id: 23,
             expected_fence: output_fence(),
         };
-        request.validate().unwrap();
-        let encoded = serde_json::to_value(&request).unwrap();
+        prepare.validate().unwrap();
+        let prepare_json = serde_json::to_value(&prepare).unwrap();
         assert_eq!(
-            encoded,
+            prepare_json,
             serde_json::json!({
                 "operation_id": OUTPUT_CONSENT_PREPARE_OPERATION_ID,
                 "request_id": 23,
                 "expected_fence": output_fence(),
             })
         );
-        assert!(encoded.get("action").is_none());
-        let mut forged_action = encoded.clone();
-        forged_action["action"] = serde_json::json!({ "kind": "arm", "role": "both" });
+        assert!(prepare_json.get("action").is_none());
+        let mut forged_prepare_action = prepare_json.clone();
+        forged_prepare_action["action"] =
+            serde_json::json!({ "kind": "arm", "role": "both" });
         assert!(
-            serde_json::from_value::<BlackoutReleaseConsentPrepareRequestV1>(forged_action)
-                .is_err()
+            serde_json::from_value::<BlackoutReleaseConsentPrepareRequestV1>(
+                forged_prepare_action,
+            )
+            .is_err()
         );
-        let internal = request.clone().into_output_consent_prepare_request();
-        assert_eq!(internal.action, OutputControlActionV1::ReleaseBlackout);
+        let internal_prepare = prepare.clone().into_output_consent_prepare_request();
+        assert_eq!(internal_prepare.action, OutputControlActionV1::ReleaseBlackout);
         assert_eq!(
-            request.argument_fingerprint_bytes().unwrap(),
-            internal.argument_fingerprint_bytes().unwrap()
+            prepare.argument_fingerprint_bytes().unwrap(),
+            internal_prepare.argument_fingerprint_bytes().unwrap()
         );
-    }
 
-    #[test]
-    fn blackout_release_command_wire_is_release_only_and_exactly_bound() {
+        let request = BlackoutReleaseCommandRequestV1 {
 ''',
-    "strict Release consent prepare protocol test",
+    "strict Release consent prepare assertions in exact wire test",
 )
 
 replace_exact(
