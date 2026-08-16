@@ -145,6 +145,9 @@ jobs:
           cargo test -p protocol --locked control_plane_command::tests::blackout_release_command_wire_is_release_only_and_exactly_bound -- --exact --test-threads=1
           cargo test -p protocol --locked control_plane_registry_v2::tests::output_disruptive_release_requires_r4_physical_consent_receipt_rate_and_no_full_lock -- --exact --test-threads=1
 
+      - name: Test engine safety-blackout authority and publication semantics
+        run: cargo test -p engine --locked safety_blackout -- --test-threads=1
+
       - name: Test exact control-plane inventories
         shell: bash
         run: |
