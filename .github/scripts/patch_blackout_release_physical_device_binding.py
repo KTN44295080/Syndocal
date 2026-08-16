@@ -49,29 +49,29 @@ replace_exact(
     }
 ''',
     '''    prune_security_inner(&mut inner, now);
-    // Once a challenge is Ready, removing its matched device permanently
-    // invalidates that token. A later input event with a recycled OS handle
-    // must not clear the removal tombstone and resurrect the proof.
-    if inner
-        .active
-        .as_ref()
-        .is_some_and(|record| record.matched_device.is_some())
-    {
+    // A device which disappeared after starting or completing this exact
+    // challenge may never resume it, even if Windows later reuses the same
+    // numeric Raw Input handle. A fresh challenge may bind a freshly observed
+    // device, but an outstanding challenge keeps its original device binding.
+    if inner.active.as_ref().is_some_and(|record| {
+        (record.progress_device == Some(device) || record.matched_device == Some(device))
+            && inner.removed_devices.contains_key(&device)
+    }) {
         return;
     }
     inner.removed_devices.remove(&device);
     let Some(record) = inner.active.as_mut() else {
         return;
     };
-    if record.expires_at <= now {
+    if record.expires_at <= now || record.matched_device.is_some() {
         return;
     }
 ''',
-    "ready device removal cannot resurrect on handle reuse",
+    "removed challenge device cannot resume on handle reuse",
 )
 replace_exact(
     security,
-    '''    if record.expires_at <= now {
+    '''    if record.expires_at <= now || record.matched_device.is_some() {
         return;
     }
     if record.display_code[record.progress] == digit {
@@ -83,7 +83,7 @@ replace_exact(
         record.progress = usize::from(record.display_code[0] == digit);
     }
 ''',
-    '''    if record.expires_at <= now {
+    '''    if record.expires_at <= now || record.matched_device.is_some() {
         return;
     }
     if record
@@ -107,6 +107,9 @@ replace_exact(
 ''',
     "require one physical device for complete challenge",
 )
+# Do not clear progress/device binding on removal. Keeping that binding plus the
+# removed-device tombstone makes the outstanding challenge permanently unable
+# to complete; only a newly prepared challenge can bind a replacement device.
 replace_exact(
     security,
     '''    if let Ok(mut inner) = inner.lock() {
@@ -116,16 +119,10 @@ replace_exact(
 ''',
     '''    if let Ok(mut inner) = inner.lock() {
         prune_security_inner(&mut inner, now);
-        if let Some(record) = inner.active.as_mut() {
-            if record.matched_device.is_none() && record.progress_device == Some(device) {
-                record.progress = 0;
-                record.progress_device = None;
-            }
-        }
         inner.removed_devices.insert(device, now);
     }
 ''',
-    "reset incomplete challenge when its keyboard disappears",
+    "retain challenge device binding on removal",
 )
 replace_exact(
     security,
@@ -162,12 +159,35 @@ replace_exact(
             PreparedConsentState::Ready
         );
         state.remove_physical_device_for_test(0x1111);
-        // Simulate a later input event whose OS handle has been recycled to the
-        // same numeric value. The already-ready challenge must stay invalid.
         state.observe_physical_digit_for_test(1, 0x1111);
         assert_eq!(
             state.consume_consent(&authority, &prepared.consent_token),
             Err(ConsentConsumeError::DeviceRemoved)
+        );
+
+        let partial_state = ControlPlaneSecurityState::default();
+        let partial = partial_state.prepare_consent(authority.clone()).unwrap();
+        let partial_digits = partial
+            .display_code
+            .bytes()
+            .map(|digit| digit - b'0')
+            .collect::<Vec<_>>();
+        partial_state.observe_physical_digit_for_test(partial_digits[0], 0x3333);
+        partial_state.remove_physical_device_for_test(0x3333);
+        for digit in &partial_digits[1..] {
+            partial_state.observe_physical_digit_for_test(*digit, 0x3333);
+            partial_state.observe_physical_digit_for_test(*digit, 0x4444);
+        }
+        assert_eq!(
+            partial_state
+                .consent_status(&authority.caller, &partial.challenge_id)
+                .unwrap()
+                .state,
+            PreparedConsentState::PendingPhysicalInput
+        );
+        assert_eq!(
+            partial_state.consume_consent(&authority, &partial.consent_token),
+            Err(ConsentConsumeError::PhysicalInputPending)
         );
     }
 
