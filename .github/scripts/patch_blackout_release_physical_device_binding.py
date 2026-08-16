@@ -163,6 +163,22 @@ replace_exact(
 )
 replace_exact(
     security,
+    '''        state.remove_physical_device_for_test(0x7777);
+        assert_eq!(
+            state.consume_consent(&authority, &second.consent_token),
+            Err(ConsentConsumeError::DeviceRemoved)
+        );
+''',
+    '''        state.remove_physical_device_for_test(0x7777);
+        assert_eq!(
+            state.consume_consent(&authority, &second.consent_token),
+            Err(ConsentConsumeError::Replayed)
+        );
+''',
+    "existing device-removal test expects immediate revocation",
+)
+replace_exact(
+    security,
     '''            let mut source = INPUT_MESSAGE_SOURCE::default();
             if GetCurrentInputMessageSource(&mut source).is_err()
                 || source.originId != IMO_HARDWARE
