@@ -27,12 +27,6 @@ replace_exact(
     }
     if let Ok(mut inner) = inner.lock() {
         prune_security_inner(&mut inner, now);
-        if let Some(record) = inner.active.as_mut() {
-            if record.matched_device.is_none() && record.progress_device == Some(device) {
-                record.progress = 0;
-                record.progress_device = None;
-            }
-        }
         inner.removed_devices.insert(device, now);
     }
 }
@@ -43,17 +37,14 @@ replace_exact(
     }
     if let Ok(mut inner) = inner.lock() {
         prune_security_inner(&mut inner, now);
-        if let Some(record) = inner.active.as_mut() {
-            if record.matched_device.is_none() && record.progress_device == Some(device) {
-                record.progress = 0;
-                record.progress_device = None;
-            }
-        }
         inner.removed_devices.insert(device, now);
     }
 }
 
-fn record_desktop_session_lock(inner: &Arc<Mutex<SecurityInner>>, now: Instant) {
+fn record_desktop_session_security_transition(
+    inner: &Arc<Mutex<SecurityInner>>,
+    now: Instant,
+) {
     if let Ok(mut inner) = inner.lock() {
         prune_security_inner(&mut inner, now);
         if let Some(record) = inner.active.take() {
@@ -62,7 +53,7 @@ fn record_desktop_session_lock(inner: &Arc<Mutex<SecurityInner>>, now: Instant) 
     }
 }
 ''',
-    "desktop lock consent invalidation helper",
+    "desktop session transition consent invalidation helper",
 )
 
 replace_exact(
@@ -108,7 +99,7 @@ replace_exact(
     '''        if let Err(error) = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) {
             let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
             let _ = ready.send(Err(format!(
-                "Unable to register desktop session-lock notifications: {error}"
+                "Unable to register desktop session-security notifications: {error}"
             )));
             return;
         }
@@ -149,9 +140,11 @@ replace_exact(
                 WM_SYSKEYDOWN,
 ''',
     '''                WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY,
-                WM_SYSKEYDOWN, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK,
+                WM_SYSKEYDOWN, WM_WTSSESSION_CHANGE, WTS_CONSOLE_DISCONNECT,
+                WTS_REMOTE_CONNECT, WTS_REMOTE_DISCONNECT, WTS_SESSION_LOCK,
+                WTS_SESSION_REMOTE_CONTROL,
 ''',
-    "window proc imports typed session-lock constants",
+    "window proc imports typed session-security constants",
 )
 
 replace_exact(
@@ -168,13 +161,28 @@ replace_exact(
             record_device_removal(&*context, device, Instant::now());
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
-        WM_WTSSESSION_CHANGE if !context.is_null() && wparam.0 as u32 == WTS_SESSION_LOCK => {
-            record_desktop_session_lock(&*context, Instant::now());
+        WM_WTSSESSION_CHANGE
+            if !context.is_null()
+                && matches!(
+                    wparam.0 as u32,
+                    WTS_SESSION_LOCK
+                        | WTS_CONSOLE_DISCONNECT
+                        | WTS_REMOTE_CONNECT
+                        | WTS_REMOTE_DISCONNECT
+                        | WTS_SESSION_REMOTE_CONTROL
+                ) =>
+        {
+            // A challenge confirmed on the local console cannot survive a
+            // transition into/out of a remote-control session. RDP input is
+            // already excluded by Raw Input device enumeration, but this also
+            // prevents a still-live 15-second local token being consumed after
+            // session topology changes.
+            record_desktop_session_security_transition(&*context, Instant::now());
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
         value if value == WM_APP + 0x51 => {
 ''',
-    "handle desktop session lock",
+    "handle desktop lock and remote session transitions",
 )
 
 replace_exact(
@@ -202,7 +210,7 @@ replace_exact(
         let authority = binding(OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, 9);
         let prepared = state.prepare_consent(authority.clone()).unwrap();
         enter_code(&state, &prepared.display_code, 0x9999);
-        record_desktop_session_lock(&state.inner, Instant::now());
+        record_desktop_session_security_transition(&state.inner, Instant::now());
         assert_eq!(
             state.consume_consent(&authority, &prepared.consent_token),
             Err(ConsentConsumeError::Replayed)
@@ -212,5 +220,5 @@ replace_exact(
     #[test]
     fn renderer_principal_retirement_invalidates_ready_release_consent() {
 ''',
-    "desktop lock focused test",
+    "desktop session transition focused test",
 )
