@@ -227,8 +227,12 @@ jobs:
           cargo test -p protocol --locked control_plane_registry_v2::tests::output_disruptive_release_requires_r4_physical_consent_receipt_rate_and_no_full_lock -- --exact --test-threads=1
           cargo test -p protocol --locked control_plane_registry_v2::tests::local_workflow_step_resolves_without_deriving_an_adapter -- --exact --test-threads=1
 
-      - name: Test engine safety-blackout authority and publication semantics
-        run: cargo test -p engine --locked safety_blackout -- --test-threads=1
+      - name: Test engine inventory and safety-blackout publication semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p engine --locked control_plane::tests::exact_engine_command_inventory_is_generated_once_and_conservative -- --exact --test-threads=1
+          cargo test -p engine --locked safety_blackout -- --test-threads=1
 
       - name: Test exact control-plane inventories
         shell: bash
