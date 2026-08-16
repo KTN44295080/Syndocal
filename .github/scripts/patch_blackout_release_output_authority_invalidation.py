@@ -10,12 +10,16 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
-# Workflow-source classification is applied earlier in the fixed generator
-# order. Couple its terminal-resolution validation here so the generator cannot
-# accidentally ship WorkflowStepOf records which merely point at an existing
-# but unclassified source.
+# Workflow-source classification and terminal request-retention patches are
+# applied earlier in the fixed generator order. Couple their fail-closed
+# validations here so they cannot be accidentally omitted from the generated
+# source even if the workflow list is later edited.
 runpy.run_path(
     ".github/scripts/patch_blackout_release_workflow_validation.py",
+    run_name="__main__",
+)
+runpy.run_path(
+    ".github/scripts/patch_blackout_release_terminal_rejections.py",
     run_name="__main__",
 )
 
