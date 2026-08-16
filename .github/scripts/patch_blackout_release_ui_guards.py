@@ -9,6 +9,7 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+app = Path("app/src/App.tsx")
 workspace = Path("app/src/components/WorkspaceChrome.tsx")
 runtime_panel = Path("app/src/components/LightingRuntimeControlsPanel.tsx")
 
@@ -81,8 +82,33 @@ replace_exact(
 )
 
 # Control-mode B is already landed directly in appShortcutActions.ts as
-# engage-only. Keep this generator focused on the remaining UI surfaces so a
-# resumed run does not try to rewrite an already-hardened source file.
+# engage-only. Renderer-side learned/control-mapping dispatch must follow the
+# same rule instead of constructing a false/toggle intent that the backend then
+# rejects. All Blackout likewise remains safer-direction-only.
+replace_exact(
+    app,
+    '''      case "blackout":
+        await setBlackout(!snapshot().blackout);
+        break;
+''',
+    '''      case "blackout":
+        await setBlackout(true);
+        break;
+''',
+    "frontend learned blackout dispatch is engage-only",
+)
+replace_exact(
+    app,
+    '''      case "all_blackout":
+        await setAllBlackout(!(snapshot().blackout && snapshot().video.blackout));
+        break;
+''',
+    '''      case "all_blackout":
+        await setAllBlackout(true);
+        break;
+''',
+    "frontend learned all-blackout dispatch is engage-only",
+)
 
 # Runtime keeps the explicit R4 DMX Clear control. Do not leave a neighboring
 # legacy All Clear button which suggests a second unconfirmed release route.
