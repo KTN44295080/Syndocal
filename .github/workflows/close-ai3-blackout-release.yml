@@ -64,6 +64,7 @@ jobs:
           python3 .github/scripts/patch_blackout_release_ui_guards.py
           python3 .github/scripts/patch_blackout_release_full_lock_ui.py
           python3 .github/scripts/patch_blackout_release_all_blackout_s0.py
+          python3 .github/scripts/patch_blackout_release_strict_consent_prepare.py
           python3 .github/scripts/patch_blackout_release_workflow_sources.py
           python3 .github/scripts/patch_blackout_release_physical_device_binding.py
           python3 .github/scripts/patch_blackout_release_consent_expiry.py
