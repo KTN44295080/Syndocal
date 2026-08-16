@@ -181,6 +181,24 @@ replace_exact(
 ''',
     "existing device-removal test expects immediate revocation",
 )
+
+# RIDEV_INPUTSINK is required so the message-only Raw Input window can receive
+# keyboard records, but that flag would otherwise accept digits while another
+# application owns the foreground. Bind each accepted digit to a foreground
+# window owned by this Syndocal process in addition to physical-device proof.
+replace_exact(
+    security,
+    '''            WindowsAndMessaging::{
+                DefWindowProcW, DestroyWindow, GetWindowLongPtrW, PostQuitMessage,
+                SetWindowLongPtrW, CREATESTRUCTW, GIDC_REMOVAL, GWLP_USERDATA, WM_APP, WM_DESTROY,
+''',
+    '''            WindowsAndMessaging::{
+                DefWindowProcW, DestroyWindow, GetForegroundWindow, GetWindowLongPtrW,
+                GetWindowThreadProcessId, PostQuitMessage, SetWindowLongPtrW, CREATESTRUCTW,
+                GIDC_REMOVAL, GWLP_USERDATA, WM_APP, WM_DESTROY,
+''',
+    "Raw Input window proc imports foreground process checks",
+)
 replace_exact(
     security,
     '''            let mut source = INPUT_MESSAGE_SOURCE::default();
@@ -189,17 +207,26 @@ replace_exact(
                 || source.deviceType != IMDT_KEYBOARD
             {
 ''',
-    '''            // `IMO_HARDWARE` is defense in depth, not our sole proof:
-            // the authoritative evidence below is a real WM_INPUT keyboard
-            // record with a non-null hDevice that is present in the current
-            // GetRawInputDeviceList enumeration.
+    '''            let foreground = GetForegroundWindow();
+            if foreground.0.is_null() {
+                return DefWindowProcW(hwnd, message, wparam, lparam);
+            }
+            let mut foreground_process_id = 0u32;
+            if GetWindowThreadProcessId(foreground, Some(&mut foreground_process_id)) == 0
+                || foreground_process_id != std::process::id()
+            {
+                return DefWindowProcW(hwnd, message, wparam, lparam);
+            }
+            // `IMO_HARDWARE` is defense in depth, not our sole proof: the
+            // authoritative evidence below is a real WM_INPUT keyboard record
+            // with a non-null hDevice present in the current raw-device list.
             let mut source = INPUT_MESSAGE_SOURCE::default();
             if GetCurrentInputMessageSource(&mut source).is_err()
                 || source.originId != IMO_HARDWARE
                 || source.deviceType != IMDT_KEYBOARD
             {
 ''',
-    "document layered physical-input proof without overclaiming source classification",
+    "require Syndocal foreground while accepting physical consent digits",
 )
 replace_exact(
     security,
