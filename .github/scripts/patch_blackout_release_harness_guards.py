@@ -11,17 +11,20 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
 
 harness = Path("app/scripts/check-blackout-release-runtime.mjs")
 
+# The shortcut-suppression guard is landed directly in source before the
+# generated R4 migration. Preserve that already-present keyboardSource slot
+# while adding the generated-source audit inputs.
 replace_exact(
     harness,
-    '''const [controllerSource, controlSource, panelSource, appSource, fullLockOverlaySource] = await Promise.all([\n''',
-    '''const [controllerSource, controlSource, panelSource, appSource, fullLockOverlaySource, workspaceSource, backendSource, runtimeSource, invokeManifestSource] = await Promise.all([\n''',
-    "harness workspace/backend/runtime/manifest source slots",
+    '''const [controllerSource, controlSource, panelSource, appSource, fullLockOverlaySource, keyboardSource] = await Promise.all([\n''',
+    '''const [controllerSource, controlSource, panelSource, appSource, fullLockOverlaySource, keyboardSource, workspaceSource, backendSource, runtimeSource, invokeManifestSource] = await Promise.all([\n''',
+    "harness workspace/backend/runtime/manifest source slots after shortcut guard",
 )
 replace_exact(
     harness,
-    '''  readFile(new URL("../src/components/OperatorLockOverlay.tsx", import.meta.url), "utf8"),\n]);\n''',
-    '''  readFile(new URL("../src/components/OperatorLockOverlay.tsx", import.meta.url), "utf8"),\n  readFile(new URL("../src/components/WorkspaceChrome.tsx", import.meta.url), "utf8"),\n  readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8"),\n  readFile(new URL("../src-tauri/src/control_plane_runtime.rs", import.meta.url), "utf8"),\n  readFile(new URL("../src/tauri-invoke-manifest.json", import.meta.url), "utf8"),\n]);\n''',
-    "harness reads workspace backend runtime and frontend authority",
+    '''  readFile(new URL("../src/components/OperatorLockOverlay.tsx", import.meta.url), "utf8"),\n  readFile(new URL("../src/createAppKeyboardController.ts", import.meta.url), "utf8"),\n]);\n''',
+    '''  readFile(new URL("../src/components/OperatorLockOverlay.tsx", import.meta.url), "utf8"),\n  readFile(new URL("../src/createAppKeyboardController.ts", import.meta.url), "utf8"),\n  readFile(new URL("../src/components/WorkspaceChrome.tsx", import.meta.url), "utf8"),\n  readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8"),\n  readFile(new URL("../src-tauri/src/control_plane_runtime.rs", import.meta.url), "utf8"),\n  readFile(new URL("../src/tauri-invoke-manifest.json", import.meta.url), "utf8"),\n]);\n''',
+    "harness reads workspace backend runtime and frontend authority after shortcut guard",
 )
 replace_exact(
     harness,
