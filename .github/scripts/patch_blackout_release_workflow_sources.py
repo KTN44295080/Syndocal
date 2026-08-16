@@ -213,8 +213,9 @@ replace_exact(
     "local workflow source focused protocol test",
 )
 
-# This patch is applied after the strict-wire rename, so the reviewed direct
-# source is already execute_blackout_release_v1.
+# This patch runs after both strict wire patches, so the reviewed direct source
+# is execute_blackout_release_v1 and consent preparation is the dedicated
+# prepare_blackout_release_consent_v1 source.
 replace_exact(
     control,
     '''        CanonicalSourceFamily::TauriCommand => {
@@ -239,7 +240,7 @@ replace_exact(
             } else if matches!(
                 descriptor.source_id.as_str(),
                 "query_output_control_authority_v1"
-                    | "prepare_output_consent_v1"
+                    | "prepare_blackout_release_consent_v1"
                     | "query_output_consent_status_v1"
             ) {
                 SourceDisposition::WorkflowStepOf {
@@ -334,7 +335,7 @@ replace_exact(
 ''',
     '''        for source_id in [
             "query_output_control_authority_v1",
-            "prepare_output_consent_v1",
+            "prepare_blackout_release_consent_v1",
             "query_output_consent_status_v1",
         ] {
             let workflow = workflow_steps
