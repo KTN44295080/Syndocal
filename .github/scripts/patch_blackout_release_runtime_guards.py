@@ -9,51 +9,14 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
-registry = Path("app/src-tauri/src/control_plane.rs")
 runtime = Path("app/src-tauri/src/control_plane_runtime.rs")
 app = Path("app/src/App.tsx")
 
-# The strict Release wire renames existing Tauri/frontend sources; it does not
-# add four handlers or a new EngineCommand descriptor. The original receipt
-# generator predates that rename-in-place design and temporarily increments the
-# engine/source inventory by one. Normalize those stale intermediate assertions
-# here before any tests or later count-sensitive patches run.
-replace_exact(
-    registry,
-    "        const ENGINE_COMMAND_COUNT: usize = 250;",
-    "        const ENGINE_COMMAND_COUNT: usize = 249;",
-    "normalize strict Release engine inventory count",
-)
-replace_exact(
-    registry,
-    "        assert_eq!(registry.operations.len(), 1415);",
-    "        assert_eq!(registry.operations.len(), 1414);",
-    "normalize strict Release legacy registry total",
-)
-replace_exact(
-    registry,
-    "        const ENGINE_COUNT: usize = 250;",
-    "        const ENGINE_COUNT: usize = 249;",
-    "normalize canonical engine source count",
-)
-replace_exact(
-    registry,
-    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1415);",
-    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1414);",
-    "normalize canonical legacy source total",
-)
-replace_exact(
-    registry,
-    "        assert_eq!(SOURCE_TOTAL, 1448);",
-    "        assert_eq!(SOURCE_TOTAL, 1447);",
-    "normalize canonical complete source total",
-)
-replace_exact(
-    registry,
-    "        assert_eq!(unclassified.len(), 1034);",
-    "        assert_eq!(unclassified.len(), 1033);",
-    "normalize canonical unclassified source count",
-)
+# The strict Release wire renames existing Tauri/frontend sources in place.
+# The one count correction performed by patch_blackout_release_receipt.py is
+# legitimate: the Engine enum already contains both SafetyBlackout published
+# variants, so the generated engine inventory is 250 even though the app-side
+# registry assertion was stale at 249. Do not fabricate any Tauri +4 change.
 
 # A Release receipt must describe exactly the Release commit boundary. Re-read
 # of current project/output state after the engine ACK can accidentally absorb
