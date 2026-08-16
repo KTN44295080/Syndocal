@@ -19,6 +19,9 @@ def replace_all(path: Path, old: str, new: str, label: str) -> None:
 
 app = Path("app/src/App.tsx")
 main = Path("app/src-tauri/src/main.rs")
+registry = Path("app/src-tauri/src/control_plane.rs")
+invoke_manifest = Path("app/src/tauri-invoke-manifest.json")
+invoke_types = Path("app/src/tauriInvokeCommands.ts")
 
 replace_exact(
     app,
@@ -64,7 +67,7 @@ replace_exact(
 # engage / R4 release model. Allowing even `true` here would assert the ordinary
 # `blackout` bit, while R4 Release clears only the emergency safety latch; that
 # can create a blackout which the canonical Release cannot clear. Keep these
-# names inventory-visible but unavailable until their callers migrate.
+# backend names inventory-visible but unavailable until their callers migrate.
 replace_exact(
     main,
     '''#[tauri::command]
@@ -112,9 +115,7 @@ fn set_all_blackout(_state: State<'_, AppState>, enabled: bool) -> Result<(), St
 
 # MIDI, OSC, DMX-control mappings (which become OscInputEvent), and Remote
 # WebSocket do not yet have the canonical principal/capability/request identity
-# required by S0/R4. Drop both directions. Retaining their old `true` path would
-# create the non-safety `blackout` bit described above; retaining `false` would
-# bypass physical consent.
+# required by S0/R4. Drop both directions.
 replace_all(
     main,
     '''            MidiControlEvent::Blackout(enabled) => EngineCommand::Blackout(enabled),
@@ -159,4 +160,57 @@ replace_all(
                         }
 ''',
     "disable legacy Remote blackout setter",
+)
+
+# These two unavailable compatibility handlers are no longer legitimate
+# production renderer invoke authorities. Leave them in backend inventory for
+# migration accounting, but remove them from the finite frontend command union.
+for path in (invoke_manifest, invoke_types):
+    replace_exact(path, '  "set_all_blackout",\n', '', f"remove set_all_blackout from {path}")
+    replace_exact(path, '  "set_blackout",\n', '', f"remove set_blackout from {path}")
+
+# Runtime-guard patching runs earlier and intentionally fixes the strict-wire
+# inventory first. Removing two frontend alias sources changes only frontend and
+# aggregate source counts; Tauri/Engine/unclassified counts remain unchanged.
+replace_exact(
+    registry,
+    "        const FRONTEND_INVOKE_COUNT: usize = 393;",
+    "        const FRONTEND_INVOKE_COUNT: usize = 391;",
+    "frontend invoke inventory after legacy blackout removal",
+)
+replace_exact(
+    registry,
+    "        assert_eq!(registry.operations.len(), 1419);",
+    "        assert_eq!(registry.operations.len(), 1417);",
+    "legacy registry total after frontend blackout removal",
+)
+replace_exact(
+    registry,
+    "        const FRONTEND_COUNT: usize = 393;",
+    "        const FRONTEND_COUNT: usize = 391;",
+    "canonical frontend alias count",
+)
+replace_exact(
+    registry,
+    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1419);",
+    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1417);",
+    "canonical legacy source total after frontend blackout removal",
+)
+replace_exact(
+    registry,
+    "        assert_eq!(SOURCE_TOTAL, 1452);",
+    "        assert_eq!(SOURCE_TOTAL, 1450);",
+    "canonical complete source total after frontend blackout removal",
+)
+replace_exact(
+    registry,
+    "        assert_eq!(legacy.operations.len(), 1419);",
+    "        assert_eq!(legacy.operations.len(), 1417);",
+    "legacy registry JSON source total after frontend blackout removal",
+)
+replace_exact(
+    registry,
+    "        assert_eq!(operations.len(), 1419);",
+    "        assert_eq!(operations.len(), 1417);",
+    "legacy registry JSON encoded total after frontend blackout removal",
 )
