@@ -82,12 +82,14 @@ fn exact_output_control_fence_matches(
     "Release Lighting ownership helper",
 )
 
+# Extend the already-gated deterministic Release fence test instead of adding a
+# second test name which could be omitted from the focused workflow.
 replace_exact(
     runtime,
-    '''    fn test_output_control_fence() -> OutputControlFenceV1 {
+    '''    fn blackout_release_receipt_fence_is_exact_and_rolls_safely() {
+        let basis = test_output_control_fence();
 ''',
-    '''    #[test]
-    fn blackout_release_requires_current_ready_lighting_owner() {
+    '''    fn blackout_release_receipt_fence_is_exact_and_rolls_safely() {
         assert!(blackout_release_has_current_lighting_owner(
             &protocol::OutputOwnershipStatus::for_role(protocol::MachineOutputRole::Lighting)
         ));
@@ -104,9 +106,8 @@ replace_exact(
             protocol::OutputOwnershipStatus::for_role(protocol::MachineOutputRole::Lighting);
         transitioning.state = protocol::OutputOwnershipState::Transitioning;
         assert!(!blackout_release_has_current_lighting_owner(&transitioning));
-    }
 
-    fn test_output_control_fence() -> OutputControlFenceV1 {
+        let basis = test_output_control_fence();
 ''',
-    "Release current-owner focused test",
+    "Release current-owner focused assertions",
 )
