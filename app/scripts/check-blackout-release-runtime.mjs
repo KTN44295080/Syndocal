@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
-const [controllerSource, controlSource, panelSource, appSource, fullLockOverlaySource] = await Promise.all([
+const [controllerSource, controlSource, panelSource, appSource, fullLockOverlaySource, keyboardSource] = await Promise.all([
   readFile(new URL("../src/blackoutReleaseRuntimeController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/components/BlackoutReleaseControl.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/components/LightingRuntimeControlsPanel.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/components/OperatorLockOverlay.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../src/createAppKeyboardController.ts", import.meta.url), "utf8"),
 ]);
 
 const transpiled = ts.transpileModule(controllerSource, {
@@ -207,8 +208,20 @@ for (const command of runtime.blackoutReleaseInvokeCommands) {
 }
 assert.doesNotMatch(controlSource, /set_blackout/);
 assert.match(controlSource, /physical keyboard connected to this machine/i);
+assert.match(controlSource, /data-block-global-shortcuts="true"/);
 assert.match(controlSource, /releaseRuntime\.consentStatus\(consent\)/);
 assert.match(controlSource, /releaseRuntime\.release\(consent\)/);
+const shortcutBlock = keyboardSource.indexOf("document.querySelector('[data-block-global-shortcuts=\"true\"]')");
+const projectShortcut = keyboardSource.indexOf("dispatchProjectFileShortcut(event, options)");
+assert.ok(shortcutBlock >= 0, "R4 confirmation modal must block renderer shortcuts");
+assert.ok(
+  projectShortcut > shortcutBlock,
+  "global safety-modal shortcut blocking must run before project file shortcuts",
+);
+assert.match(
+  keyboardSource.slice(shortcutBlock, projectShortcut),
+  /event\.preventDefault\(\);[\s\S]*return;/,
+);
 assert.match(panelSource, /<BlackoutReleaseControl\s+onReleased=\{props\.onBlackoutReleased\}\s*\/>/);
 assert.doesNotMatch(panelSource, /onBlackout\(false\)/);
 assert.doesNotMatch(appSource, /invoke\("set_blackout", \{ enabled: false \}\)/);
