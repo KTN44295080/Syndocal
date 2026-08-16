@@ -151,6 +151,34 @@ const sameFence = (left: OutputControlFence, right: OutputControlFence): boolean
   && left.safety_blackout_epoch === right.safety_blackout_epoch
   && left.safety_blackout_generation === right.safety_blackout_generation;
 
+const nextAuthorityPair = (epoch: number, generation: number): readonly [number, number] | null => {
+  if (!isNonZeroSafeInteger(epoch) || !isNonZeroSafeInteger(generation)) return null;
+  if (generation < Number.MAX_SAFE_INTEGER) return [epoch, generation + 1] as const;
+  if (epoch < Number.MAX_SAFE_INTEGER) return [epoch + 1, 1] as const;
+  return null;
+};
+
+const isExactBlackoutReleaseAppliedTransition = (
+  before: OutputControlFence,
+  after: OutputControlFence,
+): boolean => {
+  const next = nextAuthorityPair(
+    before.safety_blackout_epoch,
+    before.safety_blackout_generation,
+  );
+  return next !== null
+    && after.process_incarnation === before.process_incarnation
+    && after.session_incarnation === before.session_incarnation
+    && after.project_epoch === before.project_epoch
+    && after.project_revision === before.project_revision
+    && after.project_checkpoint_hash === before.project_checkpoint_hash
+    && after.project_publication_generation === before.project_publication_generation
+    && after.output_epoch === before.output_epoch
+    && after.output_generation === before.output_generation
+    && after.safety_blackout_epoch === next[0]
+    && after.safety_blackout_generation === next[1];
+};
+
 let fallbackRequestCounter = 0;
 export const nextBlackoutReleaseRequestId = (): number => {
   const values = new Uint32Array(1);
@@ -257,7 +285,8 @@ const validateExecutionResponse = (
     throw new BlackoutReleaseProtocolError("terminal receipt");
   }
   if ((receipt.outcome === "no_op" && !sameFence(receipt.fence_before, receipt.fence_after))
-    || (receipt.outcome === "applied" && sameFence(receipt.fence_before, receipt.fence_after))) {
+    || (receipt.outcome === "applied"
+      && !isExactBlackoutReleaseAppliedTransition(receipt.fence_before, receipt.fence_after))) {
     throw new BlackoutReleaseProtocolError("receipt fence transition");
   }
   return receipt as BlackoutReleaseReceipt;
