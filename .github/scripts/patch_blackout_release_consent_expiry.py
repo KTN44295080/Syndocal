@@ -12,6 +12,9 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
 security = Path("app/src-tauri/src/control_plane_security.rs")
 control = Path("app/src/components/BlackoutReleaseControl.tsx")
 
+# This patch runs after patch_blackout_release_physical_device_binding.py, so
+# the old shape deliberately includes the release-build consume-time keyboard
+# re-enumeration guard added there.
 replace_exact(
     security,
     '''    pub(crate) fn consent_status(
@@ -76,6 +79,14 @@ replace_exact(
             return Err(ConsentConsumeError::PhysicalInputPending);
         };
         if inner.removed_devices.contains_key(&device) {
+            return Err(ConsentConsumeError::DeviceRemoved);
+        }
+        #[cfg(all(target_os = "windows", not(test)))]
+        if unsafe { !raw_keyboard_device_is_enumerated(device) } {
+            // A WM_INPUT_DEVICE_CHANGE removal notification is useful but not
+            // the sole liveness proof. Re-enumerate at the consume boundary so
+            // a missed notification cannot leave a physically absent keyboard
+            // capable of authorizing an energizing R4 command.
             return Err(ConsentConsumeError::DeviceRemoved);
         }
         let consumed = inner.active.take().ok_or(ConsentConsumeError::Missing)?;
@@ -179,12 +190,16 @@ replace_exact(
         if inner.removed_devices.contains_key(&device) {
             return Err(ConsentConsumeError::DeviceRemoved);
         }
+        #[cfg(all(target_os = "windows", not(test)))]
+        if unsafe { !raw_keyboard_device_is_enumerated(device) } {
+            return Err(ConsentConsumeError::DeviceRemoved);
+        }
         let consumed = inner.active.take().ok_or(ConsentConsumeError::Missing)?;
         push_tombstone(&mut inner, consumed.consent_token, now);
         Ok(())
     }
 ''',
-    "typed monotonic consent expiry",
+    "typed monotonic consent expiry after physical-device hardening",
 )
 
 replace_exact(
