@@ -161,16 +161,10 @@ replace_exact(
                 .state,
             PreparedConsentState::Ready
         );
-    }
-
-    #[test]
-    fn ready_consent_device_removal_cannot_resurrect_on_handle_reuse() {
-        let state = ControlPlaneSecurityState::default();
-        let authority = binding(OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, 9);
-        let prepared = state.prepare_consent(authority.clone()).unwrap();
-        enter_code(&state, &prepared.display_code, 0x4444);
-        state.remove_physical_device_for_test(0x4444);
-        state.observe_physical_digit_for_test(1, 0x4444);
+        state.remove_physical_device_for_test(0x1111);
+        // Simulate a later input event whose OS handle has been recycled to the
+        // same numeric value. The already-ready challenge must stay invalid.
+        state.observe_physical_digit_for_test(1, 0x1111);
         assert_eq!(
             state.consume_consent(&authority, &prepared.consent_token),
             Err(ConsentConsumeError::DeviceRemoved)
@@ -180,5 +174,5 @@ replace_exact(
     #[test]
     fn prepared_consent_rejects_other_r4_operations() {
 ''',
-    "single-device physical consent focused tests",
+    "single-device physical consent focused test",
 )
