@@ -27,14 +27,18 @@ replace_exact(
     }
     if let Ok(mut inner) = inner.lock() {
         prune_security_inner(&mut inner, now);
-        inner.removed_devices.insert(device, now);
         let invalidates_active = inner.active.as_ref().is_some_and(|record| {
             record.progress_device == Some(device) || record.matched_device == Some(device)
         });
-        if invalidates_active {
-            if let Some(record) = inner.active.take() {
-                push_tombstone(&mut inner, record.consent_token, now);
-            }
+        if !invalidates_active {
+            return;
+        }
+        // Record only the device which is actually bound to the active
+        // challenge. Unrelated or synthetic removal notifications cannot grow
+        // retained security state for the full tombstone TTL.
+        inner.removed_devices.insert(device, now);
+        if let Some(record) = inner.active.take() {
+            push_tombstone(&mut inner, record.consent_token, now);
         }
     }
 }
@@ -45,14 +49,18 @@ replace_exact(
     }
     if let Ok(mut inner) = inner.lock() {
         prune_security_inner(&mut inner, now);
-        inner.removed_devices.insert(device, now);
         let invalidates_active = inner.active.as_ref().is_some_and(|record| {
             record.progress_device == Some(device) || record.matched_device == Some(device)
         });
-        if invalidates_active {
-            if let Some(record) = inner.active.take() {
-                push_tombstone(&mut inner, record.consent_token, now);
-            }
+        if !invalidates_active {
+            return;
+        }
+        // Record only the device which is actually bound to the active
+        // challenge. Unrelated or synthetic removal notifications cannot grow
+        // retained security state for the full tombstone TTL.
+        inner.removed_devices.insert(device, now);
+        if let Some(record) = inner.active.take() {
+            push_tombstone(&mut inner, record.consent_token, now);
         }
     }
 }
