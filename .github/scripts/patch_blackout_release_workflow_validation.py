@@ -191,8 +191,8 @@ replace_exact(
 )
 replace_exact(
     control,
-    "        assert_eq!(unclassified.len(), 1035);",
-    "        assert_eq!(unclassified.len(), 1034);",
+    "        assert_eq!(unclassified.len(), 1030);",
+    "        assert_eq!(unclassified.len(), 1029);",
     "keyboard S0 unclassified count",
 )
 replace_exact(
