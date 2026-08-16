@@ -11,6 +11,7 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
 
 workspace = Path("app/src/components/WorkspaceChrome.tsx")
 runtime_panel = Path("app/src/components/LightingRuntimeControlsPanel.tsx")
+shortcuts = Path("app/src/appShortcutActions.ts")
 
 # The global DMX button is safety-direction only. Once blackout is engaged it
 # must not advertise or dispatch a release; the only release UI is the R4
@@ -78,6 +79,16 @@ replace_exact(
             </button>
 ''',
     "topbar All Blackout is engage-only",
+)
+
+# The Control-mode B shortcut follows the same safer-direction-only rule as the
+# topbar. It may re-engage an already latched S0 blackout as an idempotent no-op,
+# but it never synthesizes an R4 release intent.
+replace_exact(
+    shortcuts,
+    '  if (event.code === "KeyB") return { kind: "toggleBlackout", enabled: !context.blackout };\n',
+    '  if (event.code === "KeyB") return { kind: "toggleBlackout", enabled: true };\n',
+    "Control B shortcut is blackout-engage-only",
 )
 
 # Runtime keeps the explicit R4 DMX Clear control. Do not leave a neighboring
