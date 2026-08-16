@@ -39,6 +39,28 @@ replace_exact(
 )
 replace_exact(
     security,
+    '''        if inner.removed_devices.contains_key(&device) {
+            return Err(ConsentConsumeError::DeviceRemoved);
+        }
+        let consumed = inner.active.take().ok_or(ConsentConsumeError::Missing)?;
+''',
+    '''        if inner.removed_devices.contains_key(&device) {
+            return Err(ConsentConsumeError::DeviceRemoved);
+        }
+        #[cfg(all(target_os = "windows", not(test)))]
+        if unsafe { !raw_keyboard_device_is_enumerated(device) } {
+            // A WM_INPUT_DEVICE_CHANGE removal notification is useful but not
+            // the sole liveness proof. Re-enumerate at the consume boundary so
+            // a missed notification cannot leave a physically absent keyboard
+            // capable of authorizing an energizing R4 command.
+            return Err(ConsentConsumeError::DeviceRemoved);
+        }
+        let consumed = inner.active.take().ok_or(ConsentConsumeError::Missing)?;
+''',
+    "re-enumerate matched keyboard at consent consume",
+)
+replace_exact(
+    security,
     '''    prune_security_inner(&mut inner, now);
     inner.removed_devices.remove(&device);
     let Some(record) = inner.active.as_mut() else {
@@ -107,22 +129,27 @@ replace_exact(
 ''',
     "require one physical device for complete challenge",
 )
-# Do not clear progress/device binding on removal. Keeping that binding plus the
-# removed-device tombstone makes the outstanding challenge permanently unable
-# to complete; only a newly prepared challenge can bind a replacement device.
 replace_exact(
     security,
-    '''    if let Ok(mut inner) = inner.lock() {
-        prune_security_inner(&mut inner, now);
-        inner.removed_devices.insert(device, now);
-    }
+    '''            let mut source = INPUT_MESSAGE_SOURCE::default();
+            if GetCurrentInputMessageSource(&mut source).is_err()
+                || source.originId != IMO_HARDWARE
+                || source.deviceType != IMDT_KEYBOARD
+            {
 ''',
-    '''    if let Ok(mut inner) = inner.lock() {
-        prune_security_inner(&mut inner, now);
-        inner.removed_devices.insert(device, now);
-    }
+    '''            // `IMO_HARDWARE` is defense in depth, not our sole proof:
+            // Windows may classify input inserted by a UIAccess=true process
+            // as hardware-origin. The authoritative evidence below is a real
+            // WM_INPUT keyboard record with a non-null hDevice that is present
+            // in GetRawInputDeviceList; Microsoft documents RDP devices as
+            // absent from that raw-device list.
+            let mut source = INPUT_MESSAGE_SOURCE::default();
+            if GetCurrentInputMessageSource(&mut source).is_err()
+                || source.originId != IMO_HARDWARE
+                || source.deviceType != IMDT_KEYBOARD
+            {
 ''',
-    "retain challenge device binding on removal",
+    "document layered physical-input proof",
 )
 replace_exact(
     security,
