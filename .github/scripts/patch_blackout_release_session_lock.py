@@ -192,14 +192,14 @@ replace_exact(
         }
         WM_WTSSESSION_CHANGE
             if !context.is_null()
-                && matches!(
-                    wparam.0 as u32,
-                    WTS_SESSION_LOCK
-                        | WTS_CONSOLE_DISCONNECT
-                        | WTS_REMOTE_CONNECT
-                        | WTS_REMOTE_DISCONNECT
-                        | WTS_SESSION_REMOTE_CONTROL
-                ) =>
+                && [
+                    WTS_SESSION_LOCK as usize,
+                    WTS_CONSOLE_DISCONNECT as usize,
+                    WTS_REMOTE_CONNECT as usize,
+                    WTS_REMOTE_DISCONNECT as usize,
+                    WTS_SESSION_REMOTE_CONTROL as usize,
+                ]
+                .contains(&wparam.0) =>
         {
             // A challenge confirmed on the local console cannot survive a
             // transition into/out of a remote-control session. RDP input is
