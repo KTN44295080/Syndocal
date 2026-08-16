@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 
 
 def replace_exact(path: Path, old: str, new: str, label: str) -> None:
@@ -8,6 +9,15 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
         raise RuntimeError(f"{label}: expected exactly one match, found {count}")
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
+
+# Workflow-source classification is applied earlier in the fixed generator
+# order. Couple its terminal-resolution validation here so the generator cannot
+# accidentally ship WorkflowStepOf records which merely point at an existing
+# but unclassified source.
+runpy.run_path(
+    ".github/scripts/patch_blackout_release_workflow_validation.py",
+    run_name="__main__",
+)
 
 main = Path("app/src-tauri/src/main.rs")
 replace_exact(
