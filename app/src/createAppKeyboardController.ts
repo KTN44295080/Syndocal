@@ -132,6 +132,14 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
   };
 
   const handleControlKeyDown = (event: KeyboardEvent) => {
+    // A safety confirmation can deliberately consume physical keyboard input
+    // outside the renderer (for example the R4 Raw Input challenge). While its
+    // modal is visible, the same keystrokes must not also trigger cue pads,
+    // project shortcuts, blackout toggles, or any other renderer command.
+    if (document.querySelector('[data-block-global-shortcuts="true"]')) {
+      event.preventDefault();
+      return;
+    }
     if (dispatchProjectFileShortcut(event, options)) return;
     const snapshot = options.snapshot();
     const action = resolveAppShortcut(event, {
