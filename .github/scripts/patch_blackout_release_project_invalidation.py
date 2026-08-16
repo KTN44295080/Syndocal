@@ -108,3 +108,29 @@ replace_exact(
 ''',
     "committed project replacement invalidates consent",
 )
+
+# Full Lock is an explicit operator safety boundary. A challenge prepared before
+# entering Full Lock must not become usable again merely because the project is
+# unlocked within the token TTL. Retire it at the lock transition; Partial Lock
+# remains compatible with R4 and therefore does not revoke consent.
+replace_exact(
+    main,
+    '''    let session = project_operator_session_for_policy(&mut sessions, &coordinator, &owner_id)
+        .ok_or_else(|| "Configure an Operator policy before locking this project".to_string())?;
+    session.unlocked = false;
+    Ok(session.policy.lock_mode)
+}
+''',
+    '''    let session = project_operator_session_for_policy(&mut sessions, &coordinator, &owner_id)
+        .ok_or_else(|| "Configure an Operator policy before locking this project".to_string())?;
+    let lock_mode = session.policy.lock_mode;
+    session.unlocked = false;
+    drop(sessions);
+    if lock_mode == OperatorLockMode::Full {
+        state.control_plane_security.retire_all();
+    }
+    Ok(lock_mode)
+}
+''',
+    "Full Lock invalidates prepared R4 consent",
+)
