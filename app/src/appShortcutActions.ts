@@ -298,7 +298,7 @@ export function resolveAppShortcut(
     const operation = context.timelinePlaying ? "pause" : context.timelineDurationMs > 0 ? "play" : "none";
     return { kind: "toggleTimelinePlayback", operation };
   }
-  if (event.code === "KeyB") return { kind: "toggleBlackout", enabled: !context.blackout };
+  if (event.code === "KeyB") return { kind: "toggleBlackout", enabled: true };
   if (event.code === "KeyV") return { kind: "toggleVideoBlackout", enabled: !context.videoBlackout };
   if (event.code === "KeyK") return { kind: "tapBpm" };
   return null;
