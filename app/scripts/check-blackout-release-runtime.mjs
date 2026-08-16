@@ -150,6 +150,38 @@ const mismatchedReceipt = runtime.createBlackoutReleaseRuntimeController({
 await assert.rejects(mismatchedReceipt.release(prepared), /invalid terminal receipt/);
 assert.equal(mismatchedReceiptCalls, 1);
 
+for (const forgedFenceAfter of [
+  { ...appliedFence, output_generation: appliedFence.output_generation + 1 },
+  { ...fence, safety_blackout_generation: fence.safety_blackout_generation + 2 },
+  { ...appliedFence, project_revision: appliedFence.project_revision + 1 },
+]) {
+  let forgedTransitionCalls = 0;
+  const forgedTransition = runtime.createBlackoutReleaseRuntimeController({
+    invoke: async (command, args) => {
+      assert.equal(command, "execute_output_control_v1");
+      forgedTransitionCalls += 1;
+      return {
+        type: "receipt",
+        receipt: {
+          operation_id: runtime.blackoutReleaseOperationId,
+          request_id: args.request.request_id,
+          shape_sha256: hash("c"),
+          argument_fingerprint: fingerprint,
+          audit_sequence: 3,
+          fence_before: fence,
+          fence_after: forgedFenceAfter,
+          outcome: "applied",
+        },
+      };
+    },
+  });
+  await assert.rejects(
+    forgedTransition.release(prepared),
+    /invalid receipt fence transition/,
+  );
+  assert.equal(forgedTransitionCalls, 1);
+}
+
 const nonCanonicalChallenge = runtime.createBlackoutReleaseRuntimeController({
   invoke: async (command, args) => {
     if (command === "query_output_control_authority_v1") {
