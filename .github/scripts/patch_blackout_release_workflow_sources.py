@@ -275,7 +275,7 @@ replace_exact(
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 5);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1038);
+        assert_eq!(unclassified.len(), 1033);
         assert_eq!(
             direct.len()
                 + aliases.len()
@@ -310,7 +310,7 @@ replace_exact(
         assert_eq!(internal_steps.len(), 5);
         assert_eq!(workflow_steps.len(), 3);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1035);
+        assert_eq!(unclassified.len(), 1030);
         assert_eq!(
             direct.len()
                 + aliases.len()
