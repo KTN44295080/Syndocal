@@ -182,9 +182,9 @@ replace_exact(
 ''',
     '''        AuthoredRequestV1, BlackoutReleaseCommandRequestV1,
         BlackoutReleaseConsentChallengeV1, BlackoutReleaseConsentPrepareRequestV1,
-        BlackoutReleaseResponseV1, OutputConsentChallengeV1, OutputConsentPrepareRequestV1,
+        BlackoutReleaseResponseV1,
 ''',
-    "main Release-only consent challenge import",
+    "main Release-only consent imports",
 )
 replace_exact(
     main,
