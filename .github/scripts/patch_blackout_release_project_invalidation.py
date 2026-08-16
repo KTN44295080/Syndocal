@@ -59,10 +59,13 @@ replace_exact(
     "global consent retirement",
 )
 
+# Owner-retirement runs immediately before this patch and therefore provides a
+# stable anchor. Do not depend on the desktop-session test, which is generated
+# later by patch_blackout_release_session_lock.py.
 replace_exact(
     security,
     '''    #[test]
-    fn desktop_session_lock_invalidates_ready_release_consent() {
+    fn renderer_principal_retirement_invalidates_ready_release_consent() {
 ''',
     '''    #[test]
     fn project_authority_replacement_invalidates_ready_release_consent() {
@@ -78,7 +81,7 @@ replace_exact(
     }
 
     #[test]
-    fn desktop_session_lock_invalidates_ready_release_consent() {
+    fn renderer_principal_retirement_invalidates_ready_release_consent() {
 ''',
     "project replacement consent invalidation test",
 )
