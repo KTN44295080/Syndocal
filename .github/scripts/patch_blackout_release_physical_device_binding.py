@@ -10,7 +10,23 @@ def replace_exact(path: Path, old: str, new: str, label: str) -> None:
 
 
 security = Path("app/src-tauri/src/control_plane_security.rs")
+runtime = Path("app/src-tauri/src/control_plane_runtime.rs")
 
+replace_exact(
+    security,
+    '''pub(crate) struct ConsentAuthorityBinding {
+    pub caller: ConsentCallerBinding,
+    pub operation_id: String,
+''',
+    '''pub(crate) struct ConsentAuthorityBinding {
+    pub caller: ConsentCallerBinding,
+    /// Native HWND of the renderer which displayed this exact challenge.
+    /// Stored only in backend consent state; it is not an external protocol field.
+    pub foreground_window: usize,
+    pub operation_id: String,
+''',
+    "consent authority binds challenge renderer HWND",
+)
 replace_exact(
     security,
     '''    display_code: [u8; CHALLENGE_DIGITS],
@@ -36,6 +52,17 @@ replace_exact(
             matched_device: None,
 ''',
     "initialize consent physical progress device",
+)
+replace_exact(
+    security,
+    '''        || binding.caller.owner_incarnation == 0
+        || binding.operation_id != OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+''',
+    '''        || binding.caller.owner_incarnation == 0
+        || binding.foreground_window == 0
+        || binding.operation_id != OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+''',
+    "consent authority requires challenge renderer HWND",
 )
 replace_exact(
     security,
@@ -71,6 +98,15 @@ replace_exact(
     }
 ''',
     '''    prune_security_inner(&mut inner, now);
+    #[cfg(all(target_os = "windows", not(test)))]
+    if !inner.active.as_ref().is_some_and(|record| {
+        foreground_window_matches(record.binding.foreground_window)
+    }) {
+        // RIDEV_INPUTSINK lets the hidden Raw Input window receive records even
+        // when Syndocal is not foreground. Only the renderer which displayed
+        // this exact challenge may contribute confirmation digits.
+        return;
+    }
     // A device which disappeared after starting or completing this exact
     // challenge may never resume it, even if Windows later reuses the same
     // numeric Raw Input handle. A fresh challenge may bind a freshly observed
@@ -89,7 +125,7 @@ replace_exact(
         return;
     }
 ''',
-    "removed challenge device cannot resume on handle reuse",
+    "bind physical digits to active challenge renderer and device",
 )
 replace_exact(
     security,
@@ -128,6 +164,23 @@ replace_exact(
     }
 ''',
     "require one physical device for complete challenge",
+)
+replace_exact(
+    security,
+    '''fn record_device_removal(inner: &Arc<Mutex<SecurityInner>>, device: usize, now: Instant) {
+''',
+    '''#[cfg(all(target_os = "windows", not(test)))]
+fn foreground_window_matches(expected_window: usize) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    unsafe {
+        let foreground = GetForegroundWindow();
+        !foreground.0.is_null() && foreground.0 as usize == expected_window
+    }
+}
+
+fn record_device_removal(inner: &Arc<Mutex<SecurityInner>>, device: usize, now: Instant) {
+''',
+    "foreground renderer HWND proof helper",
 )
 replace_exact(
     security,
@@ -181,52 +234,41 @@ replace_exact(
 ''',
     "existing device-removal test expects immediate revocation",
 )
-
-# RIDEV_INPUTSINK is required so the message-only Raw Input window can receive
-# keyboard records, but that flag would otherwise accept digits while another
-# application owns the foreground. Bind each accepted digit to a foreground
-# window owned by this Syndocal process in addition to physical-device proof.
 replace_exact(
     security,
-    '''            WindowsAndMessaging::{
-                DefWindowProcW, DestroyWindow, GetWindowLongPtrW, PostQuitMessage,
-                SetWindowLongPtrW, CREATESTRUCTW, GIDC_REMOVAL, GWLP_USERDATA, WM_APP, WM_DESTROY,
+    '''            // `IMO_HARDWARE` is defense in depth, not our sole proof:
+            // the authoritative evidence below is a real WM_INPUT keyboard
+            // record with a non-null hDevice that is present in the current
+            // GetRawInputDeviceList enumeration.
+            let mut source = INPUT_MESSAGE_SOURCE::default();
 ''',
-    '''            WindowsAndMessaging::{
-                DefWindowProcW, DestroyWindow, GetForegroundWindow, GetWindowLongPtrW,
-                GetWindowThreadProcessId, PostQuitMessage, SetWindowLongPtrW, CREATESTRUCTW,
-                GIDC_REMOVAL, GWLP_USERDATA, WM_APP, WM_DESTROY,
+    '''            // `IMO_HARDWARE` is defense in depth, not our sole proof:
+            // the authoritative evidence below is a real WM_INPUT keyboard
+            // record with a non-null hDevice that is present in the current
+            // GetRawInputDeviceList enumeration. Foreground renderer binding
+            // is checked atomically with the active challenge in record_physical_digit.
+            let mut source = INPUT_MESSAGE_SOURCE::default();
 ''',
-    "Raw Input window proc imports foreground process checks",
+    "document layered physical-input and foreground proof",
 )
 replace_exact(
     security,
-    '''            let mut source = INPUT_MESSAGE_SOURCE::default();
-            if GetCurrentInputMessageSource(&mut source).is_err()
-                || source.originId != IMO_HARDWARE
-                || source.deviceType != IMDT_KEYBOARD
-            {
+    '''            caller: ConsentCallerBinding {
+                principal: "desktop:main:1".to_string(),
+                window_label: "main".to_string(),
+                owner_incarnation: 1,
+            },
+            operation_id: operation.to_string(),
 ''',
-    '''            let foreground = GetForegroundWindow();
-            if foreground.0.is_null() {
-                return DefWindowProcW(hwnd, message, wparam, lparam);
-            }
-            let mut foreground_process_id = 0u32;
-            if GetWindowThreadProcessId(foreground, Some(&mut foreground_process_id)) == 0
-                || foreground_process_id != std::process::id()
-            {
-                return DefWindowProcW(hwnd, message, wparam, lparam);
-            }
-            // `IMO_HARDWARE` is defense in depth, not our sole proof: the
-            // authoritative evidence below is a real WM_INPUT keyboard record
-            // with a non-null hDevice present in the current raw-device list.
-            let mut source = INPUT_MESSAGE_SOURCE::default();
-            if GetCurrentInputMessageSource(&mut source).is_err()
-                || source.originId != IMO_HARDWARE
-                || source.deviceType != IMDT_KEYBOARD
-            {
+    '''            caller: ConsentCallerBinding {
+                principal: "desktop:main:1".to_string(),
+                window_label: "main".to_string(),
+                owner_incarnation: 1,
+            },
+            foreground_window: 0x1234,
+            operation_id: operation.to_string(),
 ''',
-    "require Syndocal foreground while accepting physical consent digits",
+    "test consent binding includes renderer HWND",
 )
 replace_exact(
     security,
@@ -304,4 +346,113 @@ replace_exact(
     fn prepared_consent_rejects_other_r4_operations() {
 ''',
     "single-device physical consent focused test",
+)
+
+# Bind the prepared consent to the exact native renderer window that displayed
+# the challenge. The same HWND is rebuilt for execution and participates in the
+# backend-only ConsentAuthorityBinding equality check.
+replace_exact(
+    runtime,
+    '''    let binding = capture_binding(state, window.label())
+        .map_err(|_| "Output consent caller is not registered".to_string())?;
+    query_state
+''',
+    '''    let binding = capture_binding(state, window.label())
+        .map_err(|_| "Output consent caller is not registered".to_string())?;
+    let foreground_window = blackout_release_native_window_handle(window)?;
+    query_state
+''',
+    "capture native renderer HWND before Release consent preflight",
+)
+replace_exact(
+    runtime,
+    '''    let authority = ConsentAuthorityBinding {
+        caller: ConsentCallerBinding {
+            principal: binding.principal,
+            window_label: binding.window_label,
+            owner_incarnation: binding.owner_incarnation,
+        },
+        operation_id: request.action.operation_id().to_string(),
+''',
+    '''    let authority = ConsentAuthorityBinding {
+        caller: ConsentCallerBinding {
+            principal: binding.principal,
+            window_label: binding.window_label,
+            owner_incarnation: binding.owner_incarnation,
+        },
+        foreground_window,
+        operation_id: request.action.operation_id().to_string(),
+''',
+    "prepared Release consent stores native renderer HWND",
+)
+replace_exact(
+    runtime,
+    '''    let binding = match capture_binding(state, window.label()) {
+        Ok(binding) => binding,
+        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
+    };
+    let key = output_control_receipt_key(&request, &binding);
+''',
+    '''    let binding = match capture_binding(state, window.label()) {
+        Ok(binding) => binding,
+        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
+    };
+    let foreground_window = match blackout_release_native_window_handle(window) {
+        Ok(window) => window,
+        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV1::Internal),
+    };
+    let key = output_control_receipt_key(&request, &binding);
+''',
+    "execution rebuilds native renderer HWND binding",
+)
+replace_exact(
+    runtime,
+    '''    let consent_binding = ConsentAuthorityBinding {
+        caller: ConsentCallerBinding {
+            principal: binding.principal.clone(),
+            window_label: binding.window_label.clone(),
+            owner_incarnation: binding.owner_incarnation,
+        },
+        operation_id: request.operation_id.clone(),
+''',
+    '''    let consent_binding = ConsentAuthorityBinding {
+        caller: ConsentCallerBinding {
+            principal: binding.principal.clone(),
+            window_label: binding.window_label.clone(),
+            owner_incarnation: binding.owner_incarnation,
+        },
+        foreground_window,
+        operation_id: request.operation_id.clone(),
+''',
+    "execution consent binding includes native renderer HWND",
+)
+replace_exact(
+    runtime,
+    '''fn exact_output_control_fence_matches(
+    state: &AppState,
+''',
+    '''fn blackout_release_native_window_handle(window: &WebviewWindow) -> Result<usize, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| format!("Blackout Release renderer HWND is unavailable: {error}"))?;
+        let value = hwnd.0 as usize;
+        if value == 0 {
+            Err("Blackout Release renderer HWND is unavailable".to_string())
+        } else {
+            Ok(value)
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        Err("Blackout Release physical consent is available only on Windows".to_string())
+    }
+}
+
+fn exact_output_control_fence_matches(
+    state: &AppState,
+''',
+    "native Release renderer HWND helper",
 )
