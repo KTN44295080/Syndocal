@@ -34,6 +34,63 @@ jobs:
           git merge-base --is-ancestor df7e335c14fe82bb534fbd8867dcd431777e1522 HEAD
           git rev-parse HEAD > "$RUNNER_TEMP/patch-start-head"
 
+      - name: Verify complete R4 patch graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path(".github/scripts")
+          workflow = Path(".github/workflows/close-ai3-blackout-release.yml").read_text(encoding="utf-8")
+          direct = {
+              "patch_blackout_release_receipt.py",
+              "patch_blackout_release_baseline_portability.py",
+              "patch_blackout_release_runtime_guards.py",
+              "patch_blackout_release_reply_loss_test.py",
+              "patch_blackout_release_ui_guards.py",
+              "patch_blackout_release_full_lock_ui.py",
+              "patch_blackout_release_all_blackout_s0.py",
+              "patch_blackout_release_smoke_test_isolation.py",
+              "patch_blackout_release_strict_consent_prepare.py",
+              "patch_blackout_release_strict_consent_challenge.py",
+              "patch_blackout_release_request_shape_consent.py",
+              "patch_blackout_release_idempotency_capacity.py",
+              "patch_blackout_release_workflow_sources.py",
+              "patch_blackout_release_physical_device_binding.py",
+              "patch_blackout_release_consent_expiry.py",
+              "patch_blackout_release_owner_retirement.py",
+              "patch_blackout_release_project_invalidation.py",
+              "patch_blackout_release_output_authority_invalidation.py",
+              "patch_blackout_release_output_permit.py",
+              "patch_blackout_release_session_lock.py",
+              "patch_blackout_release_session_return_invalidation.py",
+              "patch_blackout_release_invalidation_generation.py",
+              "patch_blackout_release_invalidation_exhaustion.py",
+              "patch_blackout_release_harness_guards.py",
+          }
+          indirect = {
+              "patch_blackout_release_receipt_expiry.py": "patch_blackout_release_reply_loss_test.py",
+              "patch_blackout_release_workflow_validation.py": "patch_blackout_release_output_authority_invalidation.py",
+              "patch_blackout_release_strict_query_sources.py": "patch_blackout_release_output_authority_invalidation.py",
+              "patch_blackout_release_terminal_rejections.py": "patch_blackout_release_output_authority_invalidation.py",
+              "patch_blackout_release_owner_gate.py": "patch_blackout_release_output_authority_invalidation.py",
+          }
+          actual = {path.name for path in root.glob("patch_blackout_release_*.py")}
+          expected = direct | set(indirect)
+          if actual != expected:
+              raise SystemExit(
+                  f"R4 patch graph mismatch; unaccounted={sorted(actual - expected)}, missing={sorted(expected - actual)}"
+              )
+          for name in sorted(direct):
+              if name not in workflow:
+                  raise SystemExit(f"direct R4 patch is not referenced by workflow: {name}")
+          for child, parent in indirect.items():
+              parent_source = (root / parent).read_text(encoding="utf-8")
+              if child not in parent_source:
+                  raise SystemExit(f"indirect R4 patch {child} is not invoked by {parent}")
+          PY
+
       - name: Apply strict Blackout Release wire patch
         shell: bash
         run: |
