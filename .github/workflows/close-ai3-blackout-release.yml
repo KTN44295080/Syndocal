@@ -46,8 +46,20 @@ jobs:
 
           path = Path(sys.argv[1])
           source = path.read_text(encoding="utf-8")
-          old = "if old_count != 1 or new_count != 0:"
-          new = "if old_count != 1 or (new_count != 0 and new not in old):"
+          old = "    if old_count != 1 or new_count != 0:\n"
+          new = '''    already_applied_markers = {
+              "renderer exact blackout release transition helper":
+                  "const isExactBlackoutReleaseAppliedTransition = (",
+              "renderer receipt transition validation":
+                  "&& !isExactBlackoutReleaseAppliedTransition(receipt.fence_before, receipt.fence_after)",
+              "renderer forged transition harness":
+                  "for (const forgedFenceAfter of [",
+          }
+          marker = already_applied_markers.get(label)
+          if marker is not None and marker in text:
+              return
+          if old_count != 1 or (new_count != 0 and new not in old):
+          '''
           if source.count(old) != 1 or new in source:
               raise SystemExit("unexpected replace_exact helper shape")
           path.write_text(source.replace(old, new, 1), encoding="utf-8")
