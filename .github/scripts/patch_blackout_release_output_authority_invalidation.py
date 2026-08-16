@@ -26,6 +26,10 @@ runpy.run_path(
     ".github/scripts/patch_blackout_release_terminal_rejections.py",
     run_name="__main__",
 )
+runpy.run_path(
+    ".github/scripts/patch_blackout_release_owner_gate.py",
+    run_name="__main__",
+)
 
 main = Path("app/src-tauri/src/main.rs")
 replace_exact(
