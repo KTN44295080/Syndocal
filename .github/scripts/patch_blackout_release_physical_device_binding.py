@@ -131,6 +131,38 @@ replace_exact(
 )
 replace_exact(
     security,
+    '''fn record_device_removal(inner: &Arc<Mutex<SecurityInner>>, device: usize, now: Instant) {
+    if device == 0 {
+        return;
+    }
+    if let Ok(mut inner) = inner.lock() {
+        prune_security_inner(&mut inner, now);
+        inner.removed_devices.insert(device, now);
+    }
+}
+''',
+    '''fn record_device_removal(inner: &Arc<Mutex<SecurityInner>>, device: usize, now: Instant) {
+    if device == 0 {
+        return;
+    }
+    if let Ok(mut inner) = inner.lock() {
+        prune_security_inner(&mut inner, now);
+        inner.removed_devices.insert(device, now);
+        let invalidates_active = inner.active.as_ref().is_some_and(|record| {
+            record.progress_device == Some(device) || record.matched_device == Some(device)
+        });
+        if invalidates_active {
+            if let Some(record) = inner.active.take() {
+                push_tombstone(&mut inner, record.consent_token, now);
+            }
+        }
+    }
+}
+''',
+    "device removal immediately invalidates active physical consent",
+)
+replace_exact(
+    security,
     '''            let mut source = INPUT_MESSAGE_SOURCE::default();
             if GetCurrentInputMessageSource(&mut source).is_err()
                 || source.originId != IMO_HARDWARE
@@ -188,8 +220,12 @@ replace_exact(
         state.remove_physical_device_for_test(0x1111);
         state.observe_physical_digit_for_test(1, 0x1111);
         assert_eq!(
+            state.consent_status(&authority.caller, &prepared.challenge_id),
+            Err(ConsentConsumeError::Missing)
+        );
+        assert_eq!(
             state.consume_consent(&authority, &prepared.consent_token),
-            Err(ConsentConsumeError::DeviceRemoved)
+            Err(ConsentConsumeError::Replayed)
         );
 
         let partial_state = ControlPlaneSecurityState::default();
@@ -206,15 +242,12 @@ replace_exact(
             partial_state.observe_physical_digit_for_test(*digit, 0x4444);
         }
         assert_eq!(
-            partial_state
-                .consent_status(&authority.caller, &partial.challenge_id)
-                .unwrap()
-                .state,
-            PreparedConsentState::PendingPhysicalInput
+            partial_state.consent_status(&authority.caller, &partial.challenge_id),
+            Err(ConsentConsumeError::Missing)
         );
         assert_eq!(
             partial_state.consume_consent(&authority, &partial.consent_token),
-            Err(ConsentConsumeError::PhysicalInputPending)
+            Err(ConsentConsumeError::Replayed)
         );
     }
 
