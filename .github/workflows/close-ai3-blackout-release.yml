@@ -67,6 +67,7 @@ jobs:
           python3 .github/scripts/patch_blackout_release_strict_consent_prepare.py
           python3 .github/scripts/patch_blackout_release_strict_consent_challenge.py
           python3 .github/scripts/patch_blackout_release_request_shape_consent.py
+          python3 .github/scripts/patch_blackout_release_idempotency_capacity.py
           python3 .github/scripts/patch_blackout_release_workflow_sources.py
           python3 .github/scripts/patch_blackout_release_physical_device_binding.py
           python3 .github/scripts/patch_blackout_release_consent_expiry.py
@@ -180,6 +181,7 @@ jobs:
           set -euo pipefail
           cargo test -p syndocal --bin syndocal --locked control_plane_runtime::tests::blackout_release_receipt_fence_is_exact_and_rolls_safely -- --exact --test-threads=1
           cargo test -p syndocal --bin syndocal --locked control_plane_runtime::tests::blackout_release_exact_reply_loss_reuses_terminal_and_tombstones_shape_conflicts -- --exact --test-threads=1
+          cargo test -p syndocal --bin syndocal --locked control_plane_runtime::tests::blackout_release_capacity_never_forgets_a_late_retry_identity -- --exact --test-threads=1
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
