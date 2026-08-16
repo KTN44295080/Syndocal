@@ -147,19 +147,23 @@ replace_exact(
     }
     if let Ok(mut inner) = inner.lock() {
         prune_security_inner(&mut inner, now);
-        inner.removed_devices.insert(device, now);
         let invalidates_active = inner.active.as_ref().is_some_and(|record| {
             record.progress_device == Some(device) || record.matched_device == Some(device)
         });
-        if invalidates_active {
-            if let Some(record) = inner.active.take() {
-                push_tombstone(&mut inner, record.consent_token, now);
-            }
+        if !invalidates_active {
+            return;
+        }
+        // Record only the device which is actually bound to the active
+        // challenge. Unrelated or synthetic removal notifications cannot grow
+        // retained security state for the full tombstone TTL.
+        inner.removed_devices.insert(device, now);
+        if let Some(record) = inner.active.take() {
+            push_tombstone(&mut inner, record.consent_token, now);
         }
     }
 }
 ''',
-    "device removal immediately invalidates active physical consent",
+    "device removal immediately invalidates only bound physical consent",
 )
 replace_exact(
     security,
@@ -186,18 +190,16 @@ replace_exact(
             {
 ''',
     '''            // `IMO_HARDWARE` is defense in depth, not our sole proof:
-            // Windows may classify input inserted by a UIAccess=true process
-            // as hardware-origin. The authoritative evidence below is a real
-            // WM_INPUT keyboard record with a non-null hDevice that is present
-            // in GetRawInputDeviceList; Microsoft documents RDP devices as
-            // absent from that raw-device list.
+            // the authoritative evidence below is a real WM_INPUT keyboard
+            // record with a non-null hDevice that is present in the current
+            // GetRawInputDeviceList enumeration.
             let mut source = INPUT_MESSAGE_SOURCE::default();
             if GetCurrentInputMessageSource(&mut source).is_err()
                 || source.originId != IMO_HARDWARE
                 || source.deviceType != IMDT_KEYBOARD
             {
 ''',
-    "document layered physical-input proof",
+    "document layered physical-input proof without overclaiming source classification",
 )
 replace_exact(
     security,
@@ -233,6 +235,10 @@ replace_exact(
                 .state,
             PreparedConsentState::Ready
         );
+        // Unrelated removal notifications are ignored and do not accumulate
+        // retained device state.
+        state.remove_physical_device_for_test(0x2222);
+        assert!(!state.inner.lock().unwrap().removed_devices.contains_key(&0x2222));
         state.remove_physical_device_for_test(0x1111);
         state.observe_physical_digit_for_test(1, 0x1111);
         assert_eq!(
