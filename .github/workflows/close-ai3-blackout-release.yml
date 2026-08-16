@@ -76,6 +76,7 @@ jobs:
           python3 .github/scripts/patch_blackout_release_ui_guards.py
           python3 .github/scripts/patch_blackout_release_full_lock_ui.py
           python3 .github/scripts/patch_blackout_release_all_blackout_s0.py
+          python3 .github/scripts/patch_blackout_release_smoke_test_isolation.py
           python3 .github/scripts/patch_blackout_release_strict_consent_prepare.py
           python3 .github/scripts/patch_blackout_release_strict_consent_challenge.py
           python3 .github/scripts/patch_blackout_release_request_shape_consent.py
@@ -86,7 +87,11 @@ jobs:
           python3 .github/scripts/patch_blackout_release_owner_retirement.py
           python3 .github/scripts/patch_blackout_release_project_invalidation.py
           python3 .github/scripts/patch_blackout_release_output_authority_invalidation.py
+          python3 .github/scripts/patch_blackout_release_output_permit.py
           python3 .github/scripts/patch_blackout_release_session_lock.py
+          python3 .github/scripts/patch_blackout_release_session_return_invalidation.py
+          python3 .github/scripts/patch_blackout_release_invalidation_generation.py
+          python3 .github/scripts/patch_blackout_release_invalidation_exhaustion.py
           python3 .github/scripts/patch_blackout_release_harness_guards.py
 
       - name: Verify bounded R4 diff
