@@ -71,10 +71,20 @@ insert = '''    #[test]
             state.reserve_output_control_lane(&key, &shape, now),
             OutputControlLaneReservation::Terminal(actual) if actual == response
         ));
+
+        let mut different_token = request.clone();
+        different_token.consent_token = "AQEBAQEBAQEBAQEBAQEBAQ".to_string();
+        different_token.validate().unwrap();
+        let different_token_key = output_control_receipt_key(&different_token, &binding);
+        assert_eq!(different_token_key, key);
+        let different_token_shape =
+            hex_sha256(&different_token.canonical_shape_bytes().unwrap());
+        assert_ne!(different_token_shape, shape);
         assert!(matches!(
-            state.reserve_output_control_lane(&key, &"b".repeat(64), now),
+            state.reserve_output_control_lane(&different_token_key, &different_token_shape, now),
             OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
         ));
+
         assert!(matches!(
             state.reserve_output_control_lane(&key, &shape, now + RECEIPT_TTL),
             OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::ReceiptExpired)
