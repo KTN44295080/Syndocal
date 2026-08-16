@@ -13,24 +13,53 @@ registry = Path("app/src-tauri/src/control_plane.rs")
 runtime = Path("app/src-tauri/src/control_plane_runtime.rs")
 app = Path("app/src/App.tsx")
 
-# The strict Release wire renames existing Tauri/frontend sources in place.
-# The one count correction performed by patch_blackout_release_receipt.py is
-# legitimate: the Engine enum already contains both SafetyBlackout published
-# variants, so the generated engine inventory is 250 even though the app-side
-# registry assertion was stale at 249. Do not fabricate any Tauri +4 change.
-# The legacy JSON test has two separate fixed totals which the receipt generator
-# predates, so align those with the same real 250-engine inventory here.
+# The engine crate already owns the one explicit reviewed variant count. The
+# app registry previously duplicated that number plus several derived totals,
+# which is how the two SafetyBlackout published variants left the app-side
+# inventory stale. After the receipt patch repairs the current 250 count, make
+# the app consume the engine source of truth and derive aggregate totals from
+# family counts instead of maintaining a second hard-coded mirror.
 replace_exact(
     registry,
-    "        assert_eq!(legacy.operations.len(), 1414);",
-    "        assert_eq!(legacy.operations.len(), 1415);",
-    "legacy registry JSON source total after real engine count",
+    "        const ENGINE_COMMAND_COUNT: usize = 250;",
+    "        const ENGINE_COMMAND_COUNT: usize = engine::engine_command_variant_count();",
+    "legacy registry uses engine inventory source of truth",
 )
 replace_exact(
     registry,
-    "        assert_eq!(operations.len(), 1414);",
+    "        assert_eq!(registry.operations.len(), 1415);\n",
+    "",
+    "remove duplicate fixed legacy registry total",
+)
+replace_exact(
+    registry,
+    "        const ENGINE_COUNT: usize = 250;",
+    "        const ENGINE_COUNT: usize = engine::engine_command_variant_count();",
+    "canonical registry uses engine inventory source of truth",
+)
+replace_exact(
+    registry,
+    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1415);\n",
+    "",
+    "remove duplicate fixed canonical legacy total",
+)
+replace_exact(
+    registry,
+    "        assert_eq!(SOURCE_TOTAL, 1448);\n",
+    "",
+    "remove duplicate fixed canonical source total",
+)
+replace_exact(
+    registry,
+    "        assert_eq!(legacy.operations.len(), 1415);\n",
+    "",
+    "remove duplicate fixed legacy JSON source total",
+)
+replace_exact(
+    registry,
     "        assert_eq!(operations.len(), 1415);",
-    "legacy registry JSON encoded total after real engine count",
+    "        assert_eq!(operations.len(), legacy.operations.len());",
+    "legacy JSON encoded count follows registry source set",
 )
 
 # A Release receipt must describe exactly the Release commit boundary. Re-read
