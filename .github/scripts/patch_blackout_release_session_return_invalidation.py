@@ -29,19 +29,19 @@ replace_exact(
 )
 replace_exact(
     security,
-    '''                    WTS_SESSION_LOCK
-                        | WTS_CONSOLE_DISCONNECT
-                        | WTS_REMOTE_CONNECT
-                        | WTS_REMOTE_DISCONNECT
-                        | WTS_SESSION_REMOTE_CONTROL
+    '''                    WTS_SESSION_LOCK as usize,
+                    WTS_CONSOLE_DISCONNECT as usize,
+                    WTS_REMOTE_CONNECT as usize,
+                    WTS_REMOTE_DISCONNECT as usize,
+                    WTS_SESSION_REMOTE_CONTROL as usize,
 ''',
-    '''                    WTS_SESSION_LOCK
-                        | WTS_SESSION_UNLOCK
-                        | WTS_CONSOLE_CONNECT
-                        | WTS_CONSOLE_DISCONNECT
-                        | WTS_REMOTE_CONNECT
-                        | WTS_REMOTE_DISCONNECT
-                        | WTS_SESSION_REMOTE_CONTROL
+    '''                    WTS_SESSION_LOCK as usize,
+                    WTS_SESSION_UNLOCK as usize,
+                    WTS_CONSOLE_CONNECT as usize,
+                    WTS_CONSOLE_DISCONNECT as usize,
+                    WTS_REMOTE_CONNECT as usize,
+                    WTS_REMOTE_DISCONNECT as usize,
+                    WTS_SESSION_REMOTE_CONTROL as usize,
 ''',
     "invalidate consent on return to local desktop",
 )
