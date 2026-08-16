@@ -19,6 +19,91 @@ replace_exact(
     "Windows session notification feature",
 )
 
+# The monitor's liveness flag must be owned by the worker, not optimistically
+# latched by the caller after startup. If the Raw Input/WTS message loop exits,
+# R4 preparation immediately becomes unavailable and any outstanding token is
+# retired before the worker returns.
+replace_exact(
+    security,
+    "    monitor_active: AtomicBool,\n",
+    "    monitor_active: Arc<AtomicBool>,\n",
+    "share physical monitor liveness with worker",
+)
+replace_exact(
+    security,
+    "            monitor_active: AtomicBool::new(false),\n",
+    "            monitor_active: Arc::new(AtomicBool::new(false)),\n",
+    "initialize shared physical monitor liveness",
+)
+replace_exact(
+    security,
+    '''        *monitor = Some(PhysicalInputMonitor::start(Arc::clone(&self.inner))?);
+        self.monitor_active.store(true, Ordering::Release);
+        Ok(())
+''',
+    '''        *monitor = Some(PhysicalInputMonitor::start(
+            Arc::clone(&self.inner),
+            Arc::clone(&self.monitor_active),
+        )?);
+        Ok(())
+''',
+    "worker owns physical monitor active transition",
+)
+replace_exact(
+    security,
+    '''    fn start(inner: Arc<Mutex<SecurityInner>>) -> Result<Self, String> {
+''',
+    '''    fn start(
+        inner: Arc<Mutex<SecurityInner>>,
+        monitor_active: Arc<AtomicBool>,
+    ) -> Result<Self, String> {
+''',
+    "Windows physical monitor receives liveness flag",
+)
+replace_exact(
+    security,
+    '''            .spawn(move || raw_input_thread(inner, ready_tx))
+''',
+    '''            .spawn(move || raw_input_thread(inner, monitor_active, ready_tx))
+''',
+    "Raw Input worker receives liveness flag",
+)
+replace_exact(
+    security,
+    '''    fn start(_inner: Arc<Mutex<SecurityInner>>) -> Result<Self, String> {
+''',
+    '''    fn start(
+        _inner: Arc<Mutex<SecurityInner>>,
+        _monitor_active: Arc<AtomicBool>,
+    ) -> Result<Self, String> {
+''',
+    "non-Windows physical monitor signature stays fail-closed",
+)
+replace_exact(
+    security,
+    '''fn raw_input_thread(
+    inner: Arc<Mutex<SecurityInner>>,
+    ready: std::sync::mpsc::SyncSender<Result<isize, String>>,
+) {
+''',
+    '''fn raw_input_thread(
+    inner: Arc<Mutex<SecurityInner>>,
+    monitor_active: Arc<AtomicBool>,
+    ready: std::sync::mpsc::SyncSender<Result<isize, String>>,
+) {
+''',
+    "Raw Input thread owns physical monitor liveness",
+)
+replace_exact(
+    security,
+    '''        let context = Box::into_raw(Box::new(inner));
+''',
+    '''        let monitor_inner = Arc::clone(&inner);
+        let context = Box::into_raw(Box::new(inner));
+''',
+    "retain consent state for worker-exit revocation",
+)
+
 replace_exact(
     security,
     '''fn record_device_removal(inner: &Arc<Mutex<SecurityInner>>, device: usize, now: Instant) {
@@ -156,6 +241,32 @@ replace_exact(
             let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
 ''',
     "unregister session notifications on Raw Input setup failure",
+)
+replace_exact(
+    security,
+    '''        let _ = ready.send(Ok(hwnd.0 as isize));
+        let mut message = MSG::default();
+        while GetMessageW(&mut message, None, 0, 0).as_bool() {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+''',
+    '''        monitor_active.store(true, Ordering::Release);
+        if ready.send(Ok(hwnd.0 as isize)).is_err() {
+            monitor_active.store(false, Ordering::Release);
+            let _ = WTSUnRegisterSessionNotification(hwnd);
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
+            return;
+        }
+        let mut message = MSG::default();
+        while GetMessageW(&mut message, None, 0, 0).as_bool() {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        monitor_active.store(false, Ordering::Release);
+        record_desktop_session_security_transition(&monitor_inner, Instant::now());
+''',
+    "Raw Input worker exit fails closed and revokes consent",
 )
 
 replace_exact(
