@@ -143,6 +143,16 @@ replace_exact(
 ''',
     "window proc imports session unregister",
 )
+replace_exact(
+    security,
+    '''                WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY,
+                WM_SYSKEYDOWN,
+''',
+    '''                WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY,
+                WM_SYSKEYDOWN, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK,
+''',
+    "window proc imports typed session-lock constants",
+)
 
 replace_exact(
     security,
@@ -158,10 +168,7 @@ replace_exact(
             record_device_removal(&*context, device, Instant::now());
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
-        // WM_WTSSESSION_CHANGE / WTS_SESSION_LOCK. Numeric message values are
-        // stable Win32 ABI constants; registration above scopes delivery to
-        // this interactive session only.
-        0x02B1 if !context.is_null() && wparam.0 as u32 == 0x7 => {
+        WM_WTSSESSION_CHANGE if !context.is_null() && wparam.0 as u32 == WTS_SESSION_LOCK => {
             record_desktop_session_lock(&*context, Instant::now());
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
