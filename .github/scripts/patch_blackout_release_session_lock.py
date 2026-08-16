@@ -112,12 +112,25 @@ replace_exact(
     '''        let devices = [RAWINPUTDEVICE {
             usUsagePage: 0x01,
 ''',
-    '''        if let Err(error) = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) {
-            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
-            let _ = ready.send(Err(format!(
-                "Unable to register desktop session-security notifications: {error}"
-            )));
-            return;
+    '''        // Microsoft documents an early-startup RPC_S_INVALID_BINDING race
+        // before the Remote Desktop Services dependencies are ready. Retry for
+        // a short bounded interval, then fail closed: R4 Release must never run
+        // without desktop lock/remote-session invalidation being active.
+        let session_notification_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) {
+                Ok(()) => break,
+                Err(_) if Instant::now() < session_notification_deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(error) => {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
+                    let _ = ready.send(Err(format!(
+                        "Unable to register desktop session-security notifications: {error}"
+                    )));
+                    return;
+                }
+            }
         }
         let devices = [RAWINPUTDEVICE {
             usUsagePage: 0x01,
