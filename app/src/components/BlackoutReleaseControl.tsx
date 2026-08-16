@@ -159,7 +159,7 @@ export function BlackoutReleaseControl(props: BlackoutReleaseControlProps) {
             </Show>
             <div class="buttonRow">
               <button type="button" onClick={close}>
-                {busy() ? "Cancel" : "Close"}
+                Close
               </button>
             </div>
           </div>
