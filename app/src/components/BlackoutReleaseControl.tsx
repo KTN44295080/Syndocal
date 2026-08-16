@@ -121,6 +121,7 @@ export function BlackoutReleaseControl(props: BlackoutReleaseControlProps) {
           role="dialog"
           aria-modal="true"
           aria-label="Blackout release confirmation"
+          data-block-global-shortcuts="true"
         >
           <div class="operatorLockCard">
             <div class="operatorLockMark" aria-hidden="true">R4</div>
