@@ -170,8 +170,8 @@ for path in (invoke_manifest, invoke_types):
     replace_exact(path, '  "set_blackout",\n', '', f"remove set_blackout from {path}")
 
 # Removing two frontend alias sources changes only frontend and aggregate source
-# counts. The strict Release wire is rename-in-place, so Tauri/Engine/unclassified
-# counts remain at their current actual values.
+# counts. Engine inventory is already 250 after the strict Release count repair;
+# Tauri and unclassified counts remain unchanged here.
 replace_exact(
     registry,
     "        const FRONTEND_INVOKE_COUNT: usize = 393;",
@@ -180,8 +180,8 @@ replace_exact(
 )
 replace_exact(
     registry,
-    "        assert_eq!(registry.operations.len(), 1414);",
-    "        assert_eq!(registry.operations.len(), 1412);",
+    "        assert_eq!(registry.operations.len(), 1415);",
+    "        assert_eq!(registry.operations.len(), 1413);",
     "legacy registry total after frontend blackout removal",
 )
 replace_exact(
@@ -192,25 +192,25 @@ replace_exact(
 )
 replace_exact(
     registry,
-    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1414);",
-    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1412);",
+    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1415);",
+    "        assert_eq!(LEGACY_SOURCE_TOTAL, 1413);",
     "canonical legacy source total after frontend blackout removal",
 )
 replace_exact(
     registry,
-    "        assert_eq!(SOURCE_TOTAL, 1447);",
-    "        assert_eq!(SOURCE_TOTAL, 1445);",
+    "        assert_eq!(SOURCE_TOTAL, 1448);",
+    "        assert_eq!(SOURCE_TOTAL, 1446);",
     "canonical complete source total after frontend blackout removal",
 )
 replace_exact(
     registry,
-    "        assert_eq!(legacy.operations.len(), 1414);",
-    "        assert_eq!(legacy.operations.len(), 1412);",
+    "        assert_eq!(legacy.operations.len(), 1415);",
+    "        assert_eq!(legacy.operations.len(), 1413);",
     "legacy registry JSON source total after frontend blackout removal",
 )
 replace_exact(
     registry,
-    "        assert_eq!(operations.len(), 1414);",
-    "        assert_eq!(operations.len(), 1412);",
+    "        assert_eq!(operations.len(), 1415);",
+    "        assert_eq!(operations.len(), 1413);",
     "legacy registry JSON encoded total after frontend blackout removal",
 )
