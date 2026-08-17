@@ -47,6 +47,7 @@ jobs:
               "patch_blackout_release_receipt.py",
               "patch_blackout_release_baseline_portability.py",
               "patch_blackout_release_runtime_guards.py",
+              "patch_blackout_release_durable_state.py",
               "patch_blackout_release_reply_loss_test.py",
               "patch_blackout_release_ui_guards.py",
               "patch_blackout_release_full_lock_ui.py",
@@ -129,6 +130,7 @@ jobs:
           set -euo pipefail
           python3 .github/scripts/patch_blackout_release_baseline_portability.py
           python3 .github/scripts/patch_blackout_release_runtime_guards.py
+          python3 .github/scripts/patch_blackout_release_durable_state.py
           python3 .github/scripts/patch_blackout_release_reply_loss_test.py
           python3 .github/scripts/patch_blackout_release_ui_guards.py
           python3 .github/scripts/patch_blackout_release_full_lock_ui.py
@@ -163,6 +165,7 @@ jobs:
             app/scripts/check-blackout-release-runtime.mjs
             app/src-tauri/Cargo.toml
             app/src-tauri/src/control_plane.rs
+            app/src-tauri/src/control_plane_durability.rs
             app/src-tauri/src/control_plane_runtime.rs
             app/src-tauri/src/control_plane_security.rs
             app/src-tauri/src/main.rs
@@ -185,7 +188,7 @@ jobs:
           done
           for file in "${changed[@]}"; do
             case "$file" in
-              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/Cargo.toml|app/src-tauri/src/control_plane.rs|app/src-tauri/src/control_plane_runtime.rs|app/src-tauri/src/control_plane_security.rs|app/src-tauri/src/main.rs|app/src/App.tsx|app/src/blackoutReleaseRuntimeController.ts|app/src/components/BlackoutReleaseControl.tsx|app/src/components/LightingRuntimeControlsPanel.tsx|app/src/components/WorkspaceChrome.tsx|app/src/tauri-invoke-manifest.json|app/src/tauriInvokeCommands.ts|crates/engine/src/lib.rs|crates/protocol/src/control_plane_command.rs|crates/protocol/src/control_plane_registry_v2.rs) ;;
+              .github/workflows/diagnose-ai3-main.yml|app/scripts/check-blackout-release-runtime.mjs|app/src-tauri/Cargo.toml|app/src-tauri/src/control_plane.rs|app/src-tauri/src/control_plane_durability.rs|app/src-tauri/src/control_plane_runtime.rs|app/src-tauri/src/control_plane_security.rs|app/src-tauri/src/main.rs|app/src/App.tsx|app/src/blackoutReleaseRuntimeController.ts|app/src/components/BlackoutReleaseControl.tsx|app/src/components/LightingRuntimeControlsPanel.tsx|app/src/components/WorkspaceChrome.tsx|app/src/tauri-invoke-manifest.json|app/src/tauriInvokeCommands.ts|crates/engine/src/lib.rs|crates/protocol/src/control_plane_command.rs|crates/protocol/src/control_plane_registry_v2.rs) ;;
               *)
                 echo "Unexpected changed file in R4 generated patch: $file" >&2
                 exit 1
@@ -226,6 +229,12 @@ jobs:
           cargo test -p protocol --locked control_plane_command::tests::blackout_release_command_wire_is_release_only_and_exactly_bound -- --exact --test-threads=1
           cargo test -p protocol --locked control_plane_registry_v2::tests::output_disruptive_release_requires_r4_physical_consent_receipt_rate_and_no_full_lock -- --exact --test-threads=1
           cargo test -p protocol --locked control_plane_registry_v2::tests::local_workflow_step_resolves_without_deriving_an_adapter -- --exact --test-threads=1
+
+      - name: Test durable Release request identity and crash recovery state
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p syndocal --bin syndocal --locked control_plane_durability::tests -- --test-threads=1
 
       - name: Test engine inventory and safety-blackout publication semantics
         shell: bash
