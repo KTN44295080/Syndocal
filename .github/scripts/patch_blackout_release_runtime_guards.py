@@ -136,10 +136,8 @@ replace_exact(
             state
                 .runtime_control_plane
                 .finish_output_control_inflight(&inflight);
-            let error_code = if matches!(&request.action, OutputControlActionV1::ReleaseBlackout)
-                && (error.contains("stale") || error.contains("expired"))
-            {
-                OutputControlErrorCodeV1::StaleFence
+            let error_code = if matches!(&request.action, OutputControlActionV1::ReleaseBlackout) {
+                blackout_release_engine_error_code(&error)
             } else {
                 OutputControlErrorCodeV1::PublicationFailed
             };
@@ -164,7 +162,22 @@ replace_exact(
     basis: &OutputControlFenceV1,
 ) -> Result<OutputControlFenceV1, String> {
 ''',
-    '''fn blackout_release_receipt_fence(
+    '''fn blackout_release_engine_error_code(error: &str) -> OutputControlErrorCodeV1 {
+    match error {
+        "Safety blackout authority is stale" => OutputControlErrorCodeV1::StaleFence,
+        "Safety blackout release expired before engine execution" => {
+            OutputControlErrorCodeV1::Overloaded
+        }
+        "Safety blackout authority lock was poisoned"
+        | "Safety blackout release acknowledgement state was poisoned"
+        | "Safety blackout release acknowledgement omitted its result" => {
+            OutputControlErrorCodeV1::Internal
+        }
+        _ => OutputControlErrorCodeV1::PublicationFailed,
+    }
+}
+
+fn blackout_release_receipt_fence(
     basis: &OutputControlFenceV1,
     applied: bool,
 ) -> Result<OutputControlFenceV1, String> {
@@ -191,7 +204,7 @@ fn current_output_control_fence(
     basis: &OutputControlFenceV1,
 ) -> Result<OutputControlFenceV1, String> {
 ''',
-    "blackout release terminal fence helper",
+    "blackout release terminal fence and exact engine error helpers",
 )
 
 replace_exact(
@@ -215,6 +228,32 @@ replace_exact(
 
     #[test]
     fn blackout_release_receipt_fence_is_exact_and_rolls_safely() {
+        assert_eq!(
+            blackout_release_engine_error_code("Safety blackout authority is stale"),
+            OutputControlErrorCodeV1::StaleFence
+        );
+        assert_eq!(
+            blackout_release_engine_error_code(
+                "Safety blackout release expired before engine execution"
+            ),
+            OutputControlErrorCodeV1::Overloaded
+        );
+        assert_eq!(
+            blackout_release_engine_error_code(
+                "Safety blackout release acknowledgement state was poisoned"
+            ),
+            OutputControlErrorCodeV1::Internal
+        );
+        assert_eq!(
+            blackout_release_engine_error_code("Safety blackout authority is exhausted"),
+            OutputControlErrorCodeV1::PublicationFailed
+        );
+        assert_eq!(
+            blackout_release_engine_error_code("not stale but unrelated"),
+            OutputControlErrorCodeV1::PublicationFailed,
+            "free-form text must never become StaleFence by substring"
+        );
+
         let basis = test_output_control_fence();
         assert_eq!(blackout_release_receipt_fence(&basis, false).unwrap(), basis);
 
@@ -244,7 +283,7 @@ replace_exact(
 
     fn test_binding(principal: &str, window_label: &str, owner_incarnation: u64) -> CallerBinding {
 ''',
-    "blackout release terminal fence focused tests",
+    "blackout release terminal fence and error mapping focused tests",
 )
 
 # All-blackout clear must not provide a second local UI route around R4. The
