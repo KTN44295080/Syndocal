@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 
 
 def replace_exact(path: Path, old: str, new: str, label: str) -> None:
@@ -24,6 +25,7 @@ for marker in (
     "pub(crate) struct DurableR4StateV1",
     "DurableR4RecordStateV1::Prepared",
     "OutputControlErrorCodeV1::InterruptedBeforeCommit",
+    "persist_r4_durability_state",
 ):
     if marker not in durable_source:
         raise RuntimeError(f"R4 durable state module missing reviewed marker: {marker}")
@@ -95,4 +97,12 @@ mod control_plane_durability;
 mod dvc_import;
 ''',
     "compile R4 durable state module",
+)
+
+# Startup recovery is an internal helper, not a separately inventoried patch
+# root. The graph therefore has one durable-state root while still keeping the
+# large main.rs replacement logic independently reviewable.
+runpy.run_path(
+    ".github/scripts/r4_durable_startup_helper.py",
+    run_name="__main__",
 )
