@@ -4,7 +4,14 @@
 //! resolution and integration with the live Release transaction remain in the
 //! app adapter so the state model can be tested without Tauri or output I/O.
 
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    ffi::OsStr,
+    fs,
+    io::Write,
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use protocol::control_plane_command::{
     next_timeline_transport_authority, OutputControlErrorCodeV1, OutputControlFenceV1,
@@ -15,6 +22,8 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const R4_DURABILITY_STATE_VERSION: u32 = 1;
 pub(crate) const MAX_DURABLE_R4_RECORDS: usize = 1_024;
+const R4_DURABILITY_TEMP_ATTEMPTS: usize = 16;
+static R4_DURABILITY_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -337,6 +346,156 @@ impl DurableR4StateV1 {
     }
 }
 
+pub(crate) fn load_r4_durability_state(path: &Path) -> Result<Option<DurableR4StateV1>, String> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Unable to read R4 durability state {}: {error}",
+                path.display()
+            ))
+        }
+    };
+    let state: DurableR4StateV1 = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "Unable to decode R4 durability state {}: {error}",
+            path.display()
+        )
+    })?;
+    state.validate().map_err(|error| {
+        format!(
+            "R4 durability state {} is invalid: {error:?}",
+            path.display()
+        )
+    })?;
+    Ok(Some(state))
+}
+
+pub(crate) fn persist_r4_durability_state(
+    path: &Path,
+    state: &DurableR4StateV1,
+) -> Result<(), String> {
+    state
+        .validate()
+        .map_err(|error| format!("R4 durability state is invalid: {error:?}"))?;
+    let bytes = serde_json::to_vec(state)
+        .map_err(|error| format!("Unable to encode R4 durability state: {error}"))?;
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "R4 durability state path has no parent directory: {}",
+            path.display()
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "Unable to create R4 durability directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("machine-r4-control-plane.json");
+
+    for _ in 0..R4_DURABILITY_TEMP_ATTEMPTS {
+        let nonce = R4_DURABILITY_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp = parent.join(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            nonce
+        ));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Unable to create temporary R4 durability state {}: {error}",
+                    temp.display()
+                ))
+            }
+        };
+        let write_result = file.write_all(&bytes).and_then(|_| file.sync_all());
+        drop(file);
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&temp);
+            return Err(format!(
+                "Unable to flush temporary R4 durability state {}: {error}",
+                temp.display()
+            ));
+        }
+        if let Err(error) = replace_file_atomically(&temp, path) {
+            let _ = fs::remove_file(&temp);
+            return Err(error);
+        }
+        #[cfg(unix)]
+        {
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| {
+                    format!(
+                        "Unable to sync R4 durability directory {}: {error}",
+                        parent.display()
+                    )
+                })?;
+        }
+        return Ok(());
+    }
+
+    Err(format!(
+        "Unable to allocate a unique temporary R4 durability state beside {}",
+        path.display()
+    ))
+}
+
+fn replace_file_atomically(temp: &Path, target: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+
+        let temp_wide = temp
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let target_wide = target
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        unsafe {
+            MoveFileExW(
+                PCWSTR(temp_wide.as_ptr()),
+                PCWSTR(target_wide.as_ptr()),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+            .map_err(|error| {
+                format!(
+                    "Unable to atomically replace R4 durability state {}: {error}",
+                    target.display()
+                )
+            })
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::rename(temp, target).map_err(|error| {
+            format!(
+                "Unable to atomically replace R4 durability state {}: {error}",
+                target.display()
+            )
+        })
+    }
+}
+
 fn validate_nonzero_safe(value: u64) -> Result<(), DurableR4StateError> {
     if value == 0 || value > MAX_SAFE_JAVASCRIPT_INTEGER {
         Err(DurableR4StateError::InvalidGeneration)
@@ -381,6 +540,9 @@ mod tests {
     use protocol::control_plane_command::{
         OutputControlReceiptOutcomeV1, OutputControlReceiptV1,
     };
+    use std::path::PathBuf;
+
+    static TEST_DIRECTORY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn hash(seed: char) -> String {
         std::iter::repeat_n(seed, 64).collect()
@@ -407,6 +569,16 @@ mod tests {
             operation_id: OUTPUT_BLACKOUT_RELEASE_OPERATION_ID.to_string(),
             request_id,
         }
+    }
+
+    fn test_state_path(label: &str) -> PathBuf {
+        let nonce = TEST_DIRECTORY_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir()
+            .join(format!(
+                "syndocal-r4-durability-{label}-{}-{nonce}",
+                std::process::id()
+            ))
+            .join("state.json")
     }
 
     #[test]
@@ -503,6 +675,21 @@ mod tests {
         );
         assert_eq!(state.records.len(), MAX_DURABLE_R4_RECORDS);
         assert!(state.records.iter().any(|record| record.key == key(1)));
+    }
+
+    #[test]
+    fn atomic_storage_round_trip_is_strict_and_corruption_fails_closed() {
+        let path = test_state_path("round-trip");
+        let mut state = DurableR4StateV1::new(true, 8, 9).unwrap();
+        state
+            .reserve_prepared(key(12), hash('b'), hash('c'), fence())
+            .unwrap();
+        persist_r4_durability_state(&path, &state).unwrap();
+        assert_eq!(load_r4_durability_state(&path).unwrap(), Some(state.clone()));
+
+        fs::write(&path, b"{\"version\":1,\"future_field\":true}").unwrap();
+        assert!(load_r4_durability_state(&path).is_err());
+        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
