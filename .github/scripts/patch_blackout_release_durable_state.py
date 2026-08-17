@@ -28,6 +28,22 @@ for marker in (
     if marker not in durable_source:
         raise RuntimeError(f"R4 durable state module missing reviewed marker: {marker}")
 
+# Make activation visible in the bounded generated diff rather than silently
+# compiling a pre-existing staged file. The final source keeps the stricter
+# wording after the patch scaffolding is removed.
+replace_exact(
+    durable,
+    '''//! This module owns only the strict durable state machine. Filesystem path
+//! resolution and integration with the live Release transaction remain in the
+//! app adapter so the state model can be tested without Tauri or output I/O.
+''',
+    '''//! This module owns the strict durable state machine compiled into the R4
+//! Release lane. Filesystem path resolution and live transaction persistence are
+//! app-adapter responsibilities so the state model remains independently testable.
+''',
+    "activate reviewed durable R4 state module",
+)
+
 # A process crash after durable prepare but before the terminal commit is not an
 # ordinary internal error. Recovery deliberately rolls the ambiguous release
 # toward Blackout-on and records a typed terminal fact so the same request is
