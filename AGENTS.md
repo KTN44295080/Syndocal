@@ -24,6 +24,18 @@
 - Windows ASIO support is an explicit product and release requirement, not an optional runtime preference. Keep the default MIT/WASAPI path and the separately licensed, non-default ASIO bridge distinct.
 - ASIO completion requires explicit device enumeration and selection, sample-rate/native-format/channel/buffer negotiation, low-latency callback I/O, exclusive ownership and open/start/stop/free error handling, fail-closed disconnect/XRUN/no-callback recovery, project persistence and stale-selection locking, plus deterministic tests and real-device QA. The authoritative gate and current status are in `qa/ASIO_INPUT_ACCEPTANCE.md`; do not claim ASIO release completion while its unchecked gates remain.
 
+## Product version discipline
+
+- Do not leave product artifacts on one version indefinitely. Follow the active release-train policy in `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`: distributed development artifacts advance a SemVer prerelease ordinal, release candidates advance their RC ordinal after fixes, and published tags/artifacts are immutable.
+- Keep workspace Cargo, frontend package, Tauri, release-check script, artifact names, updater metadata, and current user-facing version text synchronized. Run `pnpm --dir app run check:release` after a product-version change and record it in the handoff.
+- Product SemVer is independent from project/template/cache/control-plane/API/ABI schema versions. Change a schema version only for its own compatibility boundary with migration and future-version rejection proof; never use a product bump to hide a wire/schema incompatibility.
+
+## Warning ratchet
+
+- Every checkpoint must report first-party warning counts for the configurations it ran. No checkpoint may add a first-party warning, and a warning in a modified file blocks that tranche.
+- Remove existing warnings in focused commits and reach zero first-party warnings before beta/release-candidate acceptance. Do not suppress debt with crate-wide `allow(dead_code)`, `-Awarnings`, fake reads, or an arbitrary Vite chunk-limit increase.
+- A narrow third-party/platform allowlist requires a reason, owner, upstream reference where applicable, and expiry. Once a supported matrix reaches zero, make warnings errors in CI and do not regress it.
+
 ## Delegation and concurrency
 
 - For every material implementation task with available agent capacity, actively delegate implementation and an independent adversarial review as separate tasks. Prefer Codex CLI `gpt-5.6-luna` with `model_reasoning_effort="max"` for implementation; use `gpt-5.6-terra` at high/xhigh effort for difficult work, and `gpt-5.6-sol` when it is harder still.

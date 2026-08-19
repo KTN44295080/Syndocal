@@ -1,5 +1,10 @@
 # M6 Release Validation
 
+> Historical evidence notice: the v1.0.0 artifacts below prove the named 2026-07
+> baseline only. The current product train is `1.2.0-alpha.1`; its release cannot
+> inherit these hashes, version metadata, signatures, clean-machine, ASIO, or current
+> source evidence. Follow `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`.
+
 Date: 2026-07-12  
 Release: Syndocal 1.0.0  
 Publisher: Seraf()のKTN

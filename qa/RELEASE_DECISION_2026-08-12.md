@@ -1,4 +1,8 @@
-# Syndocal release decision — 2026-08-12
+# Syndocal historical release decision — 2026-08-12
+
+> This decision records the `1.1.0` checkpoint. The active product train is now
+> `1.2.0-alpha.1`; use `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for current
+> completion, version, warning, ASIO, and release gates.
 
 ## Decision
 

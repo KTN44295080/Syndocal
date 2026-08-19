@@ -1,5 +1,12 @@
 # Syndocal complete product roadmap and frozen checkpoint
 
+> **Current execution notice (2026-08-19):** this file remains the detailed product
+> requirement and final-gate authority, but its frozen checkpoint, 75.5% planning
+> roll-up, and Media A1 resume instructions are historical. Use
+> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for the current dependency order,
+> `1.2.0-alpha.1` version train, warning ratchet, AI3 resume point, and checkpoint
+> workflow. Do not compare old and current percentages without identical denominators.
+
 Status: implementation resumed on 2026-08-13 (JST). Media Asset A1-A8 are accepted for the current Windows tranche, including the rebuilt Media Library thumbnail/hover supplement; the whole-product Q5 completion query still fails and Critical Path B is next.
 Roadmap revision: v4, current Windows Media Asset A8 evidence integrated on 2026-08-14 (JST).
 

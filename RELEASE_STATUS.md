@@ -1,4 +1,4 @@
-# Syndocal v1.0 Release Status / Next Thread Handoff
+# Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-19
 Branch: `codex/syndocal-v1.0`  
@@ -6,7 +6,7 @@ Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
-> Current continuation note: the active AI control-plane work is not represented by the old v1.0 completion statement alone. Use the [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md), [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) as the current authorities. Do not mark AI3 complete, advance to AI4, or close the current Windows product release until their unchecked gates are closed.
+> Current continuation note: the active `1.2.0-alpha.1` train is not represented by the old v1.0 completion statement alone. Use the [current completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md), [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md), [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) as the current authorities. Do not mark AI3 complete, advance to AI4, or close the current Windows product release until their unchecked gates are closed.
 
 ## 結論
 
@@ -58,12 +58,12 @@ Syndocal v1.0は、2026-07時点の`COMPLETION_PLAN.md`で定義していた**�
 - [ ] NDI SDK/runtimeを配布する場合、NewTek/NDIの再配布条件を確認する。
 - [ ] FFmpeg LGPL動的リンク、ライセンス本文、第三者通知、対応するソース取得方法を公開成果物で再確認する。
 - [ ] 現行Windows製品リリースを閉じる前に、ASIO成果物をGPLv3版として分離するかSteinberg proprietary ASIO SDK agreementを締結するかを決定し、対応source／notice義務と成果物分離を含む配布workflowを承認する。SDK 2.3.4のarchive名／SHA-256は`qa/ASIO_SDK_PIN.json`へ固定済み。通常MIT installerはWASAPIのまま維持し、別ASIO成果物をライセンス決定前に同梱しない。
-- [ ] `v1.0.0`タグを固定し、Release Notes、SHA-256、NSIS/MSI/DMG/AppImage/debを同一リリースへ掲載する。
+- [ ] 現行alpha/beta/RCを単調に進め、全gate合格後に`v1.2.0`タグを固定し、Release Notes、SHA-256、NSIS/MSI/DMG/AppImage/debと分離ASIO成果物（承認時のみ）を同一release evidence IDへ掲載する。歴史的v1.0 artifactのhashを流用しない。
 - [ ] Windows/macOSのクリーンな別PCで最終成果物をダウンロードから起動まで確認する。
 
 個人利用または限定テスト配布では未署名のまま扱えるが、SmartScreen/Gatekeeper警告を利用者へ説明する。
 
-## v1.1候補の現在地
+## v1.2 alpha開発列の現在地（v1.1実装履歴を包含）
 
 優先順位は次の通り。
 
@@ -76,7 +76,7 @@ Syndocal v1.0は、2026-07時点の`COMPLETION_PLAN.md`で定義していた**�
 7. 日本語UI/ローカライズ（実装済み。静的UI coverage 100%、主要動的状態、永続・可逆locale切替）
 8. ユーザーテンプレート、MIDI／OSCマッピング共有（実装済み）。ワークスペースレイアウト保存も実装済み
 
-### v1.1実装進捗
+### v1.1から継承した実装進捗
 
 2026-07-12にWebリモートのセキュリティ強化を開始した。
 
