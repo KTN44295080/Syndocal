@@ -5,7 +5,7 @@
 - Branch: `codex/syndocal-v1.0`
 - Baseline HEAD at takeover: `df7e335c14fe82bb534fbd8867dcd431777e1522`
 - Verified local OutputControl R4 implementation checkpoint: `105c522e795ad021776649bff07d2ecf77bb0d0f` (`feat: route local output controls through R4`). The verified documentation follow-up is `94f4259eb982b4ecfa7b6ea3c645bbf8bd0c64ac`; both were pushed successfully to `origin/codex/syndocal-v1.0`.
-- The owner-incarnation output-lease acceptance contract was fixed in docs-only checkpoint `7b411c4e5a7b26ddf9ae91cea4fa8181daedfa24` (`docs: define AI3 output lease contract`). The later pure transition-core checkpoint described below is intentionally not AppState/runtime integration and will be pinned by its documentation follow-up before handoff.
+- The owner-incarnation output-lease acceptance contract was fixed in docs-only checkpoint `7b411c4e5a7b26ddf9ae91cea4fa8181daedfa24` (`docs: define AI3 output lease contract`). The later pure transition-core checkpoint is `2b889a753a6f55fc308ff5d82509138cfffd41a0` (`feat: add pure output lease transition core`); it is intentionally not AppState/runtime integration.
 - The previous Codex reached its context/token limit while continuing AI3. Treat Timeline Transport and the canonical Timeline Follow Abort tranche as verified. AI3 has now been audited and remains incomplete in all five roadmap categories. The detailed audit matrix and ordered gaps are recorded in `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`.
 - The working tree was clean before this handoff-document update. Do not assume that code present in the baseline commit is complete merely because it is committed.
 
