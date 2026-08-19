@@ -361,10 +361,10 @@ to own physical permits, creation, teardown acknowledgement, and machine-role
 transitions. The new lease layer answers only which exact owner incarnation may
 issue ordinary output operations for a canonical resource set.
 
-The minimum lease states are `unclaimed`, `held_active`, `held_orphaned`, and
-`authority_transfer_pending`. The last is a logical lease transition, not permission
-to call the Engine ownership fence. A lease binds principal, renderer/window
-identity, backend process/session incarnation, backend-issued owner incarnation,
+The minimum persisted lease states are `unclaimed`, `held_active`, and
+`held_orphaned`. Forced transfer is one synchronous atomic authority transition,
+not a persisted intermediate state and not permission to call the Engine ownership
+fence. A lease binds principal, renderer/window identity, backend process/session incarnation, backend-issued owner incarnation,
 canonical non-overlapping resource set, monotonically increasing lease generation,
 backend-selected TTL, and expiry on a monotonic clock. Expiry,
 missed heartbeat, disconnect, kill switch, owner retirement, acquire, renew,
@@ -419,6 +419,27 @@ replacement interaction, and S0 Blackout remaining immediately available. This
 includes a race in which S0 advances the safety generation and the ordinary R4 is
 rejected before commit. This contract is a design checkpoint, not implementation
 evidence and not AI3 closure.
+
+#### Pure lease-transition core checkpoint
+
+The bounded follow-up implements the first code layer in
+`app/src-tauri/src/output_lease.rs`. It is a crate-private, single-lease, pure
+authority transition core with no Tauri, Engine, output worker, machine-role,
+Blackout, or physical-gate dependency. It validates exact current-process owner
+incarnations and canonical resources, uses caller-supplied monotonic time with a
+backend TTL ceiling, advances generations without wrapping, and implements acquire,
+renew, expiry/orphan, recover, relinquish, project/owner orphaning, restart
+non-reclamation, and synchronous atomic authority transfer. Exact-deadline renew
+and transfer first orphan the expired lease and advance its generation.
+
+Ten focused Rust tests cover validation/canonical ordering, generation-fenced
+transitions, expiry equality, owner/process ABA, rejected-state atomicity, clock and
+generation overflow, transfer resource preservation, relinquishment, and restart.
+Independent review found no P0/P1 within this deliberately small core. **It is not
+yet an operational lease:** multi-lease/resource-overlap registry, request receipts,
+same-ID shape handling, rate/single-flight/audit, AppState/query/command wiring,
+prepared confirmation, project replacement hooks, and final R4/S0 race integration
+remain the next implementation slices. AI3 remains incomplete.
 
 ## 7. Required non-vacuous evidence
 

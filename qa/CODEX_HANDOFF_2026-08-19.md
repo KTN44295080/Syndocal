@@ -5,7 +5,7 @@
 - Branch: `codex/syndocal-v1.0`
 - Baseline HEAD at takeover: `df7e335c14fe82bb534fbd8867dcd431777e1522`
 - Verified local OutputControl R4 implementation checkpoint: `105c522e795ad021776649bff07d2ecf77bb0d0f` (`feat: route local output controls through R4`). The verified documentation follow-up is `94f4259eb982b4ecfa7b6ea3c645bbf8bd0c64ac`; both were pushed successfully to `origin/codex/syndocal-v1.0`.
-- The owner-incarnation output-lease acceptance contract below is the docs-only design checkpoint `7b411c4e5a7b26ddf9ae91cea4fa8181daedfa24` (`docs: define AI3 output lease contract`). It deliberately contains no partial Rust/TypeScript implementation.
+- The owner-incarnation output-lease acceptance contract was fixed in docs-only checkpoint `7b411c4e5a7b26ddf9ae91cea4fa8181daedfa24` (`docs: define AI3 output lease contract`). The later pure transition-core checkpoint described below is intentionally not AppState/runtime integration and will be pinned by its documentation follow-up before handoff.
 - The previous Codex reached its context/token limit while continuing AI3. Treat Timeline Transport and the canonical Timeline Follow Abort tranche as verified. AI3 has now been audited and remains incomplete in all five roadmap categories. The detailed audit matrix and ordered gaps are recorded in `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`.
 - The working tree was clean before this handoff-document update. Do not assume that code present in the baseline commit is complete merely because it is committed.
 
@@ -209,9 +209,9 @@ Terra High/xHigh reviewer read-only until a stable checkpoint. Do not extend the
 existing `MachineOutputRole` / `OutputOwnershipGate` status object into a hybrid
 lease. Add a distinct backend lease authority layer above that physical local gate.
 
-Implement and fake-clock-test `unclaimed`, `held_active`, `held_orphaned`, and
-logical `authority_transfer_pending` around an exact owner binding (principal,
-window/renderer, backend process/session incarnation, backend-issued owner
+Implement and fake-clock-test persisted `unclaimed`, `held_active`, and
+`held_orphaned`; forced transfer is one synchronous atomic authority transition,
+not a persisted intermediate state. Bind principal, window/renderer, backend process/session incarnation, backend-issued owner
 incarnation), canonical resource set, monotonic lease generation, and
 backend-bounded TTL. Expiry, disconnect, owner retirement, restart,
 acquire, renew, recover, release, and forced transfer must have **no implicit physical
@@ -249,6 +249,36 @@ authorization, and consent; this slice must not claim those services complete. A
 bounded single-flight/rate limits and exact receipts/audit containing session/owner
 incarnations, canonical resources, generation before/after, and outcome. Prove that
 an S0 race advances the safety generation and rejects an ordinary R4 before commit.
+
+The first bounded code layer now exists in `app/src-tauri/src/output_lease.rs`: a
+crate-private pure single-lease authority state machine only. It has no AppState,
+Tauri, Engine, physical output, consent, receipt, or registry integration. Focused
+ten fake-clock-style tests cover acquire/renew/exact-deadline orphan/recover/relinquish,
+owner and process-session ABA, restart non-reclamation, checked overflow, atomic
+authority transfer, and rejected-state equality. Independent Terra review found no
+P0/P1 in this bounded core. Do not mistake it for an operational output lease.
+
+The exact next code step is a bounded multi-lease registry with atomic overlap
+handling and process-local exact request receipts/same-ID shape rejection, followed
+by a separate reviewed AppState/R4 commit-boundary integration. Keep physical calls
+out of the registry layer and preserve S0 independence.
+
+Verification for this pure-core checkpoint:
+
+- `cargo test -p syndocal --locked output_lease -- --nocapture`: 10 passed, 0
+  failed, 757 filtered out;
+- `cargo fmt --all -- --check` and `git diff --check`: passed;
+- immediately before the native build, exact checkout PID `36980` was verified as
+  `target/release/syndocal.exe`, stopped, and the remaining exact-path count was 0;
+- the established VS/FFmpeg/libclang/Node command for
+  `pnpm --dir app tauri build --no-bundle` succeeded and rebuilt the exact release
+  executable;
+- the exact executable was launched as PID `9436`; verification found exactly one
+  exact-path process and one responsive `Syndocal` window with `IsZoomed=True`.
+
+This native evidence proves only that the pure core compiles into the application;
+because the core is deliberately not wired to AppState or commands, it is not
+runtime output-lease acceptance or physical hardware proof.
 
 ## Persistent collaboration and checkpoint rules
 

@@ -113,6 +113,7 @@ mod control_plane_runtime;
 mod control_plane_security;
 mod dvc_import;
 mod ndi_transport;
+mod output_lease;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod spout_transport;
 
