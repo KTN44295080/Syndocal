@@ -1,7 +1,7 @@
 # Syndocal completion flow — current execution authority
 
-Date: 2026-08-19  
-Branch at creation: `codex/syndocal-v1.0`  
+Date: 2026-08-19
+Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
 ## 1. Purpose and authority
