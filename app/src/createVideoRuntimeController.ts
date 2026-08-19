@@ -1667,7 +1667,18 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   };
   const setVideoBlackout = async (enabled: boolean) => {
     try {
-      await options.invoke("set_video_blackout", { enabled });
+      if (enabled) {
+        await options.invoke("set_video_blackout", { enabled: true });
+      } else {
+        // The current R4 release schema is scoped to the safety blackout
+        // latch. It cannot truthfully clear authored video blackout state,
+        // so this direction stays fail-closed until a target-aware action is
+        // reviewed.
+        options.setMessage(
+          "Video blackout release is unavailable until a target-aware OutputControl action is reviewed; no state changed.",
+        );
+        return;
+      }
       await options.refreshSnapshot();
     } catch (error) { options.setMessage(String(error)); }
   };

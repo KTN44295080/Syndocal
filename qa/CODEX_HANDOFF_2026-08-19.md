@@ -19,8 +19,8 @@ current checkpoint:
   into the core, rechecks status after taking the lifecycle lock, and strictly
   verifies the exact manifest before stopping the Standby worker;
 - a valid, invalid-JSON, corrupt-project, or noncanonical newer manifest cannot
-  make Exact mode apply an older checkpoint; the legacy local command alone
-  retains explicit `LocalLatest` fallback behavior;
+  make Exact mode apply an older checkpoint. At this earlier repair checkpoint,
+  the legacy local command still retained explicit `LocalLatest` fallback;
 - stale or invalid Exact selection returns before worker stop, project
   publication, or output transition.
 
@@ -31,11 +31,48 @@ polling-worker replacement scope. This closes the compile/generation-binding
 repair only. It does **not** close Take Over's larger project-swap physical-output
 retirement/re-arm fence or AI3 as a whole.
 
+The later local OutputControl R4 checkpoint below supersedes that compatibility
+detail: the production legacy Take Over Tauri handler is now fail-closed, so
+`LocalLatest` is no longer reachable from a production command.
+
 Independent adversarial review found no remaining P0/P1 in this repair. Residual
 P2 proof hardening remains: add explicit empty/`+011`/alphabetic manifest-tail
 cases, a deterministic core test proving stale Exact rejection leaves the worker
 running, and an execute-to-core integration seam beyond the current selector and
 filesystem tests.
+
+## Local OutputControl R4 checkpoint
+
+The checkpoint containing this section completes the next bounded AI3 slice, not
+AI3 as a whole:
+
+- local safety-latch Release Blackout, active Arm, and exact Standby Take Over now
+  use three action-specific Tauri commands and three canonical R4 operations;
+- the registry wire/query contract is version 3 and enforces exactly one local
+  adapter per R4 operation. Authority/status are reviewed local queries and consent
+  preparation is a non-adapter support phase;
+- the browser validates exact authority/challenge/status/receipt DTOs and requires
+  a visible nonblocking six-digit Raw Input challenge. Typed rejection is terminal;
+  a transport reply loss retries once with the same request object;
+- S0 engage remains a separate Full-Lock-capable priority path. Legacy local
+  release/energizing handlers reject unsafe directions. Authored all/video/per-output
+  release remains explicitly unavailable rather than being mislabeled as the
+  safety-latch action;
+- Arm/Release revalidate under the actual output transition guard. Take Over
+  revalidates the exact Standby session/generation and force condition before any
+  recovery/input/project/worker side effect; stale rejection leaves the worker
+  running, while success prevents a queued worker from republishing;
+- action commit returns its exact after-fence directly. There is no post-action
+  fallible read that can turn an applied action into a false rejection, and the
+  process-local terminal lane preserves exact retry after bookkeeping-lock poison.
+
+Independent Terra xHigh review found no remaining code P0/P1 after the race,
+receipt, registry-version, and DTO corrections. This claim is deliberately limited:
+MIDI/OSC/Remote, target-aware all/video/per-output release, owner lease/orphan/restart,
+durable receipts/audit, complete physical project retirement/re-arm, saturation,
+Raw Input E2E, and real hardware remain open AI3 evidence. The `LocalLatest` selector
+is no longer reachable from a production Tauri command; the old direct Take Over
+handler is fail-closed.
 
 ## AI3 audit result
 
@@ -45,15 +82,13 @@ The five-part AI3 definition has now been audited against committed baseline
 runtime generations, output ownership, rate limits, Blackout/Arm/Take Over
 safety, and physical-resource idempotency.
 
-The most immediate P0 is the disconnected R4 output vertical. Release Blackout,
-Arm, and Take Over exist as backend OutputControl WIP but are not canonical
-registry operations and the GUI still invokes legacy direct commands. The next
-safe slice should migrate those three local operations together through one
-local-only, physically confirmed R4 controller and fail closed any remaining
-energizing bypass. It must not add external principals, grants, sidecar access,
-or claim the AI4 consent service complete. Output lease/orphan/restart semantics,
-durable physical receipts/audit, full project-swap retirement fencing, and
-10,000-call realtime-budget proof remain later AI3 work.
+The former disconnected local R4 output vertical is closed by the checkpoint above.
+It does not make every output ingress canonical: MIDI/OSC/Remote and wider physical
+output actions remain open. The next safe slice is the AI3 owner-incarnation output
+lease/orphan/forced-transfer state machine, followed by full project-swap physical
+retirement/re-arm and durable receipt/audit/saturation proof. Do not add or claim
+AI4 external principals, grants, revocation, sidecar access, or consent service in
+the AI3 lease slice.
 
 ## Verified takeover environment
 
@@ -120,10 +155,39 @@ checkpoint evidence rather than a promise that the process will remain alive.
 Before the next release build, inspect again and stop only that exact path as
 required by `AGENTS.md`.
 
+### Local R4 verification evidence
+
+The following additional checks passed for this checkpoint:
+
+- `cargo test -p protocol --locked` — 132 unit tests and 4 doc-tests passed.
+- `cargo test -p syndocal --locked --bin syndocal output_control_ --no-fail-fast` — 10 passed.
+- `cargo test -p syndocal --locked --bin syndocal canonical_registry --no-fail-fast` — 3 passed.
+- `cargo test -p syndocal --locked --bin syndocal takeover --no-fail-fast` — 5 passed.
+- `cargo test -p syndocal --locked --bin syndocal compiled_handler_and_registry_have_the_exact_same_set --no-fail-fast` — 1 passed.
+- `cargo test -p syndocal --locked --bin syndocal external_project_replacement_joins_standby_worker_before_fenced_swap --no-fail-fast` — 1 passed.
+- `pnpm --dir app run check:output-control-runtime`
+- `pnpm --dir app run check:safety-blackout-runtime`
+- `pnpm --dir app run check:output-ownership`
+- `pnpm --dir app run check:backend-operator-contract`
+- `pnpm --dir app run check:release`
+- `pnpm --dir app run check:timeline-follow-runtime`
+- `pnpm --dir app run check:timeline-transport-runtime`
+- `pnpm --dir app run check:frontend-invokes`
+- `pnpm --dir app build`
+- the default-feature `cargo check -p syndocal --locked` in the exact VS/FFmpeg/libclang environment.
+
+Immediately before the new native build, exact-path inspection found only historical
+checkpoint PID `20540`; that process was stopped and the remaining exact-path count
+was `0`. The same reproducible build command shown above completed successfully in
+4m16s. The exact new `target/release/syndocal.exe` was launched as PID `36980` and,
+at verification time, was the only exact process and the only responsive window,
+with title `Syndocal` and `IsZoomed=True`. This proves the bounded native integration,
+not physical output, Raw Input confirmation, or ASIO acceptance.
+
 ## Required continuation order
 
 1. Preserve the completed Take Over type/generation-binding repair and its strict filesystem regressions.
-2. Migrate local Release Blackout, Arm, and Take Over together through one canonical local-only OutputControl R4 vertical. Keep S0 engage on its priority lane, remove/fail-close legacy energizing GUI routes, and do not introduce AI4 external grants or principals.
+2. Preserve the completed local-GUI R4 vertical for safety-latch Release Blackout, active Arm, and exact Take Over. Do not broaden its claim to MIDI/OSC/Remote or all/video/per-output release.
 3. Implement the missing AI3 output lease state machine: owner incarnation, resource set, monotonic generation, TTL expiry with unchanged physical state, orphaned state, stale-owner rejection, idempotent retry, restart non-reclamation, and a fail-closed forced-transfer ownership/state transition. AI4 supplies the human presence, authorization, grants, and consent for that transition; it does not own the underlying AI3 transfer state machine.
 4. Fence Take Over/new/load/recovery through acknowledged physical retirement, project replacement, and explicit re-arm; then add durable physical receipt/audit and crash/reply-loss/saturation proof.
 5. Close AI3 with the repository-native completion gate: exact-checkout process stop, `pnpm --dir app tauri build --no-bundle`, exact executable launch, exactly one responsive Syndocal window, and maximized-window QA.

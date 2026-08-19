@@ -497,6 +497,7 @@ import { createTimelineOverviewAutomationController } from "./createTimelineOver
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
+import { executeOutputControl } from "./outputControlController";
 import { createTimelineFollowAbortRuntimeController } from "./timelineFollowAbortRuntimeController";
 import { createTimelineTransportRuntimeController } from "./timelineTransportRuntimeController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
@@ -15535,10 +15536,13 @@ export default function App() {
       if (enabled) {
         await safetyBlackoutRuntime.engage();
       } else {
-        // Safety release is intentionally not part of the S0 lane. This
-        // legacy local release remains outside Full Lock until the R4
-        // ownership/consent contract replaces it.
-        await invoke("set_blackout", { enabled: false });
+        await executeOutputControl(
+          invoke,
+          { kind: "release_blackout" },
+          ({ displayCode }) => setMessage(
+            `Release blackout confirmation required: type ${displayCode} on the physical keyboard.`,
+          ),
+        );
       }
       await refreshSnapshot();
     } catch (error) {
@@ -15548,7 +15552,21 @@ export default function App() {
 
   const setAllBlackout = async (enabled: boolean) => {
     try {
-      await invoke("set_all_blackout", { enabled });
+      if (enabled) {
+        await safetyBlackoutRuntime.engage();
+        // The legacy all-output command remains permitted only in the safer
+        // direction; its release branch is rejected by the backend.
+        await invoke("set_all_blackout", { enabled: true });
+      } else {
+        // The current R4 release schema is scoped to the safety blackout
+        // latch. It cannot truthfully clear authored all-output blackout
+        // state, so this direction stays fail-closed until a target-aware
+        // action is reviewed.
+        setMessage(
+          "All-output blackout release is unavailable until a target-aware OutputControl action is reviewed; no state changed.",
+        );
+        return;
+      }
       setMessage(enabled ? "All blackout enabled." : "All blackout cleared.");
       await refreshSnapshot();
     } catch (error) {
@@ -19198,7 +19216,13 @@ export default function App() {
 
   const setVideoOutputBlackout = async (outputId: number, blackout: boolean) => {
     try {
-      await invoke("set_video_output_blackout", { outputId, blackout });
+      if (!blackout) {
+        setMessage(
+          `Per-output blackout release for output ${outputId} is unavailable until a target-aware OutputControl action is reviewed; no state changed.`,
+        );
+        return;
+      }
+      await invoke("set_video_output_blackout", { outputId, blackout: true });
       await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
       setMessage(String(error));

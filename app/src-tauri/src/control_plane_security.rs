@@ -18,7 +18,10 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use getrandom::getrandom;
 
-const CONSENT_CHALLENGE_TTL: Duration = Duration::from_secs(30);
+// R4 physical confirmation is intentionally short-lived. The local bridge
+// is not the AI4 grant/presence service; this bound only prevents a prepared
+// challenge from remaining usable while a user or project state changes.
+const CONSENT_CHALLENGE_TTL: Duration = Duration::from_secs(15);
 const CONSENT_TOMBSTONE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_CONSENT_RECORDS: usize = 64;
 const CHALLENGE_DIGITS: usize = 6;
@@ -704,6 +707,26 @@ mod tests {
             state.consume_consent(&authority, &prepared.consent_token),
             Err(ConsentConsumeError::PhysicalInputPending)
         );
+
+        let mut wrong_action = authority.clone();
+        wrong_action.operation_id = "syndocal.output.blackout.release.v1".to_string();
+        assert_eq!(
+            state.consume_consent(&wrong_action, &prepared.consent_token),
+            Err(ConsentConsumeError::WrongBinding)
+        );
+        let mut wrong_argument = authority.clone();
+        wrong_argument.argument_fingerprint = "33".repeat(32);
+        assert_eq!(
+            state.consume_consent(&wrong_argument, &prepared.consent_token),
+            Err(ConsentConsumeError::WrongBinding)
+        );
+        let mut wrong_owner = authority.clone();
+        wrong_owner.caller.owner_incarnation += 1;
+        assert_eq!(
+            state.consume_consent(&wrong_owner, &prepared.consent_token),
+            Err(ConsentConsumeError::WrongBinding)
+        );
+
         enter_code(&state, &prepared.display_code, 0x1234);
         assert_eq!(
             state

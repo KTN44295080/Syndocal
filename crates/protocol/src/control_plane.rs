@@ -77,6 +77,10 @@ pub enum OperationCapability {
     /// Narrow safer-direction capability for emergency lighting blackout
     /// engagement. It cannot authorize release or any other S0 operation.
     SafetyBlackoutEngage,
+    /// Local-only output control. This capability is always paired with the
+    /// reviewed R4 output-control adapter and a prepared physical-confirmation
+    /// policy; it never implies an external principal or grant.
+    OutputControl,
     /// Marks an internal source-family inventory entry.  It grants neither a
     /// local-window invocation nor an external execution adapter.
     InternalInventory,

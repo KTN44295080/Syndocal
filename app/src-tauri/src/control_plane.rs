@@ -15,6 +15,9 @@ use protocol::control_plane::{
     OperationSourceFamily, SchemaIdentity, CONTROL_PLANE_SCHEMA_VERSION,
 };
 use protocol::control_plane_command::{
+    OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_CONSENT_PREPARE_OPERATION_ID,
+    OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+    OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
     SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SET_EFFECT_ENABLED_OPERATION_ID,
     TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
     TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
@@ -263,7 +266,11 @@ fn canonical_source_inventory_descriptor(
     let source_key = SourceKey::new(source_family, descriptor.source_id.clone());
     let disposition = match source_family {
         CanonicalSourceFamily::TauriCommand => {
-            if let Some(reviewed) = reviewed_canonical_operation(&descriptor.source_id) {
+            if descriptor.source_id == "prepare_output_consent_v1" {
+                SourceDisposition::SupportPhase {
+                    support_id: OUTPUT_CONSENT_PREPARE_OPERATION_ID.to_string(),
+                }
+            } else if let Some(reviewed) = reviewed_canonical_operation(&descriptor.source_id) {
                 SourceDisposition::Operation {
                     canonical_operation_id: reviewed.operation_id().to_string(),
                     projection: TypedSchemaProjection::Exact,
@@ -522,6 +529,9 @@ enum ReviewedCanonicalOperation {
     SetTimelineTransportPlaying,
     AbortTimelineFollow,
     EngageSafetyBlackout,
+    ReleaseBlackout,
+    ArmOutputOwnership,
+    TakeOverStandby,
 }
 
 impl ReviewedCanonicalOperation {
@@ -532,6 +542,9 @@ impl ReviewedCanonicalOperation {
             Self::SetTimelineTransportPlaying => TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
             Self::AbortTimelineFollow => TIMELINE_FOLLOW_ABORT_OPERATION_ID,
             Self::EngageSafetyBlackout => SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
+            Self::ReleaseBlackout => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            Self::ArmOutputOwnership => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+            Self::TakeOverStandby => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
         }
     }
 }
@@ -547,6 +560,9 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         }
         "abort_timeline_follow_runtime_v1" => Some(ReviewedCanonicalOperation::AbortTimelineFollow),
         "safety_blackout_engage_v1" => Some(ReviewedCanonicalOperation::EngageSafetyBlackout),
+        "release_blackout_output_control_v1" => Some(ReviewedCanonicalOperation::ReleaseBlackout),
+        "arm_output_control_v1" => Some(ReviewedCanonicalOperation::ArmOutputOwnership),
+        "take_over_output_control_v1" => Some(ReviewedCanonicalOperation::TakeOverStandby),
         _ => None,
     }
 }
@@ -610,6 +626,18 @@ fn canonical_descriptor_for_source(
             AdapterPolicy::LocalWindowEmergencySafetyMutation,
             ReceiptPolicy::ExactTerminalReceipt,
         ),
+        ReviewedCanonicalOperation::ReleaseBlackout
+        | ReviewedCanonicalOperation::ArmOutputOwnership
+        | ReviewedCanonicalOperation::TakeOverStandby => (
+            OperationClass::Mutation,
+            vec![
+                OperationCapability::LocalWindowBound,
+                OperationCapability::OutputControl,
+            ],
+            OperationIdempotency::Mutating,
+            AdapterPolicy::LocalWindowOutputControl,
+            ReceiptPolicy::ExactTerminalReceipt,
+        ),
     };
     Some(CanonicalOperationDescriptor {
         schema: CanonicalOperationDescriptor::schema_identity(),
@@ -617,6 +645,13 @@ fn canonical_descriptor_for_source(
         class,
         risk: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
             OperationRisk::S0
+        } else if matches!(
+            reviewed,
+            ReviewedCanonicalOperation::ReleaseBlackout
+                | ReviewedCanonicalOperation::ArmOutputOwnership
+                | ReviewedCanonicalOperation::TakeOverStandby
+        ) {
+            OperationRisk::R4
         } else {
             OperationRisk::R0
         },
@@ -625,6 +660,13 @@ fn canonical_descriptor_for_source(
         response_schema: descriptor.response_schema.clone(),
         idempotency,
         audit: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
+            OperationAuditRequirement::Immutable
+        } else if matches!(
+            reviewed,
+            ReviewedCanonicalOperation::ReleaseBlackout
+                | ReviewedCanonicalOperation::ArmOutputOwnership
+                | ReviewedCanonicalOperation::TakeOverStandby
+        ) {
             OperationAuditRequirement::Immutable
         } else {
             OperationAuditRequirement::NotApplicable
@@ -636,6 +678,9 @@ fn canonical_descriptor_for_source(
             ReviewedCanonicalOperation::SetTimelineTransportPlaying
                 | ReviewedCanonicalOperation::AbortTimelineFollow
                 | ReviewedCanonicalOperation::EngageSafetyBlackout
+                | ReviewedCanonicalOperation::ReleaseBlackout
+                | ReviewedCanonicalOperation::ArmOutputOwnership
+                | ReviewedCanonicalOperation::TakeOverStandby
         ) {
             RatePolicy::TokenBucket4PerSecondBurst8
         } else {
@@ -644,6 +689,13 @@ fn canonical_descriptor_for_source(
         payload_policy: PayloadPolicy::FailClosed,
         consent_policy: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
             ConsentPolicy::NotRequiredForSafetyOnly
+        } else if matches!(
+            reviewed,
+            ReviewedCanonicalOperation::ReleaseBlackout
+                | ReviewedCanonicalOperation::ArmOutputOwnership
+                | ReviewedCanonicalOperation::TakeOverStandby
+        ) {
+            ConsentPolicy::PreparedPhysicalConfirmation
         } else {
             ConsentPolicy::FailClosed
         },
@@ -659,7 +711,7 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
             OperationCapability::RegistryDiscovery,
         ),
         "get_control_plane_canonical_registry" => (
-            "syndocal.query.control_plane.canonical_registry.v2",
+            "syndocal.query.control_plane.canonical_registry.v3",
             OperationClass::Discovery,
             OperationCapability::RegistryDiscovery,
         ),
@@ -690,6 +742,16 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
         ),
         "query_timeline_follow_abort_authority_v1" => (
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
+        "query_output_control_authority_v1" => (
+            OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
+        "query_output_consent_status_v1" => (
+            OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
         ),
@@ -764,6 +826,30 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
         return unavailable_descriptor_for_semantic_operation(
             operation_id,
             SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
+        );
+    }
+    if operation_id == "prepare_output_consent_v1" {
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            OUTPUT_CONSENT_PREPARE_OPERATION_ID,
+        );
+    }
+    if operation_id == "release_blackout_output_control_v1" {
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+        );
+    }
+    if operation_id == "arm_output_control_v1" {
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+        );
+    }
+    if operation_id == "take_over_output_control_v1" {
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
         );
     }
     unavailable_descriptor(operation_id)
@@ -970,20 +1056,22 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 10] = [
+        const R0_ALLOWLIST: [&str; 12] = [
             "syndocal.query.control_plane.registry.v1",
-            "syndocal.query.control_plane.canonical_registry.v2",
+            "syndocal.query.control_plane.canonical_registry.v3",
             "syndocal.query.control_plane.capabilities.v1",
             "syndocal.query.control_plane.schemas.v1",
             "syndocal.query.events.observations.v1",
             "syndocal.query.output.ownership.v1",
             "syndocal.query.project.authority.v1",
             "syndocal.query.runtime.generations.v1",
+            OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+            OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 450);
-        const ENGINE_COMMAND_COUNT: usize = 249;
+        assert_eq!(names.len(), 456);
+        const ENGINE_COMMAND_COUNT: usize = 250;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -1005,16 +1093,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 389;
+        const FRONTEND_INVOKE_COUNT: usize = 395;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            450 + ENGINE_COMMAND_COUNT
+            456 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1410);
+        assert_eq!(registry.operations.len(), 1423);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -1024,7 +1112,7 @@ mod tests {
         assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
-            440 + ENGINE_COMMAND_COUNT
+            444 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -1055,7 +1143,7 @@ mod tests {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
         });
-        assert_eq!(tauri_unavailable.clone().count(), 440);
+        assert_eq!(tauri_unavailable.clone().count(), 444);
         for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
@@ -1088,6 +1176,74 @@ mod tests {
                 descriptor.operation_id
             );
         }
+        for (source_id, semantic_operation_id) in [
+            (
+                "release_blackout_output_control_v1",
+                OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            ),
+            ("arm_output_control_v1", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
+            (
+                "take_over_output_control_v1",
+                OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+            ),
+        ] {
+            let descriptor = registry
+                .operations
+                .iter()
+                .find(|descriptor| {
+                    descriptor.source_family == OperationSourceFamily::TauriCommand
+                        && descriptor.source_id == source_id
+                })
+                .unwrap_or_else(|| panic!("missing OutputControl command descriptor {source_id}"));
+            assert_eq!(descriptor.operation_id, semantic_operation_id);
+            assert_eq!(descriptor.risk, OperationRisk::R5);
+            assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
+            assert_eq!(descriptor.idempotency, OperationIdempotency::Mutating);
+        }
+        for (source_id, semantic_operation_id) in [
+            (
+                "query_output_control_authority_v1",
+                OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+            ),
+            (
+                "query_output_consent_status_v1",
+                OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
+            ),
+        ] {
+            let descriptor = registry
+                .operations
+                .iter()
+                .find(|descriptor| {
+                    descriptor.source_family == OperationSourceFamily::TauriCommand
+                        && descriptor.source_id == source_id
+                })
+                .unwrap_or_else(|| panic!("missing OutputControl query descriptor {source_id}"));
+            assert_eq!(descriptor.operation_id, semantic_operation_id);
+            assert_eq!(descriptor.risk, OperationRisk::R0);
+            assert_eq!(
+                descriptor.availability,
+                OperationAvailability::LocalWindowOnly
+            );
+            assert_eq!(descriptor.idempotency, OperationIdempotency::ReadOnly);
+        }
+        let consent_prepare = registry
+            .operations
+            .iter()
+            .find(|descriptor| {
+                descriptor.source_family == OperationSourceFamily::TauriCommand
+                    && descriptor.source_id == "prepare_output_consent_v1"
+            })
+            .expect("missing OutputControl consent preparation descriptor");
+        assert_eq!(
+            consent_prepare.operation_id,
+            OUTPUT_CONSENT_PREPARE_OPERATION_ID
+        );
+        assert_eq!(consent_prepare.risk, OperationRisk::R5);
+        assert_eq!(
+            consent_prepare.availability,
+            OperationAvailability::Unavailable
+        );
+        assert_eq!(consent_prepare.idempotency, OperationIdempotency::Mutating);
         let engine_unavailable = registry
             .operations
             .iter()
@@ -1271,21 +1427,183 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 450;
-        const ENGINE_COUNT: usize = 249;
+        const TAURI_COUNT: usize = 456;
+        const ENGINE_COUNT: usize = 250;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 389;
+        const FRONTEND_COUNT: usize = 395;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1410);
-        assert_eq!(SOURCE_TOTAL, 1443);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1423);
+        assert_eq!(SOURCE_TOTAL, 1456);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 14);
+        assert_eq!(canonical.canonical_operations.len(), 19);
+
+        let output_control_operations = canonical
+            .canonical_operations
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    operation.operation_id.as_str(),
+                    OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                        | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
+                        | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(output_control_operations.len(), 3);
+        for (source_id, operation_id) in [
+            (
+                "release_blackout_output_control_v1",
+                OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            ),
+            ("arm_output_control_v1", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
+            (
+                "take_over_output_control_v1",
+                OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+            ),
+        ] {
+            let operation = output_control_operations
+                .iter()
+                .find(|operation| operation.operation_id == operation_id)
+                .unwrap_or_else(|| {
+                    panic!("missing canonical OutputControl operation {operation_id}")
+                });
+            assert_eq!(operation.risk, OperationRisk::R4);
+            assert_eq!(operation.class, OperationClass::Mutation);
+            assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
+            assert_eq!(
+                operation.adapter_policy,
+                AdapterPolicy::LocalWindowOutputControl
+            );
+            assert_eq!(
+                operation.receipt_policy,
+                ReceiptPolicy::ExactTerminalReceipt
+            );
+            assert_eq!(
+                operation.consent_policy,
+                ConsentPolicy::PreparedPhysicalConfirmation
+            );
+            assert_eq!(
+                operation.capabilities,
+                vec![
+                    OperationCapability::LocalWindowBound,
+                    OperationCapability::OutputControl,
+                ]
+            );
+            let direct = canonical
+                .source_inventory
+                .iter()
+                .find(|source| {
+                    source.source_key.family == CanonicalSourceFamily::TauriCommand
+                        && source.source_key.source_id == source_id
+                })
+                .unwrap_or_else(|| panic!("missing direct OutputControl source {source_id}"));
+            assert!(matches!(
+                &direct.disposition,
+                SourceDisposition::Operation {
+                    canonical_operation_id,
+                    projection: TypedSchemaProjection::Exact,
+                } if canonical_operation_id == operation_id
+            ));
+            let alias = canonical
+                .source_inventory
+                .iter()
+                .find(|source| {
+                    source.source_key.family == CanonicalSourceFamily::FrontendInvoke
+                        && source.source_key.source_id == source_id
+                })
+                .unwrap_or_else(|| panic!("missing frontend OutputControl alias {source_id}"));
+            assert!(matches!(
+                &alias.disposition,
+                SourceDisposition::AliasOfSource { target }
+                    if *target == direct.source_key
+            ));
+            assert_eq!(
+                canonical
+                    .canonical_operation_for_source(&alias.source_key)
+                    .unwrap()
+                    .map(|operation| operation.operation_id.as_str()),
+                Some(operation_id)
+            );
+        }
+        let consent_support = canonical
+            .source_inventory
+            .iter()
+            .find(|source| {
+                source.source_key.family == CanonicalSourceFamily::TauriCommand
+                    && source.source_key.source_id == "prepare_output_consent_v1"
+            })
+            .expect("OutputControl consent preparation must remain a support source");
+        assert!(matches!(
+            &consent_support.disposition,
+            SourceDisposition::SupportPhase { support_id }
+                if support_id == OUTPUT_CONSENT_PREPARE_OPERATION_ID
+        ));
+        assert!(canonical
+            .canonical_operation_for_source(&consent_support.source_key)
+            .unwrap()
+            .is_none());
+        for (source_id, operation_id) in [
+            (
+                "query_output_control_authority_v1",
+                OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+            ),
+            (
+                "query_output_consent_status_v1",
+                OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
+            ),
+        ] {
+            let source = canonical
+                .source_inventory
+                .iter()
+                .find(|source| {
+                    source.source_key.family == CanonicalSourceFamily::TauriCommand
+                        && source.source_key.source_id == source_id
+                })
+                .unwrap_or_else(|| panic!("missing OutputControl query source {source_id}"));
+            assert_eq!(
+                canonical
+                    .canonical_operation_for_source(&source.source_key)
+                    .unwrap()
+                    .map(|operation| operation.operation_id.as_str()),
+                Some(operation_id)
+            );
+        }
+
+        let canonical_query_source = canonical
+            .source_inventory
+            .iter()
+            .find(|source| {
+                source.source_key.family == CanonicalSourceFamily::TauriCommand
+                    && source.source_key.source_id == "get_control_plane_canonical_registry"
+            })
+            .expect("canonical registry query source must remain inventoried");
+        let canonical_query_operation_id = "syndocal.query.control_plane.canonical_registry.v3";
+        assert_eq!(
+            canonical_query_source.raw_request_schema,
+            command_schema(canonical_query_operation_id, "request")
+        );
+        assert_eq!(
+            canonical_query_source.raw_response_schema,
+            command_schema(canonical_query_operation_id, "response")
+        );
+        let canonical_query_operation = canonical
+            .canonical_operation_for_source(&canonical_query_source.source_key)
+            .unwrap()
+            .expect("canonical registry query must resolve to a canonical operation");
+        assert_eq!(
+            canonical_query_operation.request_schema,
+            canonical_query_source.raw_request_schema
+        );
+        assert_eq!(
+            canonical_query_operation.response_schema,
+            canonical_query_source.raw_response_schema
+        );
 
         let count_family = |family| {
             canonical
@@ -1366,6 +1684,11 @@ mod tests {
             .iter()
             .filter(|source| matches!(&source.disposition, SourceDisposition::Unclassified { .. }))
             .collect::<Vec<_>>();
+        let support_phases = canonical
+            .source_inventory
+            .iter()
+            .filter(|source| matches!(&source.disposition, SourceDisposition::SupportPhase { .. }))
+            .collect::<Vec<_>>();
         let internal_steps = canonical
             .source_inventory
             .iter()
@@ -1386,17 +1709,19 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 14);
+        assert_eq!(direct.len(), 19);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1035);
+        assert_eq!(unclassified.len(), 1036);
+        assert_eq!(support_phases.len(), 1);
         assert_eq!(
             direct.len()
                 + aliases.len()
                 + internal_steps.len()
                 + structural_routes.len()
-                + unclassified.len(),
+                + unclassified.len()
+                + support_phases.len(),
             SOURCE_TOTAL
         );
 
@@ -1651,6 +1976,14 @@ mod tests {
             if operation.operation_id == SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
                 assert_eq!(operation.risk, OperationRisk::S0);
                 assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
+            } else if matches!(
+                operation.operation_id.as_str(),
+                OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                    | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
+                    | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+            ) {
+                assert_eq!(operation.risk, OperationRisk::R4);
+                assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
             } else {
                 assert_eq!(operation.risk, OperationRisk::R0);
                 assert_eq!(operation.audit, OperationAuditRequirement::NotApplicable);
@@ -1749,6 +2082,40 @@ mod tests {
                         OperationCapability::AllowedDuringFullLock,
                     ]
                 );
+            } else if matches!(
+                operation.operation_id.as_str(),
+                OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                    | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
+                    | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+            ) {
+                assert_eq!(operation.class, OperationClass::Mutation);
+                assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
+                assert_eq!(
+                    operation.adapter_policy,
+                    AdapterPolicy::LocalWindowOutputControl
+                );
+                assert_eq!(
+                    operation.receipt_policy,
+                    ReceiptPolicy::ExactTerminalReceipt
+                );
+                assert_eq!(
+                    operation.rate_policy,
+                    RatePolicy::TokenBucket4PerSecondBurst8
+                );
+                assert_eq!(
+                    operation.consent_policy,
+                    ConsentPolicy::PreparedPhysicalConfirmation
+                );
+                assert_eq!(
+                    operation.capabilities,
+                    vec![
+                        OperationCapability::LocalWindowBound,
+                        OperationCapability::OutputControl,
+                    ]
+                );
+                assert!(!operation
+                    .capabilities
+                    .contains(&OperationCapability::AllowedDuringFullLock));
             } else {
                 assert_eq!(operation.idempotency, OperationIdempotency::ReadOnly);
                 assert_eq!(operation.adapter_policy, AdapterPolicy::LocalWindowReadOnly);
@@ -1977,7 +2344,23 @@ mod tests {
         let endpoint = endpoint_rows[0];
         assert_eq!(
             endpoint["operation_id"],
-            "syndocal.query.control_plane.canonical_registry.v2"
+            "syndocal.query.control_plane.canonical_registry.v3"
+        );
+        assert_eq!(
+            endpoint["request_schema"]["name"],
+            "syndocal.query.control_plane.canonical_registry.v3.request"
+        );
+        assert_eq!(
+            endpoint["response_schema"]["name"],
+            "syndocal.query.control_plane.canonical_registry.v3.response"
+        );
+        assert_eq!(
+            endpoint["request_schema"]["version"],
+            CONTROL_PLANE_SCHEMA_VERSION
+        );
+        assert_eq!(
+            endpoint["response_schema"]["version"],
+            CONTROL_PLANE_SCHEMA_VERSION
         );
         assert_eq!(endpoint["risk"], "r0");
         assert_eq!(endpoint["availability"], "local_window_only");

@@ -45,6 +45,7 @@
     "check:fx-visual-viewport": "node scripts/check-viewport-containment.mjs --fx-visual-only",
     "check:identity-color": "node scripts/check-identity-color.mjs",
     "check:output-ownership": "node scripts/check-output-ownership.mjs",
+    "check:output-control-runtime": "node scripts/check-output-control-runtime.mjs",
     "check:localization": "node scripts/check-localization.mjs",
     "check:fullscreen-vj": "node scripts/check-viewport-containment.mjs --fullscreen-vj",
     "check:vj-operator": "node scripts/check-viewport-containment.mjs --operator-vj-only",

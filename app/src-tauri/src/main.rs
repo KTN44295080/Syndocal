@@ -40,11 +40,13 @@ use protocol::{
     control_plane_command::{
         AuthoredRequestV1, OutputConsentChallengeV1, OutputConsentPrepareRequestV1,
         OutputConsentStatusRequestV1, OutputConsentStatusV1, OutputControlAuthorityBundleV1,
-        OutputControlCommandRequestV1, OutputControlResponseV1, ProjectMutationFenceV1,
-        RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorV1, RuntimeCommandRequestV1,
-        RuntimeCommandResponseV1, SafetyBlackoutEngageRequestV1, SafetyBlackoutEngageResponseV1,
-        SetEffectEnabledPayload, SetEffectEnabledResponseV1, TimelineFollowAbortAuthorityBundleV1,
-        TimelineFollowAbortRuntimeRequestV1, TimelineFollowAbortRuntimeResponseV1,
+        OutputControlCommandRequestV1, OutputControlFenceV1, OutputControlResponseV1,
+        ProjectMutationFenceV1, RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorV1,
+        RuntimeCommandRequestV1, RuntimeCommandResponseV1, SafetyBlackoutEngageRequestV1,
+        SafetyBlackoutEngageResponseV1, SetEffectEnabledPayload, SetEffectEnabledResponseV1,
+        TimelineFollowAbortAuthorityBundleV1, TimelineFollowAbortRuntimeRequestV1,
+        TimelineFollowAbortRuntimeResponseV1, OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+        OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
     },
     normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
     validate_engine_ready_video_clip_slots, validate_engine_ready_video_effect_chains,
@@ -17079,6 +17081,12 @@ fn send_dmx_routes_test_frame(
 
 #[tauri::command]
 fn set_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    if !enabled {
+        return Err(
+            "Blackout release is fail-closed: use the authenticated local OutputControl R4 path"
+                .to_string(),
+        );
+    }
     state
         .engine
         .send(EngineCommand::Blackout(enabled))
@@ -17087,6 +17095,12 @@ fn set_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), String>
 
 #[tauri::command]
 fn set_all_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    if !enabled {
+        return Err(
+            "All-blackout release is fail-closed: use the authenticated local OutputControl R4 path"
+                .to_string(),
+        );
+    }
     state
         .engine
         .send(EngineCommand::SetAllBlackout(enabled))
@@ -31651,6 +31665,12 @@ fn set_video_master_opacity(state: State<'_, AppState>, opacity: f32) -> Result<
 
 #[tauri::command]
 fn set_video_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    if !enabled {
+        return Err(
+            "Video blackout release is fail-closed pending a target-aware OutputControl R4 action"
+                .to_string(),
+        );
+    }
     state
         .engine
         .send(EngineCommand::SetVideoBlackout(enabled))
@@ -31875,6 +31895,12 @@ fn set_video_output_blackout(
     output_id: VideoOutputId,
     blackout: bool,
 ) -> Result<(), String> {
+    if !blackout {
+        return Err(
+            "Video-output blackout release is fail-closed pending a target-aware OutputControl R4 action"
+                .to_string(),
+        );
+    }
     validate_video_output_exists(&state.engine.snapshot(), output_id)?;
     state
         .engine
@@ -32429,14 +32455,57 @@ fn query_output_consent_status_v1(
 }
 
 #[tauri::command]
-fn execute_output_control_v1(
+fn release_blackout_output_control_v1(
     app: tauri::AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
     query_state: State<'_, ControlPlaneQueryState>,
     request: OutputControlCommandRequestV1,
 ) -> OutputControlResponseV1 {
-    control_plane_runtime::execute_output_control(&app, &window, &state, &query_state, request)
+    control_plane_runtime::execute_output_control_for_operation(
+        &app,
+        &window,
+        &state,
+        &query_state,
+        OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+        request,
+    )
+}
+
+#[tauri::command]
+fn arm_output_control_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    control_plane_runtime::execute_output_control_for_operation(
+        &app,
+        &window,
+        &state,
+        &query_state,
+        OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+        request,
+    )
+}
+
+#[tauri::command]
+fn take_over_output_control_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    control_plane_runtime::execute_output_control_for_operation(
+        &app,
+        &window,
+        &state,
+        &query_state,
+        OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+        request,
+    )
 }
 
 /// Engage the safer-direction, runtime-only DMX safety latch. There is no
@@ -35532,7 +35601,10 @@ fn navigate_project_history(
                 coordinator,
                 ProjectReplacementCoordinatorEffect::RevisionMutation,
                 false,
+                |_, _, _| Ok(()),
+                |_, _, _| (),
             )
+            .map(|(result, ())| result)
         },
     )
 }
@@ -37818,6 +37890,7 @@ fn start_standby_sync(
                                             ),
                                             None,
                                             ProjectSnapshotReplacementScope::StandbyPollingWorker,
+                                            Some(stop.as_ref()),
                                         )
                                     {
                                         apply_error = Some(error);
@@ -37886,10 +37959,13 @@ fn stop_standby_sync(state: State<'_, AppState>) -> Result<StandbySyncStatus, St
             .mark_output_ownership_transition_failure(error.clone());
         error
     })?;
+    // Publication has committed and the stop token was set under its output
+    // guard. Runtime bookkeeping is therefore poison-recovering: a poisoned
+    // mutex must not turn an applied Take Over into a false rejection.
     let mut runtime = state
         .standby_sync
         .lock()
-        .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     stop_standby_sync_runtime(&mut runtime);
     runtime
         .status
@@ -37912,11 +37988,37 @@ fn standby_sync_status(state: State<'_, AppState>) -> Result<StandbySyncStatus, 
         .map_err(|_| "Standby synchronization status lock was poisoned".to_string())
 }
 
+fn lock_and_validate_standby_takeover_status<'a>(
+    status: &'a Mutex<StandbySyncStatus>,
+    selector: &StandbyTakeoverCheckpointSelector,
+    force: bool,
+) -> Result<std::sync::MutexGuard<'a, StandbySyncStatus>, String> {
+    let status = status
+        .lock()
+        .map_err(|_| "Standby synchronization status lock was poisoned".to_string())?;
+    let expected = match selector {
+        StandbyTakeoverCheckpointSelector::Exact(expected) => expected,
+        StandbyTakeoverCheckpointSelector::LocalLatest => {
+            return Err("Output-control Take Over requires an exact Standby checkpoint".to_string())
+        }
+    };
+    if !status.running
+        || status.role != Some(StandbySyncRole::Standby)
+        || status.session_id.as_deref() != Some(expected.session_id.as_str())
+        || status.generation != Some(expected.generation)
+        || (!force && (status.split_brain || !status.heartbeat_stale))
+    {
+        return Err("Standby Take Over status changed before fenced publication".to_string());
+    }
+    Ok(status)
+}
+
 fn take_over_standby_core(
     state: &AppState,
     force: bool,
     selector: StandbyTakeoverCheckpointSelector,
-) -> Result<ProjectLoadResult, String> {
+    expected_output_fence: &OutputControlFenceV1,
+) -> Result<(ProjectLoadResult, OutputControlFenceV1), String> {
     let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
         let error = "Standby synchronization lifecycle lock was poisoned".to_string();
         state
@@ -37924,13 +38026,13 @@ fn take_over_standby_core(
             .mark_output_ownership_transition_failure(error.clone());
         error
     })?;
-    let (directory, status_snapshot) = {
+    let (directory, status_snapshot, standby_stop, standby_status) = {
         let runtime = state
             .standby_sync
             .lock()
             .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
-        let status = runtime
-            .status
+        let standby_status = Arc::clone(&runtime.status);
+        let status = standby_status
             .lock()
             .map_err(|_| "Standby synchronization status lock was poisoned".to_string())?
             .clone();
@@ -37940,7 +38042,11 @@ fn take_over_standby_core(
             .map(validate_standby_sync_directory)
             .transpose()?
             .ok_or_else(|| "Standby synchronization is not configured".to_string())?;
-        (directory, status)
+        let standby_stop = runtime
+            .stop
+            .clone()
+            .ok_or_else(|| "Standby synchronization worker is not running".to_string())?;
+        (directory, status, standby_stop, standby_status)
     };
     validate_takeover_running_status(&status_snapshot)?;
     if status_snapshot.split_brain && !force {
@@ -37967,6 +38073,25 @@ fn take_over_standby_core(
         }
     }
 
+    // Validate the project/output identity before reading and stopping the
+    // standby worker. The replacement boundary repeats this check after
+    // stop/join; this early check avoids retiring a healthy worker for an
+    // already-stale consent while lifecycle ownership is held.
+    {
+        let _external_admission = lock_project_external_command_admission(state)?;
+        let mut coordinator = lock_project_coordinator(state)?;
+        if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+            || !control_plane_runtime::exact_output_control_fence_matches(
+                state,
+                &coordinator,
+                expected_output_fence,
+            )
+            || ensure_no_pending_project_transaction(&coordinator).is_err()
+        {
+            return Err("Output control fence changed before Standby Take Over stop".to_string());
+        }
+    }
+
     let checkpoint = match &selector {
         StandbyTakeoverCheckpointSelector::LocalLatest => {
             read_standby_checkpoint_for_session(&directory, status_snapshot.session_id.as_deref())?
@@ -37982,36 +38107,43 @@ fn take_over_standby_core(
             checkpoint
         }
     };
-    {
-        let mut runtime = state
-            .standby_sync
-            .lock()
-            .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
-        stop_standby_sync_runtime(&mut runtime);
-    }
-    // Take Over keeps the lifecycle guard through the join and the fenced
-    // replacement. The current ownership role is Standby, so the replacement
-    // cannot re-arm physical outputs while the checkpoint is applied.
-    let load_result = load_project_from_file_with_control_mappings_in_scope(
+    // Keep the worker alive until the fenced publication commits. A stale
+    // consent must not leave an otherwise healthy Standby worker stopped.
+    // The commit closure sets this token while external/coordinator/output
+    // guards remain held; a worker already queued behind those guards checks
+    // the same token after taking the output guard and exits without
+    // publishing. We join only after the guarded commit has returned.
+    let path_label = format!(
+        "Standby Take Over generation {}",
+        checkpoint.manifest.generation
+    );
+    let result = load_project_from_file_with_control_mappings_in_scope_and_expected_output_fence(
         state,
         checkpoint.project,
         checkpoint.mappings,
-        format!(
-            "Standby Take Over generation {}",
-            checkpoint.manifest.generation
-        ),
+        path_label,
         None,
         ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
+        expected_output_fence,
+        &standby_stop,
+        &standby_status,
+        &selector,
+        force,
     )?;
-    Ok(load_result)
+    let mut runtime = state
+        .standby_sync
+        .lock()
+        .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
+    stop_standby_sync_runtime(&mut runtime);
+    Ok(result)
 }
 
 #[tauri::command]
 fn take_over_standby(state: State<'_, AppState>, force: bool) -> Result<ProjectLoadResult, String> {
-    take_over_standby_core(
-        &state,
-        force,
-        StandbyTakeoverCheckpointSelector::LocalLatest,
+    let _ = (state, force);
+    Err(
+        "Standby Take Over is fail-closed: use the authenticated local OutputControl R4 path"
+            .to_string(),
     )
 }
 
@@ -38637,6 +38769,7 @@ fn load_project_checkpoint(
         &state,
         prepared,
         ProjectSnapshotReplacementScope::ExternalCaller,
+        None,
     )
 }
 
@@ -38955,6 +39088,7 @@ fn load_project_from_file(
         path_label,
         current_path,
         ProjectSnapshotReplacementScope::ExternalCaller,
+        None,
     )
 }
 
@@ -38991,6 +39125,7 @@ fn load_project_from_file_with_control_mappings_and_disposition(
         current_path,
         ProjectSnapshotReplacementScope::ExternalCaller,
         disposition,
+        None,
     )
 }
 
@@ -39001,6 +39136,7 @@ fn load_project_from_file_with_control_mappings_in_scope(
     path_label: String,
     current_path: Option<&Path>,
     scope: ProjectSnapshotReplacementScope,
+    abort_before_publication: Option<&AtomicBool>,
 ) -> Result<ProjectLoadResult, String> {
     load_project_from_file_with_control_mappings_in_scope_and_disposition(
         state,
@@ -39010,6 +39146,38 @@ fn load_project_from_file_with_control_mappings_in_scope(
         current_path,
         scope,
         ProjectAuthorityDisposition::CleanAtPath,
+        abort_before_publication,
+    )
+}
+
+/// Prepare a Take Over snapshot while the caller holds the Standby lifecycle
+/// guard, then revalidate the consent-bound output fence at the exact
+/// coordinator/replacement boundary. This closes the post-consent window in
+/// which a project publication could otherwise race the consumed fence.
+fn load_project_from_file_with_control_mappings_in_scope_and_expected_output_fence(
+    state: &AppState,
+    project: ProjectFile,
+    mappings: ProjectControlMappings,
+    path_label: String,
+    current_path: Option<&Path>,
+    scope: ProjectSnapshotReplacementScope,
+    expected_output_fence: &OutputControlFenceV1,
+    standby_stop: &Arc<AtomicBool>,
+    standby_status: &Arc<Mutex<StandbySyncStatus>>,
+    selector: &StandbyTakeoverCheckpointSelector,
+    force: bool,
+) -> Result<(ProjectLoadResult, OutputControlFenceV1), String> {
+    let mut prepared = prepare_project_load(project, mappings, path_label, current_path)?;
+    prepared.authority_disposition = ProjectAuthorityDisposition::CleanAtPath;
+    replace_prepared_project_snapshot_with_expected_output_fence(
+        state,
+        prepared,
+        scope,
+        expected_output_fence,
+        standby_stop,
+        standby_status,
+        selector,
+        force,
     )
 }
 
@@ -39021,10 +39189,11 @@ fn load_project_from_file_with_control_mappings_in_scope_and_disposition(
     current_path: Option<&Path>,
     scope: ProjectSnapshotReplacementScope,
     disposition: ProjectAuthorityDisposition,
+    abort_before_publication: Option<&AtomicBool>,
 ) -> Result<ProjectLoadResult, String> {
     let mut prepared = prepare_project_load(project, mappings, path_label, current_path)?;
     prepared.authority_disposition = disposition;
-    replace_prepared_project_snapshot(state, prepared, scope)
+    replace_prepared_project_snapshot(state, prepared, scope, abort_before_publication)
 }
 
 /// Same-project Standby sanitization reuses the project that is authoritative
@@ -39056,7 +39225,10 @@ fn sanitize_current_project_runtime_under_authority(
         &mut coordinator,
         ProjectReplacementCoordinatorEffect::RuntimeSanitize,
         true,
+        |_, _, _| Ok(()),
+        |_, _, _| (),
     )
+    .map(|(result, ())| result)
 }
 
 fn prepare_project_load(
@@ -39250,13 +39422,21 @@ fn replace_prepared_project_snapshot(
     state: &AppState,
     prepared: PreparedProjectLoad,
     scope: ProjectSnapshotReplacementScope,
+    abort_before_publication: Option<&AtomicBool>,
 ) -> Result<ProjectLoadResult, String> {
     if scope == ProjectSnapshotReplacementScope::ExternalCaller {
         let _lifecycle_guard = lock_standby_sync_lifecycle_for_project_swap(state)?;
         return run_project_snapshot_replacement_scope(
             scope,
             || stop_standby_sync_for_project_swap(state),
-            || replace_prepared_project_snapshot_after_standby_stop(state, prepared, scope),
+            || {
+                replace_prepared_project_snapshot_after_standby_stop(
+                    state,
+                    prepared,
+                    scope,
+                    abort_before_publication,
+                )
+            },
         );
     }
     // Do not take standby_sync_lifecycle from the polling worker. An external
@@ -39265,7 +39445,14 @@ fn replace_prepared_project_snapshot(
     run_project_snapshot_replacement_scope(
         scope,
         || Ok(()),
-        || replace_prepared_project_snapshot_after_standby_stop(state, prepared, scope),
+        || {
+            replace_prepared_project_snapshot_after_standby_stop(
+                state,
+                prepared,
+                scope,
+                abort_before_publication,
+            )
+        },
     )
 }
 
@@ -39308,6 +39495,7 @@ fn replace_prepared_project_snapshot_after_standby_stop(
     state: &AppState,
     prepared: PreparedProjectLoad,
     scope: ProjectSnapshotReplacementScope,
+    abort_before_publication: Option<&AtomicBool>,
 ) -> Result<ProjectLoadResult, String> {
     // External callbacks/remote control can never enqueue between input
     // retirement, the fenced publication and the authoritative coordinator
@@ -39329,6 +39517,78 @@ fn replace_prepared_project_snapshot_after_standby_stop(
         &mut coordinator,
         effect,
         true,
+        |_, _, _| {
+            if abort_before_publication.is_some_and(|stop| stop.load(Ordering::Relaxed)) {
+                Err("Standby synchronization stopped before project publication".to_string())
+            } else {
+                Ok(())
+            }
+        },
+        |_, _, _| (),
+    )
+    .map(|(result, ())| result)
+}
+
+fn replace_prepared_project_snapshot_with_expected_output_fence(
+    state: &AppState,
+    prepared: PreparedProjectLoad,
+    scope: ProjectSnapshotReplacementScope,
+    expected_output_fence: &OutputControlFenceV1,
+    standby_stop: &Arc<AtomicBool>,
+    standby_status: &Arc<Mutex<StandbySyncStatus>>,
+    selector: &StandbyTakeoverCheckpointSelector,
+    force: bool,
+) -> Result<(ProjectLoadResult, OutputControlFenceV1), String> {
+    if scope != ProjectSnapshotReplacementScope::LifecycleAlreadyHeld {
+        return Err(
+            "Output-control Take Over replacement requires the lifecycle guard to be held"
+                .to_string(),
+        );
+    }
+    // The caller holds standby_sync_lifecycle. The worker remains alive until
+    // this publication commits, while the remaining locks follow the global
+    // order external admission -> coordinator -> output transition.
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    let (output_epoch_after, output_generation_after) =
+        control_plane_runtime::preflight_output_control_successor(expected_output_fence)?;
+    replace_prepared_project_snapshot_with_coordinator(
+        state,
+        prepared,
+        &mut coordinator,
+        ProjectReplacementCoordinatorEffect::IdentitySwap,
+        true,
+        |state, coordinator, _transition_guard| {
+            if reconcile_project_checkpoint_for_coordinator(state, coordinator).is_err()
+                || !control_plane_runtime::exact_output_control_fence_matches(
+                    state,
+                    coordinator,
+                    expected_output_fence,
+                )
+                || ensure_no_pending_project_transaction(coordinator).is_err()
+            {
+                return Err(
+                    "Output control fence changed before Standby Take Over publication".to_string(),
+                );
+            }
+
+            lock_and_validate_standby_takeover_status(standby_status, selector, force)
+        },
+        |state, coordinator, _transition_guard| {
+            standby_stop.store(true, Ordering::Relaxed);
+            let safety = state.engine.safety_blackout_authority();
+            control_plane_runtime::committed_output_control_fence(
+                expected_output_fence,
+                coordinator.epoch,
+                coordinator.revision,
+                &coordinator.checkpoint_hash,
+                coordinator.publication_generation,
+                output_epoch_after,
+                output_generation_after,
+                safety.epoch,
+                safety.generation,
+            )
+        },
     )
 }
 
@@ -39337,13 +39597,23 @@ fn replace_prepared_project_snapshot_after_standby_stop(
 /// authoritative local commit have finished.  This makes the baseline for a
 /// later serialized replacement the project actually published by its
 /// predecessor, not a stale pre-lock observation.
-fn replace_prepared_project_snapshot_with_coordinator(
+fn replace_prepared_project_snapshot_with_coordinator<Validate, Validation, Capture, Captured>(
     state: &AppState,
     mut prepared: PreparedProjectLoad,
     coordinator: &mut ProjectCoordinator,
     coordinator_effect: ProjectReplacementCoordinatorEffect,
     emit_authority_event: bool,
-) -> Result<ProjectLoadResult, String> {
+    validate_before_publication: Validate,
+    capture_after_commit: Capture,
+) -> Result<(ProjectLoadResult, Captured), String>
+where
+    Validate: FnOnce(
+        &AppState,
+        &mut ProjectCoordinator,
+        &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<Validation, String>,
+    Capture: FnOnce(&AppState, &ProjectCoordinator, &std::sync::MutexGuard<'_, ()>) -> Captured,
+{
     let app = project_swap_app_handle(state)?;
     let next_project = project_file_from_prepared_load(&prepared);
     let next_checkpoint_hash = project_checkpoint_hash(&next_project, &prepared.mappings)?;
@@ -39389,6 +39659,20 @@ fn replace_prepared_project_snapshot_with_coordinator(
         };
     preflight_project_swap_ancillary_mirrors(state)?;
     preflight_project_runtime_reset(state)?;
+    let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
+        let error =
+            "Output ownership transition lock was poisoned during project replacement".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    // Exact action-fence and worker-cancellation checks belong after output
+    // serialization but before recovery-authority persistence, callback epoch
+    // reservation, control-input retirement, or any physical transition. The
+    // same guard remains live through publication and terminal-fence capture.
+    let _publication_validation =
+        validate_before_publication(state, coordinator, &_transition_guard)?;
     if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
         // Identity and HistoryNavigation invalidate any prior browser
         // recovery image. Persist the new machine-local serial before input
@@ -39424,17 +39708,9 @@ fn replace_prepared_project_snapshot_with_coordinator(
     reserve_project_callback_epoch(&state.project_callback_epoch)?;
     reserve_project_callback_epoch(&state.project_mapping_callback_epoch)?;
     retire_project_control_inputs_before_project_publish(state)?;
-    let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
-        let error =
-            "Output ownership transition lock was poisoned during project replacement".to_string();
-        state
-            .engine
-            .mark_output_ownership_transition_failure(error.clone());
-        error
-    })?;
-    // Read desired only after serializing against Arm/role changes. The
-    // polling worker does not take lifecycle, so this is the point at which it
-    // becomes impossible to overwrite a concurrently selected machine role.
+    // Read desired only after serializing against Arm/role changes. The guard
+    // above also prevents a stale R4 or cancelled polling publication from
+    // touching recovery/callback/input state before this physical boundary.
     let desired_role = state.engine.output_ownership_status().desired_role;
     let mut transition = Some(
         state
@@ -39539,7 +39815,9 @@ fn replace_prepared_project_snapshot_with_coordinator(
             let _ = app.emit(PROJECT_CONTROL_INPUTS_RETIRED_EVENT, ());
         }
     }
-    Ok(prepared.result)
+    let captured = capture_after_commit(state, coordinator, &_transition_guard);
+    drop(_publication_validation);
+    Ok((prepared.result, captured))
 }
 
 /// Assignment-only coordinator/mirror commit after a history-navigation
@@ -45906,6 +46184,213 @@ fn apply_output_ownership_role(
     apply_output_ownership_role_locked(app, state, role)
 }
 
+fn lock_output_ownership_transition(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+    state.output_ownership_transition.lock().map_err(|_| {
+        let error = "Output ownership transition lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })
+}
+
+/// Acquire the output transition guard before revalidating an action fence,
+/// then keep that exact guard alive until the action closure returns. This
+/// small seam makes the no-gap ordering independently testable without a Wry
+/// application handle.
+fn with_revalidated_output_transition<Guard, Validation, Output, Acquire, Revalidate, Apply>(
+    acquire: Acquire,
+    revalidate: Revalidate,
+    apply: Apply,
+) -> Result<Output, String>
+where
+    Acquire: FnOnce() -> Result<Guard, String>,
+    Revalidate: FnOnce() -> Result<Validation, String>,
+    Apply: FnOnce(&Guard, Validation) -> Result<Output, String>,
+{
+    let guard = acquire()?;
+    let validation = revalidate()?;
+    apply(&guard, validation)
+}
+
+/// Apply an authenticated R4 Arm while retaining the same lifecycle and
+/// project admission boundary that was used to validate its consent fence.
+/// The output transition lock is acquired in the global order after the
+/// coordinator, then the fence is checked again while that same guard remains
+/// live through physical route activation and the terminal-fence capture.
+fn apply_output_ownership_role_with_output_control_fence(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    role: MachineOutputRole,
+    expected_fence: &OutputControlFenceV1,
+) -> Result<(bool, OutputControlFenceV1), String> {
+    let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+        let error = "Standby synchronization lifecycle lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    with_revalidated_output_transition(
+        || lock_output_ownership_transition(state),
+        || {
+            if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+                || !control_plane_runtime::exact_output_control_fence_matches(
+                    state,
+                    &coordinator,
+                    expected_fence,
+                )
+                || ensure_no_pending_project_transaction(&coordinator).is_err()
+            {
+                return Err("Output control fence changed before Arm transition".to_string());
+            }
+            let output_successor =
+                control_plane_runtime::preflight_output_control_successor(expected_fence)?;
+            Ok((
+                output_successor,
+                (
+                    coordinator.epoch,
+                    coordinator.revision,
+                    coordinator.checkpoint_hash.clone(),
+                    coordinator.publication_generation,
+                ),
+            ))
+        },
+        |transition_guard,
+         (
+            (output_epoch_after, output_generation_after),
+            (
+                project_epoch,
+                project_revision,
+                project_checkpoint_hash,
+                project_publication_generation,
+            ),
+        )| {
+            let current = state.engine.output_ownership_status();
+            if current.state == protocol::OutputOwnershipState::Ready
+                && current.effective_role == role
+                && current.desired_role == role
+            {
+                // The no-op linearizes at exact revalidation. S0 engage is a
+                // separate priority lane and may advance immediately after
+                // that point, but a NoOp receipt must retain an identical
+                // before/after fence rather than absorb unrelated S0 state.
+                return Ok((false, expected_fence.clone()));
+            }
+            apply_output_ownership_role_with_transition_guard(app, state, role, transition_guard)?;
+            let safety = state.engine.safety_blackout_authority();
+            Ok((
+                true,
+                control_plane_runtime::committed_output_control_fence(
+                    expected_fence,
+                    project_epoch,
+                    project_revision,
+                    &project_checkpoint_hash,
+                    project_publication_generation,
+                    output_epoch_after,
+                    output_generation_after,
+                    safety.epoch,
+                    safety.generation,
+                ),
+            ))
+        },
+    )
+}
+
+/// Release only the safety blackout latch that was named by the authenticated
+/// R4 fence. Project admission remains held while the engine consumes that
+/// fence, so a project swap cannot turn a consent for one project into a
+/// release on the next project.
+fn release_safety_blackout_with_output_control_fence(
+    state: &AppState,
+    expected_fence: &OutputControlFenceV1,
+) -> Result<(bool, OutputControlFenceV1), String> {
+    let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+        let error = "Standby synchronization lifecycle lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    with_revalidated_output_transition(
+        || lock_output_ownership_transition(state),
+        || {
+            if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+                || !control_plane_runtime::exact_output_control_fence_matches(
+                    state,
+                    &coordinator,
+                    expected_fence,
+                )
+                || ensure_no_pending_project_transaction(&coordinator).is_err()
+            {
+                return Err("Output control fence changed before blackout release".to_string());
+            }
+            let safety = state.engine.safety_blackout_authority();
+            let safety_after = if safety.engaged {
+                protocol::control_plane_command::next_timeline_transport_authority(
+                    safety.epoch,
+                    safety.generation,
+                )
+                .ok_or_else(|| "Safety blackout authority is exhausted".to_string())?
+            } else {
+                (safety.epoch, safety.generation)
+            };
+            Ok((
+                safety_after,
+                (
+                    coordinator.epoch,
+                    coordinator.revision,
+                    coordinator.checkpoint_hash.clone(),
+                    coordinator.publication_generation,
+                ),
+            ))
+        },
+        |_transition_guard,
+         (
+            (safety_epoch_after, safety_generation_after),
+            (
+                project_epoch,
+                project_revision,
+                project_checkpoint_hash,
+                project_publication_generation,
+            ),
+        )| {
+            state
+                .engine
+                .safety_blackout_release_published(
+                    expected_fence.safety_blackout_epoch,
+                    expected_fence.safety_blackout_generation,
+                    Instant::now() + Duration::from_secs(2),
+                )
+                .map(|disposition| {
+                    (
+                        matches!(
+                            disposition,
+                            engine::SafetyBlackoutReleaseDisposition::Applied
+                        ),
+                        control_plane_runtime::committed_output_control_fence(
+                            expected_fence,
+                            project_epoch,
+                            project_revision,
+                            &project_checkpoint_hash,
+                            project_publication_generation,
+                            expected_fence.output_epoch,
+                            expected_fence.output_generation,
+                            safety_epoch_after,
+                            safety_generation_after,
+                        ),
+                    )
+                })
+        },
+    )
+}
+
 fn fail_output_ownership_transition(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -46107,13 +46592,16 @@ fn apply_output_ownership_role_locked(
     role: MachineOutputRole,
 ) -> Result<OutputOwnershipStatus, String> {
     validate_output_role_change_for_standby_sync(state, role)?;
-    let _transition_lock = state.output_ownership_transition.lock().map_err(|_| {
-        let error = "Output ownership transition lock was poisoned".to_string();
-        state
-            .engine
-            .mark_output_ownership_transition_failure(error.clone());
-        error
-    })?;
+    let transition_guard = lock_output_ownership_transition(state)?;
+    apply_output_ownership_role_with_transition_guard(app, state, role, &transition_guard)
+}
+
+fn apply_output_ownership_role_with_transition_guard(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    role: MachineOutputRole,
+    _transition_guard: &std::sync::MutexGuard<'_, ()>,
+) -> Result<OutputOwnershipStatus, String> {
     validate_output_role_change_for_standby_sync(state, role)?;
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
@@ -46180,6 +46668,12 @@ fn set_output_ownership_role(
     state: State<'_, AppState>,
     role: MachineOutputRole,
 ) -> Result<OutputOwnershipStatus, String> {
+    if role != MachineOutputRole::Standby {
+        return Err(
+            "Active output arming is fail-closed: use the authenticated local OutputControl R4 path"
+                .to_string(),
+        );
+    }
     apply_output_ownership_role(&app, &state, role)
 }
 
@@ -46189,6 +46683,12 @@ fn arm_output_ownership_role(
     state: State<'_, AppState>,
 ) -> Result<OutputOwnershipStatus, String> {
     let preferred_role = state.engine.output_ownership_status().desired_role;
+    if preferred_role != MachineOutputRole::Standby {
+        return Err(
+            "Active output arming is fail-closed: use the authenticated local OutputControl R4 path"
+                .to_string(),
+        );
+    }
     apply_output_ownership_role(&app, &state, preferred_role)
 }
 
@@ -60110,6 +60610,40 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn output_control_takeover_final_status_guard_rejects_generation_or_freshness_advance() {
+        let status = Mutex::new(StandbySyncStatus {
+            running: true,
+            role: Some(StandbySyncRole::Standby),
+            session_id: Some("primary-a".to_string()),
+            generation: Some(42),
+            heartbeat_stale: true,
+            ..StandbySyncStatus::default()
+        });
+        let selector = StandbyTakeoverCheckpointSelector::Exact(StandbyCheckpointIdentity {
+            session_id: "primary-a".to_string(),
+            generation: 42,
+        });
+
+        let guard = lock_and_validate_standby_takeover_status(&status, &selector, false).unwrap();
+        assert!(matches!(
+            status.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        drop(guard);
+
+        status.lock().unwrap().generation = Some(43);
+        assert!(lock_and_validate_standby_takeover_status(&status, &selector, false).is_err());
+
+        {
+            let mut status = status.lock().unwrap();
+            status.generation = Some(42);
+            status.heartbeat_stale = false;
+        }
+        assert!(lock_and_validate_standby_takeover_status(&status, &selector, false).is_err());
+        assert!(lock_and_validate_standby_takeover_status(&status, &selector, true).is_ok());
+    }
+
+    #[test]
     fn external_project_replacement_joins_standby_worker_before_fenced_swap() {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
@@ -60158,6 +60692,63 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert!(replaced.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn output_control_revalidates_after_transition_lock_and_holds_it_through_commit() {
+        let transition = Mutex::new(());
+        let phases = Mutex::new(Vec::new());
+
+        let result = with_revalidated_output_transition(
+            || {
+                phases.lock().unwrap().push("locked");
+                transition.lock().map_err(|_| "poisoned".to_string())
+            },
+            || {
+                assert!(matches!(
+                    transition.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+                phases.lock().unwrap().push("revalidated");
+                Ok(41_u64)
+            },
+            |_guard, validation| {
+                assert!(matches!(
+                    transition.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+                phases.lock().unwrap().push("committed");
+                Ok(validation + 1)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result, 42);
+        assert_eq!(
+            *phases.lock().unwrap(),
+            vec!["locked", "revalidated", "committed"]
+        );
+        assert!(transition.try_lock().is_ok());
+    }
+
+    #[test]
+    fn output_control_failed_revalidation_releases_transition_without_commit() {
+        let transition = Mutex::new(());
+        let committed = AtomicBool::new(false);
+
+        let error = with_revalidated_output_transition(
+            || transition.lock().map_err(|_| "poisoned".to_string()),
+            || Err::<(), _>("stale fence".to_string()),
+            |_guard, ()| {
+                committed.store(true, Ordering::Release);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "stale fence");
+        assert!(!committed.load(Ordering::Acquire));
+        assert!(transition.try_lock().is_ok());
     }
 
     #[test]
@@ -86092,7 +86683,9 @@ fn main() {
             query_output_control_authority_v1,
             prepare_output_consent_v1,
             query_output_consent_status_v1,
-            execute_output_control_v1,
+            release_blackout_output_control_v1,
+            arm_output_control_v1,
+            take_over_output_control_v1,
             safety_blackout_engage_v1,
             set_effect_video_target_position,
             move_effect,

@@ -1,5 +1,6 @@
 import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
+import { executeOutputControl } from "../outputControlController";
 import type { MachineOutputRole, OutputOwnershipStatus } from "../types";
 
 type StandbySyncRole = "primary" | "standby";
@@ -209,12 +210,28 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
     setBusy(true);
     setActionError(null);
     try {
-      const outputStatus = await props.invokeCommand<OutputOwnershipStatus>(
-        "set_output_ownership_role",
-        { role: nextRole },
+      if (nextRole === "Standby") {
+        // Standby is the safer-direction disarm path and remains available
+        // without an output grant or physical release confirmation.
+        const outputStatus = await props.invokeCommand<OutputOwnershipStatus>(
+          "set_output_ownership_role",
+          { role: nextRole },
+        );
+        setOwnershipStatus(outputStatus);
+        setMachineRole(outputStatus.effective_role);
+        return;
+      }
+      await executeOutputControl(
+        props.invokeCommand,
+        { kind: "arm", role: nextRole === "Lighting" ? "lighting" : nextRole === "Video" ? "video" : "both" },
+        ({ displayCode }) => setActionError(
+          `Arm ${nextRole} confirmation required: type ${displayCode} on the physical keyboard.`,
+        ),
       );
-      setOwnershipStatus(outputStatus);
-      setMachineRole(outputStatus.effective_role);
+      setActionError(null);
+      // The terminal receipt is authoritative, but status polling remains the
+      // source of the actual effective role after asynchronous route start.
+      await pollStatus();
     } catch (error) {
       setActionError(String(error));
       await pollStatus();
@@ -227,11 +244,24 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
     setBusy(true);
     setActionError(null);
     try {
-      const outputStatus = await props.invokeCommand<OutputOwnershipStatus>(
-        "arm_output_ownership_role",
+      const requestedRole = machineRole();
+      if (requestedRole === "Standby") {
+        const outputStatus = await props.invokeCommand<OutputOwnershipStatus>(
+          "arm_output_ownership_role",
+        );
+        setOwnershipStatus(outputStatus);
+        setMachineRole(outputStatus.desired_role);
+        return;
+      }
+      await executeOutputControl(
+        props.invokeCommand,
+        { kind: "arm", role: requestedRole === "Lighting" ? "lighting" : requestedRole === "Video" ? "video" : "both" },
+        ({ displayCode }) => setActionError(
+          `Arm ${requestedRole} confirmation required: type ${displayCode} on the physical keyboard.`,
+        ),
       );
-      setOwnershipStatus(outputStatus);
-      setMachineRole(outputStatus.desired_role);
+      setActionError(null);
+      await pollStatus();
     } catch (error) {
       setActionError(String(error));
       await pollStatus();
@@ -249,7 +279,23 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
     setBusy(true);
     setActionError(null);
     try {
-      await props.invokeCommand("take_over_standby", { force: forceRequired() });
+      const current = status();
+      if (!current.session_id || current.generation === null) {
+        throw new Error("Standby Take Over checkpoint is unavailable; nothing was applied.");
+      }
+      await executeOutputControl(
+        props.invokeCommand,
+        {
+          kind: "take_over_standby",
+          force: forceRequired(),
+          standby_session_id: current.session_id,
+          standby_generation: current.generation,
+        },
+        ({ displayCode }) => setActionError(
+          `Take Over confirmation required: type ${displayCode} on the physical keyboard.`,
+        ),
+      );
+      setActionError(null);
       takeoverDialog.close();
       await pollStatus();
     } catch (error) {

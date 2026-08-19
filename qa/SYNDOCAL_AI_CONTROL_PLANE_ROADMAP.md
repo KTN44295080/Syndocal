@@ -300,19 +300,58 @@ requirements currently stand as follows:
 | Requirement | Status | Implemented evidence | Open boundary |
 | --- | --- | --- | --- |
 | Runtime generations | Partial | Timeline Transport and Follow Abort have authority fences, generations, single-flight receipts, and bounded rate limits; query reports several additional runtime generations. | Loop/video and other legacy runtime mutations are not yet canonical or generation-fenced across Tauri, MIDI/OSC, Remote, and shortcut routes. |
-| Output ownership | Partial | The machine-local output gate starts all-deny and implements role transitions, physical permits, activation/creation/teardown leases, and failure fencing. | The AI3 owner-incarnation lease with TTL, renew, orphaned state, stale-owner rejection, forced transfer, and restart non-reclamation is absent. The local gate is not that distributed/backend lease. |
-| Rate limits | Partial | Transport, Follow Abort, S0 Blackout, and the currently unconnected OutputControl runtime use token buckets. | Legacy GUI/input routes bypass those limits, OutputControl lacks dedicated proof, and no 10,000-call realtime-budget evidence exists. |
-| Blackout / Arm / Take Over safety | S0 partial; R4 incomplete | S0 engage has a narrow DTO, priority path, idempotent engine latch, receipt lane, and frontend exact retry. | Release Blackout, Arm, and Take Over are not registered canonical operations and their GUI routes still invoke legacy commands directly. Project replacement and Take Over are not continuously fenced through physical retirement and explicit re-arm. |
-| Physical-resource idempotency | Partial | NDI, Spout, and Display creation leases recheck ownership epochs and retain teardown acknowledgement fail-closed. | Request-to-physical-action terminal receipts and audit are process-local/expiring, not crash-safe; project replacement and restart reply-loss are not proven exactly once. |
+| Output ownership | Partial | The machine-local output gate starts all-deny and implements role transitions, physical permits, activation/creation/teardown leases, and failure fencing. Local-GUI active Arm and exact Take Over now enter action-specific R4 operations under the lifecycle/project/output transition boundary. | The AI3 owner-incarnation lease with TTL, renew, orphaned state, stale-owner rejection, forced transfer, and restart non-reclamation is absent. The local gate is not that distributed/backend lease. |
+| Rate limits | Partial | Transport, Follow Abort, S0 Blackout, and the local R4 OutputControl operations use token buckets. OutputControl has direct fake-clock proof for burst 8 / ninth rejection and per-principal/domain single flight. | MIDI/OSC/Remote and other legacy runtime routes remain outside this local vertical, and no 10,000-call realtime-budget evidence exists for the complete output path. |
+| Blackout / Arm / Take Over safety | S0 plus local-GUI R4 partial | S0 engage keeps its narrow priority path. Safety-latch Release, active Arm, and exact Take Over are three one-source/one-operation R4 commands with short-lived Raw Input confirmation, exact fences/receipts, and legacy local energizing handlers fail-closed. | All/video/per-output release is deliberately unavailable pending target-aware actions. MIDI/OSC/Remote release routes, full project-swap physical retirement/re-arm, and actual hardware confirmation remain open. |
+| Physical-resource idempotency | Partial | NDI, Spout, and Display creation leases recheck ownership epochs and retain teardown acknowledgement fail-closed. The local R4 operations preserve same-request terminal retry within one process, including poisoned bookkeeping-lock recovery. | Receipts and audit remain process-local/expiring, not crash-safe; restart reply-loss and the full physical project-replacement path are not proven exactly once. |
 
-The next safe AI3 order is: restore and race-harden the Take Over boundary; make
-legacy energizing/release routes canonical or explicitly fail-closed; register and
-gate every AI3 output operation; add the owner-incarnation output-lease state
-machine; fence project replacement through resource retirement and explicit Arm;
-then add durable receipt/audit and saturation/native proof. Prepared human consent,
-principal grants, Raw Input presence, revocation, and the consent service remain
-AI4 responsibilities. AI3 may expose a fail-closed consent policy but must not
-claim those AI4 services complete.
+The local-GUI Take Over and R4 energizing/release boundary described below is now
+race-hardened. The next safe AI3 order is: inventory and canonicalize or fail-close
+the remaining MIDI/OSC/Remote and wider output routes; add the owner-incarnation
+output-lease state machine; fence every project replacement through acknowledged
+resource retirement and explicit Arm; then add durable receipt/audit and complete
+saturation/native/hardware proof. Prepared human consent, principal grants, Raw
+Input presence, revocation, and the consent service remain AI4 responsibilities.
+AI3 may expose a fail-closed consent policy but must not claim those AI4 services
+complete.
+
+### AI3 local OutputControl R4 checkpoint — 2026-08-19
+
+The checkpoint containing this section closes the **local desktop GUI vertical
+only** for safety-latch Release Blackout, active Arm, and exact Standby Take Over:
+
+- each action has a distinct Tauri source and canonical R4 operation; the public
+  registry wire and discovery operation are version 3, and every R4 operation is
+  constrained to exactly one local-window adapter;
+- the frontend obtains a backend fence, displays a nonblocking six-digit physical
+  Raw Input challenge, validates every DTO identity/expiry/fingerprint/fence, and
+  retries a lost terminal reply once with the identical request object;
+- legacy local GUI/backend release or energizing branches are either safer-direction
+  only or fail closed. All/video/per-output release does not pretend that the
+  safety-latch action covers authored blackout state;
+- Arm and Release revalidate under lifecycle -> external admission -> coordinator
+  -> output transition ordering and retain the output guard through commit and
+  terminal-fence capture;
+- Take Over revalidates exact project/output and running Standby session/generation/
+  force state before any recovery-authority, input-retirement, project-publication,
+  or worker-stop side effect. A stale rejection leaves the worker running; success
+  commits the stop token while the validation guards are held and joins afterward;
+- dedicated proof covers exact retry/shape conflicts, owner retirement, burst rate,
+  single flight, lock/revalidation order, Standby status advance, consent binding,
+  replay/device removal, frontend malformed DTOs, and registry/source equality.
+
+The native completion gate for this bounded slice passed on Windows: the exact
+checkout process was stopped before `pnpm --dir app tauri build --no-bundle`, the
+release build succeeded, and the exact executable was relaunched with one responsive,
+maximized `Syndocal` window. This is not hardware or Raw Input end-to-end acceptance.
+
+**AI3 remains incomplete.** MIDI/OSC/Remote and wider output routes are not part of
+this vertical; the owner-incarnation lease state machine, forced-transfer state,
+full physical retirement/re-arm fence, crash-durable receipt/audit, saturation/soak,
+and hardware matrix remain open. The local Raw Input challenge is a fail-closed R4
+bridge, not completion of AI4 principals, grants, revocation, or consent service.
+Windows ASIO acceptance and distribution licensing also remain separate mandatory
+open product-release gates.
 
 ## 7. Required non-vacuous evidence
 

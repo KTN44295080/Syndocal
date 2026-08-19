@@ -1,4 +1,4 @@
-//! Canonical, fail-closed control-plane registry version 2.
+//! Canonical, fail-closed control-plane registry wire contract.
 //!
 //! Version 1 inventories implementation sources directly.  This module keeps
 //! that inventory intact while separating a small, reviewed canonical
@@ -18,8 +18,14 @@ use crate::control_plane::{
     OperationRisk, OperationSourceFamily as LegacyOperationSourceFamily, SchemaIdentity,
 };
 
-/// Schema version for this canonical/source registry contract.
-pub const CONTROL_PLANE_REGISTRY_V2_SCHEMA_VERSION: u16 = 2;
+/// Current wire version for this canonical/source registry contract.
+///
+/// The `_V2` name is retained for source compatibility with the module and
+/// public API introduced by the original canonical registry. The wire version
+/// is deliberately 3 because the additive public enum variants in this
+/// contract changed the meaning of serialized registry values; a v2 consumer
+/// must reject this payload instead of interpreting it under the old schema.
+pub const CONTROL_PLANE_REGISTRY_V2_SCHEMA_VERSION: u16 = 3;
 pub const CANONICAL_OPERATION_DESCRIPTOR_SCHEMA_NAME: &str =
     "syndocal.control-plane.canonical-operation-descriptor";
 pub const SOURCE_INVENTORY_DESCRIPTOR_SCHEMA_NAME: &str =
@@ -39,9 +45,10 @@ pub const MAX_BINDING_ID_BYTES: usize = 576;
 pub const MAX_SCHEMA_NAME_BYTES: usize = 768;
 pub const MAX_UNCLASSIFIED_REASON_BYTES: usize = 1_024;
 
-/// Version-2-only source namespace. This mirrors legacy v1 families through
-/// an explicit conversion so that v2 can inventory additive source families
-/// without changing the v1 wire contract or its exact registry.
+/// Canonical-registry-only source namespace. This mirrors legacy v1 families
+/// through an explicit conversion so that the canonical registry can inventory
+/// additive source families without changing the v1 wire contract or its exact
+/// registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CanonicalSourceFamily {
@@ -181,8 +188,8 @@ impl SourceRole {
 }
 
 /// A supported adapter kind.  External variants are representable only so a
-/// forged wire value can be rejected explicitly; no valid v2 policy supports
-/// them.
+/// forged wire value can be rejected explicitly; no valid canonical policy
+/// supports them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdapterKind {
@@ -213,6 +220,10 @@ pub enum AdapterPolicy {
     /// The named S0 emergency blackout engagement. Its request has no target
     /// value, requires immutable audit, and is never a release capability.
     LocalWindowEmergencySafetyMutation,
+    /// A local-only R4 output mutation. The adapter is bound to the current
+    /// Tauri window and requires an exact physical-confirmation token plus a
+    /// terminal receipt. No external adapter is implied.
+    LocalWindowOutputControl,
     /// No adapter is exposed.  This is the only policy available before a
     /// separately reviewed adapter is introduced.
     FailClosed,
@@ -236,14 +247,16 @@ pub enum RatePolicy {
     TokenBucket4PerSecondBurst8,
 }
 
-/// Payload adaptation deliberately has no enabled implementation in v2.
+/// Payload adaptation deliberately has no enabled implementation in the
+/// canonical registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PayloadPolicy {
     FailClosed,
 }
 
-/// Consent handling deliberately has no enabled implementation in v2.
+/// Consent handling deliberately has no enabled implementation in the
+/// canonical registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConsentPolicy {
@@ -251,6 +264,10 @@ pub enum ConsentPolicy {
     /// S0 does not consume an R4/R5 confirmation token; authority is the
     /// narrow named capability plus strict rate and immutable audit.
     NotRequiredForSafetyOnly,
+    /// R4 output control must consume a fresh, single-use backend challenge
+    /// confirmed by the physical-input boundary. This does not implement
+    /// AI4 grants or an external consent service.
+    PreparedPhysicalConfirmation,
 }
 
 /// The only reviewed schema projection at this stage is exact identity.
@@ -285,6 +302,12 @@ pub enum SourceDisposition {
     StructuralRoute {
         target: SourceKey,
     },
+    /// A local support phase whose output is not itself a physical-action
+    /// receipt. Support phases remain inventory-only and never derive an
+    /// execution adapter.
+    SupportPhase {
+        support_id: String,
+    },
     PresentationOnly,
     Unclassified {
         reason: String,
@@ -299,6 +322,7 @@ impl SourceDisposition {
             Self::DispatchesToFamily { .. } => "dispatches_to_family",
             Self::InternalStepOf { .. } => "internal_step_of",
             Self::StructuralRoute { .. } => "structural_route",
+            Self::SupportPhase { .. } => "support_phase",
             Self::PresentationOnly => "presentation_only",
             Self::Unclassified { .. } => "unclassified",
         }
@@ -313,6 +337,7 @@ impl SourceDisposition {
             Self::AliasOfSource { target }
             | Self::InternalStepOf { target }
             | Self::StructuralRoute { target } => 96 + target.wire_byte_bound(),
+            Self::SupportPhase { support_id } => 96 + json_string_byte_bound(support_id),
             Self::DispatchesToFamily { .. } => 128,
             Self::PresentationOnly => 64,
             Self::Unclassified { reason } => 96 + json_string_byte_bound(reason),
@@ -627,6 +652,38 @@ impl CanonicalOperationDescriptor {
                     }
                 }
             }
+            AdapterPolicy::LocalWindowOutputControl => {
+                if self.class != OperationClass::Mutation
+                    || self.risk != OperationRisk::R4
+                    || self.idempotency != OperationIdempotency::Mutating
+                    || self.audit != OperationAuditRequirement::Immutable
+                    || self.capabilities
+                        != vec![
+                            OperationCapability::LocalWindowBound,
+                            OperationCapability::OutputControl,
+                        ]
+                    || self.receipt_policy != ReceiptPolicy::ExactTerminalReceipt
+                    || self.rate_policy != RatePolicy::TokenBucket4PerSecondBurst8
+                    || self.payload_policy != PayloadPolicy::FailClosed
+                    || self.consent_policy != ConsentPolicy::PreparedPhysicalConfirmation
+                {
+                    return Err(
+                        CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(
+                            self.operation_id.clone(),
+                        ),
+                    );
+                }
+                for adapter in &self.derived_adapters {
+                    adapter.validate_shape()?;
+                    if adapter.adapter != AdapterKind::LocalTauriWindow {
+                        return Err(
+                            CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(
+                                self.operation_id.clone(),
+                            ),
+                        );
+                    }
+                }
+            }
             AdapterPolicy::FailClosed => {
                 if !self.derived_adapters.is_empty() {
                     return Err(
@@ -649,11 +706,21 @@ impl CanonicalOperationDescriptor {
                 | AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation
                 | AdapterPolicy::LocalWindowRuntimeSafetyMutation
                 | AdapterPolicy::LocalWindowEmergencySafetyMutation
+                | AdapterPolicy::LocalWindowOutputControl
         ) {
             if self.derived_adapters.is_empty() {
                 return Err(CanonicalRegistryValidationError::MissingDerivedAdapter(
                     self.operation_id.clone(),
                 ));
+            }
+            if self.adapter_policy == AdapterPolicy::LocalWindowOutputControl
+                && self.derived_adapters.len() != 1
+            {
+                return Err(
+                    CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(
+                        self.operation_id.clone(),
+                    ),
+                );
             }
             if !is_strictly_sorted(&self.derived_adapters) {
                 return Err(CanonicalRegistryValidationError::UnsortedDerivedAdapters(
@@ -878,6 +945,19 @@ impl SourceInventoryDescriptor {
                     );
                 }
             }
+            SourceDisposition::SupportPhase { support_id } => {
+                validate_operation_id(support_id)?;
+                if self.source_key.family != CanonicalSourceFamily::TauriCommand
+                    || self.role != SourceRole::LocalWindowCommand
+                {
+                    return Err(
+                        CanonicalRegistryValidationError::InvalidDispositionForFamily(
+                            self.source_key.clone(),
+                            self.disposition.kind_name(),
+                        ),
+                    );
+                }
+            }
             SourceDisposition::PresentationOnly => {
                 if self.role != SourceRole::FrontendInvocation {
                     return Err(
@@ -1059,6 +1139,7 @@ impl CanonicalControlPlaneRegistry {
                     | AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation
                     | AdapterPolicy::LocalWindowRuntimeSafetyMutation
                     | AdapterPolicy::LocalWindowEmergencySafetyMutation
+                    | AdapterPolicy::LocalWindowOutputControl
             ) && expected.is_empty()
             {
                 return Err(
@@ -1181,6 +1262,7 @@ impl CanonicalControlPlaneRegistry {
                                 | AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation
                                 | AdapterPolicy::LocalWindowRuntimeSafetyMutation
                                 | AdapterPolicy::LocalWindowEmergencySafetyMutation
+                                | AdapterPolicy::LocalWindowOutputControl
                         )
                     {
                         return Err(CanonicalRegistryValidationError::FamilyAdapterMismatch(
@@ -1234,7 +1316,9 @@ impl CanonicalControlPlaneRegistry {
                         ));
                     }
                 }
-                SourceDisposition::PresentationOnly | SourceDisposition::Unclassified { .. } => {}
+                SourceDisposition::SupportPhase { .. }
+                | SourceDisposition::PresentationOnly
+                | SourceDisposition::Unclassified { .. } => {}
             }
         }
 
@@ -1476,6 +1560,7 @@ fn resolve_canonical_operation_id(
             SourceDisposition::StructuralRoute { target } => {
                 resolve_canonical_operation_id(target, sources, canonical_ids, visiting)
             }
+            SourceDisposition::SupportPhase { .. } => Ok(None),
             SourceDisposition::DispatchesToFamily { .. }
             | SourceDisposition::PresentationOnly
             | SourceDisposition::Unclassified { .. } => Ok(None),
@@ -1843,6 +1928,38 @@ mod tests {
     }
 
     #[test]
+    fn registry_wire_schema_version_three_rejects_previous_version_two() {
+        assert_eq!(CONTROL_PLANE_REGISTRY_V2_SCHEMA_VERSION, 3);
+        assert_eq!(CanonicalOperationDescriptor::schema_identity().version, 3);
+        assert_eq!(SourceInventoryDescriptor::schema_identity().version, 3);
+        assert_eq!(CanonicalControlPlaneRegistry::schema_identity().version, 3);
+
+        let registry = valid_registry();
+        let encoded = serde_json::to_value(&registry).unwrap();
+        assert_eq!(encoded["schema"]["version"], json!(3));
+        assert_eq!(
+            encoded["canonical_operations"][0]["schema"]["version"],
+            json!(3)
+        );
+        assert_eq!(
+            encoded["source_inventory"][0]["schema"]["version"],
+            json!(3)
+        );
+
+        let mut old_registry = encoded.clone();
+        old_registry["schema"]["version"] = json!(2);
+        assert!(serde_json::from_value::<CanonicalControlPlaneRegistry>(old_registry).is_err());
+
+        let mut old_operation = encoded.clone();
+        old_operation["canonical_operations"][0]["schema"]["version"] = json!(2);
+        assert!(serde_json::from_value::<CanonicalControlPlaneRegistry>(old_operation).is_err());
+
+        let mut old_source = encoded;
+        old_source["source_inventory"][0]["schema"]["version"] = json!(2);
+        assert!(serde_json::from_value::<CanonicalControlPlaneRegistry>(old_source).is_err());
+    }
+
+    #[test]
     fn duplicate_orphan_and_alias_cycle_are_rejected() {
         let mut duplicate = valid_registry();
         duplicate
@@ -1952,7 +2069,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_keyboard_sources_are_versioned_unclassified_and_cannot_be_exposed() {
+    fn canonical_registry_keyboard_sources_are_versioned_unclassified_and_cannot_be_exposed() {
         assert_eq!(
             CanonicalSourceFamily::from(LegacyOperationSourceFamily::TauriCommand),
             CanonicalSourceFamily::TauriCommand
@@ -2322,6 +2439,111 @@ mod tests {
             ));
         }
         let mut external = safety;
+        external.derived_adapters[0].adapter = AdapterKind::ExternalMcp;
+        assert!(matches!(
+            external.validate(),
+            Err(CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(_))
+        ));
+    }
+
+    #[test]
+    fn local_r4_output_control_requires_physical_consent_and_local_adapter() {
+        let operation_id = "syndocal.output.blackout.release.v1";
+        let mut output = authoritative_mutation_operation();
+        output.operation_id = operation_id.to_string();
+        output.request_schema = SchemaIdentity {
+            name: format!("{operation_id}.request"),
+            version: 1,
+        };
+        output.response_schema = SchemaIdentity {
+            name: format!("{operation_id}.response"),
+            version: 1,
+        };
+        output.risk = OperationRisk::R4;
+        output.capabilities = vec![
+            OperationCapability::LocalWindowBound,
+            OperationCapability::OutputControl,
+        ];
+        output.audit = OperationAuditRequirement::Immutable;
+        output.adapter_policy = AdapterPolicy::LocalWindowOutputControl;
+        output.receipt_policy = ReceiptPolicy::ExactTerminalReceipt;
+        output.rate_policy = RatePolicy::TokenBucket4PerSecondBurst8;
+        output.consent_policy = ConsentPolicy::PreparedPhysicalConfirmation;
+        let source_key = SourceKey::new(
+            CanonicalSourceFamily::TauriCommand,
+            "release_blackout_output_control_v1",
+        );
+        output.derived_adapters.push(DerivedAdapterBinding {
+            adapter: AdapterKind::LocalTauriWindow,
+            binding_id: source_key.binding_id(),
+            source_key: source_key.clone(),
+        });
+        output.validate().unwrap();
+
+        let secondary_source_key = SourceKey::new(
+            CanonicalSourceFamily::TauriCommand,
+            "release_blackout_output_control_secondary_v1",
+        );
+        let mut multiple_adapters = output.clone();
+        multiple_adapters
+            .derived_adapters
+            .push(DerivedAdapterBinding {
+                adapter: AdapterKind::LocalTauriWindow,
+                binding_id: secondary_source_key.binding_id(),
+                source_key: secondary_source_key,
+            });
+        assert!(matches!(
+            multiple_adapters.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+
+        let mut direct = source(
+            CanonicalSourceFamily::TauriCommand,
+            "release_blackout_output_control_v1",
+            SourceDisposition::Operation {
+                canonical_operation_id: operation_id.to_string(),
+                projection: TypedSchemaProjection::Exact,
+            },
+        );
+        direct.raw_request_schema = output.request_schema.clone();
+        direct.raw_response_schema = output.response_schema.clone();
+        let support = source(
+            CanonicalSourceFamily::TauriCommand,
+            "prepare_output_consent_v1",
+            SourceDisposition::SupportPhase {
+                support_id: "syndocal.output.consent.prepare.v1".to_string(),
+            },
+        );
+        let mut registry = CanonicalControlPlaneRegistry {
+            schema: CanonicalControlPlaneRegistry::schema_identity(),
+            canonical_operations: vec![output],
+            source_inventory: vec![direct, support],
+        };
+        registry
+            .source_inventory
+            .sort_by(|left, right| left.source_key.cmp(&right.source_key));
+        registry.populate_derived_adapters().unwrap();
+        assert!(registry
+            .canonical_operation_for_source(&SourceKey::new(
+                CanonicalSourceFamily::TauriCommand,
+                "prepare_output_consent_v1",
+            ))
+            .unwrap()
+            .is_none());
+
+        let mut wrong_risk = registry.canonical_operations[0].clone();
+        wrong_risk.risk = OperationRisk::R0;
+        assert!(matches!(
+            wrong_risk.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+        let mut wrong_consent = registry.canonical_operations[0].clone();
+        wrong_consent.consent_policy = ConsentPolicy::FailClosed;
+        assert!(matches!(
+            wrong_consent.validate(),
+            Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(_))
+        ));
+        let mut external = registry.canonical_operations[0].clone();
         external.derived_adapters[0].adapter = AdapterKind::ExternalMcp;
         assert!(matches!(
             external.validate(),

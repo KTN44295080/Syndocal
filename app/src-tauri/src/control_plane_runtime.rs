@@ -11,10 +11,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use engine::{
-    SafetyBlackoutEngageDisposition, SafetyBlackoutReleaseDisposition,
-    TimelineTransportSetPlayingDisposition,
-};
+use engine::{SafetyBlackoutEngageDisposition, TimelineTransportSetPlayingDisposition};
 use protocol::control_plane_command::{
     OutputConsentChallengeV1, OutputConsentPhysicalStateV1, OutputConsentPrepareRequestV1,
     OutputConsentStatusRequestV1, OutputConsentStatusV1, OutputControlActionV1,
@@ -350,7 +347,7 @@ pub(crate) fn execute_output_control(
             .runtime_control_plane
             .finish_output_control_inflight(&inflight);
         let response = output_control_rejection(&request, output_consent_error_code(error));
-        let _ = state.runtime_control_plane.store_output_control_terminal(
+        state.runtime_control_plane.store_output_control_terminal(
             key,
             shape_sha256,
             response.clone(),
@@ -359,22 +356,16 @@ pub(crate) fn execute_output_control(
         return response;
     }
 
-    // The exact fence and consent have now been consumed. Release the project
-    // locks before entering output lifecycle code (which owns its own strict
-    // transition locks) or standby replacement code (which must acquire the
-    // project coordinator in the canonical replacement order).
+    // The exact fence and consent have now been consumed. Each mutating
+    // action re-enters the lifecycle/project admission boundary through its
+    // actual transition or publication commit.
     drop(coordinator);
     drop(external_admission);
 
     let operation_result = match &request.action {
-        OutputControlActionV1::ReleaseBlackout => state
-            .engine
-            .safety_blackout_release_published(
-                request.expected_fence.safety_blackout_epoch,
-                request.expected_fence.safety_blackout_generation,
-                Instant::now() + Duration::from_secs(2),
-            )
-            .map(|disposition| matches!(disposition, SafetyBlackoutReleaseDisposition::Applied)),
+        OutputControlActionV1::ReleaseBlackout => {
+            super::release_safety_blackout_with_output_control_fence(state, &request.expected_fence)
+        }
         OutputControlActionV1::Arm { role } => {
             let target = match role {
                 protocol::control_plane_command::OutputControlTargetRoleV1::Lighting => {
@@ -387,51 +378,31 @@ pub(crate) fn execute_output_control(
                     protocol::MachineOutputRole::Both
                 }
             };
-            let status = state.engine.output_ownership_status();
-            if status.state == protocol::OutputOwnershipState::Ready
-                && status.effective_role == target
-                && status.desired_role == target
-            {
-                Ok(false)
-            } else {
-                super::apply_output_ownership_role(app, state, target).map(|_| true)
-            }
+            super::apply_output_ownership_role_with_output_control_fence(
+                app,
+                state,
+                target,
+                &request.expected_fence,
+            )
         }
         OutputControlActionV1::TakeOverStandby { force, .. } => {
             standby_takeover_selector(&request.action)
-                .and_then(|selector| super::take_over_standby_core(state, *force, selector))
-                .map(|_| true)
+                .and_then(|selector| {
+                    super::take_over_standby_core(state, *force, selector, &request.expected_fence)
+                })
+                .map(|(_load_result, fence_after)| (true, fence_after))
         }
     };
 
     let (applied, fence_after) = match operation_result {
-        Ok(applied) => {
-            let fence_after = match current_output_control_fence(state, &request.expected_fence) {
-                Ok(fence) => fence,
-                Err(_) => {
-                    state
-                        .runtime_control_plane
-                        .finish_output_control_inflight(&inflight);
-                    let response =
-                        output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
-                    let _ = state.runtime_control_plane.store_output_control_terminal(
-                        key,
-                        shape_sha256,
-                        response.clone(),
-                        Instant::now(),
-                    );
-                    return response;
-                }
-            };
-            (applied, fence_after)
-        }
+        Ok(result) => result,
         Err(_) => {
             state
                 .runtime_control_plane
                 .finish_output_control_inflight(&inflight);
             let response =
                 output_control_rejection(&request, OutputControlErrorCodeV1::PublicationFailed);
-            let _ = state.runtime_control_plane.store_output_control_terminal(
+            state.runtime_control_plane.store_output_control_terminal(
                 key,
                 shape_sha256,
                 response.clone(),
@@ -455,25 +426,20 @@ pub(crate) fn execute_output_control(
             OutputControlReceiptOutcomeV1::NoOp
         },
     });
-    let response = if response.validate().is_ok() {
-        response
-    } else {
-        output_control_rejection(&request, OutputControlErrorCodeV1::Internal)
-    };
+    debug_assert!(response.validate().is_ok());
     state
         .runtime_control_plane
         .finish_output_control_inflight(&inflight);
-    if state
-        .runtime_control_plane
-        .store_output_control_terminal(key, shape_sha256, response.clone(), Instant::now())
-        .is_err()
-    {
-        return output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
-    }
+    state.runtime_control_plane.store_output_control_terminal(
+        key,
+        shape_sha256,
+        response.clone(),
+        Instant::now(),
+    );
     response
 }
 
-fn exact_output_control_fence_matches(
+pub(crate) fn exact_output_control_fence_matches(
     state: &AppState,
     coordinator: &ProjectCoordinator,
     fence: &OutputControlFenceV1,
@@ -488,6 +454,56 @@ fn exact_output_control_fence_matches(
         && output.generation.checked_add(1) == Some(fence.output_generation)
         && safety.epoch == fence.safety_blackout_epoch
         && safety.generation == fence.safety_blackout_generation
+}
+
+/// Reserve the externally projected output counters that a successful Arm or
+/// project-replacement transition will publish. This must run before the
+/// physical action so terminal-fence exhaustion cannot be discovered after a
+/// successful commit.
+pub(crate) fn preflight_output_control_successor(
+    fence: &OutputControlFenceV1,
+) -> Result<(u64, u64), String> {
+    let output_epoch = fence
+        .output_epoch
+        .checked_add(1)
+        .filter(|value| *value <= MAX_SAFE_JAVASCRIPT_INTEGER)
+        .ok_or_else(|| "Output ownership epoch is exhausted".to_string())?;
+    let output_generation = fence
+        .output_generation
+        .checked_add(1)
+        .filter(|value| *value <= MAX_SAFE_JAVASCRIPT_INTEGER)
+        .ok_or_else(|| "Output ownership generation is exhausted".to_string())?;
+    Ok((output_epoch, output_generation))
+}
+
+/// Build the terminal fence from values preflighted before action commit and
+/// state captured while the coordinator/output transition guards are still
+/// held. No fallible lock or allocation occurs after the physical action.
+pub(crate) fn committed_output_control_fence(
+    basis: &OutputControlFenceV1,
+    project_epoch: u64,
+    project_revision: u64,
+    project_checkpoint_hash: &str,
+    project_publication_generation: u64,
+    output_epoch: u64,
+    output_generation: u64,
+    safety_blackout_epoch: u64,
+    safety_blackout_generation: u64,
+) -> OutputControlFenceV1 {
+    let fence = OutputControlFenceV1 {
+        process_incarnation: basis.process_incarnation,
+        session_incarnation: basis.session_incarnation,
+        project_epoch,
+        project_revision,
+        project_checkpoint_hash: project_checkpoint_hash.to_string(),
+        project_publication_generation,
+        output_epoch,
+        output_generation,
+        safety_blackout_epoch,
+        safety_blackout_generation,
+    };
+    debug_assert!(fence.validate().is_ok());
+    fence
 }
 
 fn validate_output_action_current(
@@ -522,6 +538,30 @@ fn validate_output_action_current(
             Ok(())
         }
     }
+}
+
+/// Dispatch one operation-specific Tauri ingress into the shared local
+/// OutputControl controller. Keeping the operation identity at the wrapper
+/// boundary prevents the generic action envelope from becoming a source that
+/// ambiguously projects to three different canonical operations.
+pub(crate) fn execute_output_control_for_operation(
+    app: &tauri::AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    expected_operation_id: &'static str,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    if request.operation_id != expected_operation_id
+        || request.action.operation_id() != expected_operation_id
+    {
+        return output_control_rejection_for_operation(
+            &request,
+            expected_operation_id,
+            OutputControlErrorCodeV1::InvalidRequest,
+        );
+    }
+    execute_output_control(app, window, state, query_state, request)
 }
 
 fn standby_takeover_selector(
@@ -571,8 +611,16 @@ fn output_control_rejection(
     request: &OutputControlCommandRequestV1,
     error: OutputControlErrorCodeV1,
 ) -> OutputControlResponseV1 {
+    output_control_rejection_for_operation(request, request.action.operation_id(), error)
+}
+
+fn output_control_rejection_for_operation(
+    request: &OutputControlCommandRequestV1,
+    operation_id: &str,
+    error: OutputControlErrorCodeV1,
+) -> OutputControlResponseV1 {
     OutputControlResponseV1::Rejected(OutputControlRejectionV1 {
-        operation_id: request.action.operation_id().to_string(),
+        operation_id: operation_id.to_string(),
         request_id: request.request_id.clamp(1, MAX_SAFE_JAVASCRIPT_INTEGER),
         error,
     })
@@ -589,54 +637,6 @@ fn output_control_receipt_key(
         operation_id: request.action.operation_id().to_string(),
         request_id: request.request_id,
     }
-}
-
-fn current_output_control_fence(
-    state: &AppState,
-    basis: &OutputControlFenceV1,
-) -> Result<OutputControlFenceV1, String> {
-    let _external_admission = lock_project_external_command_admission(state)?;
-    let mut coordinator = lock_project_coordinator(state)?;
-    reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
-    for _ in 0..8 {
-        let output_before = state.engine.output_ownership_status();
-        let safety_before = state.engine.safety_blackout_authority();
-        let output_epoch = output_before
-            .epoch
-            .checked_add(1)
-            .filter(|value| *value <= MAX_SAFE_JAVASCRIPT_INTEGER)
-            .ok_or_else(|| "Output ownership epoch is exhausted".to_string())?;
-        let output_generation = output_before
-            .generation
-            .checked_add(1)
-            .filter(|value| *value <= MAX_SAFE_JAVASCRIPT_INTEGER)
-            .ok_or_else(|| "Output ownership generation is exhausted".to_string())?;
-        let fence = OutputControlFenceV1 {
-            process_incarnation: basis.process_incarnation,
-            session_incarnation: basis.session_incarnation,
-            project_epoch: coordinator.epoch,
-            project_revision: coordinator.revision,
-            project_checkpoint_hash: coordinator.checkpoint_hash.clone(),
-            project_publication_generation: coordinator.publication_generation,
-            output_epoch,
-            output_generation,
-            safety_blackout_epoch: safety_before.epoch,
-            safety_blackout_generation: safety_before.generation,
-        };
-        let output_after = state.engine.output_ownership_status();
-        let safety_after = state.engine.safety_blackout_authority();
-        if output_before.epoch == output_after.epoch
-            && output_before.generation == output_after.generation
-            && safety_before == safety_after
-        {
-            fence
-                .validate()
-                .map_err(|_| "Output-control result fence is invalid".to_string())?;
-            return Ok(fence);
-        }
-        std::hint::spin_loop();
-    }
-    Err("Output-control result fence did not stabilize".to_string())
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {
@@ -1428,12 +1428,10 @@ impl RuntimeControlPlaneState {
         shape_sha256: &str,
         now: Instant,
     ) -> OutputControlLaneReservation {
-        let mut inner = match self.output_control.lock() {
-            Ok(inner) => inner,
-            Err(_) => {
-                return OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::Internal)
-            }
-        };
+        let mut inner = self
+            .output_control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         purge_output_control_expired(&mut inner, now);
         let last_used = next_output_control_sequence(&mut inner);
         if let Some(record) = inner.receipts.get_mut(key) {
@@ -1467,7 +1465,10 @@ impl RuntimeControlPlaneState {
         shape_sha256: &str,
         now: Instant,
     ) -> Option<OutputControlLaneReservation> {
-        let mut inner = self.output_control.lock().ok()?;
+        let mut inner = self
+            .output_control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         purge_output_control_expired(&mut inner, now);
         let last_used = next_output_control_sequence(&mut inner);
         if let Some(record) = inner.receipts.get_mut(key) {
@@ -1498,7 +1499,7 @@ impl RuntimeControlPlaneState {
         let mut inner = self
             .output_control
             .lock()
-            .map_err(|_| OutputControlErrorCodeV1::Internal)?;
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         purge_output_control_expired(&mut inner, now);
         if inner.audit.len() >= MAX_SAFETY_AUDIT_RECORDS {
             return Err(OutputControlErrorCodeV1::Overloaded);
@@ -1538,9 +1539,11 @@ impl RuntimeControlPlaneState {
     }
 
     fn finish_output_control_inflight(&self, key: &PrincipalDomainKey) {
-        if let Ok(mut inner) = self.output_control.lock() {
-            inner.inflight.remove(key);
-        }
+        let mut inner = self
+            .output_control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        inner.inflight.remove(key);
     }
 
     fn store_output_control_terminal(
@@ -1549,11 +1552,11 @@ impl RuntimeControlPlaneState {
         shape_sha256: String,
         response: OutputControlResponseV1,
         now: Instant,
-    ) -> Result<(), OutputControlErrorCodeV1> {
+    ) {
         let mut inner = self
             .output_control
             .lock()
-            .map_err(|_| OutputControlErrorCodeV1::Internal)?;
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         purge_output_control_expired(&mut inner, now);
         enforce_output_control_receipt_capacity(&mut inner, &key, now);
         let last_used = next_output_control_sequence(&mut inner);
@@ -1567,13 +1570,14 @@ impl RuntimeControlPlaneState {
             },
         );
         inner.lanes.remove(&key);
-        Ok(())
     }
 
     fn release_output_control_lane(&self, key: &OutputControlReceiptKey) {
-        if let Ok(mut inner) = self.output_control.lock() {
-            inner.lanes.remove(key);
-        }
+        let mut inner = self
+            .output_control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        inner.lanes.remove(key);
     }
 
     /// Retire all server records for a renderer principal before its owner
@@ -1657,9 +1661,10 @@ impl RuntimeControlPlaneState {
             .retain(|key, _| key.principal != principal);
 
         drop(safety_blackout);
-        let Ok(mut output_control) = self.output_control.lock() else {
-            return;
-        };
+        let mut output_control = self
+            .output_control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         purge_output_control_expired(&mut output_control, now);
         let keys = output_control
             .receipts
@@ -2930,6 +2935,7 @@ mod tests {
     use super::*;
     use protocol::control_plane_command::{
         OutputControlActionV1, ProjectMutationFenceV1, SetTimelinePlayingRuntimePayloadV1,
+        OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
     };
 
     fn test_binding(principal: &str, window_label: &str, owner_incarnation: u64) -> CallerBinding {
@@ -3039,6 +3045,98 @@ mod tests {
         ));
     }
 
+    fn test_output_key(
+        principal: &str,
+        operation_id: &str,
+        request_id: u64,
+        owner_incarnation: u64,
+    ) -> OutputControlReceiptKey {
+        OutputControlReceiptKey {
+            principal: principal.to_string(),
+            window_label: "main".to_string(),
+            owner_incarnation,
+            operation_id: operation_id.to_string(),
+            request_id,
+        }
+    }
+
+    fn test_output_rejection(
+        key: &OutputControlReceiptKey,
+        error: OutputControlErrorCodeV1,
+    ) -> OutputControlResponseV1 {
+        OutputControlResponseV1::Rejected(OutputControlRejectionV1 {
+            operation_id: key.operation_id.clone(),
+            request_id: key.request_id,
+            error,
+        })
+    }
+
+    fn test_output_fence() -> OutputControlFenceV1 {
+        OutputControlFenceV1 {
+            process_incarnation: 1,
+            session_incarnation: 2,
+            project_epoch: 3,
+            project_revision: 4,
+            project_checkpoint_hash: "a".repeat(64),
+            project_publication_generation: 5,
+            output_epoch: 6,
+            output_generation: 7,
+            safety_blackout_epoch: 8,
+            safety_blackout_generation: 9,
+        }
+    }
+
+    #[test]
+    fn output_control_successor_is_preflighted_before_commit_and_receipt_is_infallible() {
+        let basis = test_output_fence();
+        assert_eq!(preflight_output_control_successor(&basis).unwrap(), (7, 8));
+
+        let fence =
+            committed_output_control_fence(&basis, 10, 11, &"b".repeat(64), 12, 13, 14, 15, 16);
+        assert_eq!(fence.process_incarnation, basis.process_incarnation);
+        assert_eq!(fence.session_incarnation, basis.session_incarnation);
+        assert_eq!(fence.project_epoch, 10);
+        assert_eq!(fence.project_revision, 11);
+        assert_eq!(fence.project_checkpoint_hash, "b".repeat(64));
+        assert_eq!(fence.project_publication_generation, 12);
+        assert_eq!(fence.output_epoch, 13);
+        assert_eq!(fence.output_generation, 14);
+        assert_eq!(fence.safety_blackout_epoch, 15);
+        assert_eq!(fence.safety_blackout_generation, 16);
+        assert!(fence.validate().is_ok());
+
+        let exhausted = OutputControlFenceV1 {
+            output_epoch: MAX_SAFE_JAVASCRIPT_INTEGER,
+            ..basis
+        };
+        assert!(preflight_output_control_successor(&exhausted).is_err());
+    }
+
+    #[test]
+    fn output_control_terminal_survives_bookkeeping_mutex_poison_for_exact_retry() {
+        let state = RuntimeControlPlaneState::default();
+        let now = Instant::now();
+        let key = test_output_key(
+            "renderer-output-poison",
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+            12_000,
+            6,
+        );
+        let shape = "f".repeat(64);
+        let response = test_output_rejection(&key, OutputControlErrorCodeV1::PublicationFailed);
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.output_control.lock().unwrap();
+            panic!("inject output-control bookkeeping poison");
+        }));
+        state.store_output_control_terminal(key.clone(), shape.clone(), response.clone(), now);
+
+        assert!(matches!(
+            state.reserve_output_control_lane(&key, &shape, now),
+            OutputControlLaneReservation::Terminal(actual) if actual == response
+        ));
+    }
+
     #[test]
     fn output_control_takeover_passes_exact_standby_identity_to_core() {
         let action = OutputControlActionV1::TakeOverStandby {
@@ -3055,6 +3153,241 @@ mod tests {
                 },
             ))
         );
+    }
+
+    #[test]
+    fn output_control_exact_shape_retry_conflict_and_expiry_tombstone_are_fail_closed() {
+        let state = RuntimeControlPlaneState::default();
+        let now = Instant::now();
+        let binding = test_binding("renderer-output-receipt", "main", 7);
+        let key = test_output_key(
+            &binding.principal,
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+            12_001,
+            binding.owner_incarnation,
+        );
+        let shape = "a".repeat(64);
+        let response = test_output_rejection(&key, OutputControlErrorCodeV1::PublicationFailed);
+
+        assert!(matches!(
+            state.reserve_output_control_lane(&key, &shape, now),
+            OutputControlLaneReservation::Lane(_)
+        ));
+        state.store_output_control_terminal(key.clone(), shape.clone(), response.clone(), now);
+
+        assert!(matches!(
+            state.reserve_output_control_lane(&key, &shape, now),
+            OutputControlLaneReservation::Terminal(actual) if actual == response
+        ));
+        assert!(matches!(
+            state.recheck_output_control_terminal(&key, &shape, now),
+            Some(OutputControlLaneReservation::Terminal(actual)) if actual == response
+        ));
+        assert!(matches!(
+            state.reserve_output_control_lane(&key, &"b".repeat(64), now),
+            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+        ));
+
+        // Expiry removes the terminal response but leaves a tombstone so the
+        // exact key cannot be reused with either the old or a new shape.
+        assert!(matches!(
+            state.reserve_output_control_lane(&key, &shape, now + RECEIPT_TTL),
+            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+        ));
+        assert!(matches!(
+            state.reserve_output_control_lane(&key, &"c".repeat(64), now + RECEIPT_TTL),
+            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+        ));
+    }
+
+    #[test]
+    fn output_control_owner_retirement_tombstones_receipt_and_lane_without_erasing_audit() {
+        let state = RuntimeControlPlaneState::default();
+        let now = Instant::now();
+        let binding = test_binding("renderer-output-retire", "main", 8);
+        let shape = "d".repeat(64);
+        let terminal_key = test_output_key(
+            &binding.principal,
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+            12_002,
+            binding.owner_incarnation,
+        );
+        assert!(matches!(
+            state.reserve_output_control_lane(&terminal_key, &shape, now),
+            OutputControlLaneReservation::Lane(_)
+        ));
+        let (inflight, audit_sequence) = state
+            .admit_and_audit_output_control(&binding, &terminal_key, &shape, &"e".repeat(64), now)
+            .unwrap();
+        assert_eq!(audit_sequence, 1);
+        state.finish_output_control_inflight(&inflight);
+        state.store_output_control_terminal(
+            terminal_key.clone(),
+            shape.clone(),
+            test_output_rejection(&terminal_key, OutputControlErrorCodeV1::Busy),
+            now,
+        );
+
+        let pending_key = test_output_key(
+            &binding.principal,
+            OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            12_003,
+            binding.owner_incarnation,
+        );
+        assert!(matches!(
+            state.reserve_output_control_lane(&pending_key, &shape, now),
+            OutputControlLaneReservation::Lane(_)
+        ));
+
+        state.retire_principal(&binding.principal);
+
+        for key in [&terminal_key, &pending_key] {
+            assert!(matches!(
+                state.reserve_output_control_lane(key, &shape, now),
+                OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+            ));
+        }
+        let inner = state.output_control.lock().unwrap();
+        assert!(inner.receipts.is_empty());
+        assert!(inner.lanes.is_empty());
+        assert!(inner.tombstones.contains_key(&terminal_key));
+        assert!(inner.tombstones.contains_key(&pending_key));
+        assert_eq!(
+            inner.audit.len(),
+            1,
+            "retirement does not rewrite immutable audit"
+        );
+        assert_eq!(inner.audit[0].sequence, audit_sequence);
+        assert_eq!(inner.audit[0].principal, binding.principal);
+        assert_eq!(inner.audit[0].owner_incarnation, binding.owner_incarnation);
+    }
+
+    #[test]
+    fn output_control_fake_clock_burst_is_eight_and_ninth_is_rejected_before_audit() {
+        let state = RuntimeControlPlaneState::default();
+        let now = Instant::now();
+        let binding = test_binding("renderer-output-rate", "main", 9);
+        let shape = "f".repeat(64);
+        let argument_fingerprint = "1".repeat(64);
+
+        for offset in 0..8_u64 {
+            let key = test_output_key(
+                &binding.principal,
+                OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+                12_100 + offset,
+                binding.owner_incarnation,
+            );
+            assert!(matches!(
+                state.reserve_output_control_lane(&key, &shape, now),
+                OutputControlLaneReservation::Lane(_)
+            ));
+            let (inflight, sequence) = state
+                .admit_and_audit_output_control(&binding, &key, &shape, &argument_fingerprint, now)
+                .unwrap();
+            assert_eq!(sequence, offset + 1);
+            state.finish_output_control_inflight(&inflight);
+            state.release_output_control_lane(&key);
+        }
+
+        let ninth_key = test_output_key(
+            &binding.principal,
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+            12_108,
+            binding.owner_incarnation,
+        );
+        assert!(matches!(
+            state.reserve_output_control_lane(&ninth_key, &shape, now),
+            OutputControlLaneReservation::Lane(_)
+        ));
+        assert_eq!(
+            state
+                .admit_and_audit_output_control(
+                    &binding,
+                    &ninth_key,
+                    &shape,
+                    &argument_fingerprint,
+                    now,
+                )
+                .unwrap_err(),
+            OutputControlErrorCodeV1::Overloaded
+        );
+        let inner = state.output_control.lock().unwrap();
+        assert_eq!(
+            inner.audit.len(),
+            8,
+            "the ninth over-limit attempt is rejected before audit"
+        );
+        drop(inner);
+        state.release_output_control_lane(&ninth_key);
+    }
+
+    #[test]
+    fn output_control_single_flight_is_busy_per_principal_and_domain() {
+        let state = RuntimeControlPlaneState::default();
+        let now = Instant::now();
+        let binding = test_binding("renderer-output-flight", "main", 10);
+        let shape = "2".repeat(64);
+        let argument_fingerprint = "3".repeat(64);
+        let first_key = test_output_key(
+            &binding.principal,
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+            12_201,
+            binding.owner_incarnation,
+        );
+        let second_key = test_output_key(
+            &binding.principal,
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+            12_202,
+            binding.owner_incarnation,
+        );
+        for key in [&first_key, &second_key] {
+            assert!(matches!(
+                state.reserve_output_control_lane(key, &shape, now),
+                OutputControlLaneReservation::Lane(_)
+            ));
+        }
+
+        let (first_inflight, first_sequence) = state
+            .admit_and_audit_output_control(
+                &binding,
+                &first_key,
+                &shape,
+                &argument_fingerprint,
+                now,
+            )
+            .unwrap();
+        assert_eq!(first_sequence, 1);
+        assert_eq!(
+            state
+                .admit_and_audit_output_control(
+                    &binding,
+                    &second_key,
+                    &shape,
+                    &argument_fingerprint,
+                    now,
+                )
+                .unwrap_err(),
+            OutputControlErrorCodeV1::Busy
+        );
+        {
+            let inner = state.output_control.lock().unwrap();
+            assert_eq!(inner.audit.len(), 1, "busy does not append a second audit");
+        }
+
+        state.finish_output_control_inflight(&first_inflight);
+        let (second_inflight, second_sequence) = state
+            .admit_and_audit_output_control(
+                &binding,
+                &second_key,
+                &shape,
+                &argument_fingerprint,
+                now,
+            )
+            .unwrap();
+        assert_eq!(second_sequence, 2);
+        state.finish_output_control_inflight(&second_inflight);
+        state.release_output_control_lane(&first_key);
+        state.release_output_control_lane(&second_key);
     }
 
     #[test]

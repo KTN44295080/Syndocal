@@ -12,7 +12,7 @@ Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/
 
 Syndocal v1.0は、2026-07時点の`COMPLETION_PLAN.md`で定義していた**旧ソフトウェア完成条件を満たした歴史的baseline**である。
 
-現行の拡張製品リリースは未完了である。AI control-planeのAI3は5要件すべてを監査済みだが、canonical output vertical、owner lease、project-swap physical fence、durable receipt/audit、rate/soak proofが未完了である。Take Overの型/世代固定修復に対するネイティブ完了ゲートは2026-08-19に通過したが、これはAI3全体の合格ではない。Windows ASIOも配布ライセンス/成果物境界、第二vendor、rate/buffer/channel matrix、障害復旧、1時間soak、物理遅延などの受入が未完了である。旧baselineや個別修復の合格を、これら現行要件の合格へ読み替えない。
+現行の拡張製品リリースは未完了である。AI control-planeのAI3は5要件すべてを監査済みで、ローカルGUIのsafety-latch Release Blackout／active Arm／exact Take Overというcanonical R4 verticalとそのネイティブ完了ゲートは2026-08-19に通過した。しかしMIDI/OSC/Remoteとall/video/per-output release、owner lease、project-swap physical fence、durable receipt/audit、rate/soak proofは未完了であり、これはAI3全体の合格ではない。Windows ASIOも配布ライセンス/成果物境界、第二vendor、rate/buffer/channel matrix、障害復旧、1時間soak、物理遅延などの受入が未完了である。旧baselineや個別修復の合格を、これら現行要件の合格へ読み替えない。
 
 - 照明、映像、共有タイムライン/キュー/エフェクト、2D Stage Map、`.sdc`保存/復元、外部I/O境界を実装済み。
 - Windows/macOS/LinuxでRust、libav、フロントエンド、Tauri、配布物生成とパッケージ起動CIがgreen。

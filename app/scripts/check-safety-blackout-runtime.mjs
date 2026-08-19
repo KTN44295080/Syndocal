@@ -80,7 +80,21 @@ assert.equal(unknownCalls, 1);
 // Production wiring keeps engage separate from legacy release, while Full
 // Lock exposes only safer-direction button actions.
 assert.match(appSource, /if \(enabled\) \{\s*await safetyBlackoutRuntime\.engage\(\);/s);
-assert.match(appSource, /await invoke\("set_blackout", \{ enabled: false \}\);/);
+assert.match(
+  appSource,
+  /await executeOutputControl\(\s*invoke,\s*\{\s*kind: "release_blackout"/s,
+  "App release must use the authenticated R4 OutputControl controller",
+);
+assert.doesNotMatch(
+  appSource,
+  /invoke\("set_blackout",\s*\{\s*enabled:\s*false\s*\}\)/,
+  "S0 safety-blackout release must never fall back to the legacy setter",
+);
+assert.match(
+  appSource,
+  /const invokeSafetyBlackoutRuntime = async <T,>\(\s*command:[\s\S]*?if \(command !== "safety_blackout_engage_v1"\)/,
+  "S0 engage must retain its narrow, separate ingress",
+);
 assert.match(overlaySource, /onClick=\{\(\) => props\.onSetBlackout\(true\)\}/);
 assert.doesNotMatch(overlaySource, /onSetBlackout\(!props\.blackout\)/);
 assert.doesNotMatch(overlaySource, /onSetAllBlackout\(false\)/);
