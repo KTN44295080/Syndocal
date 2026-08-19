@@ -14046,6 +14046,31 @@ struct StandbyCheckpoint {
     mappings: ProjectControlMappings,
 }
 
+/// Immutable identity of the checkpoint bound to a takeover consent/fence.
+/// The session and generation are carried together so a later heartbeat from
+/// the same session cannot silently replace the authorized project image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StandbyCheckpointIdentity {
+    pub(crate) session_id: String,
+    pub(crate) generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StandbyTakeoverCheckpointSelector {
+    /// Legacy local command behavior: choose the latest valid checkpoint after
+    /// taking the lifecycle lock.
+    LocalLatest,
+    /// Control-plane behavior: require the exact consent-bound identity.
+    Exact(StandbyCheckpointIdentity),
+}
+
+fn standby_checkpoint_identity(manifest: &StandbySyncManifest) -> StandbyCheckpointIdentity {
+    StandbyCheckpointIdentity {
+        session_id: manifest.session_id.clone(),
+        generation: manifest.generation,
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ProjectHistoryEntry {
     entry_id: u64,
@@ -37258,6 +37283,159 @@ fn write_standby_checkpoint_in(
     Ok(manifest)
 }
 
+fn read_standby_checkpoint_manifest(
+    directory: &Path,
+    manifest: StandbySyncManifest,
+) -> Result<StandbyCheckpoint, String> {
+    let path = directory.join(&manifest.project_file);
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("Unable to read standby project {}: {error}", path.display()))?;
+    if bytes.len() as u64 != manifest.project_bytes
+        || standby_checksum(&bytes) != manifest.project_checksum
+    {
+        return Err(format!(
+            "Standby project integrity check failed: {}",
+            path.display()
+        ));
+    }
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Invalid standby project {}: {error}", path.display()))?;
+    let (project, mappings) = project_and_control_mappings_from_value(value)
+        .map_err(|error| format!("Invalid standby project {}: {error}", path.display()))?;
+    validate_project_file(&project)
+        .map_err(|error| format!("Invalid standby project {}: {error}", path.display()))?;
+    Ok(StandbyCheckpoint {
+        manifest,
+        project,
+        mappings,
+    })
+}
+
+#[cfg(test)]
+fn select_latest_standby_manifest_for_session(
+    manifests: &[StandbySyncManifest],
+    session_id: &str,
+) -> Option<StandbySyncManifest> {
+    manifests
+        .iter()
+        .filter(|manifest| manifest.session_id == session_id)
+        .max_by_key(|manifest| manifest.generation)
+        .cloned()
+}
+
+fn validate_exact_standby_takeover_manifest(
+    manifest: &StandbySyncManifest,
+    expected: &StandbyCheckpointIdentity,
+) -> Result<(), String> {
+    let actual = standby_checkpoint_identity(manifest);
+    if actual != *expected {
+        return Err(format!(
+            "Standby takeover checkpoint is stale: expected {} generation {}, observed {} generation {}",
+            expected.session_id,
+            expected.generation,
+            actual.session_id,
+            actual.generation,
+        ));
+    }
+    let expected_project_file =
+        standby_project_file_name(&expected.session_id, expected.generation);
+    if manifest.project_file != expected_project_file {
+        return Err(format!(
+            "Standby takeover checkpoint integrity failed: expected project file {}, observed {}",
+            expected_project_file, manifest.project_file
+        ));
+    }
+    Ok(())
+}
+
+fn strict_standby_manifest_path_for_exact_takeover(
+    directory: &Path,
+    expected: &StandbyCheckpointIdentity,
+) -> Result<PathBuf, String> {
+    if expected.session_id.is_empty()
+        || expected.session_id.len() > 128
+        || !expected.session_id.is_ascii()
+        || expected
+            .session_id
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b'/' | b'\\'))
+        || expected.generation == 0
+    {
+        return Err("Standby takeover checkpoint identity is invalid".to_string());
+    }
+
+    const MANIFEST_PREFIX: &str = "syndocal-standby-";
+    const MANIFEST_SUFFIX: &str = ".json";
+    let prefix = format!("{MANIFEST_PREFIX}{}-", expected.session_id);
+    let mut exact_path = None;
+    for entry in fs::read_dir(directory).map_err(|error| {
+        format!(
+            "Unable to list standby synchronization directory {}: {error}",
+            directory.display()
+        )
+    })? {
+        let entry = entry
+            .map_err(|error| format!("Unable to inspect standby synchronization entry: {error}"))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(&prefix) || !name.ends_with(MANIFEST_SUFFIX) {
+            continue;
+        }
+        let generation_text = &name[prefix.len()..name.len() - MANIFEST_SUFFIX.len()];
+        // A longer hyphenated session ID (for example primary-a-b) also
+        // shares the shorter primary-a prefix. Only a canonical decimal
+        // suffix is an unambiguous candidate for this expected session.
+        // Tails without a hyphen cannot be another session ID, so malformed
+        // or non-canonical values must fail closed instead of allowing exact
+        // takeover to fall back to an older checkpoint. Hyphenated tails are
+        // retained as possible longer-session collisions (for example
+        // primary-a-b generation 99 produces the tail b-99).
+        let generation = match generation_text.parse::<u64>() {
+            Ok(generation) if generation_text == generation.to_string() => generation,
+            Ok(_) | Err(_) if !generation_text.contains('-') => {
+                return Err(format!(
+                    "Invalid standby manifest generation candidate {generation_text:?} for session {}",
+                    expected.session_id
+                ));
+            }
+            Ok(_) | Err(_) => continue,
+        };
+        if generation > expected.generation {
+            return Err(format!(
+                "Standby takeover checkpoint is stale: newer generation {} was observed for session {}",
+                generation, expected.session_id
+            ));
+        }
+        if generation == expected.generation && exact_path.replace(entry.path()).is_some() {
+            return Err(format!(
+                "Duplicate standby manifest candidate for session {} generation {}",
+                expected.session_id, expected.generation
+            ));
+        }
+    }
+    exact_path.ok_or_else(|| {
+        format!(
+            "Standby takeover checkpoint is stale: no manifest for session {} generation {}",
+            expected.session_id, expected.generation
+        )
+    })
+}
+
+/// Exact control-plane reads scan filenames before parsing JSON. A malformed
+/// newer candidate therefore cannot disappear through the general reader's
+/// valid-manifest filter and cause fallback to an older checkpoint.
+fn read_standby_checkpoint_for_exact_takeover(
+    directory: &Path,
+    expected: &StandbyCheckpointIdentity,
+) -> Result<StandbyCheckpoint, String> {
+    let manifest_path = strict_standby_manifest_path_for_exact_takeover(directory, expected)?;
+    let manifest = read_standby_manifest(&manifest_path)?;
+    validate_exact_standby_takeover_manifest(&manifest, expected)?;
+    read_standby_checkpoint_manifest(directory, manifest)
+}
+
 fn read_standby_checkpoint_for_session(
     directory: &Path,
     session_id: Option<&str>,
@@ -37269,58 +37447,10 @@ fn read_standby_checkpoint_for_session(
     }
     let mut last_error = None;
     for manifest in manifests {
-        let path = directory.join(&manifest.project_file);
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                last_error = Some(format!(
-                    "Unable to read standby project {}: {error}",
-                    path.display()
-                ));
-                continue;
-            }
-        };
-        if bytes.len() as u64 != manifest.project_bytes
-            || standby_checksum(&bytes) != manifest.project_checksum
-        {
-            last_error = Some(format!(
-                "Standby project integrity check failed: {}",
-                path.display()
-            ));
-            continue;
+        match read_standby_checkpoint_manifest(directory, manifest) {
+            Ok(checkpoint) => return Ok(Some(checkpoint)),
+            Err(error) => last_error = Some(error),
         }
-        let value: Value = match serde_json::from_slice(&bytes) {
-            Ok(value) => value,
-            Err(error) => {
-                last_error = Some(format!(
-                    "Invalid standby project {}: {error}",
-                    path.display()
-                ));
-                continue;
-            }
-        };
-        let (project, mappings) = match project_and_control_mappings_from_value(value) {
-            Ok(checkpoint) => checkpoint,
-            Err(error) => {
-                last_error = Some(format!(
-                    "Invalid standby project {}: {error}",
-                    path.display()
-                ));
-                continue;
-            }
-        };
-        if let Err(error) = validate_project_file(&project) {
-            last_error = Some(format!(
-                "Invalid standby project {}: {error}",
-                path.display()
-            ));
-            continue;
-        }
-        return Ok(Some(StandbyCheckpoint {
-            manifest,
-            project,
-            mappings,
-        }));
     }
     Err(last_error
         .unwrap_or_else(|| "No valid standby synchronization checkpoint was found".to_string()))
@@ -37782,7 +37912,11 @@ fn standby_sync_status(state: State<'_, AppState>) -> Result<StandbySyncStatus, 
         .map_err(|_| "Standby synchronization status lock was poisoned".to_string())
 }
 
-fn take_over_standby_core(state: &AppState, force: bool) -> Result<ProjectLoadResult, String> {
+fn take_over_standby_core(
+    state: &AppState,
+    force: bool,
+    selector: StandbyTakeoverCheckpointSelector,
+) -> Result<ProjectLoadResult, String> {
     let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
         let error = "Standby synchronization lifecycle lock was poisoned".to_string();
         state
@@ -37821,9 +37955,33 @@ fn take_over_standby_core(state: &AppState, force: bool) -> Result<ProjectLoadRe
         );
     }
 
-    let checkpoint =
-        read_standby_checkpoint_for_session(&directory, status_snapshot.session_id.as_deref())?
-            .ok_or_else(|| "No standby checkpoint is available for Take Over".to_string())?;
+    if let StandbyTakeoverCheckpointSelector::Exact(expected) = &selector {
+        // Re-check the status after taking lifecycle ownership. The control
+        // plane validated this identity before consuming consent, but the
+        // polling worker can advance status while the external locks are
+        // released. A changed status is stale even before reading the file.
+        if status_snapshot.session_id.as_deref() != Some(expected.session_id.as_str())
+            || status_snapshot.generation != Some(expected.generation)
+        {
+            return Err("Standby takeover checkpoint is stale".to_string());
+        }
+    }
+
+    let checkpoint = match &selector {
+        StandbyTakeoverCheckpointSelector::LocalLatest => {
+            read_standby_checkpoint_for_session(&directory, status_snapshot.session_id.as_deref())?
+                .ok_or_else(|| "No standby checkpoint is available for Take Over".to_string())?
+        }
+        StandbyTakeoverCheckpointSelector::Exact(expected) => {
+            // Read the latest manifest for the consent-bound session and
+            // reject any generation advance before stopping the worker. This
+            // is intentionally fail-closed and never falls back to an older
+            // checkpoint when a newer manifest exists.
+            let checkpoint = read_standby_checkpoint_for_exact_takeover(&directory, expected)?;
+            validate_exact_standby_takeover_manifest(&checkpoint.manifest, expected)?;
+            checkpoint
+        }
+    };
     {
         let mut runtime = state
             .standby_sync
@@ -37850,7 +38008,11 @@ fn take_over_standby_core(state: &AppState, force: bool) -> Result<ProjectLoadRe
 
 #[tauri::command]
 fn take_over_standby(state: State<'_, AppState>, force: bool) -> Result<ProjectLoadResult, String> {
-    take_over_standby_core(&state, force)
+    take_over_standby_core(
+        &state,
+        force,
+        StandbyTakeoverCheckpointSelector::LocalLatest,
+    )
 }
 
 fn diagnostic_zip_file_name(path: PathBuf) -> PathBuf {
@@ -38777,8 +38939,11 @@ fn migrate_legacy_spatial_parameter_models(value: &mut Value) -> Result<(), Stri
     walk(value)
 }
 
+/// Project replacement is shared by Tauri command handlers (which hold
+/// `State<'_, AppState>`) and the authenticated control-plane runtime (which
+/// already owns `&AppState`), so the internal boundary stays at `&AppState`.
 fn load_project_from_file(
-    state: &State<'_, AppState>,
+    state: &AppState,
     project: ProjectFile,
     path_label: String,
     current_path: Option<&Path>,
@@ -38794,7 +38959,7 @@ fn load_project_from_file(
 }
 
 fn load_project_from_file_with_control_mappings(
-    state: &State<'_, AppState>,
+    state: &AppState,
     project: ProjectFile,
     mappings: ProjectControlMappings,
     path_label: String,
@@ -38811,7 +38976,7 @@ fn load_project_from_file_with_control_mappings(
 }
 
 fn load_project_from_file_with_control_mappings_and_disposition(
-    state: &State<'_, AppState>,
+    state: &AppState,
     project: ProjectFile,
     mappings: ProjectControlMappings,
     path_label: String,
@@ -38830,7 +38995,7 @@ fn load_project_from_file_with_control_mappings_and_disposition(
 }
 
 fn load_project_from_file_with_control_mappings_in_scope(
-    state: &State<'_, AppState>,
+    state: &AppState,
     project: ProjectFile,
     mappings: ProjectControlMappings,
     path_label: String,
@@ -38849,7 +39014,7 @@ fn load_project_from_file_with_control_mappings_in_scope(
 }
 
 fn load_project_from_file_with_control_mappings_in_scope_and_disposition(
-    state: &State<'_, AppState>,
+    state: &AppState,
     project: ProjectFile,
     mappings: ProjectControlMappings,
     path_label: String,
@@ -39082,7 +39247,7 @@ fn stop_standby_sync_for_project_swap(state: &AppState) -> Result<(), String> {
 }
 
 fn replace_prepared_project_snapshot(
-    state: &State<'_, AppState>,
+    state: &AppState,
     prepared: PreparedProjectLoad,
     scope: ProjectSnapshotReplacementScope,
 ) -> Result<ProjectLoadResult, String> {
@@ -39140,7 +39305,7 @@ where
 }
 
 fn replace_prepared_project_snapshot_after_standby_stop(
-    state: &State<'_, AppState>,
+    state: &AppState,
     prepared: PreparedProjectLoad,
     scope: ProjectSnapshotReplacementScope,
 ) -> Result<ProjectLoadResult, String> {
@@ -59894,6 +60059,39 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn exact_takeover_selector_rejects_generation_advanced_after_validation() {
+        let manifest = |generation| StandbySyncManifest {
+            version: STANDBY_SYNC_VERSION,
+            app: APP_NAME.to_string(),
+            session_id: "primary-a".to_string(),
+            generation,
+            written_at_unix_ms: generation,
+            project_file: standby_project_file_name("primary-a", generation),
+            project_bytes: 0,
+            project_checksum: String::new(),
+        };
+        let expected = StandbyCheckpointIdentity {
+            session_id: "primary-a".to_string(),
+            generation: 10,
+        };
+        let old_manifest = manifest(expected.generation);
+        let advanced_manifest = manifest(expected.generation + 1);
+        let manifests = vec![old_manifest.clone(), advanced_manifest.clone()];
+
+        // Local-latest mode intentionally follows the newest valid heartbeat.
+        let local_latest =
+            select_latest_standby_manifest_for_session(&manifests, &expected.session_id)
+                .expect("local-latest must select the newest manifest");
+        assert_eq!(local_latest.generation, expected.generation + 1);
+
+        // Exact control-plane mode validates the latest observed manifest
+        // against the consent-bound identity and rejects the advance instead
+        // of applying either the newer image or silently falling back to old.
+        assert!(validate_exact_standby_takeover_manifest(&local_latest, &expected).is_err());
+        assert!(validate_exact_standby_takeover_manifest(&old_manifest, &expected).is_ok());
+    }
+
+    #[test]
     fn standby_sync_running_publication_requires_completed_all_deny_status() {
         assert!(standby_sync_may_publish_running(
             &OutputOwnershipStatus::for_role(MachineOutputRole::Standby)
@@ -62029,6 +62227,125 @@ pub(crate) mod tests {
         assert_eq!(
             fallback.manifest.generation,
             STANDBY_SYNC_RETENTION as u64 + 1
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn exact_standby_reader_rejects_invalid_newer_candidates_without_local_fallback() {
+        let directory = unique_test_directory("standby-exact-strict-reader");
+        fs::create_dir_all(&directory).unwrap();
+        let session_id = "primary-a-with-hyphens";
+        let mappings = ProjectControlMappings::default();
+        write_standby_checkpoint_in(
+            &directory,
+            &empty_project_file(),
+            &mappings,
+            session_id,
+            10,
+            1_010,
+        )
+        .unwrap();
+        let expected_ten = StandbyCheckpointIdentity {
+            session_id: session_id.to_string(),
+            generation: 10,
+        };
+        assert_eq!(
+            read_standby_checkpoint_for_exact_takeover(&directory, &expected_ten)
+                .unwrap()
+                .manifest
+                .generation,
+            10
+        );
+
+        // A non-canonical numeric tail is an invalid candidate for this
+        // exact session, not a longer-session collision. Exact mode must
+        // reject it while the general reader keeps its existing fallback to
+        // the valid generation-10 checkpoint.
+        let noncanonical_manifest =
+            directory.join(format!("syndocal-standby-{session_id}-011.json"));
+        fs::write(&noncanonical_manifest, b"{ invalid json").unwrap();
+        assert!(read_standby_checkpoint_for_exact_takeover(&directory, &expected_ten).is_err());
+        assert_eq!(
+            read_standby_checkpoint_for_session(&directory, Some(session_id))
+                .unwrap()
+                .unwrap()
+                .manifest
+                .generation,
+            10
+        );
+        fs::remove_file(noncanonical_manifest).unwrap();
+
+        // A different, longer hyphenated session shares the textual prefix
+        // but must not be mistaken for this session's generation candidate.
+        write_standby_checkpoint_in(
+            &directory,
+            &empty_project_file(),
+            &mappings,
+            "primary-a-with-hyphens-extra",
+            99,
+            1_099,
+        )
+        .unwrap();
+        assert_eq!(
+            read_standby_checkpoint_for_exact_takeover(&directory, &expected_ten)
+                .unwrap()
+                .manifest
+                .generation,
+            10
+        );
+
+        // The general reader intentionally ignores invalid manifests and can
+        // fall back to generation 10. Exact mode must see the filename
+        // candidate for generation 11 and reject before any fallback.
+        fs::write(
+            directory.join(standby_manifest_file_name(session_id, 11)),
+            b"{ invalid json",
+        )
+        .unwrap();
+        let expected_eleven = StandbyCheckpointIdentity {
+            session_id: session_id.to_string(),
+            generation: 11,
+        };
+        assert!(read_standby_checkpoint_for_exact_takeover(&directory, &expected_ten).is_err());
+        assert!(read_standby_checkpoint_for_exact_takeover(&directory, &expected_eleven).is_err());
+        assert_eq!(
+            read_standby_checkpoint_for_session(&directory, Some(session_id))
+                .unwrap()
+                .unwrap()
+                .manifest
+                .generation,
+            10
+        );
+
+        // A valid newer manifest with a corrupt project must also fail exact
+        // mode at project integrity/decoding, while LocalLatest preserves its
+        // existing fallback to generation 10.
+        fs::remove_file(directory.join(standby_manifest_file_name(session_id, 11))).unwrap();
+        let newer_manifest = write_standby_checkpoint_in(
+            &directory,
+            &empty_project_file(),
+            &mappings,
+            session_id,
+            11,
+            1_011,
+        )
+        .unwrap();
+        fs::write(
+            directory.join(&newer_manifest.project_file),
+            b"corrupt project bytes",
+        )
+        .unwrap();
+        assert!(read_standby_checkpoint_for_exact_takeover(&directory, &expected_ten).is_err());
+        assert!(read_standby_checkpoint_for_exact_takeover(&directory, &expected_eleven).is_err());
+        assert_eq!(
+            read_standby_checkpoint_for_session(&directory, Some(session_id))
+                .unwrap()
+                .unwrap()
+                .manifest
+                .generation,
+            10
         );
 
         fs::remove_dir_all(directory).unwrap();

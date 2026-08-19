@@ -291,6 +291,29 @@ will include.
    client, JSON-RPC client, Remote migration, hardware output matrix, recovery,
    clean install, and security review.
 
+### AI3 implementation audit checkpoint — 2026-08-19
+
+The committed implementation at `896fb407f896edd46fe938a07a8bd5c71cfc956d`
+contains substantial AI3 groundwork, but **AI3 is not complete**. The five AI3
+requirements currently stand as follows:
+
+| Requirement | Status | Implemented evidence | Open boundary |
+| --- | --- | --- | --- |
+| Runtime generations | Partial | Timeline Transport and Follow Abort have authority fences, generations, single-flight receipts, and bounded rate limits; query reports several additional runtime generations. | Loop/video and other legacy runtime mutations are not yet canonical or generation-fenced across Tauri, MIDI/OSC, Remote, and shortcut routes. |
+| Output ownership | Partial | The machine-local output gate starts all-deny and implements role transitions, physical permits, activation/creation/teardown leases, and failure fencing. | The AI3 owner-incarnation lease with TTL, renew, orphaned state, stale-owner rejection, forced transfer, and restart non-reclamation is absent. The local gate is not that distributed/backend lease. |
+| Rate limits | Partial | Transport, Follow Abort, S0 Blackout, and the currently unconnected OutputControl runtime use token buckets. | Legacy GUI/input routes bypass those limits, OutputControl lacks dedicated proof, and no 10,000-call realtime-budget evidence exists. |
+| Blackout / Arm / Take Over safety | S0 partial; R4 incomplete | S0 engage has a narrow DTO, priority path, idempotent engine latch, receipt lane, and frontend exact retry. | Release Blackout, Arm, and Take Over are not registered canonical operations and their GUI routes still invoke legacy commands directly. Project replacement and Take Over are not continuously fenced through physical retirement and explicit re-arm. |
+| Physical-resource idempotency | Partial | NDI, Spout, and Display creation leases recheck ownership epochs and retain teardown acknowledgement fail-closed. | Request-to-physical-action terminal receipts and audit are process-local/expiring, not crash-safe; project replacement and restart reply-loss are not proven exactly once. |
+
+The next safe AI3 order is: restore and race-harden the Take Over boundary; make
+legacy energizing/release routes canonical or explicitly fail-closed; register and
+gate every AI3 output operation; add the owner-incarnation output-lease state
+machine; fence project replacement through resource retirement and explicit Arm;
+then add durable receipt/audit and saturation/native proof. Prepared human consent,
+principal grants, Raw Input presence, revocation, and the consent service remain
+AI4 responsibilities. AI3 may expose a fail-closed consent policy but must not
+claim those AI4 services complete.
+
 ## 7. Required non-vacuous evidence
 
 - A generated coverage gate fails when a non-presentational Tauri/GUI, shortcut,

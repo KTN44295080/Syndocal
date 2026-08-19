@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
+const read = (path) =>
+  readFile(new URL(path, import.meta.url), "utf8").then((source) =>
+    source.replace(/\r\n?/g, "\n"),
+  );
 const panel = await read("../src/components/StandbySyncPanel.tsx");
 const videoPanel = await read("../src/components/VideoControlOutputsPanel.tsx");
 const app = await read("../src/App.tsx");
@@ -385,7 +388,7 @@ assertOrdered(
 );
 const ndiWorkerStart = sliceBetween(
   ndiTransport,
-  "impl NdiOutputWorker {\n    fn start(",
+  "#[cfg(feature = \"ndi\")]\nimpl NdiOutputWorker {\n    fn start(",
   "    fn publish(&mut self)",
   "NDI output worker start path",
 );
@@ -397,7 +400,7 @@ const ndiWorkerClosure = sliceBetween(
 );
 const ndiOutputProduction = sliceBetween(
   ndiTransport,
-  "impl NdiOutputWorker {",
+  "#[cfg(feature = \"ndi\")]\nimpl NdiOutputWorker {\n",
   "#[cfg(test)]",
   "NDI output production lifecycle",
 );

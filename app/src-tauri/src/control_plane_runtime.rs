@@ -47,7 +47,7 @@ use super::{
     ensure_no_pending_project_transaction, ensure_project_operator_video_clip_slot_runtime_allowed,
     lock_project_coordinator, lock_project_external_command_admission,
     reconcile_project_checkpoint_for_coordinator, AppState, ControlPlaneQueryState,
-    ProjectCoordinator,
+    ProjectCoordinator, StandbyCheckpointIdentity, StandbyTakeoverCheckpointSelector,
 };
 
 const RECEIPT_TTL: Duration = Duration::from_secs(10 * 60);
@@ -398,7 +398,9 @@ pub(crate) fn execute_output_control(
             }
         }
         OutputControlActionV1::TakeOverStandby { force, .. } => {
-            super::take_over_standby_core(state, *force).map(|_| true)
+            standby_takeover_selector(&request.action)
+                .and_then(|selector| super::take_over_standby_core(state, *force, selector))
+                .map(|_| true)
         }
     };
 
@@ -519,6 +521,24 @@ fn validate_output_action_current(
             }
             Ok(())
         }
+    }
+}
+
+fn standby_takeover_selector(
+    action: &OutputControlActionV1,
+) -> Result<StandbyTakeoverCheckpointSelector, String> {
+    match action {
+        OutputControlActionV1::TakeOverStandby {
+            standby_session_id,
+            standby_generation,
+            ..
+        } => Ok(StandbyTakeoverCheckpointSelector::Exact(
+            StandbyCheckpointIdentity {
+                session_id: standby_session_id.clone(),
+                generation: *standby_generation,
+            },
+        )),
+        _ => Err("Output control action is not a Standby Take Over".to_string()),
     }
 }
 
@@ -2909,7 +2929,7 @@ fn safety_blackout_rejection(
 mod tests {
     use super::*;
     use protocol::control_plane_command::{
-        ProjectMutationFenceV1, SetTimelinePlayingRuntimePayloadV1,
+        OutputControlActionV1, ProjectMutationFenceV1, SetTimelinePlayingRuntimePayloadV1,
     };
 
     fn test_binding(principal: &str, window_label: &str, owner_incarnation: u64) -> CallerBinding {
@@ -3017,6 +3037,24 @@ mod tests {
             state.reserve_lane(key, shape_sha256, now),
             LaneReservation::Lane(_)
         ));
+    }
+
+    #[test]
+    fn output_control_takeover_passes_exact_standby_identity_to_core() {
+        let action = OutputControlActionV1::TakeOverStandby {
+            force: false,
+            standby_session_id: "primary-a".to_string(),
+            standby_generation: 42,
+        };
+        assert_eq!(
+            standby_takeover_selector(&action),
+            Ok(StandbyTakeoverCheckpointSelector::Exact(
+                StandbyCheckpointIdentity {
+                    session_id: "primary-a".to_string(),
+                    generation: 42,
+                },
+            ))
+        );
     }
 
     #[test]
