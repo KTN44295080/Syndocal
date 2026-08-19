@@ -353,6 +353,73 @@ bridge, not completion of AI4 principals, grants, revocation, or consent service
 Windows ASIO acceptance and distribution licensing also remain separate mandatory
 open product-release gates.
 
+### AI3 output-lease next-slice acceptance contract — 2026-08-19
+
+The next implementation slice adds a backend authority layer above, and does not
+replace, the existing machine-local `OutputOwnershipGate`. The local gate continues
+to own physical permits, creation, teardown acknowledgement, and machine-role
+transitions. The new lease layer answers only which exact owner incarnation may
+issue ordinary output operations for a canonical resource set.
+
+The minimum lease states are `unclaimed`, `held_active`, `held_orphaned`, and
+`authority_transfer_pending`. The last is a logical lease transition, not permission
+to call the Engine ownership fence. A lease binds principal, renderer/window
+identity, backend process/session incarnation, backend-issued owner incarnation,
+canonical non-overlapping resource set, monotonically increasing lease generation,
+backend-selected TTL, and expiry on a monotonic clock. Expiry,
+missed heartbeat, disconnect, kill switch, owner retirement, acquire, renew,
+recovery, release, and forced transfer change authority state only: none may by
+itself send DMX, open/close video output, change Blackout, restore a desired role,
+Arm, or Take Over. In particular, `held_active -> held_orphaned` preserves the
+physical output image exactly.
+
+Only the same live backend-issued owner incarnation may renew or recover an orphaned
+lease. `Live` means registered in the current backend process/session with the exact
+current renderer and owner incarnations. Principal text, window label, cached
+sidecar state, an old terminal receipt, or a recreated renderer is insufficient.
+Process restart starts without a reclaimed lease. A forced transfer is an atomic,
+all-resources-or-none, generation-fenced R4 authority transition; it invalidates the
+old owner's future commands and increments the lease generation, but the new owner
+must issue a separate explicit output action before physical state can change. It
+may use the existing `output_ownership_transition` mutex for serialization, but it
+must not call the Engine ownership fence, alter a machine role, stop a worker, or
+begin teardown. AI4 supplies human presence, grants, authorization, and consent for
+this transition; until AI4 exists the operation requires the existing local prepared
+confirmation and otherwise fails closed. AI3 owns the fail-closed state transition
+and stale-owner fence, not the AI4 services.
+
+Ordinary Release, Arm, and Take Over must carry and revalidate the exact owner,
+resource coverage, lease generation, and non-expired state at their final existing
+project/output commit boundary. The lock order must extend the established
+lifecycle -> external admission -> coordinator -> output transition order with the
+lease transition/execution guard, without putting S0 Blackout behind the lease.
+Same-request retries return one exact terminal receipt; same ID with a different
+canonical shape is rejected before any authority or physical change. Lease R4
+operations use bounded single flight and rate limits and append audit/receipt truth
+including owner/session incarnation, canonical resources, generation before/after,
+and outcome. Lease relinquishment must use an unambiguous name such as
+`relinquish_output_lease`; it must never route to Release Blackout.
+
+Resource coverage is canonical and fail closed: global safety-latch Release
+Blackout requires `{lighting, video}`; Arm requires exactly the resources enabled by
+the backend-authoritative desired `MachineOutputRole` and rejects an unmappable or
+Standby target; exact Take Over requires `{lighting, video}`. Every wider or
+target-specific operation remains unavailable until it has an explicit mapping.
+Project identity replacement atomically advances the lease generation and moves
+affected active leases to `held_orphaned` at the replacement commit boundary,
+without changing physical output; a fresh exact Recover is required before ordinary
+R4 output authority is restored.
+
+The bounded proof must use a fake monotonic clock and deterministic race seams. It
+must cover acquire/renew/recover/release, overlapping resource rejection, expiry to
+`held_orphaned` with zero physical-operation delta, stale generation and owner-ABA
+rejection, exact retry and shape conflict, owner retirement and process-restart
+non-reclamation, forced transfer racing old-owner Release/Arm/Take Over, project
+replacement interaction, and S0 Blackout remaining immediately available. This
+includes a race in which S0 advances the safety generation and the ordinary R4 is
+rejected before commit. This contract is a design checkpoint, not implementation
+evidence and not AI3 closure.
+
 ## 7. Required non-vacuous evidence
 
 - A generated coverage gate fails when a non-presentational Tauri/GUI, shortcut,

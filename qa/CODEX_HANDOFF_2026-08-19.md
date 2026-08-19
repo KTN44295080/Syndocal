@@ -4,7 +4,8 @@
 
 - Branch: `codex/syndocal-v1.0`
 - Baseline HEAD at takeover: `df7e335c14fe82bb534fbd8867dcd431777e1522`
-- Verified local OutputControl R4 implementation checkpoint: `105c522e795ad021776649bff07d2ecf77bb0d0f` (`feat: route local output controls through R4`). It was pushed successfully to `origin/codex/syndocal-v1.0`; the documentation follow-up containing this note is the next commit on the same branch.
+- Verified local OutputControl R4 implementation checkpoint: `105c522e795ad021776649bff07d2ecf77bb0d0f` (`feat: route local output controls through R4`). The verified documentation follow-up is `94f4259eb982b4ecfa7b6ea3c645bbf8bd0c64ac`; both were pushed successfully to `origin/codex/syndocal-v1.0`.
+- The owner-incarnation output-lease acceptance contract below is the current docs-only design checkpoint. It deliberately contains no partial Rust/TypeScript implementation and will be pinned by its follow-up commit before handoff.
 - The previous Codex reached its context/token limit while continuing AI3. Treat Timeline Transport and the canonical Timeline Follow Abort tranche as verified. AI3 has now been audited and remains incomplete in all five roadmap categories. The detailed audit matrix and ordered gaps are recorded in `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`.
 - The working tree was clean before this handoff-document update. Do not assume that code present in the baseline commit is complete merely because it is committed.
 
@@ -200,6 +201,54 @@ not physical output, Raw Input confirmation, or ASIO acceptance.
 4. Fence Take Over/new/load/recovery through acknowledged physical retirement, project replacement, and explicit re-arm; then add durable physical receipt/audit and crash/reply-loss/saturation proof.
 5. Close AI3 with the repository-native completion gate: exact-checkout process stop, `pnpm --dir app tauri build --no-bundle`, exact executable launch, exactly one responsive Syndocal window, and maximized-window QA.
 6. Only then proceed to AI4.
+
+### Exact next-slice contract: owner-incarnation output lease
+
+The next Codex should delegate implementation to Luna Max and keep an independent
+Terra High/xHigh reviewer read-only until a stable checkpoint. Do not extend the
+existing `MachineOutputRole` / `OutputOwnershipGate` status object into a hybrid
+lease. Add a distinct backend lease authority layer above that physical local gate.
+
+Implement and fake-clock-test `unclaimed`, `held_active`, `held_orphaned`, and
+logical `authority_transfer_pending` around an exact owner binding (principal,
+window/renderer, backend process/session incarnation, backend-issued owner
+incarnation), canonical resource set, monotonic lease generation, and
+backend-bounded TTL. Expiry, disconnect, owner retirement, restart,
+acquire, renew, recover, release, and forced transfer must have **no implicit physical
+side effect**. They must not send output, change Blackout, restore the previous role,
+Arm, or Take Over. Restart must not reconstruct authority from cached sidecar state
+or old receipts.
+
+Only an owner registered in the current backend process/session with the exact
+renderer and owner incarnations may renew/recover. Forced transfer must be a
+distinct, atomic all-resources-or-none, generation-fenced R4 authority transition
+that invalidates the old owner without implicitly energizing or de-energizing output;
+any physical change remains a later explicit action. It may serialize on
+`output_ownership_transition`, but must not call the Engine ownership fence, change
+machine role, stop a worker, or start teardown. Until AI4 exists it requires the
+existing local prepared confirmation and otherwise fails closed. Extend the existing
+lifecycle -> external admission -> coordinator -> output transition commit boundary
+with lease revalidation for ordinary Release, Arm, and Take Over. Never make S0
+Blackout wait for or require a lease.
+
+Canonical resource mapping is mandatory: global safety-latch Release Blackout and
+exact Take Over require `{lighting, video}`; Arm requires the exact resources enabled
+by the backend-authoritative desired role and rejects Standby/unmapped targets. All
+wider/target-specific operations remain fail closed until mapped. Project identity
+replacement advances the generation and moves affected leases to `held_orphaned`
+at the same commit boundary, with no physical side effect and an explicit Recover
+required afterward. Name lease release `relinquish_output_lease` or equivalent so it
+cannot be confused or routed to Release Blackout.
+
+Minimum proof: same-owner renew, wrong-owner and incarnation-ABA rejection,
+overlapping-resource rejection, expiry to orphaned with unchanged engine role/safety
+latch/output-worker operation counts, exact retry and same-ID/different-shape,
+restart non-reclamation, forced-transfer races with old-owner output actions, project
+replacement interaction, and retained priority S0. AI4 still owns presence, grants,
+authorization, and consent; this slice must not claim those services complete. Add
+bounded single-flight/rate limits and exact receipts/audit containing session/owner
+incarnations, canonical resources, generation before/after, and outcome. Prove that
+an S0 race advances the safety generation and rejects an ordinary R4 before commit.
 
 ## Persistent collaboration and checkpoint rules
 
