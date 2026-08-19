@@ -4,6 +4,7 @@
 
 - Branch: `codex/syndocal-v1.0`
 - Baseline HEAD at takeover: `df7e335c14fe82bb534fbd8867dcd431777e1522`
+- Verified local OutputControl R4 implementation checkpoint: `105c522e795ad021776649bff07d2ecf77bb0d0f` (`feat: route local output controls through R4`). It was pushed successfully to `origin/codex/syndocal-v1.0`; the documentation follow-up containing this note is the next commit on the same branch.
 - The previous Codex reached its context/token limit while continuing AI3. Treat Timeline Transport and the canonical Timeline Follow Abort tranche as verified. AI3 has now been audited and remains incomplete in all five roadmap categories. The detailed audit matrix and ordered gaps are recorded in `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`.
 - The working tree was clean before this handoff-document update. Do not assume that code present in the baseline commit is complete merely because it is committed.
 
@@ -175,6 +176,13 @@ The following additional checks passed for this checkpoint:
 - `pnpm --dir app run check:frontend-invokes`
 - `pnpm --dir app build`
 - the default-feature `cargo check -p syndocal --locked` in the exact VS/FFmpeg/libclang environment.
+
+All Cargo commands in this Local R4 evidence block used the same `VsDevCmd.bat`,
+`FFMPEG_DIR`, `LIBCLANG_PATH`, FFmpeg `PATH`, and absolute Cargo setup shown in the
+earlier exact native-check command. All pnpm commands prepended
+`C:\Users\janua\AppData\Local\SyndocalDev\node-v22.22.1-win-x64` to `PATH` and used
+that directory's `pnpm.cmd`. The native build used the full reproducible command
+shown above without modification.
 
 Immediately before the new native build, exact-path inspection found only historical
 checkpoint PID `20540`; that process was stopped and the remaining exact-path count
