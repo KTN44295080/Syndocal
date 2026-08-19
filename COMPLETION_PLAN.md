@@ -3,7 +3,7 @@
 作成日: 2026-07-10
 対象: Syndocal — Rust/Tauri/SolidJS 製 DMX 照明 + VJ 統合コントロールアプリ
 運用: この文書は「完成(v1.0)」までのロードマップと、Codex/Claude セッションへの標準作業指示を兼ねる。
-日々のスライス記録は従来どおり `CLAUDE.md` に追記し、この文書はマイルストーン単位でのみ更新する。
+日々のスライス記録は従来どおり `CLAUDE.md` に追記する。定期的または意味のある進捗チェックポイントでは、関連するロードマップ/リリース/QA文書と引き継ぎを更新し、検証後にコミット・プッシュする。
 
 ---
 
@@ -20,6 +20,7 @@
 - [x] 共有エフェクト: 1 つの LFO/PositionWave ソースが照明と映像の両方を駆動する。
 - [x] タイムライン: キューイベント + 照明/映像オートメーションが 1 本のタイムラインで同期する。
 - [ ] 高度なタイムライン: Phase/Guide voice、musical A-B loop (`1/2`/`x2`/Break + mapping shortcuts)、Media LibraryからのVideo/Audio配置と音声付き映像のatomic split、linked Group/Ungroup、Timeline bank FollowとA/V/Lighting crossfade・BPM slew・`Trans` Guideを完遂する。正確なモデル/UX/受入条件は master roadmap §16A。
+- [ ] Windows ASIO: `crates/audio` の既存Live Audio/FFT境界を維持したまま、非既定の独立ASIO bridgeを製品要件として完遂する。リリース完了条件は、(a) driver/device列挙と世代付きIDによる明示選択、(b) sample rate・native format・channel map・requested/applied fixed bufferの交渉と表示、(c) 低遅延callback→worker I/Oと実buffer/overrun/XRUN telemetry、(d) exclusiveなopen/start/stop/free、占有・不一致・切断・reset/resync・no-callback時のfail-closedエラー/復旧、(e) projectへの選択・設定保存とRefresh後のstale/曖昧IDロック、(f) bridge/build・短時間smoke・100-cycle・native UI・第二vendor・advertised rate/buffer/channel matrix・hot-plug/recovery・1時間ASIO/WASAPI soak・物理input-to-pixel latencyを含む実機QAとする。既存の一台smoke/100-cycle/native UI証跡は部分達成であり、配布ライセンス/第二vendor/長時間・物理遅延等の未チェック項目を完了扱いにしない。詳細と現在のgate stateは `qa/ASIO_INPUT_ACCEPTANCE.md`。
 - [x] 外部 I/O: MIDI 入出力、OSC、Web リモート、feature境界付きNDI実配線。Spout/Syphonは診断付きUnavailableとしてv1.1へ明示的に延期。
 - [x] プロジェクト: `.sdc` の保存/読込/検証/自動リカバリが完結し、外部ファイル欠損時も自己完結スナップショットで復元できる。
 
@@ -189,7 +190,9 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 ### スライス規律
 1. **1 スライス = 1 境界 + 1 検証**。Engine → `cargo test -p engine`、Tauri/検証/プロジェクトファイル → `cargo test -p syndocal`、フロントエンド → `pnpm --dir app build`(+ UI/CSS 変更時は `npm run check:viewport`)、GDTF → `cargo test -p gdtf`。
 2. スライス完了ごとに `CLAUDE.md` に日付付きで記録(従来形式を踏襲)。
-3. **コミット規約(新規)**: スライス完了 = コミット。メッセージは `<領域>: <変更内容>` 形式(例: `mapping: extract viewport shell into component`)。「s」のような無意味メッセージは禁止。M0 以降、未コミットの巨大ダーティツリーを再び作らない。
+3. **チェックポイントと引き継ぎ**: 定期的または意味のある進捗ごとに、関連するREADME/ロードマップ/QA文書と、current branch/HEAD・検証済み証跡・残件・次アクションを記した引き継ぎを更新する。未検証の外部実機/ライセンス項目は明示的に残す。
+4. **コミット規約**: 検証済みのスライス/チェックポイント = コミット + プッシュ。メッセージは `<領域>: <変更内容>` 形式(例: `mapping: extract viewport shell into component`)。「s」のような無意味メッセージは禁止。M0 以降、未コミットの巨大ダーティツリーを再び作らない。プッシュ失敗時はコミットを保持し、引き継ぎへ失敗理由と再試行方針を記録する。
+5. **実装とレビュー**: 実装担当と独立した adversarial reviewer を分離し、同時実行できる場合は待ち時間中に非重複の検証・調査・文書化を進める。実装の既定モデルは Luna Max、難しい作業は Terra High/xHigh、さらに難しい場合は Sol とする。統合・ネイティブ検証・最終判定は監督担当が行う。
 
 ### ガードレール(違反 = 回帰)
 - アプリ本体(window/document/.app)をスクロールさせない。長いリストはパネル内スクロールのみ。UI/CSS を触ったら必ず `npm run check:viewport`。
@@ -198,7 +201,7 @@ CPU プレビューを wgpu 実出力に置き換える。**照明エンジン�
 - 製品名 Syndocal / 拡張子 `.sdc` / 開発者名 Seraf()のKTN を維持。旧名エイリアスをユーザ向けファイルに出さない。
 - 共通コードからOS固有APIを直接呼ばない。Windows/macOS/Linux差分は専用モジュール、`cfg`、feature flagで隔離し、非対応機能は起動失敗ではなく明示的なUnavailable状態にする。
 - 3D ビジュアライザをメイン UI に戻さない(`crates/visualizer` はデータ境界のまま)。
-- README/docs の更新は M6 まで意図的にバッチする(従来方針の継続)。ただし CLAUDE.md への記録は毎スライス必須。
+- README/docs の更新をM6まで一括延期しない。変更に関係する文書と引き継ぎは意味のあるチェックポイントごとに更新し、`CLAUDE.md` への記録は毎スライス必須。
 - `pnpm --dir app build` が node_modules パージを対話で求めた場合は答えず、`node node_modules/typescript/bin/tsc --noEmit` + `node node_modules/vite/bin/vite.js build` の直接実行で代替。
 - 広範囲な変更をリバートしない。ダーティツリーは意図的な状態。
 

@@ -1,14 +1,18 @@
 # Syndocal v1.0 Release Status / Next Thread Handoff
 
-Updated: 2026-07-15
+Updated: 2026-08-19
 Branch: `codex/syndocal-v1.0`  
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
+> Current continuation note: the active AI control-plane work is not represented by the old v1.0 completion statement alone. Use the [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md), [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) as the current authorities. Do not mark AI3 complete, advance to AI4, or close the current Windows product release until their unchecked gates are closed.
+
 ## 結論
 
-Syndocal v1.0は、`COMPLETION_PLAN.md`で定義した**ソフトウェア完成条件を満たしたリリース候補**である。
+Syndocal v1.0は、2026-07時点の`COMPLETION_PLAN.md`で定義していた**旧ソフトウェア完成条件を満たした歴史的baseline**である。
+
+現行の拡張製品リリースは未完了である。AI control-planeのAI3は未監査範囲とネイティブ完了ゲートが残り、Windows ASIOは配布ライセンス/成果物境界、第二vendor、rate/buffer/channel matrix、障害復旧、1時間soak、物理遅延などの受入が未完了である。旧baselineの合格を、これら現行要件の合格へ読み替えない。
 
 - 照明、映像、共有タイムライン/キュー/エフェクト、2D Stage Map、`.sdc`保存/復元、外部I/O境界を実装済み。
 - Windows/macOS/LinuxでRust、libav、フロントエンド、Tauri、配布物生成とパッケージ起動CIがgreen。
@@ -53,7 +57,7 @@ Syndocal v1.0は、`COMPLETION_PLAN.md`で定義した**ソフトウェア完成
 - [ ] Apple Developer ID署名とNotarizationを行う。
 - [ ] NDI SDK/runtimeを配布する場合、NewTek/NDIの再配布条件を確認する。
 - [ ] FFmpeg LGPL動的リンク、ライセンス本文、第三者通知、対応するソース取得方法を公開成果物で再確認する。
-- [ ] ASIO版を配布する場合は、GPLv3版として分離するかSteinberg proprietary ASIO SDK agreementを締結するかを先に決定する。SDK 2.3.4のarchive名／SHA-256は`qa/ASIO_SDK_PIN.json`へ固定済みだが、license選択、対応source／notice、成果物分離を含む配布workflowは未承認である。通常MIT版はWASAPIのまま維持する。
+- [ ] 現行Windows製品リリースを閉じる前に、ASIO成果物をGPLv3版として分離するかSteinberg proprietary ASIO SDK agreementを締結するかを決定し、対応source／notice義務と成果物分離を含む配布workflowを承認する。SDK 2.3.4のarchive名／SHA-256は`qa/ASIO_SDK_PIN.json`へ固定済み。通常MIT installerはWASAPIのまま維持し、別ASIO成果物をライセンス決定前に同梱しない。
 - [ ] `v1.0.0`タグを固定し、Release Notes、SHA-256、NSIS/MSI/DMG/AppImage/debを同一リリースへ掲載する。
 - [ ] Windows/macOSのクリーンな別PCで最終成果物をダウンロードから起動まで確認する。
 

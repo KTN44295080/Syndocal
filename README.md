@@ -35,7 +35,7 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 - 照明と映像が混在する共有タイムライン
 - 1キューで灯体値、映像Layer、Output、Node Graphを同時リコール
 - 1つのLFO/位置ウェーブから灯体属性と映像パラメータを同時駆動
-- マイクLive FFTの16 band／RMS／Peak／onset／BPM／kick／snareから照明・映像を同時駆動。WindowsではWASAPI sharedに加え、通常MIT版と分離したASIO bridge featureでdriver／sample rate／fixed buffer／channel mixを明示選択できる。切断／250ms無入力時は共有0クリアを要求し、未受理を明示する
+- マイクLive FFTの16 band／RMS／Peak／onset／BPM／kick／snareから照明・映像を同時駆動。WindowsではWASAPI sharedに加え、通常MIT版と分離したASIO bridge featureでdriver／sample rate／fixed buffer／channel mixを明示選択できる。ASIOは製品リリース要件であり、切断／250ms無入力時は共有0クリアを要求し、未受理を明示する。現行の未完了受入条件は `qa/ASIO_INPUT_ACCEPTANCE.md` を参照する
 - Tap / MIDI Clock / MTC / LTC / Ableton Link用共有クロック境界
 - MIDI、OSC、WebSocket、iPad/Android向けPWAリモート
 - 10秒間隔の自動Recovery、Recent Project、`.sdc` OS関連付け
@@ -130,7 +130,7 @@ pnpm --dir app tauri build --ci --bundles nsis,msi
 
 Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設定します。bundle直前にDLLがステージされ、MSI/NSISへ同梱されます。NDIを有効にする場合は別途NDI SDKを導入し、`--features ndi`とSDKのライセンス条件に従ってください。
 
-ASIOは既定buildへ含めません。Windowsのローカル技術検証は、手動取得したSDKを`CPAL_ASIO_DIR`、LLVMの`libclang.dll`を`LIBCLANG_PATH`へ明示してから次を実行します。SDK pinは[qa/ASIO_SDK_PIN.json](qa/ASIO_SDK_PIN.json)、受入と配布境界は[qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)を正とします。GPLv3版として分離するかSteinberg proprietary agreementを締結するまで、通常installerへASIO bridgeを同梱しません。
+ASIOは既定buildへ含めませんが、Windows製品のリリース完了条件です。現行スコープはLive Audio入力の独立bridgeで、device列挙・明示選択、sample rate／native format／channel／fixed buffer、低遅延callback I/O、exclusive open/start/stop/free、占有・不一致・切断・reset/resync・XRUN／no-callbackのfail-closed処理、選択設定の保存と再列挙時のstale IDロックを要求します。bridge/build、短時間smoke、100-cycle、native UIに加え、第二vendor、rate／buffer／channel matrix、hot-plug／recovery、1時間ASIO/WASAPI soak、物理input-to-pixel latencyの実機QAが終わるまで完了扱いにしません。現時点では一台の短時間smoke・100-cycle・native UIは通過していますが、配布ライセンス、第二vendor、長時間・復旧・物理遅延などは未完了です。手動取得したSDKを`CPAL_ASIO_DIR`、LLVMの`libclang.dll`を`LIBCLANG_PATH`へ明示して検証します。SDK pinは[qa/ASIO_SDK_PIN.json](qa/ASIO_SDK_PIN.json)、受入と配布境界は[qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)を正とします。GPLv3版として分離するかSteinberg proprietary agreementを締結するまで、通常installerへASIO bridgeを同梱しません。
 
 ```powershell
 & .\qa\harnesses\check-asio-build.ps1

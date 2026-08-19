@@ -14,10 +14,20 @@
 - Solve space pressure with reflow, disclosure, pagination, or internal scrolling before considering any size reduction.
 - Any explicitly requested size reduction must remain local to the named element; do not use it as permission to shrink adjacent or shared UI.
 
+## Checkpoints, documentation, and handoff
+
+- At every periodic or meaningful progress checkpoint, update the relevant roadmap/release/QA documents and leave a concise handoff containing the current branch/HEAD, verified evidence, remaining blockers, and next action. Do not leave the operational state only in chat.
+- After the checkpoint validation passes, create a meaningful commit and push it. Record exact commands and any unverified external or hardware acceptance in the handoff; never mark an item complete from an unverified result. If a push fails, preserve the commit and report the push failure and recovery action.
+
+## Windows ASIO product gate
+
+- Windows ASIO support is an explicit product and release requirement, not an optional runtime preference. Keep the default MIT/WASAPI path and the separately licensed, non-default ASIO bridge distinct.
+- ASIO completion requires explicit device enumeration and selection, sample-rate/native-format/channel/buffer negotiation, low-latency callback I/O, exclusive ownership and open/start/stop/free error handling, fail-closed disconnect/XRUN/no-callback recovery, project persistence and stale-selection locking, plus deterministic tests and real-device QA. The authoritative gate and current status are in `qa/ASIO_INPUT_ACCEPTANCE.md`; do not claim ASIO release completion while its unchecked gates remain.
+
 ## Delegation and concurrency
 
-- When delegating implementation, prefer Codex CLI `gpt-5.6-luna` with `model_reasoning_effort="max"` when it is available. For difficult or heavy implementation work, `gpt-5.6-terra` and then `gpt-5.6-sol` are also permitted.
-- Separate implementation from adversarial review whenever concurrency permits. The reviewer must independently inspect failure modes, regressions, and proof strength instead of merely confirming the implementer's summary.
+- For every material implementation task with available agent capacity, actively delegate implementation and an independent adversarial review as separate tasks. Prefer Codex CLI `gpt-5.6-luna` with `model_reasoning_effort="max"` for implementation; use `gpt-5.6-terra` at high/xhigh effort for difficult work, and `gpt-5.6-sol` when it is harder still.
+- The reviewer must independently inspect failure modes, regressions, and proof strength instead of merely confirming the implementer's summary. Assign explicit file ownership before concurrent edits and keep review read-only until the implementation owner reports a stable checkpoint.
 - Do not idle while delegated work is running. Advance independent read-only investigation, test planning, documentation checks, release evidence, or non-overlapping implementation in parallel.
-- Assign explicit file ownership before concurrent edits. Never let agents edit the same files concurrently; keep review read-only until the implementation owner reports a stable checkpoint.
+- Never let agents edit the same files concurrently; keep review read-only until the implementation owner reports a stable checkpoint.
 - The supervising agent remains responsible for integration, required native verification, and the final completion claim even when implementation or review is delegated.
