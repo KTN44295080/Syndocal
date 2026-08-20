@@ -540,12 +540,34 @@ function assertGenericCommandConfiguration(configuration) {
   validateExpectedOutputMarkers(configuration.expectedOutputMarkers);
 }
 
+function assertRequiredGenericEnvironment(configuration, environment) {
+  const required = configuration?.requiredEnvironment;
+  // Existing frontend entries intentionally have no external SDK dependency.
+  // When the field is present, however, it is strict and cannot be empty.
+  if (required === undefined) return;
+  if (!Array.isArray(required) || required.length === 0) {
+    throw new Error(`configuration ${configuration?.id ?? "<unknown>"} requiredEnvironment must be a non-empty array`);
+  }
+  if (required.some((key) => typeof key !== "string" || key.trim().length === 0)) {
+    throw new Error(`configuration ${configuration.id} requiredEnvironment must contain non-empty names`);
+  }
+  if (new Set(required).size !== required.length) {
+    throw new Error(`configuration ${configuration.id} requiredEnvironment must contain unique names`);
+  }
+  const missing = required.filter((key) => typeof environment[key] !== "string" || environment[key].trim().length === 0);
+  if (missing.length > 0) {
+    throw new Error(`required generic environment is missing: ${missing.join(", ")}`);
+  }
+}
+
 export async function runGenericConfiguration(configuration, repoRoot, environment = process.env) {
   assertGenericCommandConfiguration(configuration);
+  const controlledEnvironment = controlledGenericCommandEnvironment(environment);
+  assertRequiredGenericEnvironment(configuration, controlledEnvironment);
   const args = [...configuration.command.args];
   const processResult = await runProcessWithTimeout(configuration.command.executable, args, {
     cwd: repoRoot,
-    env: controlledGenericCommandEnvironment(environment),
+    env: controlledEnvironment,
     timeoutMs: configuration.timeoutMs,
     maxOutputBytes: GENERIC_COMMAND_OUTPUT_LIMIT_BYTES,
     forwardStderr: false,
@@ -783,6 +805,180 @@ export function findBaselineLaundering(previousConfiguration, currentConfigurati
   return JSON.stringify(previousConfiguration) === JSON.stringify(currentConfiguration)
     ? []
     : ["warning baseline/configuration metadata is immutable; use a separately reviewed rebaseline checkpoint"];
+}
+
+const ZERO_WARNING_PROMOTION_FIELDS = [
+  "id",
+  "command",
+  "platform",
+  "profile",
+  "features",
+  "timeoutMs",
+  "firstPartyManifests",
+  "requiredEnvironment",
+];
+
+export const ZERO_WARNING_PROMOTION_ALLOWED_FILES = Object.freeze([
+  "qa/warnings/warning-inventory.json",
+]);
+
+function selectedConfigurationShape(configuration) {
+  return Object.fromEntries(ZERO_WARNING_PROMOTION_FIELDS.map((field) => [field, configuration?.[field]]));
+}
+
+function sameJson(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function configurationsById(inventory, label) {
+  if (!Array.isArray(inventory?.configurations)) throw new Error(`${label} inventory configurations are invalid`);
+  const byId = new Map();
+  for (const configuration of inventory.configurations) {
+    if (byId.has(configuration.id)) throw new Error(`${label} inventory has duplicate configuration id: ${configuration.id}`);
+    byId.set(configuration.id, configuration);
+  }
+  return byId;
+}
+
+function assertPromotionRunnerResult(configuration, result) {
+  if (result.timedOut) throw new Error(`${configuration.id} warning command timed out during promotion audit`);
+  if (result.outputLimitExceeded) throw new Error(`${configuration.id} warning command exceeded bounded output during promotion audit`);
+  if (result.exitCode !== 0) throw new Error(`${configuration.id} warning command exited with ${result.exitCode} during promotion audit`);
+  if (configuration.command.executable === "cargo") {
+    if ((result.invalidJsonLines?.length ?? 0) > 0) throw new Error(`${configuration.id} emitted malformed Cargo JSON during promotion audit`);
+    if (JSON.stringify(result.buildFinished ?? []) !== JSON.stringify([true])) {
+      throw new Error(`${configuration.id} Cargo build-finished coverage is not exactly one successful build`);
+    }
+    if (result.stderrWarning) throw new Error(`${configuration.id} emitted warning-shaped Cargo stderr during promotion audit`);
+    const coverage = compareArtifactCoverage(configuration.expectedArtifacts, result.artifacts ?? []);
+    if (!coverage.ok) throw new Error(`${configuration.id} artifact coverage mismatch during promotion audit`);
+  } else {
+    if (result.warningShaped) throw new Error(`${configuration.id} emitted warning-shaped output during promotion audit`);
+    if (!result.markerCoverage?.ok) {
+      throw new Error(`${configuration.id} output marker coverage mismatch during promotion audit`);
+    }
+    if ((configuration.expectedArtifacts?.length ?? 0) !== 0) {
+      throw new Error(`${configuration.id} generic promotion must have zero artifact expectations`);
+    }
+  }
+  if ((result.diagnostics?.length ?? 0) !== 0) {
+    throw new Error(`${configuration.id} produced diagnostics during zero-warning promotion`);
+  }
+}
+
+/**
+ * Audits an already-authored pending->enforced inventory transition. This is
+ * intentionally opt-in: it never writes the inventory and is not used by the
+ * normal warning gate. The caller must provide both trusted refs explicitly.
+ */
+export async function auditZeroWarningPromotion({
+  repoRoot,
+  baseRef,
+  headRef,
+  configurationId,
+  inventoryPath = "qa/warnings/warning-inventory.json",
+  schema = null,
+  environment = process.env,
+  runConfiguration = runWarningConfiguration,
+  allowedFiles = ZERO_WARNING_PROMOTION_ALLOWED_FILES,
+}) {
+  if (typeof baseRef !== "string" || baseRef.trim().length === 0
+    || typeof headRef !== "string" || headRef.trim().length === 0) {
+    throw new Error("zero-warning promotion requires explicit base and head refs");
+  }
+  const comparison = resolveTrustedComparison(repoRoot, baseRef, headRef);
+  const priorInventory = loadInventoryAtRef(repoRoot, comparison.base, inventoryPath);
+  const currentInventory = loadInventoryAtRef(repoRoot, comparison.head, inventoryPath);
+  const priorErrors = validateInventory(priorInventory, schema);
+  if (priorErrors.length > 0) throw new Error(`trusted prior inventory validation failed: ${priorErrors.join("; ")}`);
+  const currentErrors = validateInventory(currentInventory, schema);
+  if (currentErrors.length > 0) throw new Error(`promotion head inventory validation failed: ${currentErrors.join("; ")}`);
+  if (!sameJson(priorInventory.policy, currentInventory.policy)) {
+    throw new Error("zero-warning promotion cannot change inventory policy");
+  }
+
+  const priorById = configurationsById(priorInventory, "trusted prior");
+  const currentById = configurationsById(currentInventory, "promotion head");
+  const priorIds = [...priorById.keys()].sort();
+  const currentIds = [...currentById.keys()].sort();
+  if (!sameJson(priorIds, currentIds)) {
+    throw new Error("zero-warning promotion rejects configuration add/remove, including pending entries");
+  }
+
+  const promoted = [];
+  for (const id of priorIds) {
+    const previous = priorById.get(id);
+    const current = currentById.get(id);
+    if (previous.status === "enforced") {
+      if (!sameJson(previous, current)) {
+        throw new Error(`zero-warning promotion rejects enforced configuration change: ${id}`);
+      }
+      continue;
+    }
+    if (previous.status !== "pending") throw new Error(`trusted prior configuration ${id} has invalid status`);
+    if (current.status === "pending") {
+      if (!sameJson(previous, current)) {
+        throw new Error(`zero-warning promotion rejects pending configuration change: ${id}`);
+      }
+      continue;
+    }
+    if (current.status !== "enforced") throw new Error(`promotion status is invalid for ${id}`);
+    if (!sameJson(selectedConfigurationShape(previous), selectedConfigurationShape(current))) {
+      throw new Error(`zero-warning promotion changed immutable configuration fields: ${id}`);
+    }
+    if ((current.diagnostics?.length ?? 0) !== 0 || (current.externalWarningAllows?.length ?? 0) !== 0) {
+      throw new Error(`zero-warning promotion requires empty diagnostics and external allows: ${id}`);
+    }
+    if (current.evidence?.commit !== comparison.base) {
+      throw new Error(`zero-warning promotion evidence.commit must equal trusted base ${comparison.base}: ${id}`);
+    }
+    if (current.command.executable === "pnpm") {
+      validateExpectedOutputMarkers(current.expectedOutputMarkers);
+      if ((current.expectedArtifacts?.length ?? 0) !== 0) {
+        throw new Error(`zero-warning promotion generic artifact coverage must be empty: ${id}`);
+      }
+    } else if (!Array.isArray(current.expectedArtifacts) || current.expectedArtifacts.length === 0) {
+      throw new Error(`zero-warning promotion Cargo artifact coverage must be non-empty: ${id}`);
+    }
+    promoted.push(current);
+  }
+  if (promoted.length === 0) throw new Error("zero-warning promotion requires at least one pending->enforced configuration");
+
+  const modifiedFiles = collectModifiedFiles(repoRoot, comparison);
+  const allowed = new Set(allowedFiles.map((file) => normalizeComparisonPath(file)));
+  const disallowed = [...modifiedFiles].filter((file) => !allowed.has(normalizeComparisonPath(file))).sort();
+  if (disallowed.length > 0) {
+    throw new Error(`zero-warning promotion changed files outside inventory/warning gate scope: ${disallowed.join(", ")}`);
+  }
+  const suppressions = findAddedSuppressions(repoRoot, comparison);
+  if (suppressions.length > 0) throw new Error(`zero-warning promotion found suppression loopholes: ${suppressions.join(", ")}`);
+
+  if (typeof configurationId !== "string" || configurationId.trim().length === 0) {
+    throw new Error("zero-warning promotion requires an explicit configuration id");
+  }
+  const configuration = promoted.find((candidate) => candidate.id === configurationId);
+  if (!configuration) {
+    throw new Error(`zero-warning promotion configuration is not a pending->enforced transition: ${configurationId}`);
+  }
+  const hostPlatform = detectHostPlatform();
+  if (configuration.platform !== hostPlatform) {
+    throw new Error(`configuration ${configuration.id} targets ${configuration.platform}, but this host is ${hostPlatform}`);
+  }
+  const currentToolchain = detectToolchain();
+  for (const [tool, expected] of Object.entries(configuration.evidence?.toolchain ?? {})) {
+    if (currentToolchain[tool] !== expected) {
+      throw new Error(`toolchain drift for ${tool}: inventory=${expected}; current=${currentToolchain[tool]}`);
+    }
+  }
+  const result = await runConfiguration(configuration, repoRoot, environment);
+  assertPromotionRunnerResult(configuration, result);
+  return {
+    comparison,
+    configurationId,
+    promotedIds: promoted.map((candidate) => candidate.id),
+    modifiedFiles,
+    results: [{ id: configuration.id, result }],
+  };
 }
 
 export function loadInventory(file) {

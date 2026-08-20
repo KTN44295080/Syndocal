@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   aggregateDiagnostics,
+  auditZeroWarningPromotion,
   artifactIdentity,
   compareArtifactCoverage,
   compareOutputMarkerCoverage,
@@ -13,6 +14,7 @@ import {
   collectModifiedFiles,
   controlledChildEnvironment,
   controlledGenericCommandEnvironment,
+  detectToolchain,
   detectSuppressionText,
   diagnosticIdentityHash,
   findAddedSuppressions,
@@ -288,6 +290,29 @@ const genericMissingMarker = await runGenericConfiguration(
 );
 assert.equal(genericMissingMarker.markerCoverage.ok, false);
 assert.deepEqual(genericMissingMarker.markerCoverage.missing, ["missing-marker"]);
+const forwardedEnvironment = { ...process.env, WARNING_RATCHET_TEST_ENV: "forwarded" };
+const forwardedEnvironmentResult = await runGenericConfiguration({
+  ...genericConfiguration("process.stdout.write(process.env.WARNING_RATCHET_TEST_ENV)"),
+  requiredEnvironment: ["WARNING_RATCHET_TEST_ENV"],
+}, repoRoot, forwardedEnvironment);
+assert.equal(forwardedEnvironmentResult.stdout, "forwarded");
+await assert.rejects(
+  runGenericConfiguration({
+    ...genericConfiguration("process.stdout.write('generic-marker')"),
+    requiredEnvironment: [],
+  }, repoRoot),
+  /requiredEnvironment must be a non-empty array/,
+);
+const missingNativeEnvironment = { ...process.env };
+delete missingNativeEnvironment.FFMPEG_DIR;
+delete missingNativeEnvironment.LIBCLANG_PATH;
+await assert.rejects(
+  runGenericConfiguration({
+    ...genericConfiguration("process.stdout.write('generic-marker')"),
+    requiredEnvironment: ["FFMPEG_DIR", "LIBCLANG_PATH"],
+  }, repoRoot, missingNativeEnvironment),
+  /required generic environment is missing: FFMPEG_DIR, LIBCLANG_PATH/,
+);
 const outputCap = await runProcessWithTimeout(
   process.execPath,
   ["-e", "process.stdout.write('x'.repeat(4096))"],
@@ -418,6 +443,196 @@ const unknownExecutableInventory = structuredClone(genericInventory);
 unknownExecutableInventory.configurations.at(-1).command.executable = "node";
 assert.ok(validateInventorySchema(unknownExecutableInventory, schema).some((error) => error.includes("allowed values") || error.includes("enum")));
 assert.deepEqual(validateInventorySchema(inventory, schema), []);
+const promotionFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-promotion-"));
+try {
+  const fixtureGit = (args) => execFileSync("git", args, { cwd: promotionFixtureRoot, encoding: "utf8" }).trim();
+  fixtureGit(["init", "--initial-branch=main"]);
+  fixtureGit(["config", "user.name", "Warning Ratchet Promotion Test"]);
+  fixtureGit(["config", "user.email", "warning-ratchet-promotion@example.invalid"]);
+  mkdirSync(path.join(promotionFixtureRoot, "qa/warnings"), { recursive: true });
+  const promotionBaseInventory = structuredClone(inventory);
+  const promotionCommand = { executable: "pnpm", args: ["--dir", path.join(repoRoot, "app"), "exec", "node", "-e", "process.stdout.write('promotion-marker')"] };
+  promotionBaseInventory.configurations.push({
+    id: "generic-promotion-fixture",
+    platform: "windows-x86_64-msvc",
+    profile: "promotion-fixture",
+    features: [],
+    command: promotionCommand,
+    timeoutMs: 1_000,
+    firstPartyManifests: [],
+    status: "pending",
+    blockingReason: "test fixture",
+    nextAction: "test fixture",
+    expectedArtifacts: [],
+    diagnostics: [],
+    externalWarningAllows: [],
+  }, {
+    id: "generic-linux-promotion-fixture",
+    platform: "linux-x86_64",
+    profile: "promotion-fixture-linux",
+    features: [],
+    command: promotionCommand,
+    timeoutMs: 1_000,
+    firstPartyManifests: [],
+    status: "pending",
+    blockingReason: "test fixture",
+    nextAction: "test fixture",
+    expectedArtifacts: [],
+    diagnostics: [],
+    externalWarningAllows: [],
+  });
+  const promotionInventoryFile = path.join(promotionFixtureRoot, "qa/warnings/warning-inventory.json");
+  writeFileSync(promotionInventoryFile, `${JSON.stringify(promotionBaseInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "trusted pending inventory"]);
+  const promotionBase = fixtureGit(["rev-parse", "HEAD"]);
+  const promotionHeadInventory = structuredClone(promotionBaseInventory);
+  const promotionHeadConfiguration = promotionHeadInventory.configurations.at(-1);
+  promotionHeadConfiguration.status = "enforced";
+  delete promotionHeadConfiguration.blockingReason;
+  delete promotionHeadConfiguration.nextAction;
+  promotionHeadConfiguration.expectedOutputMarkers = ["promotion-marker"];
+  promotionHeadConfiguration.evidence = {
+    commit: promotionBase,
+    capturedAt: "2026-08-21T00:00:00Z",
+    command: "pnpm exec node -e promotion-marker",
+    toolchain: { cargo: "test", rustc: "test", node: "test", pnpm: "test" },
+  };
+  writeFileSync(promotionInventoryFile, `${JSON.stringify(promotionHeadInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "promote zero warning fixture"]);
+  const promotionHead = fixtureGit(["rev-parse", "HEAD"]);
+  const promotionToolchain = detectToolchain();
+  for (const promotionConfiguration of promotionHeadInventory.configurations.slice(-2)) {
+    promotionConfiguration.status = "enforced";
+    delete promotionConfiguration.blockingReason;
+    delete promotionConfiguration.nextAction;
+    promotionConfiguration.expectedOutputMarkers = ["promotion-marker"];
+    promotionConfiguration.evidence = {
+      commit: promotionBase,
+      capturedAt: "2026-08-21T00:00:00Z",
+      command: "pnpm --dir app exec node -e promotion-marker",
+      toolchain: promotionToolchain,
+    };
+  }
+  writeFileSync(promotionInventoryFile, `${JSON.stringify(promotionHeadInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "promote zero warning fixture with platform pair"]);
+  const promotionHeadWithPair = fixtureGit(["rev-parse", "HEAD"]);
+  const promotionResult = await auditZeroWarningPromotion({
+    repoRoot: promotionFixtureRoot,
+    baseRef: promotionBase,
+    headRef: promotionHeadWithPair,
+    configurationId: "generic-promotion-fixture",
+    schema,
+  });
+  assert.deepEqual(promotionResult.promotedIds, ["generic-linux-promotion-fixture", "generic-promotion-fixture"]);
+  await assert.rejects(
+    auditZeroWarningPromotion({ repoRoot: promotionFixtureRoot, baseRef: null, headRef: promotionHeadWithPair, configurationId: "generic-promotion-fixture", schema }),
+    /requires explicit base and head refs/,
+  );
+  await assert.rejects(
+    auditZeroWarningPromotion({ repoRoot: promotionFixtureRoot, baseRef: promotionBase, headRef: promotionHeadWithPair, schema }),
+    /requires an explicit configuration id/,
+  );
+  await assert.rejects(
+    auditZeroWarningPromotion({
+      repoRoot: promotionFixtureRoot,
+      baseRef: promotionBase,
+      headRef: promotionHeadWithPair,
+      configurationId: "windows-default-all-targets",
+      schema,
+    }),
+    /not a pending->enforced transition/,
+  );
+  await assert.rejects(
+    auditZeroWarningPromotion({
+      repoRoot: promotionFixtureRoot,
+      baseRef: promotionBase,
+      headRef: promotionHeadWithPair,
+      configurationId: "generic-linux-promotion-fixture",
+      schema,
+    }),
+    /targets linux-x86_64, but this host is windows-x86_64-msvc/,
+  );
+  const outsidePromotionFile = path.join(promotionFixtureRoot, "outside.txt");
+  writeFileSync(outsidePromotionFile, "not part of an inventory-only promotion\n");
+  await assert.rejects(
+    auditZeroWarningPromotion({
+      repoRoot: promotionFixtureRoot,
+      baseRef: promotionBase,
+      headRef: promotionHeadWithPair,
+      configurationId: "generic-promotion-fixture",
+      schema,
+    }),
+    /outside inventory\/warning gate scope/,
+  );
+  rmSync(outsidePromotionFile, { force: true });
+
+  const badEvidenceInventory = structuredClone(promotionHeadInventory);
+  badEvidenceInventory.configurations.find((candidate) => candidate.id === "generic-promotion-fixture").evidence.commit = "b".repeat(40);
+  writeFileSync(promotionInventoryFile, `${JSON.stringify(badEvidenceInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "invalid promotion evidence"]);
+  const badEvidenceHead = fixtureGit(["rev-parse", "HEAD"]);
+  await assert.rejects(
+    auditZeroWarningPromotion({
+      repoRoot: promotionFixtureRoot,
+      baseRef: promotionBase,
+      headRef: badEvidenceHead,
+      configurationId: "generic-promotion-fixture",
+      schema,
+    }),
+    /evidence\.commit must equal trusted base/,
+  );
+  await assert.rejects(
+    auditZeroWarningPromotion({
+      repoRoot: promotionFixtureRoot,
+      baseRef: promotionHeadWithPair,
+      headRef: badEvidenceHead,
+      configurationId: "generic-promotion-fixture",
+      schema,
+    }),
+    /rejects enforced configuration change/,
+  );
+  const driftInventory = structuredClone(promotionHeadInventory);
+  driftInventory.configurations.find((candidate) => candidate.id === "generic-promotion-fixture").evidence.toolchain = {
+    ...promotionToolchain,
+    cargo: "toolchain-drift",
+  };
+  writeFileSync(promotionInventoryFile, `${JSON.stringify(driftInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "invalid promotion toolchain"]);
+  const driftHead = fixtureGit(["rev-parse", "HEAD"]);
+  await assert.rejects(
+    auditZeroWarningPromotion({
+      repoRoot: promotionFixtureRoot,
+      baseRef: promotionBase,
+      headRef: driftHead,
+      configurationId: "generic-promotion-fixture",
+      schema,
+    }),
+    /toolchain drift for cargo/,
+  );
+  const removedConfigurationInventory = structuredClone(promotionBaseInventory);
+  removedConfigurationInventory.configurations.pop();
+  writeFileSync(promotionInventoryFile, `${JSON.stringify(removedConfigurationInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "invalid pending removal"]);
+  const removedConfigurationHead = fixtureGit(["rev-parse", "HEAD"]);
+  await assert.rejects(
+    auditZeroWarningPromotion({
+      repoRoot: promotionFixtureRoot,
+      baseRef: promotionBase,
+      headRef: removedConfigurationHead,
+      configurationId: "generic-promotion-fixture",
+      schema,
+    }),
+    /rejects configuration add\/remove/,
+  );
+} finally {
+  rmSync(promotionFixtureRoot, { recursive: true, force: true });
+}
 await assert.rejects(
   runCargoConfiguration(spoutConfiguration, repoRoot, { ...process.env, RUSTFLAGS: "-A" + "warnings" }),
   /warning-affecting environment is forbidden/,
@@ -527,4 +742,4 @@ assert.equal(malformed.invalidJsonLines.length, 1);
 assert.deepEqual(malformed.buildFinished, []);
 assert.deepEqual(parseCargoJsonLines([JSON.stringify({ reason: "build-finished", success: false })], configuration, context).buildFinished, [false]);
 
-console.log("warning ratchet self-tests ok: 52 assertion groups");
+console.log("warning ratchet self-tests ok: 61 assertion groups");

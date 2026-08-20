@@ -12,6 +12,7 @@ import {
   loadInventory,
   loadInventoryAtRef,
   resolveTrustedComparison,
+  auditZeroWarningPromotion,
   runWarningConfiguration,
   validateInventory,
 } from "./warning-ratchet-lib.mjs";
@@ -27,21 +28,38 @@ function parseArgs(values) {
     baseRef: process.env.WARNING_RATCHET_BASE_REF || null,
     headRef: process.env.WARNING_RATCHET_HEAD_REF || "HEAD",
     bootstrap: false,
+    promotion: false,
+    baseRefExplicit: false,
+    headRefExplicit: false,
   };
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
     if (value === "--") continue;
     if (value === "--configuration") result.configuration = values[++index];
-    else if (value === "--base-ref") result.baseRef = values[++index];
-    else if (value === "--head-ref") result.headRef = values[++index];
+    else if (value === "--base-ref") {
+      result.baseRef = values[++index];
+      result.baseRefExplicit = true;
+    }
+    else if (value === "--head-ref") {
+      result.headRef = values[++index];
+      result.headRefExplicit = true;
+    }
     else if (value === "--bootstrap-baseline") result.bootstrap = true;
+    else if (value === "--promote-zero-warning") result.promotion = true;
     else throw new Error(`unknown argument: ${value}`);
   }
-  if (!result.configuration) throw new Error("--configuration is required");
+  if (result.promotion && (!result.baseRefExplicit || !result.headRefExplicit)) {
+    throw new Error("--promote-zero-warning requires explicit --base-ref and --head-ref");
+  }
+  if (result.promotion && !result.configuration) {
+    throw new Error("--promote-zero-warning requires --configuration");
+  }
+  if (!result.promotion && !result.configuration) throw new Error("--configuration is required");
   return result;
 }
 
 const args = parseArgs(process.argv.slice(2));
+async function runNormalWarningGate() {
 const inventory = loadInventory(inventoryPath);
 const schema = loadInventory(schemaPath);
 const inventoryErrors = validateInventory(inventory, schema);
@@ -126,3 +144,22 @@ if (!diagnosticComparison.ok) {
   throw new Error(`warning ratchet failed:\n${diagnosticComparison.failures.map((failure) => `- ${failure}`).join("\n")}`);
 }
 console.log("warning ratchet ok");
+}
+
+if (args.promotion) {
+  const schema = loadInventory(schemaPath);
+  const promotion = await auditZeroWarningPromotion({
+    repoRoot,
+    baseRef: args.baseRef,
+    headRef: args.headRef,
+    configurationId: args.configuration,
+    schema,
+  });
+  console.log(`zero-warning promotion audit: ${promotion.comparison.base}...${promotion.comparison.head}`);
+  console.log(`promoted configurations: ${promotion.promotedIds.join(", ")}`);
+  console.log(`executed configuration: ${promotion.configurationId}`);
+  console.log(`changed files: ${promotion.modifiedFiles.size}`);
+  console.log("zero-warning promotion audit ok; inventory was not written");
+} else {
+  await runNormalWarningGate();
+}
