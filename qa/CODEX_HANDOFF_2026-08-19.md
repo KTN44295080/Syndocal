@@ -556,3 +556,23 @@ check:warnings:self-test` (61 assertion groups), `pnpm --dir app run
 check:release`, PyYAML parsing of `.github/workflows/cross-platform.yml`, and
 `git diff --check`. Commit `85d6eb2b6d7877cd49801c288357d3c72a36046f`
 was pushed to `origin/codex/syndocal-v1.2`.
+
+## 2026-08-21 HOTONE second-vendor ASIO checkpoint
+
+The connected HOTONE Ampero Mini was tested through the isolated, pinned ASIO
+bridge using explicit driver ID `asio:HOTONE AUDIO USB Audio Device`. Its exact
+advertised input configuration is 44.1 kHz, one/two channels, native `i32`, and
+8..2048 buffer frames. An intentional 48 kHz mismatch failed before Start and did
+not fall back. The exact 44.1 kHz / 2-channel / i32 / 128-frame configuration then
+passed 100 Start/Stop/Free cycles in 12.7754482 seconds: callbacks 200, actual
+buffer 128 on every cycle, Stops 100, Frees 100, warnings 0, terminal events 0,
+XRUNs 0, nonfinite samples 0, and fallback 0. This closes the second-vendor stream
+gate but not the complete rate/buffer/channel matrix, fault injection, one-hour
+soak, physical latency, or ASIO distribution-license decision.
+
+A subsequent bounded TOPPING matrix probe did not convert advertised capability
+into a false pass. Explicit 44.1 kHz / one-channel Starts at 64 and 128 frames
+failed with the driver's `hardware is malfunctioning` backend error and no
+fallback. The next 256-frame trial stopped returning, so the run was cancelled
+and the remaining matrix was not attempted. This is recorded hardware/driver
+failure evidence; rate/buffer/channel and fault-recovery acceptance remain open.

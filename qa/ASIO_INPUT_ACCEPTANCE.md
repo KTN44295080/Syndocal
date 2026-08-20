@@ -67,8 +67,9 @@ Current pin:
 | `asio:TOPPING Pro USB Audio Device` | Explicit persistent ID, 48 kHz, 2 channels, i32, 128 frames; 100 cycles | Bridge ignored hardware test passed in 27.6767468 s with `--locked --offline` | Actual buffer 128 in all 100 cycles; callbacks 200 and at least 2 per cycle; Stop 100; Free 100; warnings 0; terminal 0; XRUN event/API 0; nonfinite 0; frame mismatch 0; fallback 0 | Completed repeated Start/Stop/Free gate on the same working driver |
 | Current-source native QA app + `TOPPING Pro USB Audio Device` | UI-selected ASIO, explicit driver, 48.0 kHz, 128 frames, Average All → mono | Start reached `ACTIVE`; Stop returned to `READY`; F11 and Esc round-trip passed | Maximized window capture 1913x1080; F11 capture exactly 1920x1080 at 0,0 with no title bar/taskbar; live rail showed OVR 0/0 and XRUN 0 | Full native operator-path smoke, not an endurance or latency-percentile pass |
 | `Realtek ASIO` | Explicit Realtek driver request | Open failed with hardware input/output unavailable | No substitution or silent fallback | Negative fail-closed evidence, not a second accepted driver |
+| `HOTONE AUDIO USB Audio Device` (Ampero Mini) | Explicit persistent ID, 44.1 kHz, 2 channels, native i32, 128 frames; 100 cycles | Bridge ignored hardware test passed in 12.7754482 s with `--locked --offline` | Actual buffer 128 in all 100 cycles; callbacks 200; Stop 100; Free 100; warnings 0; terminal 0; XRUN 0; nonfinite 0; fallback 0 | Second-vendor successful stream and repeated-open evidence |
 
-The TOPPING evidence proves that one explicit hardware configuration opens, reports the actual fixed buffer, invokes the capture callback and stops, that the same exact configuration can complete 100 repeated Start/Stop/Free cycles without warning, terminal event, xrun, nonfinite sample, frame mismatch or fallback, and that the production operator path can configure, run and stop it at the primary 1920x1080 full-screen viewport. The 27.6767468-second repeated-open test and short native UI run are still not a one-hour soak or statistical performance result. Callback-duration percentiles, capture-to-engine/pixel latency, physical marker latency, cross-vendor behavior and hot-plug/recovery fault injection were not measured by these runs.
+The TOPPING evidence proves that one explicit hardware configuration opens, reports the actual fixed buffer, invokes the capture callback and stops, that the same exact configuration can complete 100 repeated Start/Stop/Free cycles without warning, terminal event, xrun, nonfinite sample, frame mismatch or fallback, and that the production operator path can configure, run and stop it at the primary 1920x1080 full-screen viewport. The 27.6767468-second repeated-open test and short native UI run are still not a one-hour soak or statistical performance result. Callback-duration percentiles, capture-to-engine/pixel latency, physical marker latency, cross-vendor breadth beyond the later exact HOTONE trial, and hot-plug/recovery fault injection were not measured by these runs.
 
 ## Warning and repeated-open checkpoint (2026-08-21)
 
@@ -85,8 +86,35 @@ explicit 128-frame buffer. All 100 Start/Stop/Free cycles completed in
 33.4553781 seconds with callbacks 200, actual buffer 128 in every cycle, stops
 100, frees 100, warnings 0, terminal events 0, XRUNs 0 and nonfinite samples 0.
 This refresh closes the warning-inventory execution blocker for the isolated
-bridge; it does not change the remaining distribution-license, second-vendor,
-soak, fault-injection or physical-latency gates below.
+bridge; it does not change the remaining distribution-license,
+sample-rate/buffer/channel matrix, soak, fault-injection or physical-latency gates
+below. The later HOTONE checkpoint separately closes the second-vendor row.
+
+## Second-vendor checkpoint (2026-08-21)
+
+The connected HOTONE Ampero Mini exposed the explicit ASIO driver ID
+`asio:HOTONE AUDIO USB Audio Device`. A deliberately incorrect 48 kHz request
+failed at capability validation before Start and reported the exact advertised
+configuration: 44.1 kHz, one or two input channels, native `i32`, and 8..2048
+buffer frames. No default/first-driver/WASAPI fallback occurred.
+
+The exact advertised 44.1 kHz / 2-channel / `i32` / 128-frame configuration then
+passed one smoke cycle followed by 100 Start/Stop/Free cycles through the pinned
+offline bridge test. The 100-cycle run completed in 12.7754482 seconds with actual
+buffer 128 on every cycle, callbacks 200, Stops 100, Frees 100, warnings 0,
+terminal events 0, XRUNs 0, nonfinite samples 0, and fallback 0. This closes the
+second-vendor successful-stream gate. It is not the remaining sample-rate/buffer/
+channel matrix, occupied/reset/unplug fault matrix, one-hour soak, or physical
+input-to-pixel latency evidence.
+
+A broader TOPPING matrix probe was also attempted. The driver advertised 44.1,
+48, and 96 kHz (plus additional rates), one through six input channels, native
+`i32`, and 8..2048 buffer frames. Exact 44.1 kHz / one-channel / 64-frame and
+128-frame Starts both failed explicitly with ASIO backend `hardware is
+malfunctioning`; no fallback occurred. The following 256-frame trial stopped
+returning and the bounded test run was cancelled rather than treating the driver
+hang as a pass. The remaining TOPPING matrix was not run after that hang. These
+results keep the advertised rate/buffer/channel and fault-recovery gates open.
 
 ## Hardware acceptance
 
@@ -119,7 +147,7 @@ Acceptance thresholds are overrun 0, callback p99 below 20% of the hardware buff
 - [x] One explicit working-driver short smoke with applied buffer and XRUN telemetry.
 - [x] Unavailable explicit driver fails without another-driver or WASAPI fallback.
 - [ ] Distribution license/artifact path selected and notices/source obligations packaged.
-- [ ] A second vendor driver completes a successful stream trial.
+- [x] A second vendor driver (`HOTONE AUDIO USB Audio Device`) completed an explicit 44.1 kHz / 2-channel / i32 / 128-frame stream trial and 100 clean Start/Stop/Free cycles.
 - [ ] 44.1/48/96 kHz, 64/128/256 frames and channel-selection matrix completed where advertised.
 - [x] Start/Stop/Free 100 cycles completed on the explicit TOPPING 48 kHz / 2-channel / i32 / 128-frame configuration with zero warnings, terminal events, XRUNs, nonfinite samples, frame mismatch or fallback.
 - [x] Current-source native VJ Desk configured and ran the explicit TOPPING 48 kHz / 128-frame path in F11 1920x1080, displayed zero overrun/XRUN, stopped to Ready, and returned from full screen with Esc.
