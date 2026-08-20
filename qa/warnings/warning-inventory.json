@@ -4507,10 +4507,26 @@
       "command": { "executable": "cargo", "args": ["check", "-p", "syndocal", "--no-default-features", "--features", "asio", "--all-targets", "--locked", "--message-format=json"] },
       "timeoutMs": 900000,
       "firstPartyManifests": [],
-      "status": "pending",
-      "blockingReason": "The app ASIO loader feature reaches first-party source and fails at app/src-tauri/src/main.rs:45388 E0425 (`spout` not found) and :45389 E0423 (`engine` crate used as a value); this is distinct from the excluded bridge.",
-      "nextAction": "Repair the loader source defects in a separately owned runtime tranche, then capture the exact warning multiset.",
-      "expectedArtifacts": [], "diagnostics": [], "externalWarningAllows": []
+      "status": "enforced",
+      "expectedArtifacts": [
+        { "package": "audio", "target": "audio", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "engine", "target": "engine", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "gdtf", "target": "gdtf", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "io", "target": "io", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "protocol", "target": "protocol", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "syndocal", "target": "build-script-build", "targetKinds": ["custom-build"], "crateTypes": ["bin"] },
+        { "package": "syndocal", "target": "syndocal", "targetKinds": ["bin"], "crateTypes": ["bin"] },
+        { "package": "video", "target": "video", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "visualizer", "target": "visualizer", "targetKinds": ["lib"], "crateTypes": ["lib"] }
+      ],
+      "diagnostics": [],
+      "externalWarningAllows": [],
+      "evidence": {
+        "commit": "bd360277592c22a02ec584b7027d816a8a44af72",
+        "capturedAt": "2026-08-20T18:32:20Z",
+        "command": "cargo check -p syndocal --no-default-features --features asio --all-targets --locked --message-format=json",
+        "toolchain": { "cargo": "1.97.1 (c980f4866 2026-06-30)", "rustc": "1.97.1 (8bab26f4f 2026-07-14)", "node": "22.22.1", "pnpm": "10.9.0" }
+      }
     },
     {
       "id": "windows-syndocal-ndi",
@@ -4519,11 +4535,28 @@
       "features": ["syndocal/ndi"],
       "command": { "executable": "cargo", "args": ["check", "-p", "syndocal", "--no-default-features", "--features", "ndi", "--all-targets", "--locked", "--message-format=json"] },
       "timeoutMs": 900000,
+      "requiredEnvironment": ["NDI_SDK_DIR"],
       "firstPartyManifests": [],
-      "status": "pending",
-      "blockingReason": "Local NDI capture first fails because grafton-ndi cannot find the NDI 6 SDK header; with the SDK boundary satisfied, the same isolated feature scope retains the first-party main.rs:45388 E0425 / :45389 E0423 source defects exposed by no-Spout feature builds.",
-      "nextAction": "Repair the NDI source defects in a separately owned runtime tranche, then capture the exact warning multiset.",
-      "expectedArtifacts": [], "diagnostics": [], "externalWarningAllows": []
+      "status": "enforced",
+      "expectedArtifacts": [
+        { "package": "audio", "target": "audio", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "engine", "target": "engine", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "gdtf", "target": "gdtf", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "io", "target": "io", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "protocol", "target": "protocol", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "syndocal", "target": "build-script-build", "targetKinds": ["custom-build"], "crateTypes": ["bin"] },
+        { "package": "syndocal", "target": "syndocal", "targetKinds": ["bin"], "crateTypes": ["bin"] },
+        { "package": "video", "target": "video", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "visualizer", "target": "visualizer", "targetKinds": ["lib"], "crateTypes": ["lib"] }
+      ],
+      "diagnostics": [],
+      "externalWarningAllows": [],
+      "evidence": {
+        "commit": "bd360277592c22a02ec584b7027d816a8a44af72",
+        "capturedAt": "2026-08-20T18:33:05Z",
+        "command": "cargo check -p syndocal --no-default-features --features ndi --all-targets --locked --message-format=json",
+        "toolchain": { "cargo": "1.97.1 (c980f4866 2026-06-30)", "rustc": "1.97.1 (8bab26f4f 2026-07-14)", "node": "22.22.1", "pnpm": "10.9.0" }
+      }
     },
     {
       "id": "windows-syndocal-spout",
@@ -6271,11 +6304,21 @@
       "features": ["asio-bridge/asio"],
       "command": { "executable": "cargo", "args": ["check", "--manifest-path", "tools/asio-bridge/Cargo.toml", "--no-default-features", "--features", "asio", "--all-targets", "--locked", "--message-format=json"] },
       "timeoutMs": 900000,
+      "requiredEnvironment": ["CPAL_ASIO_DIR", "LIBCLANG_PATH"],
       "firstPartyManifests": ["tools/asio-bridge/Cargo.toml"],
-      "status": "pending",
-      "blockingReason": "The separately licensed bridge is excluded from the workspace and requires its approved ASIO SDK plus review of its cfg-gated crate allowance; it is not the app loader.",
-      "nextAction": "Capture on the approved ASIO bridge environment and classify its exact first-party package diagnostics.",
-      "expectedArtifacts": [], "diagnostics": [], "externalWarningAllows": []
+      "status": "enforced",
+      "expectedArtifacts": [
+        { "package": "syndocal-asio-bridge", "target": "build-script-build", "targetKinds": ["custom-build"], "crateTypes": ["bin"] },
+        { "package": "syndocal-asio-bridge", "target": "syndocal_asio_bridge", "targetKinds": ["cdylib", "rlib"], "crateTypes": ["cdylib", "rlib"] }
+      ],
+      "diagnostics": [],
+      "externalWarningAllows": [],
+      "evidence": {
+        "commit": "bd360277592c22a02ec584b7027d816a8a44af72",
+        "capturedAt": "2026-08-20T18:32:02Z",
+        "command": "cargo check --manifest-path tools/asio-bridge/Cargo.toml --no-default-features --features asio --all-targets --locked --message-format=json",
+        "toolchain": { "cargo": "1.97.1 (c980f4866 2026-06-30)", "rustc": "1.97.1 (8bab26f4f 2026-07-14)", "node": "22.22.1", "pnpm": "10.9.0" }
+      }
     },
     {
       "id": "macos-default-all-targets",
@@ -6311,10 +6354,28 @@
       "command": { "executable": "cargo", "args": ["check", "--workspace", "--all-targets", "--locked", "--message-format=json"] },
       "timeoutMs": 1200000,
       "firstPartyManifests": [],
-      "status": "pending",
-      "blockingReason": "Linux execution is unavailable and GitHub Actions is billing-blocked before job steps.",
-      "nextAction": "Capture the actual default feature union on the pinned Ubuntu runner.",
-      "expectedArtifacts": [], "diagnostics": [], "externalWarningAllows": []
+      "status": "enforced",
+      "expectedArtifacts": [
+        { "package": "audio", "target": "audio", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "engine", "target": "engine", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "engine", "target": "syndocal_soak", "targetKinds": ["example"], "crateTypes": ["bin"] },
+        { "package": "gdtf", "target": "gdtf", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "io", "target": "io", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "protocol", "target": "protocol", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "syndocal", "target": "build-script-build", "targetKinds": ["custom-build"], "crateTypes": ["bin"] },
+        { "package": "syndocal", "target": "syndocal", "targetKinds": ["bin"], "crateTypes": ["bin"] },
+        { "package": "video", "target": "generate_hap_q_qa", "targetKinds": ["example"], "crateTypes": ["bin"] },
+        { "package": "video", "target": "video", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "visualizer", "target": "visualizer", "targetKinds": ["lib"], "crateTypes": ["lib"] }
+      ],
+      "diagnostics": [],
+      "externalWarningAllows": [],
+      "evidence": {
+        "commit": "bd360277592c22a02ec584b7027d816a8a44af72",
+        "capturedAt": "2026-08-20T18:43:28Z",
+        "command": "cargo check --workspace --all-targets --locked --message-format=json",
+        "toolchain": { "cargo": "1.97.1 (c980f4866 2026-06-30)", "rustc": "1.97.1 (8bab26f4f 2026-07-14)", "node": "22.22.1", "pnpm": "10.9.0" }
+      }
     },
     {
       "id": "linux-default-release",
@@ -6324,10 +6385,28 @@
       "command": { "executable": "cargo", "args": ["check", "--workspace", "--all-targets", "--release", "--locked", "--message-format=json"] },
       "timeoutMs": 1800000,
       "firstPartyManifests": [],
-      "status": "pending",
-      "blockingReason": "Linux execution is unavailable and GitHub Actions is billing-blocked before job steps.",
-      "nextAction": "Capture the actual default release feature union on the pinned Ubuntu runner.",
-      "expectedArtifacts": [], "diagnostics": [], "externalWarningAllows": []
+      "status": "enforced",
+      "expectedArtifacts": [
+        { "package": "audio", "target": "audio", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "engine", "target": "engine", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "engine", "target": "syndocal_soak", "targetKinds": ["example"], "crateTypes": ["bin"] },
+        { "package": "gdtf", "target": "gdtf", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "io", "target": "io", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "protocol", "target": "protocol", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "syndocal", "target": "build-script-build", "targetKinds": ["custom-build"], "crateTypes": ["bin"] },
+        { "package": "syndocal", "target": "syndocal", "targetKinds": ["bin"], "crateTypes": ["bin"] },
+        { "package": "video", "target": "generate_hap_q_qa", "targetKinds": ["example"], "crateTypes": ["bin"] },
+        { "package": "video", "target": "video", "targetKinds": ["lib"], "crateTypes": ["lib"] },
+        { "package": "visualizer", "target": "visualizer", "targetKinds": ["lib"], "crateTypes": ["lib"] }
+      ],
+      "diagnostics": [],
+      "externalWarningAllows": [],
+      "evidence": {
+        "commit": "bd360277592c22a02ec584b7027d816a8a44af72",
+        "capturedAt": "2026-08-20T18:46:22Z",
+        "command": "cargo check --workspace --all-targets --release --locked --message-format=json",
+        "toolchain": { "cargo": "1.97.1 (c980f4866 2026-06-30)", "rustc": "1.97.1 (8bab26f4f 2026-07-14)", "node": "22.22.1", "pnpm": "10.9.0" }
+      }
     },
     {
       "id": "frontend-typescript-vite-windows",
@@ -6337,10 +6416,15 @@
       "command": { "executable": "pnpm", "args": ["--dir", "app", "build"] },
       "timeoutMs": 900000,
       "firstPartyManifests": [],
-      "status": "pending",
-      "blockingReason": "Vite still emits the measured >500 kB chunk warning and no structured frontend diagnostic identity is accepted yet.",
-      "nextAction": "Add frontend warning extraction while preserving the current threshold, then split/lazy-load and remeasure.",
-      "expectedArtifacts": [], "diagnostics": [], "externalWarningAllows": []
+      "status": "enforced",
+      "expectedOutputMarkers": ["vite v6.4.2 building for production...", "265 modules transformed.", "built in"],
+      "expectedArtifacts": [], "diagnostics": [], "externalWarningAllows": [],
+      "evidence": {
+        "commit": "bd360277592c22a02ec584b7027d816a8a44af72",
+        "capturedAt": "2026-08-20T18:34:08Z",
+        "command": "pnpm --dir app build",
+        "toolchain": { "cargo": "1.97.1 (c980f4866 2026-06-30)", "rustc": "1.97.1 (8bab26f4f 2026-07-14)", "node": "22.22.1", "pnpm": "10.9.0" }
+      }
     },
     {
       "id": "windows-native-release",
@@ -6349,11 +6433,17 @@
       "features": ["workspace-default", "syndocal/libav", "syndocal/spout", "tauri-native"],
       "command": { "executable": "pnpm", "args": ["--dir", "app", "tauri", "build", "--no-bundle"] },
       "timeoutMs": 1800000,
+      "requiredEnvironment": ["FFMPEG_DIR", "LIBCLANG_PATH"],
       "firstPartyManifests": [],
-      "status": "pending",
-      "blockingReason": "Native Rust/Tauri/Vite warning streams have not been captured into one stable structured identity set.",
-      "nextAction": "Capture after the exact-checkout process stop without claiming pending hardware/platform acceptance.",
-      "expectedArtifacts": [], "diagnostics": [], "externalWarningAllows": []
+      "status": "enforced",
+      "expectedOutputMarkers": ["Finished `release` profile", "Built application at:"],
+      "expectedArtifacts": [], "diagnostics": [], "externalWarningAllows": [],
+      "evidence": {
+        "commit": "bd360277592c22a02ec584b7027d816a8a44af72",
+        "capturedAt": "2026-08-20T18:39:58Z",
+        "command": "pnpm --dir app tauri build --no-bundle",
+        "toolchain": { "cargo": "1.97.1 (c980f4866 2026-06-30)", "rustc": "1.97.1 (8bab26f4f 2026-07-14)", "node": "22.22.1", "pnpm": "10.9.0" }
+      }
     }
   ]
 }
