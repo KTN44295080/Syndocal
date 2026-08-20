@@ -32,6 +32,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -122,12 +124,12 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 22.22.1
           cache: pnpm
           cache-dependency-path: app/pnpm-lock.yaml
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt
 
@@ -145,6 +147,20 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Test warning ratchet
+        run: pnpm --dir app run check:warnings:self-test
+
+      - name: Enforce Windows warning ratchets
+        if: runner.os == 'Windows'
+        env:
+          WARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
+        run: |
+          pnpm --dir app run check:warnings -- --configuration windows-default-all-targets
+          pnpm --dir app run check:warnings -- --configuration windows-default-release
+          pnpm --dir app run check:warnings -- --configuration windows-workspace-tests
+          pnpm --dir app run check:warnings -- --configuration windows-syndocal-spout
 
       - name: Test Rust workspace
         run: cargo test --workspace --locked -- --test-threads=1

@@ -1,0 +1,7 @@
+{
+  "workspaceMembers": ["path+file:///C:/fixture/KDMX/crates/engine#1.2.0-alpha.1"],
+  "packages": [
+    { "id": "path+file:///C:/fixture/KDMX/crates/engine#1.2.0-alpha.1", "name": "engine" },
+    { "id": "registry+https://github.com/rust-lang/crates.io-index#dependency@1.0.0", "name": "dependency" }
+  ]
+}

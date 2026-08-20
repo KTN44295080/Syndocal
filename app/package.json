@@ -60,6 +60,8 @@
     "check:workspace-operator-viewport": "node scripts/check-viewport-containment.mjs --workspace-operator-only",
     "check:workspace-operator-native": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-native-workspace-operator.ps1",
     "check:release": "node scripts/check-release-metadata.mjs",
+    "check:warnings": "node scripts/check-warning-ratchet.mjs",
+    "check:warnings:self-test": "node scripts/test-warning-ratchet.mjs",
     "check:tauri-build-wrapper": "node scripts/check-tauri-build-wrapper.mjs",
     "check:release-ui:browser": "pnpm run check:viewport && pnpm run check:vj-operator && pnpm run check:timeline-viewport",
     "check:release-ui": "pnpm run check:desktop-window && pnpm run check:release-ui:browser && pnpm run check:native-window",
@@ -107,6 +109,8 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.5.0",
+    "ajv": "8.17.1",
+    "smol-toml": "1.8.0",
     "typescript": "^5.6.0",
     "vite": "^6.0.0",
     "vite-plugin-solid": "^2.10.0"

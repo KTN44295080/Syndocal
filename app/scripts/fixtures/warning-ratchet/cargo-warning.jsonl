@@ -1,0 +1,4 @@
+{"reason":"compiler-message","package_id":"path+file:///C:/fixture/KDMX/crates/engine#1.2.0-alpha.1","target":{"name":"engine","kind":["lib"]},"message":{"level":"warning","message":"function `legacy_helper` is never used","code":{"code":"dead_code"},"spans":[{"file_name":"crates/engine/src/lib.rs","line_start":42,"column_start":1,"is_primary":true}]}}
+{"reason":"compiler-message","package_id":"registry+https://github.com/rust-lang/crates.io-index#dependency@1.0.0","target":{"name":"dependency","kind":["lib"]},"message":{"level":"warning","message":"dependency warning","code":{"code":"unused_imports"},"spans":[{"file_name":"C:/cargo/registry/dependency/src/lib.rs","line_start":8,"column_start":1,"is_primary":true}]}}
+{"reason":"compiler-artifact","package_id":"path+file:///C:/fixture/KDMX/crates/engine#1.2.0-alpha.1","target":{"name":"engine","kind":["lib"],"crate_types":["lib"]}}
+{"reason":"build-finished","success":true}
