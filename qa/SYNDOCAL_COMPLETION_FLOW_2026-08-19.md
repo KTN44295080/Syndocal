@@ -195,10 +195,13 @@ This does not check the Phase 0 W0 box. Nine configurations remain pending in th
 versioned inventory: ASIO loader, excluded ASIO bridge, NDI, macOS default/release,
 Linux default/release, frontend structured warnings, and native-release structured
 warnings. `requiredMatrixComplete` therefore remains false. H1 uses a reviewed
-one-time local bootstrap; the docs-only follow-up must prove normal mode with H1 as
-the immutable prior inventory. GitHub Actions run `32351887066` executed zero steps
-because account billing/spending limits blocked every job, so no CI/platform claim
-is derived from that run.
+one-time local bootstrap. Docs-only H2
+`33f58df2f69c45892f2089037cbf00ed0aab3e56` has H1 as its parent and changes only
+the two checkpoint documents. Normal-mode verification with `base=H1` and
+`head=H2` passed all four configurations at 83/83, 83/83, 25/25, and 79/79 warning
+occurrences, with exact artifact coverage 11/11, 11/11, 11/11, and 9/9. GitHub
+Actions run `32351887066` executed zero steps because account billing/spending limits
+blocked every job, so no CI/platform claim is derived from that run.
 
 ## 6. Dependency-ordered remaining implementation
 
