@@ -4,6 +4,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use unicode_normalization::UnicodeNormalization;
 
 pub mod control_plane;
 pub mod control_plane_command;
@@ -7458,6 +7459,17 @@ pub struct RemoteControlConfig {
     pub max_message_bytes: usize,
     #[serde(default = "default_remote_max_messages_per_second")]
     pub max_messages_per_second: u16,
+    /// Dedicated DJ Link is opt-in and never uses the generic pairing PIN.
+    #[serde(default)]
+    pub dj_link_enabled: bool,
+    #[serde(default)]
+    pub dj_link_bind_ip: Option<String>,
+    /// Machine-local secret. It is injected by the backend after the public
+    /// config has been deserialized and is never accepted from project or UI
+    /// input.  Skipping both directions prevents a renderer from selecting
+    /// its own authority credential.
+    #[serde(skip)]
+    pub dj_link_token: Option<String>,
 }
 
 /// Runtime-only operator targeting state shared by the desktop UI, MIDI/OSC,
@@ -7502,6 +7514,9 @@ impl Default for RemoteControlConfig {
             max_connections: default_remote_max_connections(),
             max_message_bytes: default_remote_max_message_bytes(),
             max_messages_per_second: default_remote_max_messages_per_second(),
+            dj_link_enabled: false,
+            dj_link_bind_ip: None,
+            dj_link_token: None,
         }
     }
 }
@@ -7515,12 +7530,488 @@ pub struct RemoteClientSummary {
     pub messages_received: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct RemoteControlStatus {
     pub running: bool,
     pub active_connections: usize,
     pub rejected_connections: u64,
     pub clients: Vec<RemoteClientSummary>,
+    /// Additive process-local DJ Link truth.  The token is intentionally not
+    /// represented anywhere in this status DTO.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dj_link: Option<DjLinkRuntimeStatus>,
+}
+
+/// DJ Link is a dedicated, authenticated LAN protocol. It intentionally does
+/// not reuse the generic remote PIN or expose the credential in any status
+/// payload.
+pub const DJ_LINK_PROTOCOL_VERSION: u8 = 1;
+pub const DJ_LINK_MAX_FRAME_BYTES: usize = 64 * 1024;
+pub const DJ_LINK_MAX_STRING_BYTES: usize = 256;
+pub const DJ_LINK_MIN_TOKEN_BYTES: usize = 32;
+pub const DJ_LINK_MAX_CAPABILITIES: usize = 32;
+pub const DJ_LINK_MAX_MAPPINGS: usize = 128;
+pub const DJ_LINK_MAX_SEQUENCE: u64 = 9_007_199_254_740_991;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DjLinkMessageType {
+    #[serde(rename = "DJ_AGENT_HELLO")]
+    Hello,
+    #[serde(rename = "DJ_HEARTBEAT")]
+    Heartbeat,
+    #[serde(rename = "DJ_MASTER_CHANGED")]
+    MasterChanged,
+    #[serde(rename = "DJ_MASTER_TRACK_ACTIVE")]
+    MasterTrackActive,
+    #[serde(rename = "DJ_LOOP_STATE")]
+    LoopState,
+    #[serde(rename = "DJ_RELEASE")]
+    Release,
+    #[serde(rename = "DJ_STATE_SYNC")]
+    StateSync,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkEnvelope {
+    pub v: u8,
+    #[serde(rename = "type")]
+    pub message_type: DjLinkMessageType,
+    #[serde(rename = "agentId")]
+    pub agent_id: String,
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    pub sequence: u64,
+    #[serde(rename = "eventId")]
+    pub event_id: String,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkHelloPayload {
+    #[serde(rename = "authToken")]
+    pub auth_token: String,
+    pub version: u8,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkHeartbeatPayload {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkMasterTrackPayload {
+    #[serde(default, rename = "contentId")]
+    pub content_id: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub artist: Option<String>,
+    /// Deck identity is required for a track-active event. A string keeps
+    /// peer/device identifiers opaque and bounded instead of guessing a
+    /// numeric deck mapping.
+    pub deck: String,
+    #[serde(default, rename = "deckId")]
+    pub deck_id: Option<String>,
+    #[serde(default, rename = "trackBpm")]
+    pub track_bpm: Option<f64>,
+    #[serde(default, rename = "positionSec")]
+    pub position_sec: Option<f64>,
+    #[serde(default, rename = "startedAt")]
+    pub started_at: Option<String>,
+    #[serde(rename = "playSessionId")]
+    pub play_session_id: String,
+    #[serde(rename = "isPlaying", alias = "playing")]
+    pub playing: bool,
+    #[serde(default = "default_true")]
+    pub master: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkMasterChangedPayload {
+    #[serde(default, rename = "masterDeck")]
+    pub master_deck: Option<String>,
+    #[serde(default)]
+    pub deck: Option<String>,
+    #[serde(default, rename = "isPlaying", alias = "playing")]
+    pub playing: bool,
+    #[serde(default = "default_true")]
+    pub master: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkLoopStatePayload {
+    pub division: u8,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkReleasePayload {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkStateSyncPayload {
+    #[serde(default, rename = "loopDivision")]
+    pub loop_division: Option<u8>,
+    #[serde(default)]
+    pub released: bool,
+    #[serde(default, rename = "masterDeck")]
+    pub master_deck: Option<String>,
+    #[serde(default, rename = "masterTrack")]
+    pub master_track: Option<DjLinkMasterTrackStatePayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkMasterTrackStatePayload {
+    #[serde(default, rename = "contentId")]
+    pub content_id: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(rename = "isPlaying", alias = "playing")]
+    pub playing: bool,
+    #[serde(default, rename = "playSessionId")]
+    pub play_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DjLinkAckOutcome {
+    Accepted,
+    Duplicate,
+    NoMapping,
+    Rejected,
+    Busy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkAck {
+    pub v: u8,
+    #[serde(rename = "type")]
+    pub message_type: String,
+    #[serde(rename = "eventId")]
+    pub event_id: String,
+    pub sequence: u64,
+    pub outcome: DjLinkAckOutcome,
+    pub code: Option<String>,
+    #[serde(rename = "stateGeneration")]
+    pub state_generation: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct DjLinkRuntimeStatus {
+    pub connected: bool,
+    pub peer: Option<String>,
+    pub generation: u64,
+    #[serde(rename = "agentId")]
+    pub agent_id: Option<String>,
+    #[serde(rename = "sessionId")]
+    pub session_id: Option<String>,
+    pub master: bool,
+    #[serde(rename = "trackActive")]
+    pub track_active: bool,
+    #[serde(rename = "loopDivision")]
+    pub loop_division: Option<u8>,
+    pub released: bool,
+    #[serde(rename = "lastEventId")]
+    pub last_event_id: Option<String>,
+    #[serde(rename = "ageMs")]
+    pub age_ms: Option<u64>,
+    #[serde(default, rename = "masterDeck")]
+    pub master_deck: Option<String>,
+    #[serde(default, rename = "trackContentId")]
+    pub track_content_id: Option<String>,
+    #[serde(default, rename = "trackTitle")]
+    pub track_title: Option<String>,
+    #[serde(default, rename = "trackArtist")]
+    pub track_artist: Option<String>,
+    #[serde(default, rename = "trackDeckId")]
+    pub track_deck_id: Option<String>,
+    #[serde(default, rename = "trackStartedAt")]
+    pub track_started_at: Option<String>,
+    #[serde(default, rename = "trackPlaying")]
+    pub track_playing: bool,
+    #[serde(default, rename = "trackBpm")]
+    pub track_bpm: Option<f64>,
+    #[serde(default, rename = "positionSec")]
+    pub position_sec: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DjTrackRetriggerPolicy {
+    #[default]
+    OncePerPlaySession,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjTrackSelector {
+    #[serde(default, rename = "contentId")]
+    pub content_id: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub artist: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjTrackTriggerMapping {
+    pub id: String,
+    pub selector: DjTrackSelector,
+    #[serde(rename = "timelineId")]
+    pub timeline_id: TimelineId,
+    #[serde(default)]
+    pub retrigger: DjTrackRetriggerPolicy,
+}
+
+impl DjTrackSelector {
+    pub fn canonical_key(&self) -> Result<String, String> {
+        let content_id = self
+            .content_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(content_id) = content_id {
+            validate_dj_link_string(content_id, "contentId")?;
+            return Ok(format!("content:{content_id}"));
+        }
+        let title = self
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "DJ track selector requires contentId or title+artist".to_string())?;
+        let artist = self
+            .artist
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "DJ track selector requires both title and artist".to_string())?;
+        validate_dj_link_string(title, "title")?;
+        validate_dj_link_string(artist, "artist")?;
+        let title = title.nfc().collect::<String>();
+        let artist = artist.nfc().collect::<String>();
+        validate_dj_link_string(&title, "normalized title")?;
+        validate_dj_link_string(&artist, "normalized artist")?;
+        Ok(format!("title_artist:{title}\u{001f}{artist}"))
+    }
+}
+
+pub fn validate_dj_track_trigger_mappings(
+    mappings: &[DjTrackTriggerMapping],
+) -> Result<(), String> {
+    if mappings.len() > DJ_LINK_MAX_MAPPINGS {
+        return Err(format!(
+            "DJ track mapping count exceeds {DJ_LINK_MAX_MAPPINGS}"
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    let mut selectors = BTreeSet::new();
+    for mapping in mappings {
+        validate_dj_link_string(&mapping.id, "mapping id")?;
+        if mapping.id.trim().is_empty() || !ids.insert(mapping.id.clone()) {
+            return Err("DJ track mapping IDs must be non-empty and unique".to_string());
+        }
+        let selector = mapping.selector.canonical_key()?;
+        if !selectors.insert(selector) {
+            return Err("DJ track selectors must be unique and unambiguous".to_string());
+        }
+        if mapping.timeline_id.0 == 0 {
+            return Err("DJ track mapping timelineId must be non-zero".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_dj_link_string(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > DJ_LINK_MAX_STRING_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(format!(
+            "DJ Link {label} is empty, too long, or contains control characters"
+        ));
+    }
+    Ok(())
+}
+
+impl DjLinkEnvelope {
+    pub fn parse_json(text: &str) -> Result<Self, String> {
+        if text.len() > DJ_LINK_MAX_FRAME_BYTES {
+            return Err("DJ Link frame exceeds the bounded size".to_string());
+        }
+        let envelope: Self = serde_json::from_str(text).map_err(|error| error.to_string())?;
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.v != DJ_LINK_PROTOCOL_VERSION {
+            return Err("unsupported DJ Link protocol version".to_string());
+        }
+        validate_dj_link_string(&self.agent_id, "agentId")?;
+        validate_dj_link_string(&self.session_id, "sessionId")?;
+        validate_dj_link_string(&self.event_id, "eventId")?;
+        if self.sequence == 0 || self.sequence > DJ_LINK_MAX_SEQUENCE {
+            return Err("DJ Link sequence must be a positive safe integer".to_string());
+        }
+        if !self.payload.is_object() {
+            return Err("DJ Link payload must be an object".to_string());
+        }
+        match self.message_type {
+            DjLinkMessageType::Hello => {
+                let hello: DjLinkHelloPayload = parse_dj_link_payload(&self.payload)?;
+                if hello.version != DJ_LINK_PROTOCOL_VERSION
+                    || hello.auth_token.len() < DJ_LINK_MIN_TOKEN_BYTES
+                    || hello.auth_token.len() > DJ_LINK_MAX_STRING_BYTES
+                    || hello.capabilities.len() > DJ_LINK_MAX_CAPABILITIES
+                {
+                    return Err(
+                        "DJ Link HELLO authentication/version/capabilities are invalid".to_string(),
+                    );
+                }
+                for capability in hello.capabilities {
+                    validate_dj_link_string(&capability, "capability")?;
+                }
+            }
+            DjLinkMessageType::Heartbeat => {
+                let _: DjLinkHeartbeatPayload = parse_dj_link_payload(&self.payload)?;
+            }
+            DjLinkMessageType::MasterChanged => {
+                let payload: DjLinkMasterChangedPayload = parse_dj_link_payload(&self.payload)?;
+                if let Some(deck) = payload.master_deck.as_deref().or(payload.deck.as_deref()) {
+                    validate_dj_link_string(deck, "masterDeck")?;
+                }
+            }
+            DjLinkMessageType::MasterTrackActive => {
+                let payload: DjLinkMasterTrackPayload = parse_dj_link_payload(&self.payload)?;
+                validate_dj_link_track_payload(&payload)?;
+            }
+            DjLinkMessageType::LoopState => {
+                let payload: DjLinkLoopStatePayload = parse_dj_link_payload(&self.payload)?;
+                if payload.division > 63 {
+                    return Err("DJ Link loop division exceeds the safe bound".to_string());
+                }
+            }
+            DjLinkMessageType::Release => {
+                let _: DjLinkReleasePayload = parse_dj_link_payload(&self.payload)?;
+            }
+            DjLinkMessageType::StateSync => {
+                let payload: DjLinkStateSyncPayload = parse_dj_link_payload(&self.payload)?;
+                if let Some(deck) = payload.master_deck.as_deref() {
+                    validate_dj_link_string(deck, "masterDeck")?;
+                }
+                if let Some(loop_division) = payload.loop_division {
+                    if loop_division > 63 {
+                        return Err("DJ Link loop division exceeds the safe bound".to_string());
+                    }
+                }
+                if let Some(track) = payload.master_track {
+                    for (value, label) in [
+                        (track.content_id.as_deref(), "contentId"),
+                        (track.title.as_deref(), "title"),
+                        (track.artist.as_deref(), "artist"),
+                        (track.play_session_id.as_deref(), "playSessionId"),
+                    ] {
+                        if let Some(value) = value {
+                            validate_dj_link_string(value, label)?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn canonical_shape(&self) -> Result<String, String> {
+        self.validate()?;
+        let mut value = serde_json::to_value(self).map_err(|error| error.to_string())?;
+        canonicalize_dj_link_value(&mut value);
+        serde_json::to_string(&value).map_err(|error| error.to_string())
+    }
+}
+
+fn parse_dj_link_payload<T>(payload: &serde_json::Value) -> Result<T, String>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_value(payload.clone()).map_err(|error| error.to_string())
+}
+
+fn validate_dj_link_track_payload(payload: &DjLinkMasterTrackPayload) -> Result<(), String> {
+    validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
+    validate_dj_link_string(&payload.deck, "deck")?;
+    for (value, label) in [
+        (payload.content_id.as_deref(), "contentId"),
+        (payload.title.as_deref(), "title"),
+        (payload.artist.as_deref(), "artist"),
+    ] {
+        if let Some(value) = value {
+            validate_dj_link_string(value, label)?;
+        }
+    }
+    if let Some(deck_id) = payload.deck_id.as_deref() {
+        validate_dj_link_string(deck_id, "deckId")?;
+    }
+    if let Some(started_at) = payload.started_at.as_deref() {
+        validate_dj_link_string(started_at, "startedAt")?;
+    }
+    if payload
+        .track_bpm
+        .is_some_and(|value| !value.is_finite() || !(0.0..=1_000.0).contains(&value))
+        || payload
+            .position_sec
+            .is_some_and(|value| !value.is_finite() || value < 0.0)
+    {
+        return Err("DJ Link track numeric fields are invalid".to_string());
+    }
+    if !payload.playing {
+        return Err("DJ Link track event must identify a playing master track".to_string());
+    }
+    if payload.master
+        && payload
+            .content_id
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && payload.title.as_deref().unwrap_or("").trim().is_empty()
+    {
+        return Err("DJ Link master track event has no track identity".to_string());
+    }
+    Ok(())
+}
+
+fn canonicalize_dj_link_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut ordered = BTreeMap::new();
+            for (key, mut child) in std::mem::take(object) {
+                canonicalize_dj_link_value(&mut child);
+                ordered.insert(key, child);
+            }
+            *object = ordered.into_iter().collect();
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                canonicalize_dj_link_value(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -12823,5 +13314,110 @@ mod tests {
                 slot_id: super::VideoClipSlotId(2)
             }
         );
+    }
+
+    #[test]
+    fn dj_link_envelope_is_strict_and_canonical() {
+        let text = r#"{"v":1,"type":"DJ_MASTER_TRACK_ACTIVE","agentId":"rekordbox","sessionId":"s1","sequence":1,"eventId":"e1","payload":{"contentId":"abc","playSessionId":"p1","isPlaying":true,"master":true,"deck":"A","deckId":"deck-a","trackBpm":128.0,"positionSec":1.25,"startedAt":"2026-08-21T00:00:00Z"}}"#;
+        let envelope = super::DjLinkEnvelope::parse_json(text).unwrap();
+        assert_eq!(
+            envelope.message_type,
+            super::DjLinkMessageType::MasterTrackActive
+        );
+        let shape = envelope.canonical_shape().unwrap();
+        assert!(shape.contains("DJ_MASTER_TRACK_ACTIVE"));
+        assert!(super::DjLinkEnvelope::parse_json(
+            &text.replace("\"sequence\":1", "\"sequence\":0")
+        )
+        .is_err());
+        assert!(super::DjLinkEnvelope::parse_json(
+            &text.replace("\"payload\":", "\"extra\":1,\"payload\":")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn dj_link_peer_wire_fixtures_are_strict_and_distinct() {
+        let hello = r#"{"v":1,"type":"DJ_AGENT_HELLO","agentId":"rekordbox","sessionId":"s1","sequence":1,"eventId":"hello-1","payload":{"authToken":"0123456789abcdef0123456789abcdef","version":1,"capabilities":["track","loop"]}}"#;
+        assert_eq!(
+            super::DjLinkEnvelope::parse_json(hello)
+                .unwrap()
+                .message_type,
+            super::DjLinkMessageType::Hello
+        );
+        let sync = r#"{"v":1,"type":"DJ_STATE_SYNC","agentId":"rekordbox","sessionId":"s1","sequence":2,"eventId":"sync-1","payload":{"loopDivision":2,"released":false,"masterDeck":"A","masterTrack":{"contentId":"abc","title":"Track","artist":"Artist","isPlaying":true}}}"#;
+        let sync_envelope = super::DjLinkEnvelope::parse_json(sync).unwrap();
+        assert_eq!(
+            sync_envelope.message_type,
+            super::DjLinkMessageType::StateSync
+        );
+        let changed = r#"{"v":1,"type":"DJ_MASTER_CHANGED","agentId":"rekordbox","sessionId":"s1","sequence":3,"eventId":"master-1","payload":{"masterDeck":"B","master":true}}"#;
+        assert_eq!(
+            super::DjLinkEnvelope::parse_json(changed)
+                .unwrap()
+                .message_type,
+            super::DjLinkMessageType::MasterChanged
+        );
+        assert!(
+            super::DjLinkEnvelope::parse_json(&hello.replace("DJ_AGENT_HELLO", "HELLO")).is_err()
+        );
+    }
+
+    #[test]
+    fn dj_link_backend_token_is_not_deserialized_or_serialized() {
+        let config = super::RemoteControlConfig {
+            bind_ip: "127.0.0.1".to_string(),
+            port: 9_100,
+            pairing_pin: "123456".to_string(),
+            dj_link_enabled: true,
+            dj_link_bind_ip: Some("127.0.0.1".to_string()),
+            dj_link_token: Some("0123456789abcdef0123456789abcdef".to_string()),
+            ..super::RemoteControlConfig::default()
+        };
+        let encoded = serde_json::to_value(&config).unwrap();
+        assert!(encoded.get("dj_link_token").is_none());
+        let mut incoming = encoded;
+        incoming["dj_link_token"] =
+            serde_json::json!("renderer-selected-token-that-must-be-ignored");
+        let decoded: super::RemoteControlConfig = serde_json::from_value(incoming).unwrap();
+        assert!(decoded.dj_link_token.is_none());
+    }
+
+    #[test]
+    fn dj_link_selector_priority_and_ambiguity_are_fail_closed() {
+        let content = super::DjTrackSelector {
+            content_id: Some("  track-1 ".to_string()),
+            title: Some("ignored".to_string()),
+            artist: Some("ignored".to_string()),
+        };
+        assert_eq!(content.canonical_key().unwrap(), "content:track-1");
+        let title_artist = super::DjTrackSelector {
+            content_id: None,
+            title: Some(" Track ".to_string()),
+            artist: Some(" Artist ".to_string()),
+        };
+        assert!(title_artist.canonical_key().unwrap().contains("Track"));
+        assert!(super::validate_dj_track_trigger_mappings(&[
+            super::DjTrackTriggerMapping {
+                id: "a".to_string(),
+                selector: title_artist.clone(),
+                timeline_id: super::TimelineId(1),
+                retrigger: super::DjTrackRetriggerPolicy::OncePerPlaySession,
+            },
+            super::DjTrackTriggerMapping {
+                id: "b".to_string(),
+                selector: title_artist,
+                timeline_id: super::TimelineId(2),
+                retrigger: super::DjTrackRetriggerPolicy::OncePerPlaySession,
+            },
+        ])
+        .is_err());
+        assert!(super::DjTrackSelector {
+            content_id: None,
+            title: Some("only title".to_string()),
+            artist: None,
+        }
+        .canonical_key()
+        .is_err());
     }
 }

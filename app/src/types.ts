@@ -294,6 +294,8 @@ export interface RemoteControlConfig {
   max_connections: number;
   max_message_bytes: number;
   max_messages_per_second: number;
+  dj_link_enabled: boolean;
+  dj_link_bind_ip: string | null;
 }
 
 export interface RemoteClientSummary {
@@ -309,6 +311,47 @@ export interface RemoteControlStatus {
   active_connections: number;
   rejected_connections: number;
   clients: RemoteClientSummary[];
+  dj_link?: DjLinkRuntimeStatus | null;
+}
+
+export interface DjTrackSelector {
+  contentId?: string | null;
+  title?: string | null;
+  artist?: string | null;
+}
+
+export type DjTrackRetriggerPolicy = "once_per_play_session";
+
+export interface DjTrackTriggerMapping {
+  id: string;
+  selector: DjTrackSelector;
+  timelineId: number;
+  retrigger: DjTrackRetriggerPolicy;
+}
+
+export interface DjLinkRuntimeStatus {
+  available?: boolean;
+  connected: boolean;
+  peer: string | null;
+  generation: number;
+  agentId?: string | null;
+  sessionId?: string | null;
+  master: boolean;
+  trackActive: boolean;
+  loopDivision: number | null;
+  released: boolean;
+  lastEventId: string | null;
+  outcome?: string | null;
+  ageMs: number | null;
+  masterDeck?: string | null;
+  trackContentId?: string | null;
+  trackTitle?: string | null;
+  trackArtist?: string | null;
+  trackDeckId?: string | null;
+  trackStartedAt?: string | null;
+  trackPlaying?: boolean;
+  trackBpm?: number | null;
+  positionSec?: number | null;
 }
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
@@ -808,6 +851,7 @@ export interface ProjectFile {
   midi_mappings?: MidiControlMapping[];
   osc_mappings?: OscControlMapping[];
   dmx_mappings?: DmxControlMapping[];
+  dj_track_triggers?: DjTrackTriggerMapping[];
   snapshot: EngineSnapshot;
 }
 
@@ -819,6 +863,7 @@ export interface ProjectLoadResult {
   midi_mappings: MidiControlMapping[];
   osc_mappings: OscControlMapping[];
   dmx_mappings: DmxControlMapping[];
+  dj_track_triggers?: DjTrackTriggerMapping[];
   warnings: string[];
   /** Backend-authoritative identity token for subsequent mapping/history CAS. */
   project_epoch: number;
@@ -929,6 +974,7 @@ export interface ProjectAuthorityBundle {
   midi_mappings: MidiControlMapping[];
   osc_mappings: OscControlMapping[];
   dmx_mappings: DmxControlMapping[];
+  dj_track_triggers: DjTrackTriggerMapping[];
   history: ProjectHistoryStatus;
   input_runtime: ProjectInputRuntimeStatus;
 }
@@ -998,6 +1044,7 @@ export interface UserTemplateLoadResult extends ProjectLoadResult {
   midi_mappings: MidiControlMapping[];
   osc_mappings: OscControlMapping[];
   dmx_mappings: DmxControlMapping[];
+  dj_track_triggers: DjTrackTriggerMapping[];
 }
 
 export interface NodeGraphAudioNode {

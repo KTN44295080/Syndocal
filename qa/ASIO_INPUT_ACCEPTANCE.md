@@ -1,6 +1,6 @@
 # ASIO Input Acceptance
 
-Updated: 2026-07-14
+Updated: 2026-08-21
 
 ## Release boundary
 
@@ -69,6 +69,24 @@ Current pin:
 | `Realtek ASIO` | Explicit Realtek driver request | Open failed with hardware input/output unavailable | No substitution or silent fallback | Negative fail-closed evidence, not a second accepted driver |
 
 The TOPPING evidence proves that one explicit hardware configuration opens, reports the actual fixed buffer, invokes the capture callback and stops, that the same exact configuration can complete 100 repeated Start/Stop/Free cycles without warning, terminal event, xrun, nonfinite sample, frame mismatch or fallback, and that the production operator path can configure, run and stop it at the primary 1920x1080 full-screen viewport. The 27.6767468-second repeated-open test and short native UI run are still not a one-hour soak or statistical performance result. Callback-duration percentiles, capture-to-engine/pixel latency, physical marker latency, cross-vendor behavior and hot-plug/recovery fault injection were not measured by these runs.
+
+## Warning and repeated-open checkpoint (2026-08-21)
+
+The pinned local `ASIO-SDK_2.3.4_2025-10-15` tree and
+`C:\Program Files\LLVM\bin\libclang.dll` passed
+`qa/harnesses/check-asio-build.ps1`. The exact isolated all-targets Cargo warning
+capture completed with exit 0, one successful `build-finished`, two unique
+first-party artifacts (bridge custom build and `cdylib`/`rlib` target), malformed
+JSON 0, warning-shaped stderr false, and first-party warnings 0.
+
+The ignored physical test was then rerun against
+`asio:TOPPING Pro USB Audio Device` at 48 kHz, two channels, native i32 and an
+explicit 128-frame buffer. All 100 Start/Stop/Free cycles completed in
+33.4553781 seconds with callbacks 200, actual buffer 128 in every cycle, stops
+100, frees 100, warnings 0, terminal events 0, XRUNs 0 and nonfinite samples 0.
+This refresh closes the warning-inventory execution blocker for the isolated
+bridge; it does not change the remaining distribution-license, second-vendor,
+soak, fault-injection or physical-latency gates below.
 
 ## Hardware acceptance
 

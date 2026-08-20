@@ -8,13 +8,16 @@ import {
   aggregateDiagnostics,
   artifactIdentity,
   compareArtifactCoverage,
+  compareOutputMarkerCoverage,
   compareDiagnostics,
   collectModifiedFiles,
   controlledChildEnvironment,
+  controlledGenericCommandEnvironment,
   detectSuppressionText,
   diagnosticIdentityHash,
   findAddedSuppressions,
   findBaselineLaundering,
+  forbiddenGenericCommandEnvironment,
   forbiddenWarningEnvironment,
   loadInventory,
   loadInventoryAtRef,
@@ -22,8 +25,12 @@ import {
   parseCargoJsonLines,
   resolveTrustedComparison,
   runCargoConfiguration,
+  runGenericConfiguration,
   runProcessWithTimeout,
+  runWarningConfiguration,
   validateInventory,
+  validateExpectedOutputMarkers,
+  validateInventorySchema,
   warningAffectingCargoConfigs,
   warningShapedStderr,
 } from "./warning-ratchet-lib.mjs";
@@ -231,6 +238,85 @@ const timeoutResult = await runProcessWithTimeout(process.execPath, ["-e", "setT
 });
 assert.equal(timeoutResult.timedOut, true);
 
+const genericConfiguration = (code, markers = ["generic-marker"], timeoutMs = 5_000) => ({
+  id: "generic-warning-fixture",
+  command: { executable: "pnpm", args: ["exec", "node", "-e", code] },
+  timeoutMs,
+  expectedOutputMarkers: markers,
+});
+const genericSuccess = await runWarningConfiguration(
+  genericConfiguration("process.stdout.write('generic-marker')"),
+  repoRoot,
+);
+assert.equal(genericSuccess.exitCode, 0);
+assert.equal(genericSuccess.timedOut, false);
+assert.equal(genericSuccess.warningShaped, false);
+assert.equal(genericSuccess.markerCoverage.ok, true);
+assert.deepEqual(compareOutputMarkerCoverage(["literal"], "literal output"), {
+  ok: true,
+  missing: [],
+  expected: ["literal"],
+});
+const genericStdoutWarning = await runGenericConfiguration(
+  genericConfiguration("process.stdout.write('generic-marker\\nwarning: synthetic')"),
+  repoRoot,
+);
+assert.equal(genericStdoutWarning.warningShaped, true);
+const genericStderrWarning = await runGenericConfiguration(
+  genericConfiguration("process.stdout.write('generic-marker'); process.stderr.write('WARN synthetic')"),
+  repoRoot,
+);
+assert.equal(genericStderrWarning.warningShaped, true);
+const genericViteWarning = await runGenericConfiguration(
+  genericConfiguration("process.stdout.write('generic-marker\\n(!) Vite synthetic warning')"),
+  repoRoot,
+);
+assert.equal(genericViteWarning.warningShaped, true);
+const genericNonzero = await runGenericConfiguration(
+  genericConfiguration("process.stdout.write('generic-marker'); process.exitCode = 7"),
+  repoRoot,
+);
+assert.equal(genericNonzero.exitCode, 7);
+const genericTimeout = await runGenericConfiguration(
+  genericConfiguration("setTimeout(() => process.stdout.write('generic-marker'), 10_000)", ["generic-marker"], 1_000),
+  repoRoot,
+);
+assert.equal(genericTimeout.timedOut, true);
+const genericMissingMarker = await runGenericConfiguration(
+  genericConfiguration("process.stdout.write('generic-marker')", ["missing-marker"]),
+  repoRoot,
+);
+assert.equal(genericMissingMarker.markerCoverage.ok, false);
+assert.deepEqual(genericMissingMarker.markerCoverage.missing, ["missing-marker"]);
+const outputCap = await runProcessWithTimeout(
+  process.execPath,
+  ["-e", "process.stdout.write('x'.repeat(4096))"],
+  { cwd: repoRoot, env: process.env, timeoutMs: 1_000, maxOutputBytes: 64, forwardStderr: false },
+);
+assert.equal(outputCap.outputLimitExceeded, true);
+const stderrOutputCap = await runProcessWithTimeout(
+  process.execPath,
+  ["-e", "process.stderr.write('x'.repeat(4096))"],
+  { cwd: repoRoot, env: process.env, timeoutMs: 1_000, maxOutputBytes: 64, forwardStderr: false },
+);
+assert.equal(stderrOutputCap.outputLimitExceeded, true);
+await assert.rejects(
+  runGenericConfiguration({ ...genericConfiguration("process.stdout.write('generic-marker')"), command: { executable: "node", args: [] } }, repoRoot),
+  /unsupported command executable/,
+);
+await assert.rejects(
+  runGenericConfiguration({ ...genericConfiguration("process.stdout.write('generic-marker')"), expectedOutputMarkers: [] }, repoRoot),
+  /expectedOutputMarkers must be a non-empty array/,
+);
+assert.ok(forbiddenGenericCommandEnvironment({ NODE_OPTIONS: "--require=taint" }).includes("NODE_OPTIONS"));
+assert.deepEqual(forbiddenGenericCommandEnvironment({ PNPM_CONFIG_FOO: "taint" }), []);
+assert.throws(() => controlledGenericCommandEnvironment({ NODE_OPTIONS: "--require=taint" }), /generic command environment is forbidden/);
+assert.equal(Object.hasOwn(controlledGenericCommandEnvironment({ PNPM_HOME: "C:/tainted" }), "PNPM_HOME"), false);
+assert.equal(Object.hasOwn(controlledGenericCommandEnvironment({ PNPM_CONFIG_FOO: "taint" }), "PNPM_CONFIG_FOO"), false);
+assert.equal(Object.hasOwn(controlledGenericCommandEnvironment({ npm_config_script_shell: "taint" }), "npm_config_script_shell"), false);
+assert.throws(() => validateExpectedOutputMarkers([]), /non-empty array/);
+assert.throws(() => validateExpectedOutputMarkers(["duplicate", "duplicate"]), /unique literal strings/);
+
 assert.throws(() => resolveTrustedComparison(repoRoot, "0".repeat(40), "HEAD"), /invalid comparison ref/);
 assert.throws(() => resolveTrustedComparison(repoRoot, "definitely-missing", "HEAD"), /unresolvable/);
 assert.throws(() => resolveTrustedComparison(repoRoot, "HEAD", "HEAD"), /must differ/);
@@ -281,10 +367,57 @@ try {
 
 assert.deepEqual(findBaselineLaundering({ id: "x" }, { id: "x" }), []);
 assert.ok(findBaselineLaundering({ id: "x", status: "enforced" }, { id: "x", status: "pending" }).length > 0);
+const immutableCommandConfiguration = {
+  id: "immutable-command",
+  command: { executable: "pnpm", args: ["run", "build"] },
+  expectedOutputMarkers: ["build complete"],
+};
+assert.ok(findBaselineLaundering(
+  immutableCommandConfiguration,
+  { ...immutableCommandConfiguration, command: { executable: "pnpm", args: ["run", "other"] } },
+).length > 0);
+assert.ok(findBaselineLaundering(
+  immutableCommandConfiguration,
+  { ...immutableCommandConfiguration, expectedOutputMarkers: ["other marker"] },
+).length > 0);
 
 const inventory = loadInventory(path.join(repoRoot, "qa/warnings/warning-inventory.json"));
 const schema = loadInventory(path.join(repoRoot, "qa/warnings/warning-inventory.schema.json"));
 const spoutConfiguration = inventory.configurations.find((candidate) => candidate.id === "windows-syndocal-spout");
+const genericInventoryConfiguration = {
+  id: "generic-schema-fixture",
+  platform: "windows-x86_64-msvc",
+  profile: "frontend-fixture",
+  features: [],
+  command: { executable: "pnpm", args: ["run", "build"] },
+  timeoutMs: 1_000,
+  firstPartyManifests: [],
+  status: "enforced",
+  evidence: {
+    commit: "a".repeat(40),
+    capturedAt: "2026-08-21T00:00:00Z",
+    command: "pnpm run build",
+    toolchain: { cargo: "1", rustc: "1", node: "1", pnpm: "1" },
+  },
+  expectedOutputMarkers: ["build complete"],
+  expectedArtifacts: [],
+  diagnostics: [],
+  externalWarningAllows: [],
+};
+const genericInventory = structuredClone(inventory);
+genericInventory.configurations.push(genericInventoryConfiguration);
+assert.deepEqual(validateInventorySchema(genericInventory, schema), []);
+assert.deepEqual(validateInventory(genericInventory, schema), []);
+const genericWithoutMarkers = structuredClone(genericInventory);
+delete genericWithoutMarkers.configurations.at(-1).expectedOutputMarkers;
+assert.ok(validateInventorySchema(genericWithoutMarkers, schema).some((error) => error.includes("expectedOutputMarkers")));
+const invalidMarkerSchema = structuredClone(genericInventory);
+invalidMarkerSchema.configurations.at(-1).expectedOutputMarkers = ["duplicate", "duplicate"];
+assert.ok(validateInventorySchema(invalidMarkerSchema, schema).some((error) => error.includes("duplicate") || error.includes("uniqueItems")));
+const unknownExecutableInventory = structuredClone(genericInventory);
+unknownExecutableInventory.configurations.at(-1).command.executable = "node";
+assert.ok(validateInventorySchema(unknownExecutableInventory, schema).some((error) => error.includes("allowed values") || error.includes("enum")));
+assert.deepEqual(validateInventorySchema(inventory, schema), []);
 await assert.rejects(
   runCargoConfiguration(spoutConfiguration, repoRoot, { ...process.env, RUSTFLAGS: "-A" + "warnings" }),
   /warning-affecting environment is forbidden/,

@@ -249,6 +249,8 @@ import type {
   DmxOutputConfig,
   DvcImportReport,
   DmxControlMapping,
+  DjLinkRuntimeStatus,
+  DjTrackTriggerMapping,
   DaslightCustomCurveSource,
   DaslightCurveSource,
   DmxInputConfig,
@@ -393,6 +395,11 @@ import type {
   VisualizerRenderPayload,
 } from "./types";
 import {
+  clearedDjLinkSecret,
+  projectRemoteControlStatusPoll,
+  unavailableRemoteControlStatus,
+} from "./djLinkUiState";
+import {
   createTimelineFollowAbortFocusFence,
   createTimelineFollowAbortLease,
   timelineFollowRuntimeCanApply,
@@ -497,7 +504,11 @@ import { createTimelineOverviewAutomationController } from "./createTimelineOver
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
-import { executeOutputControl } from "./outputControlController";
+import {
+  executeOutputControl,
+  queryOutputLeaseAuthority,
+  selectOnlyActiveOutputLease,
+} from "./outputControlController";
 import { createTimelineFollowAbortRuntimeController } from "./timelineFollowAbortRuntimeController";
 import { createTimelineTransportRuntimeController } from "./timelineTransportRuntimeController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
@@ -1803,6 +1814,7 @@ type ProjectControlMappingsAuthority = {
   midi_mappings: MidiControlMapping[];
   osc_mappings: OscControlMapping[];
   dmx_mappings: DmxControlMapping[];
+  dj_track_triggers: DjTrackTriggerMapping[];
   mapping_runtimes_retired?: boolean;
 };
 const isVisualMediaFilePath = (path: string) => {
@@ -2060,6 +2072,7 @@ export default function App() {
   const [midiFeedbackConnected, setMidiFeedbackConnected] = createSignal(false);
   const [midiFeedbackEnabled, setMidiFeedbackEnabled] = createSignal(false);
   const [midiMappings, setMidiMappings] = createSignal<MidiControlMapping[]>([]);
+  const [djTrackTriggers, setDjTrackTriggers] = createSignal<DjTrackTriggerMapping[]>([]);
   const [controlLearnMode, setControlLearnModeState] = createSignal<ControlLearnMode | null>(null);
   const [controlLearnBusy, setControlLearnBusy] = createSignal(false);
   const [controlLearnTargetLabel, setControlLearnTargetLabel] = createSignal<string | null>(null);
@@ -2163,14 +2176,16 @@ export default function App() {
   const [remoteMaxConnections, setRemoteMaxConnections] = createSignal(8);
   const [remoteMaxMessageBytes, setRemoteMaxMessageBytes] = createSignal(64 * 1024);
   const [remoteMaxMessagesPerSecond, setRemoteMaxMessagesPerSecond] = createSignal(60);
+  const [djLinkEnabled, setDjLinkEnabled] = createSignal(false);
+  const [djLinkBindIp, setDjLinkBindIp] = createSignal<string | null>(null);
+  const [djLinkLanInterfaces, setDjLinkLanInterfaces] = createSignal<string[]>([]);
+  const [djLinkToken, setDjLinkToken] = createSignal<string | null>(null);
+  const [djLinkTokenCopied, setDjLinkTokenCopied] = createSignal(false);
   const [remoteRunning, setRemoteRunning] = createSignal(false);
   const [remoteAccessUrls, setRemoteAccessUrls] = createSignal<string[]>([]);
-  const [remoteStatus, setRemoteStatus] = createSignal<RemoteControlStatus>({
-    running: false,
-    active_connections: 0,
-    rejected_connections: 0,
-    clients: [],
-  });
+  const [remoteStatus, setRemoteStatus] = createSignal<RemoteControlStatus>(
+    unavailableRemoteControlStatus(),
+  );
   const [cueLabel, setCueLabel] = createSignal("Cue 1");
   const [cueFadeMs, setCueFadeMs] = createSignal(1000);
   const [cueAuthoredBeats, setCueAuthoredBeats] = createSignal<number | null>(null);
@@ -8166,6 +8181,8 @@ export default function App() {
     max_connections: remoteMaxConnections(),
     max_message_bytes: remoteMaxMessageBytes(),
     max_messages_per_second: remoteMaxMessagesPerSecond(),
+    dj_link_enabled: djLinkEnabled(),
+    dj_link_bind_ip: djLinkBindIp(),
   }));
   const fallbackRemoteUrl = createMemo(() => {
     const host = remoteBindIp().trim();
@@ -9831,7 +9848,7 @@ export default function App() {
 
   const projectStateSignature = (nextSnapshot = snapshot()) =>
     `${projectSnapshotSignature(nextSnapshot)}|operator:${JSON.stringify(operatorPolicy())}`
-    + `|control-mappings:${JSON.stringify({ midi: midiMappings(), osc: oscMappings(), dmx: dmxMappings() })}`;
+    + `|control-mappings:${JSON.stringify({ midi: midiMappings(), osc: oscMappings(), dmx: dmxMappings(), dj: djTrackTriggers() })}`;
   const markProjectClean = (nextSnapshot = snapshot()) => {
     setCleanProjectSignature(projectStateSignature(nextSnapshot));
     const authority = projectMappingsAuthority();
@@ -9929,6 +9946,7 @@ export default function App() {
         midiMappings: midiMappings(),
         oscMappings: oscMappings(),
         dmxMappings: dmxMappings(),
+        djTrackTriggers: djTrackTriggers(),
       });
       await refreshProjectBackups();
       setMessage(`Syndocal ${update.version} was verified and handed to the platform installer.`);
@@ -10204,9 +10222,10 @@ export default function App() {
         await invoke<ProjectBackupSummary>("save_project_backup", {
           sourcePath: currentProjectPath(),
           reason: "autosave",
-          midiMappings: midiMappings(),
-          oscMappings: oscMappings(),
-          dmxMappings: dmxMappings(),
+        midiMappings: midiMappings(),
+        oscMappings: oscMappings(),
+        dmxMappings: dmxMappings(),
+        djTrackTriggers: djTrackTriggers(),
         });
         lastDesktopBackupSignature = signature;
         lastDesktopBackupAt = now;
@@ -12492,7 +12511,8 @@ export default function App() {
     midi: MidiControlMapping[],
     osc: OscControlMapping[],
     dmx: DmxControlMapping[],
-  ) => JSON.stringify({ midi, osc, dmx });
+    dj: DjTrackTriggerMapping[] = djTrackTriggers(),
+  ) => JSON.stringify({ midi, osc, dmx, dj });
 
   const authorityToken = (authority: Partial<ProjectControlMappingsAuthority>): ProjectAuthorityToken => ({
     project_epoch: authority.project_epoch ?? projectMappingsAuthority().project_epoch,
@@ -12854,6 +12874,7 @@ export default function App() {
     midi: MidiControlMapping[];
     osc: OscControlMapping[];
     dmx: DmxControlMapping[];
+    dj: DjTrackTriggerMapping[];
   };
 
   // Validate and copy the full mapping image before any identity signal is
@@ -12864,6 +12885,7 @@ export default function App() {
     fallbackMidi: MidiControlMapping[] = [],
     fallbackOsc: OscControlMapping[] = [],
     fallbackDmx: DmxControlMapping[] = [],
+    fallbackDj: DjTrackTriggerMapping[] = [],
   ): PreparedProjectControlMappings | null => {
     const token = authorityToken(authority);
     if (!projectAuthorityCanApply(token, projectMappingsAuthority())) return null;
@@ -12873,15 +12895,17 @@ export default function App() {
       midi: authority.midi_mappings ?? fallbackMidi,
       osc: authority.osc_mappings ?? fallbackOsc,
       dmx: authority.dmx_mappings ?? fallbackDmx,
+      dj: authority.dj_track_triggers ?? fallbackDj,
     };
   };
 
   const commitPreparedProjectControlMappings = (prepared: PreparedProjectControlMappings) => {
     abortMediaAssetOperationsForAuthorityChange(prepared.token);
-    mappingObservedSignature = projectControlMappingsSignature(prepared.midi, prepared.osc, prepared.dmx);
+    mappingObservedSignature = projectControlMappingsSignature(prepared.midi, prepared.osc, prepared.dmx, prepared.dj);
     setMidiMappings(prepared.midi);
     setOscMappings(prepared.osc);
     setDmxMappings(prepared.dmx);
+    setDjTrackTriggers(prepared.dj);
     setProjectMappingsAuthority(prepared.token);
     setProjectMappingsAuthorityReady(true);
     if (prepared.dmx.length > 0) {
@@ -12894,8 +12918,9 @@ export default function App() {
     fallbackMidi: MidiControlMapping[] = [],
     fallbackOsc: OscControlMapping[] = [],
     fallbackDmx: DmxControlMapping[] = [],
+    fallbackDj: DjTrackTriggerMapping[] = [],
   ) => {
-    const prepared = prepareProjectControlMappings(authority, fallbackMidi, fallbackOsc, fallbackDmx);
+    const prepared = prepareProjectControlMappings(authority, fallbackMidi, fallbackOsc, fallbackDmx, fallbackDj);
     if (!prepared) return false;
     commitPreparedProjectControlMappings(prepared);
     return true;
@@ -12905,6 +12930,7 @@ export default function App() {
     midi: midiMappings(),
     osc: oscMappings(),
     dmx: dmxMappings(),
+    dj: djTrackTriggers(),
   });
 
   const scheduleProjectControlMappingsPersist = (delayMs = 180) => {
@@ -12942,6 +12968,7 @@ export default function App() {
     nextMidiMappings: MidiControlMapping[],
     nextOscMappings: OscControlMapping[],
     nextDmxMappings: DmxControlMapping[],
+    nextDjMappings: DjTrackTriggerMapping[] = [],
     authority: Partial<ProjectControlMappingsAuthority> = {},
   ) => {
     // Project replacement retires old input workers in the backend before its
@@ -12952,6 +12979,7 @@ export default function App() {
       nextMidiMappings,
       nextOscMappings,
       nextDmxMappings,
+      nextDjMappings,
     );
     if (!prepared) return false;
     invalidateProjectControlMappingsForIdentity();
@@ -12990,6 +13018,7 @@ export default function App() {
           midiMappings: sentMappings.midi,
           oscMappings: sentMappings.osc,
           dmxMappings: sentMappings.dmx,
+          djTrackTriggers: sentMappings.dj,
         });
         if (mappingResponseIsCurrent(started.request) && adoptProjectMappingsAuthority(next)) {
           // Only the request that still owns this identity may acknowledge a
@@ -13727,7 +13756,7 @@ export default function App() {
 
   createEffect(() => {
     const current = currentProjectControlMappings();
-    const signature = projectControlMappingsSignature(current.midi, current.osc, current.dmx);
+    const signature = projectControlMappingsSignature(current.midi, current.osc, current.dmx, current.dj);
     if (mappingObservedSignature === null) {
       mappingObservedSignature = signature;
       return;
@@ -13769,9 +13798,10 @@ export default function App() {
     try {
       await flushProjectControlMappingsAuthority();
       const path = await invoke<string | null>("save_user_template", {
-        midiMappings: midiMappings(),
-        oscMappings: oscMappings(),
-        dmxMappings: dmxMappings(),
+          midiMappings: midiMappings(),
+          oscMappings: oscMappings(),
+          dmxMappings: dmxMappings(),
+          djTrackTriggers: djTrackTriggers(),
       });
       setMessage(path ? `Saved user template ${path}` : "Template save canceled.");
     } catch (error) {
@@ -13812,9 +13842,10 @@ export default function App() {
       const capturedAuthority = captureProjectAuthorityIdentity();
       const capturedApplicationGeneration = projectAuthoritySync.applicationGeneration;
       const saved = await invoke<ProjectSaveResult | null>("save_project", {
-        midiMappings: midiMappings(),
-        oscMappings: oscMappings(),
-        dmxMappings: dmxMappings(),
+          midiMappings: midiMappings(),
+          oscMappings: oscMappings(),
+          dmxMappings: dmxMappings(),
+          djTrackTriggers: djTrackTriggers(),
       });
       if (saved) {
         const savedToken = authorityToken(saved.authority);
@@ -13854,9 +13885,10 @@ export default function App() {
       const capturedAuthority = captureProjectAuthorityIdentity();
       const capturedApplicationGeneration = projectAuthoritySync.applicationGeneration;
       const saved = await invoke<ProjectSaveResult | null>("save_project_as", {
-        midiMappings: midiMappings(),
-        oscMappings: oscMappings(),
-        dmxMappings: dmxMappings(),
+          midiMappings: midiMappings(),
+          oscMappings: oscMappings(),
+          dmxMappings: dmxMappings(),
+          djTrackTriggers: djTrackTriggers(),
       });
       if (saved) {
         const savedToken = authorityToken(saved.authority);
@@ -13882,7 +13914,7 @@ export default function App() {
 
   const loadedProjectMessage = (result: ProjectLoadResult) => {
     const profileLabel = result.profiles.length === 1 ? "1 embedded profile" : `${result.profiles.length} embedded profiles`;
-    const mappingLabel = `${result.midi_mappings?.length ?? 0} MIDI / ${result.osc_mappings?.length ?? 0} OSC / ${result.dmx_mappings?.length ?? 0} DMX mappings`;
+    const mappingLabel = `${result.midi_mappings?.length ?? 0} MIDI / ${result.osc_mappings?.length ?? 0} OSC / ${result.dmx_mappings?.length ?? 0} DMX / ${result.dj_track_triggers?.length ?? 0} DJ Link mappings`;
     const warnings = result.warnings ?? [];
     const warningLabel = warnings.length === 1 ? "1 validation warning" : `${warnings.length} validation warnings`;
     return warnings.length > 0
@@ -15536,9 +15568,11 @@ export default function App() {
       if (enabled) {
         await safetyBlackoutRuntime.engage();
       } else {
+        const leaseQuery = await queryOutputLeaseAuthority(invoke);
+        const lease = selectOnlyActiveOutputLease(leaseQuery, ["lighting", "video"]);
         await executeOutputControl(
           invoke,
-          { kind: "release_blackout" },
+          { kind: "release_blackout", lease },
           ({ displayCode }) => setMessage(
             `Release blackout confirmation required: type ${displayCode} on the physical keyboard.`,
           ),
@@ -16227,18 +16261,122 @@ export default function App() {
     return urls;
   };
 
+  let remoteStatusPollGeneration = 0;
   const refreshRemoteControlStatus = async () => {
     if (!isTauriRuntime()) {
       return remoteStatus();
     }
+    const pollGeneration = ++remoteStatusPollGeneration;
     try {
       const status = await invoke<RemoteControlStatus>("remote_control_status");
-      setRemoteStatus(status);
-      setRemoteRunning(status.running);
+      // A late reply from an older poll must not overwrite a newer authority
+      // result (or resurrect a DJ Link lease after a stop/failure).
+      if (pollGeneration !== remoteStatusPollGeneration) return status;
+      const projected = projectRemoteControlStatusPoll(status);
+      setRemoteStatus(projected.status);
+      setRemoteRunning(projected.running);
       return status;
     } catch {
-      return remoteStatus();
+      if (pollGeneration !== remoteStatusPollGeneration) return null;
+      const projected = projectRemoteControlStatusPoll(null);
+      setRemoteStatus(projected.status);
+      setRemoteRunning(projected.running);
+      return projected.status;
     }
+  };
+
+  const refreshDjLinkLanInterfaces = async () => {
+    if (!isTauriRuntime()) {
+      setDjLinkLanInterfaces([]);
+      return [];
+    }
+    try {
+      const interfaces = await invoke<string[]>("list_show_lan_interfaces");
+      const next = [...new Set(interfaces
+        .map((address) => address.trim())
+        .filter((address) => address.length > 0
+          && address !== "0.0.0.0"
+          && address !== "::"
+          && address !== "127.0.0.1"
+          && address !== "::1"))];
+      setDjLinkLanInterfaces(next);
+      if (djLinkBindIp() !== null && !next.includes(djLinkBindIp()!)) setDjLinkBindIp(null);
+      return next;
+    } catch {
+      setDjLinkLanInterfaces([]);
+      return [];
+    }
+  };
+
+  let djLinkTokenClearTimer: number | null = null;
+  const clearDjLinkToken = () => {
+    if (djLinkTokenClearTimer !== null) {
+      window.clearTimeout(djLinkTokenClearTimer);
+      djLinkTokenClearTimer = null;
+    }
+    const cleared = clearedDjLinkSecret();
+    setDjLinkToken(cleared.token);
+    setDjLinkTokenCopied(cleared.copied);
+  };
+  const showDjLinkTokenTemporarily = (token: string) => {
+    clearDjLinkToken();
+    setDjLinkToken(token);
+    djLinkTokenClearTimer = window.setTimeout(clearDjLinkToken, 30_000);
+  };
+  const rotateDjLinkToken = async () => {
+    if (remoteRunning()) {
+      setMessage("Stop Web Remote before rotating the DJ Link token.");
+      return;
+    }
+    if (!window.confirm("Rotate the DJ Link token? The current token will be invalidated and shown once.")) return;
+    try {
+      const token = await invoke<string>("rotate_dj_link_token");
+      showDjLinkTokenTemporarily(token);
+      setMessage("DJ Link token generated. Copy it now; it will not be shown again.");
+    } catch (error) {
+      setMessage(`DJ Link token rotation failed: ${String(error)}`);
+    }
+  };
+  const copyDjLinkToken = async () => {
+    const token = djLinkToken();
+    if (!token) return;
+    try {
+      await navigator.clipboard.writeText(token);
+      clearDjLinkToken();
+      const copied = clearedDjLinkSecret(true);
+      setDjLinkToken(copied.token);
+      setDjLinkTokenCopied(copied.copied);
+      setMessage("DJ Link token copied and cleared.");
+    } catch (error) {
+      setMessage(`Could not copy DJ Link token: ${String(error)}`);
+    }
+  };
+
+  const setDjTrackTriggersFromPanel = (next: DjTrackTriggerMapping[]) => {
+    if (next.length > 128 || new Set(next.map((mapping) => mapping.id)).size !== next.length) {
+      setMessage("DJ Link mappings must contain at most 128 unique IDs.");
+      return;
+    }
+    if (next.some((mapping) => {
+      const selector = mapping.selector;
+      const hasContent = Boolean(selector.contentId?.trim());
+      const hasTitleArtist = Boolean(selector.title?.trim() && selector.artist?.trim());
+      return !mapping.id.trim() || !Number.isSafeInteger(mapping.timelineId) || mapping.timelineId <= 0
+        || (!hasContent && !hasTitleArtist);
+    })) {
+      setMessage("Each DJ Link mapping needs a Content ID or an exact Title and Artist pair.");
+      return;
+    }
+    setDjTrackTriggers(next.map((mapping) => ({
+      ...mapping,
+      id: mapping.id.trim(),
+      retrigger: "once_per_play_session",
+      selector: {
+        contentId: mapping.selector.contentId?.trim() || null,
+        title: mapping.selector.title?.trim() || null,
+        artist: mapping.selector.artist?.trim() || null,
+      },
+    })));
   };
 
   const disconnectRemoteClient = async (clientId: number) => {
@@ -16273,12 +16411,22 @@ export default function App() {
     const config = remoteConfig();
     void refreshRemoteAccessUrls(config);
   });
+  createEffect(() => {
+    if (djLinkEnabled()) void refreshDjLinkLanInterfaces();
+  });
 
   const startRemoteControl = async () => {
     try {
       if (!/^\d{6}$/.test(remotePairingPin())) {
         setMessage("Remote pairing PIN must contain exactly 6 digits.");
         return;
+      }
+      if (djLinkEnabled()) {
+        const bind = djLinkBindIp();
+        if (!bind || bind === "0.0.0.0" || bind === "::" || bind === "127.0.0.1" || bind === "::1" || remoteBindIp() !== bind) {
+          setMessage("DJ Link requires one explicit non-loopback Show-LAN IP used as the Web Remote bind IP.");
+          return;
+        }
       }
       const urls = await startRemoteServer();
       setMessage(`Remote listening: ${(urls[0] ?? fallbackRemoteUrl())}`);
@@ -16288,10 +16436,14 @@ export default function App() {
   };
 
   const stopRemoteControl = async () => {
+    // Invalidate an in-flight status request before stopping so its late
+    // success cannot restore stale remote/DJ authority into the panel.
+    remoteStatusPollGeneration += 1;
     try {
       await invoke("stop_remote_control");
       setRemoteRunning(false);
-      setRemoteStatus({ running: false, active_connections: 0, rejected_connections: 0, clients: [] });
+      clearDjLinkToken();
+      setRemoteStatus(unavailableRemoteControlStatus());
       void refreshRemoteAccessUrls();
       setMessage("Remote WebSocket stopped.");
     } catch (error) {
@@ -16310,6 +16462,7 @@ export default function App() {
     if (remoteStatusTimer !== null) {
       window.clearInterval(remoteStatusTimer);
     }
+    clearDjLinkToken();
   });
 
   const createCue = async () => {
@@ -24864,6 +25017,15 @@ export default function App() {
             maxConnections={remoteMaxConnections()}
             maxMessageBytes={remoteMaxMessageBytes()}
             maxMessagesPerSecond={remoteMaxMessagesPerSecond()}
+            djLinkEnabled={djLinkEnabled()}
+            djLinkBindIp={djLinkBindIp()}
+            djLinkLanInterfaces={djLinkLanInterfaces()}
+            djLinkToken={djLinkToken()}
+            djLinkTokenCopied={djLinkTokenCopied()}
+            djTrackTriggers={djTrackTriggers()}
+            timelineOptions={(snapshot().timeline_bank ?? [])
+              .filter((timeline) => Number.isSafeInteger(timeline.id) && (timeline.id ?? 0) > 0)
+              .map((timeline) => ({ id: timeline.id!, label: timeline.label?.trim() || `Timeline ${timeline.id}` }))}
             running={remoteRunning()}
             remoteUrls={remoteUrls()}
             status={remoteStatus()}
@@ -24873,11 +25035,33 @@ export default function App() {
             onRegeneratePairingPin={() => setRemotePairingPin(createPairingPin())}
             onAllowLan={(value) => {
               setRemoteAllowLan(value);
-              setRemoteBindIp(value ? "0.0.0.0" : "127.0.0.1");
+              if (!value) {
+                setDjLinkEnabled(false);
+                setDjLinkBindIp(null);
+                setRemoteBindIp("127.0.0.1");
+              } else {
+                setRemoteBindIp(djLinkEnabled() ? (djLinkBindIp() ?? "0.0.0.0") : "0.0.0.0");
+              }
             }}
             onMaxConnections={setRemoteMaxConnections}
             onMaxMessageBytes={setRemoteMaxMessageBytes}
             onMaxMessagesPerSecond={setRemoteMaxMessagesPerSecond}
+            onDjLinkEnabled={(value) => {
+              setDjLinkEnabled(value);
+              if (value) void refreshDjLinkLanInterfaces();
+              else setDjLinkBindIp(null);
+            }}
+            onDjLinkBindIp={(value) => {
+              setDjLinkBindIp(value);
+              if (value) {
+                setRemoteAllowLan(true);
+                setRemoteBindIp(value);
+              }
+            }}
+            onRefreshDjLinkLanInterfaces={refreshDjLinkLanInterfaces}
+            onRotateDjLinkToken={rotateDjLinkToken}
+            onCopyDjLinkToken={copyDjLinkToken}
+            onDjTrackTriggers={setDjTrackTriggersFromPanel}
             onCopyRemoteUrl={copyRemoteUrl}
             onOpenRemoteUrl={openRemoteUrl}
             onStart={startRemoteControl}

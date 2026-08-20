@@ -2576,14 +2576,14 @@ async function measureTimelinePaneExpansionState(client) {
       ':scope > .topbarProject > strong',
       ':scope > .topbarProject > span',
       ':scope > .status',
-      ':scope > .status > .topbarMasterCluster',
       ':scope > .status > .bpmReadout',
       ':scope > .status > .bpmReadout > small',
       ':scope > .status > .bpmReadout > strong',
       ':scope > .status > .pill',
       // .tickMetric / .outputMetric were consolidated into the .pill status
       // indicator (its title now carries Engine tick/jitter/bytes + DMX
-      // success/output counts). The topbar background drag surface is now 11.
+      // success/output counts). The removed master cluster leaves 10
+      // topbar background drag surfaces.
     ];
     const missingTopbarDragRegionSelectors = requiredTopbarDragRegionSelectors.filter((selector) => {
       const element = selector === ':scope' ? topbar : topbar?.querySelector(selector);
@@ -2884,13 +2884,16 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     normalDensity.topbarRect &&
     normalDensity.topbarRect.height <= 44 &&
     normalDensity.topbarScrollWidth <= normalDensity.topbarClientWidth + 1 &&
-    normalDensity.topbarMasterClusterContained &&
+    // The persistent Lighting/Video master sliders were intentionally
+    // removed from the header; their non-header runtime controls remain.
+    normalDensity.topbarMasterCount === 0 &&
+    normalDensity.topbarMasterSliderCount === 0 &&
     normalDensity.topbarTapContained
   );
-  const topbarMastersAndBpmAreIntegrated = Boolean(
-    normalDensity.topbarMasterCount === 2 &&
-    normalDensity.topbarMasterSliderCount === 2 &&
-    normalDensity.topbarMasterMinimumSliderWidth >= 80 &&
+  const topbarBpmAndTapAreIntegratedWithoutHeaderMasters = Boolean(
+    normalDensity.topbarMasterCount === 0 &&
+    normalDensity.topbarMasterSliderCount === 0 &&
+    normalDensity.topbarMasterMinimumSliderWidth === 0 &&
     normalDensity.topbarBpmReadoutCount === 1 &&
     normalDensity.topbarTapRect?.width >= 40 &&
     normalDensity.topbarTapRect?.height >= 40 &&
@@ -2922,14 +2925,16 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     ['timelineExpandToggleVisible', () => Boolean(before.timelinePaneExpandToggleVisible)],
     ['timelineExpandToggleNamed', () => Boolean(before.timelinePaneExpandToggleNamed)],
     ['t25TopbarIsSingleContainedRow', () => topbarIsSingleContainedRow],
-    ['t25TopbarMastersBpmAndTapIntegrated', () => topbarMastersAndBpmAreIntegrated],
+    ['t25TopbarBpmAndTapIntegratedWithoutHeaderMasters', () => topbarBpmAndTapAreIntegratedWithoutHeaderMasters],
     ['t25ETopbarOwnsDragRegionOnlyOnBackground', () => Boolean(
       normalDensity.topbarDragRegion &&
       normalDensity.topbarDragRegionSurfaceCount >= normalDensity.requiredTopbarDragRegionSurfaceCount &&
       normalDensity.interactiveDragRegionCount === 0
     )],
     ['t25ETopbarEmptySurfaceMapIsComplete', () => Boolean(
-      normalDensity.requiredTopbarDragRegionSurfaceCount === 11 &&
+      // One background drag surface disappeared with the two removed header
+      // sliders: 10 required surfaces is the new exact contract.
+      normalDensity.requiredTopbarDragRegionSurfaceCount === 10 &&
       normalDensity.missingTopbarDragRegionSelectors?.length === 0
     )],
     ['t25EWindowControlsExistInRequiredOrder', () => Boolean(
@@ -11712,13 +11717,12 @@ function readTopbarPulseStateInPage() {
     ":scope > .topbarProject > strong",
     ":scope > .topbarProject > span",
     ":scope > .status",
-    ":scope > .status > .topbarMasterCluster",
     ":scope > .status > .bpmReadout",
     ":scope > .status > .bpmReadout > small",
     ":scope > .status > .bpmReadout > strong",
     ":scope > .status > .pill",
     // .tickMetric / .outputMetric consolidated into .pill (see normal-density
-    // requiredTopbarDragRegionSelectors). Background drag surface count is 11.
+    // requiredTopbarDragRegionSelectors). Removed header masters leave 10.
   ];
   const missingDragRegionSelectors = requiredDragRegionSelectors.filter((selector) => {
     const element = selector === ":scope" ? topbar : topbar?.querySelector(selector);
@@ -11944,16 +11948,14 @@ async function runTopbarPulseViewport(client, viewport) {
       stopped.viewport.width === 1280 &&
       stopped.pulseRect?.width <= 60 &&
       stopped.pulseRect?.height === 40,
-    topbarGoRestoredBetweenMastersAndBpm:
+    topbarGoRestoredBeforeBpmWithoutHeaderMasters:
       stopped.controlCounts.go === 1 &&
       stopped.goVisible &&
       !stopped.goDisabled &&
       stopped.goTitle.startsWith("GO: ") &&
       stopped.goTitle !== "GO: No cue" &&
-      stopped.masterClusterRect &&
       stopped.goRect &&
       stopped.bpmRect &&
-      stopped.masterClusterRect.right <= stopped.goRect.x + 0.5 &&
       stopped.goRect.right <= stopped.bpmRect.x + 0.5,
     projectSaveLoadRemovedFromTopbarAndPreservedInMenu:
       stopped.controlCounts.project === 0 &&
@@ -11966,13 +11968,15 @@ async function runTopbarPulseViewport(client, viewport) {
       projectMenu.saveShortcut.includes("Control+S") &&
       projectMenu.loadShortcut.includes("Control+O"),
     emptyTopbarSurfacesAreDragRegionsOnly:
-      stopped.requiredDragRegionSurfaceCount === 11 &&
+      // The header no longer owns the two persistent master sliders, so its
+      // exact background drag-surface count is 10 rather than 11.
+      stopped.requiredDragRegionSurfaceCount === 10 &&
       stopped.missingDragRegionSelectors.length === 0 &&
       stopped.interactiveDragRegionCount === 0 &&
       projectMenu.interactiveDragRegionCount === 0,
     allTopbarControlsCoexistAt1280:
       stopped.controlCounts.go === 1 &&
-      stopped.controlCounts.masters === 2 &&
+      stopped.controlCounts.masters === 0 &&
       stopped.controlCounts.bpm === 1 &&
       stopped.controlCounts.tap === 1 &&
       stopped.controlCounts.live === 1 &&

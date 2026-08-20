@@ -19,6 +19,37 @@ mod move_path;
 pub use control_plane::{control_plane_engine_command_descriptors, engine_command_variant_count};
 use move_path::{move_rotation, transform_move_delta, CompiledMovePath};
 
+/// Resolve an authored A-B loop to an absolute runtime boundary. Division 0
+/// is the authored range; each additional division halves the authored span
+/// from A without accumulating prior runtime scaling. This helper is pure so
+/// remote synchronization and deterministic tests share the exact rule.
+pub fn absolute_timeline_loop_bounds(
+    region: Option<&TimelineLoopRegionSummary>,
+    division: u8,
+    duration_ms: u64,
+) -> Result<(u64, u64), String> {
+    let region = region.ok_or_else(|| "Timeline loop has no authored A-B region".to_string())?;
+    if region.a_ms >= region.b_ms || region.b_ms > duration_ms {
+        return Err("Timeline loop authored A-B region is outside the finite duration".to_string());
+    }
+    if division > 63 {
+        return Err("Timeline loop division exceeds the safe bound".to_string());
+    }
+    let span = u128::from(region.b_ms - region.a_ms);
+    let denominator = 1u128 << division;
+    let offset = span / denominator;
+    if offset == 0 {
+        return Err("Timeline loop division would produce an empty range".to_string());
+    }
+    let target = u128::from(region.a_ms) + offset;
+    if target <= u128::from(region.a_ms) || target > u128::from(duration_ms) {
+        return Err("Timeline loop division produced an out-of-bounds range".to_string());
+    }
+    let target = u64::try_from(target)
+        .map_err(|_| "Timeline loop division exceeded u64 bounds".to_string())?;
+    Ok((region.a_ms, target))
+}
+
 use crossbeam_queue::ArrayQueue;
 use io::{
     artnet::ArtNetSender,
@@ -2292,6 +2323,18 @@ define_engine_command! {
         captured_at: Instant,
     },
     SetTimelinePlaying(bool),
+    /// Runtime-only activation of an already-authored Timeline bank entry.
+    /// This never selects or mutates the authored project/history image.
+    StartTimeline {
+        timeline_id: TimelineId,
+    },
+    /// Acknowledgement-bearing DJ Link publication.  The acknowledgement is
+    /// delivered only after the authored target has been installed in the
+    /// runtime; it never mutates the authored project/history image.
+    DjLinkStartTimeline {
+        timeline_id: TimelineId,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     /// Canonical, generation-fenced local-runtime Play/Pause publication.
     /// Unlike the legacy command above, it has a worker recheck and a
     /// definitive snapshot acknowledgement for the strict app receipt lane.
@@ -2304,6 +2347,24 @@ define_engine_command! {
     },
     SeekTimeline(u64),
     SetTimelineLoopEnabled(bool),
+    /// Resolve an absolute loop division from the authored A-B region. The
+    /// command is deliberately not ScaleTimelineLoop: repeated sync events
+    /// therefore converge without cumulative drift.
+    SetTimelineLoopAbsolute {
+        division: u8,
+        enabled: bool,
+    },
+    /// Acknowledgement-bearing absolute DJ Link loop convergence.
+    DjLinkSetTimelineLoopAbsolute {
+        division: u8,
+        enabled: bool,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// One queue item for DJ Link RELEASE: disable the loop and resume the
+    /// timeline as one rollback-capable runtime publication.
+    DjLinkRelease {
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     ToggleTimelineLoop,
     ScaleTimelineLoop(TimelineLoopScale),
     SetDirectChildTimelinePlaying {
@@ -3676,6 +3737,48 @@ impl EngineHandle {
                 Err(EngineError::QueueFull)
             }
         }
+    }
+
+    /// Submit a DJ Link timeline start and wait for the engine's canonical
+    /// publication result.  Remote callers must not treat queue admission as
+    /// a successful transition.
+    pub fn dj_link_start_timeline(&self, timeline_id: TimelineId) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::DjLinkStartTimeline { timeline_id, ack })
+            .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("DJ Link timeline start acknowledgement failed: {error}"))?
+    }
+
+    /// Submit an absolute authored-loop convergence and wait for its result.
+    pub fn dj_link_set_timeline_loop_absolute(
+        &self,
+        division: u8,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::DjLinkSetTimelineLoopAbsolute {
+            division,
+            enabled,
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("DJ Link absolute loop acknowledgement failed: {error}"))?
+    }
+
+    /// Submit the atomic DJ Link RELEASE publication.  Disable-loop and
+    /// resume are one queue item and are rolled back together if either side
+    /// rejects the transition.
+    pub fn dj_link_release(&self) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::DjLinkRelease { ack })
+            .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("DJ Link release acknowledgement failed: {error}"))?
     }
 
     fn send_safety(&self, command: EngineCommand) -> Result<(), EngineError> {
@@ -6621,9 +6724,14 @@ impl EngineHandle {
             | EngineCommand::ClearLiveAudioInputPublished { .. }
             | EngineCommand::ReportLiveAudioOnset { .. }
             | EngineCommand::SetTimelinePlaying(_)
+            | EngineCommand::StartTimeline { .. }
+            | EngineCommand::DjLinkStartTimeline { .. }
             | EngineCommand::SetTimelinePlayingPublished { .. }
             | EngineCommand::SeekTimeline(_)
             | EngineCommand::SetTimelineLoopEnabled(_)
+            | EngineCommand::SetTimelineLoopAbsolute { .. }
+            | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+            | EngineCommand::DjLinkRelease { .. }
             | EngineCommand::ToggleTimelineLoop
             | EngineCommand::ScaleTimelineLoop(_)
             | EngineCommand::SetDirectChildTimelinePlaying { .. }
@@ -10957,6 +11065,7 @@ impl CompiledDaslightBounceGlyph {
 
 #[derive(Clone)]
 struct CompiledDaslightBounce {
+    #[cfg(test)]
     random_a: Arc<[f32; DASLIGHT_BOUNCE_RANDOM_COUNT]>,
     palette: Arc<[ColorEffectColor]>,
     glyph: Arc<CompiledDaslightBounceGlyph>,
@@ -11075,6 +11184,7 @@ impl CompiledDaslightBounce {
             .max(1)
             .min(DASLIGHT_BOUNCE_FRAME_CAP);
         let mut compiled = Self {
+            #[cfg(test)]
             random_a,
             palette: request.stops.iter().map(|stop| stop.color).collect(),
             glyph: Arc::new(CompiledDaslightBounceGlyph::compile()),
@@ -12862,13 +12972,17 @@ struct RuntimeChaserEffect {
     request: ChaserEffectRequest,
     step_order: Vec<usize>,
     target_phase_offsets: HashMap<FixtureId, f32>,
+    #[cfg(test)]
     target_step_levels: HashMap<FixtureId, Vec<u16>>,
+    #[cfg(test)]
     target_step_maxima: HashMap<FixtureId, CompiledChaserStepMaxima>,
     hot_targets: Vec<RuntimeChaserHotTarget>,
     hot_target_indices: HashMap<FixtureId, usize>,
     last_hot_target_index: Cell<Option<usize>>,
+    #[cfg(test)]
     feature_indices: ChaserAttributeMap<usize>,
     hot_feature_slots: [RuntimeChaserFeatureSlot; 32],
+    #[cfg(test)]
     feature_fixture_ids: Vec<Vec<FixtureId>>,
     beam_targets: Vec<RuntimeChaserBeamTarget>,
     beam_attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
@@ -13801,6 +13915,7 @@ struct RuntimeVideoLayerFade {
 
 #[derive(Clone)]
 struct PendingVideoIsfEventReset {
+    #[cfg(test)]
     pulse_id: u64,
     layer_id: VideoLayerId,
     /// Stable canonical identities, never legacy shader-source pointers.
@@ -13818,7 +13933,9 @@ enum LegacyIsfStageIdentityTransform {
 }
 
 struct AppliedVideoIsfEventPulse {
+    #[cfg(test)]
     pulse_id: u64,
+    #[cfg(test)]
     replaced_resets: Vec<PendingVideoIsfEventReset>,
 }
 
@@ -13903,11 +14020,6 @@ enum PendingCommandRollback {
         pending_video_isf_event_resets: Vec<PendingVideoIsfEventReset>,
         last_error: Option<String>,
     },
-    RestoreVideoLayerIsfEffect {
-        layer_id: VideoLayerId,
-        effect: Option<VideoIsfEffectSummary>,
-        last_error: Option<String>,
-    },
     /// Complete C1 A image.  Layer projections are included because the
     /// renderer consumes them while persistence consumes the central tables.
     RestoreVideoEffectCatalog {
@@ -13922,13 +14034,6 @@ enum PendingCommandRollback {
     },
     RestoreVideoLayerTransitionRuntime {
         active_transition_buses: Vec<RuntimeVideoLayerTransitionBus>,
-        last_error: Option<String>,
-    },
-    RestoreVideoLayerIsfEffectAndCancelEventPulse {
-        layer_id: VideoLayerId,
-        effect: Option<VideoIsfEffectSummary>,
-        pulse_id: u64,
-        replaced_resets: Vec<PendingVideoIsfEventReset>,
         last_error: Option<String>,
     },
     RestoreAutoVj {
@@ -14116,9 +14221,7 @@ impl PendingCommandRollback {
                 | Self::RestoreVideoLayersAndCompositions { .. }
                 | Self::RestoreMediaAssetTransaction { .. }
                 | Self::RestoreVideoClipSlots { .. }
-                | Self::RestoreVideoLayerIsfEffect { .. }
                 | Self::RestoreVideoEffectCatalog { .. }
-                | Self::RestoreVideoLayerIsfEffectAndCancelEventPulse { .. }
                 | Self::RestoreAutoVj { .. }
                 | Self::RestoreFixturePatchBatch { .. }
                 | Self::RestoreStageMapPresets { .. }
@@ -14238,6 +14341,7 @@ struct EngineRuntime {
     #[cfg(test)]
     test_media_asset_publication_failed_after_b: Arc<AtomicBool>,
     pending_video_isf_event_resets: Vec<PendingVideoIsfEventReset>,
+    #[cfg(test)]
     next_video_isf_event_pulse_id: u64,
     fixtures: Vec<RuntimeFixture>,
     effects: Vec<RuntimeEffect>,
@@ -14604,6 +14708,7 @@ impl EngineRuntime {
             #[cfg(test)]
             test_media_asset_publication_failed_after_b,
             pending_video_isf_event_resets: Vec::new(),
+            #[cfg(test)]
             next_video_isf_event_pulse_id: 1,
             fixtures: Vec::new(),
             effects: Vec::new(),
@@ -20701,6 +20806,14 @@ impl EngineRuntime {
                 // playing state or releases an external clock owner.
                 self.last_error = self.apply_timeline_playing_command(playing, false).err();
             }
+            EngineCommand::StartTimeline { timeline_id } => {
+                self.last_error = self.start_timeline_runtime(timeline_id).err();
+            }
+            EngineCommand::DjLinkStartTimeline { timeline_id, ack } => {
+                let result = self.start_timeline_runtime(timeline_id);
+                self.last_error = result.clone().err();
+                let _ = ack.send(result);
+            }
             EngineCommand::SetTimelinePlayingPublished {
                 expected_epoch,
                 expected_generation,
@@ -20754,6 +20867,32 @@ impl EngineRuntime {
             }
             EngineCommand::SetTimelineLoopEnabled(enabled) => {
                 self.set_timeline_loop_enabled_state(enabled);
+            }
+            EngineCommand::SetTimelineLoopAbsolute { division, enabled } => {
+                self.last_error = self
+                    .set_timeline_loop_absolute_state(division, enabled)
+                    .err();
+            }
+            EngineCommand::DjLinkSetTimelineLoopAbsolute {
+                division,
+                enabled,
+                ack,
+            } => {
+                let result = self.set_timeline_loop_absolute_state(division, enabled);
+                self.last_error = result.clone().err();
+                let _ = ack.send(result);
+            }
+            EngineCommand::DjLinkRelease { ack } => {
+                let rollback = self.timeline_transport_rollback();
+                let result = (|| {
+                    self.set_timeline_loop_enabled_state(false);
+                    self.apply_timeline_playing_command(true, true).map(|_| ())
+                })();
+                if result.is_err() {
+                    self.rollback_pending_command(rollback);
+                }
+                self.last_error = result.clone().err();
+                let _ = ack.send(result);
             }
             EngineCommand::ToggleTimelineLoop => {
                 let enabled = matches!(
@@ -22500,20 +22639,6 @@ impl EngineRuntime {
                 self.pending_video_isf_event_resets = pending_video_isf_event_resets;
                 self.last_error = last_error;
             }
-            PendingCommandRollback::RestoreVideoLayerIsfEffect {
-                layer_id,
-                effect,
-                last_error,
-            } => {
-                if let Some(layer) = self
-                    .video_layers
-                    .iter_mut()
-                    .find(|layer| layer.id == layer_id)
-                {
-                    layer.isf_effect = effect;
-                }
-                self.last_error = last_error;
-            }
             PendingCommandRollback::RestoreVideoEffectCatalog {
                 effect_chains,
                 effect_presets,
@@ -22538,25 +22663,6 @@ impl EngineRuntime {
                 last_error,
             } => {
                 self.active_video_transition_buses = active_transition_buses;
-                self.last_error = last_error;
-            }
-            PendingCommandRollback::RestoreVideoLayerIsfEffectAndCancelEventPulse {
-                layer_id,
-                effect,
-                pulse_id,
-                replaced_resets,
-                last_error,
-            } => {
-                if let Some(layer) = self
-                    .video_layers
-                    .iter_mut()
-                    .find(|layer| layer.id == layer_id)
-                {
-                    layer.isf_effect = effect;
-                }
-                self.pending_video_isf_event_resets
-                    .retain(|pending| pending.pulse_id != pulse_id);
-                self.pending_video_isf_event_resets.extend(replaced_resets);
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreAutoVj {
@@ -34260,11 +34366,68 @@ impl EngineRuntime {
             };
     }
 
+    fn start_timeline_runtime(&mut self, timeline_id: TimelineId) -> Result<(), String> {
+        let timeline = self
+            .timeline_bank
+            .iter()
+            .find(|timeline| timeline.id == timeline_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!("Timeline {timeline_id:?} was not found in the authored bank")
+            })?;
+        let (timeline, runtime_events) = self.prepare_timeline_bank_entry(timeline)?;
+        self.install_timeline_bank_entry(timeline, runtime_events, true, 0);
+        Ok(())
+    }
+
+    fn set_timeline_loop_absolute_state(
+        &mut self,
+        division: u8,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let target = absolute_timeline_loop_bounds(
+            self.timeline_loop_region.as_ref(),
+            division,
+            self.timeline_duration_ms(),
+        )?;
+        let was_enabled = !matches!(
+            self.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        );
+        if self.timeline_loop_runtime.a_ms == Some(target.0)
+            && self.timeline_loop_runtime.b_ms == Some(target.1)
+            && was_enabled == enabled
+        {
+            return Ok(());
+        }
+        self.timeline_loop_runtime.a_ms = Some(target.0);
+        self.timeline_loop_runtime.b_ms = Some(target.1);
+        self.timeline_loop_runtime.generation =
+            next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+        if enabled {
+            self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Armed;
+            self.refresh_timeline_loop_runtime_status();
+        } else {
+            self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Disabled;
+            if was_enabled {
+                self.push_timeline_guide_cue(
+                    self.timeline_position_ms,
+                    "Break".to_string(),
+                    TimelineGuideCueKind::Break,
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn set_timeline_loop_enabled_state(&mut self, enabled: bool) {
         let was_enabled = !matches!(
             self.timeline_loop_runtime.status,
             TimelineLoopRuntimeStatus::Disabled
         );
+        if was_enabled == enabled {
+            return;
+        }
         self.timeline_loop_runtime.generation =
             next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
         if enabled
@@ -35856,6 +36019,7 @@ impl EngineRuntime {
         })
     }
 
+    #[cfg(test)]
     fn next_runtime_video_effect_duplicate_ids(
         &self,
         source_chains: &[VideoEffectChainSummary],
@@ -36654,6 +36818,7 @@ impl EngineRuntime {
         Ok(())
     }
 
+    #[cfg(test)]
     fn launch_video_clip_slot(
         &mut self,
         layer_id: VideoLayerId,
@@ -36667,6 +36832,7 @@ impl EngineRuntime {
         )
     }
 
+    #[cfg(test)]
     fn launch_video_clip_slot_with_transition(
         &mut self,
         layer_id: VideoLayerId,
@@ -36971,6 +37137,7 @@ impl EngineRuntime {
     /// Direct runtime tests retain the legacy convenience form. Production
     /// uses the pre-reserved path below; tests derive fresh IDs from the
     /// complete in-memory catalog without sharing an EngineHandle allocator.
+    #[cfg(test)]
     fn duplicate_video_layer(
         &mut self,
         source_layer_id: VideoLayerId,
@@ -37493,15 +37660,21 @@ impl EngineRuntime {
         )?;
         self.set_video_layer_isf_effect(layer_id, replacement, &ids)?;
 
+        #[cfg(test)]
         let pulse_id = self.next_video_isf_event_pulse_id;
-        self.next_video_isf_event_pulse_id =
-            self.next_video_isf_event_pulse_id.wrapping_add(1).max(1);
+        #[cfg(test)]
+        {
+            self.next_video_isf_event_pulse_id =
+                self.next_video_isf_event_pulse_id.wrapping_add(1).max(1);
+        }
+        #[cfg(test)]
         let mut replaced_resets = Vec::new();
         self.pending_video_isf_event_resets.retain(|pending| {
             let same_target = pending.layer_id == layer_id
                 && pending.control_name == control_name
                 && pending.stage_id == stage_id
                 && pending.effect_id == effect_id;
+            #[cfg(test)]
             if same_target {
                 replaced_resets.push(pending.clone());
             }
@@ -37509,6 +37682,7 @@ impl EngineRuntime {
         });
         self.pending_video_isf_event_resets
             .push(PendingVideoIsfEventReset {
+                #[cfg(test)]
                 pulse_id,
                 layer_id,
                 stage_id,
@@ -37517,7 +37691,9 @@ impl EngineRuntime {
                 due_at,
             });
         Ok(AppliedVideoIsfEventPulse {
+            #[cfg(test)]
             pulse_id,
+            #[cfg(test)]
             replaced_resets,
         })
     }
@@ -43450,13 +43626,17 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             request: effect.chaser.clone()?,
             step_order: Vec::new(),
             target_phase_offsets: HashMap::new(),
+            #[cfg(test)]
             target_step_levels: HashMap::new(),
+            #[cfg(test)]
             target_step_maxima: HashMap::new(),
             hot_targets: Vec::new(),
             hot_target_indices: HashMap::new(),
             last_hot_target_index: Cell::new(None),
+            #[cfg(test)]
             feature_indices: ChaserAttributeMap::default(),
             hot_feature_slots: [RuntimeChaserFeatureSlot::default(); 32],
+            #[cfg(test)]
             feature_fixture_ids: Vec::new(),
             beam_targets: Vec::new(),
             beam_attribute_indices: HashMap::new(),
@@ -47089,13 +47269,17 @@ fn runtime_chaser_effect_from_request(
         request,
         step_order,
         target_phase_offsets,
+        #[cfg(test)]
         target_step_levels,
+        #[cfg(test)]
         target_step_maxima,
         hot_targets,
         hot_target_indices,
         last_hot_target_index: Cell::new(None),
+        #[cfg(test)]
         feature_indices,
         hot_feature_slots,
+        #[cfg(test)]
         feature_fixture_ids,
         beam_targets,
         beam_attribute_indices,
@@ -50152,7 +50336,6 @@ fn chaser_build_up_down_level_for_steps(
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
 fn evaluate_chaser_effect(
     runtime: &RuntimeChaserEffect,
     feature_index: usize,
@@ -50172,6 +50355,7 @@ fn evaluate_chaser_effect(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn evaluate_chaser_effect_at_rate(
     runtime: &RuntimeChaserEffect,
@@ -51399,20 +51583,6 @@ fn video_isf_effect_source_bytes(effect: &VideoIsfEffectSummary) -> Result<usize
         })
 }
 
-fn video_isf_project_source_bytes(layers: &[RuntimeVideoLayer]) -> Result<usize, String> {
-    layers.iter().try_fold(0_usize, |total, layer| {
-        let layer_source_bytes = layer
-            .isf_effect
-            .as_ref()
-            .map(video_isf_effect_source_bytes)
-            .transpose()?
-            .unwrap_or(0);
-        total.checked_add(layer_source_bytes).ok_or_else(|| {
-            "Video ISF project source size overflowed the platform limit".to_string()
-        })
-    })
-}
-
 fn video_effect_kind_source_bytes(kind: &VideoEffectKind) -> Result<usize, String> {
     match kind {
         VideoEffectKind::Isf { effect } => video_isf_effect_source_bytes(effect),
@@ -51836,41 +52006,6 @@ fn validate_video_isf_project_source_budget(total_source_bytes: usize) -> Result
         ));
     }
     Ok(())
-}
-
-fn validate_video_isf_project_source_budget_after_addition(
-    layers: &[RuntimeVideoLayer],
-    added_source_bytes: usize,
-) -> Result<(), String> {
-    let total_source_bytes = video_isf_project_source_bytes(layers)?
-        .checked_add(added_source_bytes)
-        .ok_or_else(|| "Video ISF project source size overflowed the platform limit".to_string())?;
-    validate_video_isf_project_source_budget(total_source_bytes)
-}
-
-fn validate_video_isf_project_source_budget_after_replacement(
-    layers: &[RuntimeVideoLayer],
-    layer_index: usize,
-    replacement: Option<&VideoIsfEffectSummary>,
-) -> Result<(), String> {
-    let mut total_source_bytes = 0_usize;
-    for (index, layer) in layers.iter().enumerate() {
-        let effect = if index == layer_index {
-            replacement
-        } else {
-            layer.isf_effect.as_ref()
-        };
-        let source_bytes = effect
-            .map(video_isf_effect_source_bytes)
-            .transpose()?
-            .unwrap_or(0);
-        total_source_bytes = total_source_bytes
-            .checked_add(source_bytes)
-            .ok_or_else(|| {
-                "Video ISF project source size overflowed the platform limit".to_string()
-            })?;
-    }
-    validate_video_isf_project_source_budget(total_source_bytes)
 }
 
 fn reorder_video_layers(layers: &mut Vec<RuntimeVideoLayer>, layer_ids: Vec<VideoLayerId>) {
@@ -97779,6 +97914,79 @@ mod tests {
             .loop_runtime
             .eq(&TimelineLoopRuntimeSummary::default()));
         assert!(persisted.timeline.guide_cues.is_empty());
+    }
+
+    #[test]
+    fn dj_link_absolute_loop_division_is_non_cumulative_and_bounds_checked() {
+        let region = TimelineLoopRegionSummary {
+            a_ms: 100,
+            b_ms: 900,
+            enabled: true,
+            musical_length_beats: None,
+        };
+        assert_eq!(
+            absolute_timeline_loop_bounds(Some(&region), 0, 1_000),
+            Ok((100, 900))
+        );
+        assert_eq!(
+            absolute_timeline_loop_bounds(Some(&region), 1, 1_000),
+            Ok((100, 500))
+        );
+        assert_eq!(
+            absolute_timeline_loop_bounds(Some(&region), 2, 1_000),
+            Ok((100, 300))
+        );
+        assert_eq!(
+            absolute_timeline_loop_bounds(Some(&region), 2, 1_000),
+            Ok((100, 300))
+        );
+        assert!(absolute_timeline_loop_bounds(Some(&region), 64, 1_000).is_err());
+        assert!(absolute_timeline_loop_bounds(None, 0, 1_000).is_err());
+    }
+
+    #[test]
+    fn dj_link_runtime_start_timeline_does_not_mutate_authored_bank() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let mut authored = runtime.authored_timeline_snapshot();
+        authored.id = TimelineId(7_701);
+        authored.label = "DJ Link target".to_string();
+        authored.duration_ms = 2_000;
+        runtime.timeline_bank = vec![authored.clone()];
+        let before_bank = runtime.timeline_bank.clone();
+        runtime.apply_command(EngineCommand::StartTimeline {
+            timeline_id: authored.id,
+        });
+        assert_eq!(runtime.timeline_id, authored.id);
+        assert!(runtime.timeline_playing);
+        assert_eq!(runtime.timeline_bank, before_bank);
+    }
+
+    #[test]
+    fn dj_link_release_is_idempotent_without_generation_drift() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_loop_runtime.a_ms = Some(100);
+        runtime.timeline_loop_runtime.b_ms = Some(900);
+        runtime.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Armed;
+        let generation_before_release = runtime.timeline_loop_runtime.generation;
+        runtime.apply_command(EngineCommand::SetTimelineLoopEnabled(false));
+        let generation_after_release = runtime.timeline_loop_runtime.generation;
+        runtime.apply_command(EngineCommand::SetTimelineLoopEnabled(false));
+        assert_eq!(
+            runtime.timeline_loop_runtime.generation,
+            generation_after_release
+        );
+        assert!(generation_after_release > generation_before_release);
+    }
+
+    #[test]
+    fn dj_link_ack_lane_rejects_unpublished_targets_and_bad_absolute_loop() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        assert!(engine.dj_link_start_timeline(TimelineId(u64::MAX)).is_err());
+        assert!(engine.dj_link_set_timeline_loop_absolute(1, true).is_err());
+        assert!(engine.dj_link_release().is_ok());
     }
 
     #[test]

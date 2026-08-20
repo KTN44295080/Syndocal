@@ -30,7 +30,9 @@ use io::midi::{
     MidiClockEvent, MidiClockInput, MidiControlEvent, MidiControlInput, MidiFeedbackOutput,
 };
 use io::osc::{OscInput, OscInputEvent};
-use io::remote_ws::{RemoteInputEvent, RemoteWsServer};
+use io::remote_ws::{
+    DjLinkDispatchHandler, DjLinkDispatchOutcome, RemoteInputEvent, RemoteWsServer,
+};
 use io::sacn::is_sacn_multicast_target;
 use minisign_verify::PublicKey;
 #[cfg(test)]
@@ -46,7 +48,10 @@ use protocol::{
         SafetyBlackoutEngageResponseV1, SetEffectEnabledPayload, SetEffectEnabledResponseV1,
         TimelineFollowAbortAuthorityBundleV1, TimelineFollowAbortRuntimeRequestV1,
         TimelineFollowAbortRuntimeResponseV1, OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
-        OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+        OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
+        OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
+        OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+        OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
     },
     normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
     validate_engine_ready_video_clip_slots, validate_engine_ready_video_effect_chains,
@@ -120,20 +125,21 @@ use control_plane_query::{
     get_control_plane_query_capabilities, get_control_plane_query_schema_catalog,
     poll_control_plane_observation_events, query_control_plane_output_ownership,
     query_control_plane_project_authority, query_control_plane_runtime_generations,
-    ControlPlaneQueryState,
-};
-use output_lease::{
-    OutputLeaseOwner, OutputLeasePhase, OutputLeaseRegistry, OutputLeaseRequest,
-    OutputLeaseRequestAction,
+    query_output_lease_authority_v1, ControlPlaneQueryState,
 };
 #[cfg(test)]
-use output_lease::{OutputLeaseResource, OutputLeaseResources};
+use output_lease::OutputLeasePhase;
+use output_lease::{
+    OutputLeaseOwner, OutputLeaseRegistry, OutputLeaseRequest, OutputLeaseRequestAction,
+    OutputLeaseResource, OutputLeaseResources,
+};
 
 type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
     video::DecoderBackedFrameProvider<ndi_transport::NdiAwareVideoFrameDecoder>,
 >;
 
 const APP_NAME: &str = "Syndocal";
+#[cfg(target_os = "windows")]
 const DESKTOP_ESCAPE_SHORTCUT_EVENT: &str = "desktop-window-forward-escape";
 const PROJECT_FILE_VERSION: u32 = 1;
 /// Largest integer represented exactly by JavaScript's JSON number model.
@@ -312,6 +318,413 @@ struct ProjectOperatorSession {
     unlocked: bool,
 }
 
+const DJ_LINK_DEDUPE_LIMIT: usize = 4_096;
+const DJ_LINK_DEDUPE_TTL: Duration = Duration::from_secs(15 * 60);
+
+/// Process-local DJ Link diagnostics and track-trigger dedupe. This state is
+/// deliberately not part of ProjectFile, templates, backups, or standby
+/// checkpoints. A project identity or mapping replacement clears the play
+/// session ledger before the next peer event is admitted.
+#[derive(Debug)]
+struct DjLinkRuntime {
+    project_epoch: u64,
+    mappings: Vec<protocol::DjTrackTriggerMapping>,
+    seen_play_sessions: BTreeMap<String, Instant>,
+    state_generation: u64,
+    master: bool,
+    track_active: bool,
+    playing: bool,
+    released: bool,
+    loop_division: Option<u8>,
+    last_event_id: Option<String>,
+    master_deck: Option<String>,
+    track_content_id: Option<String>,
+    track_title: Option<String>,
+    track_artist: Option<String>,
+    track_deck_id: Option<String>,
+    track_started_at: Option<String>,
+    track_playing: bool,
+    track_bpm: Option<f64>,
+    position_sec: Option<f64>,
+}
+
+impl DjLinkRuntime {
+    fn from_coordinator(coordinator: &ProjectCoordinator) -> Self {
+        Self {
+            project_epoch: coordinator.epoch,
+            mappings: coordinator.mappings.dj_track_triggers.clone(),
+            seen_play_sessions: BTreeMap::new(),
+            state_generation: 0,
+            master: false,
+            track_active: false,
+            playing: false,
+            released: false,
+            loop_division: None,
+            last_event_id: None,
+            master_deck: None,
+            track_content_id: None,
+            track_title: None,
+            track_artist: None,
+            track_deck_id: None,
+            track_started_at: None,
+            track_playing: false,
+            track_bpm: None,
+            position_sec: None,
+        }
+    }
+
+    fn sync_project(&mut self, coordinator: &ProjectCoordinator) {
+        let mappings = &coordinator.mappings.dj_track_triggers;
+        if self.project_epoch != coordinator.epoch || self.mappings != *mappings {
+            self.project_epoch = coordinator.epoch;
+            self.mappings = mappings.clone();
+            self.seen_play_sessions.clear();
+            self.master = false;
+            self.track_active = false;
+            self.playing = false;
+            self.released = false;
+            self.loop_division = None;
+            self.last_event_id = None;
+            self.master_deck = None;
+            self.track_content_id = None;
+            self.track_title = None;
+            self.track_artist = None;
+            self.track_deck_id = None;
+            self.track_started_at = None;
+            self.track_playing = false;
+            self.track_bpm = None;
+            self.position_sec = None;
+        }
+    }
+
+    fn purge_dedupe(&mut self, now: Instant) {
+        self.seen_play_sessions
+            .retain(|_, observed| now.duration_since(*observed) <= DJ_LINK_DEDUPE_TTL);
+        // Live entries are never evicted to make room for a new event.  A
+        // full ledger fails closed in the dispatcher; only the explicit TTL
+        // purge can release a once-per-session slot.
+    }
+}
+
+fn dj_link_accepted(state_generation: u64) -> DjLinkDispatchOutcome {
+    DjLinkDispatchOutcome::Accepted { state_generation }
+}
+
+fn dj_link_rejected(code: &str, state_generation: u64) -> DjLinkDispatchOutcome {
+    DjLinkDispatchOutcome::Rejected {
+        code: code.to_string(),
+        state_generation,
+    }
+}
+
+fn dj_link_next_generation(runtime: &DjLinkRuntime) -> Result<u64, String> {
+    runtime
+        .state_generation
+        .checked_add(1)
+        .ok_or_else(|| "DJ Link state generation exhausted; restart Syndocal".to_string())
+}
+
+fn dj_link_find_track_mapping(
+    mappings: &[protocol::DjTrackTriggerMapping],
+    payload: &protocol::DjLinkMasterTrackPayload,
+) -> Option<protocol::DjTrackTriggerMapping> {
+    if payload
+        .content_id
+        .as_deref()
+        .is_some_and(|content_id| !content_id.trim().is_empty())
+    {
+        let selector = protocol::DjTrackSelector {
+            content_id: payload.content_id.clone(),
+            title: None,
+            artist: None,
+        };
+        let key = selector.canonical_key().ok()?;
+        if let Some(mapping) = mappings
+            .iter()
+            .find(|mapping| mapping.selector.canonical_key().ok().as_deref() == Some(key.as_str()))
+        {
+            return Some(mapping.clone());
+        }
+    }
+    let title = payload
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let artist = payload
+        .artist
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let fallback_key = protocol::DjTrackSelector {
+        content_id: None,
+        title: Some(title.to_string()),
+        artist: Some(artist.to_string()),
+    }
+    .canonical_key()
+    .ok()?;
+    mappings
+        .iter()
+        .find(|mapping| {
+            mapping.selector.content_id.is_none()
+                && mapping.selector.canonical_key().ok().as_deref() == Some(fallback_key.as_str())
+        })
+        .cloned()
+}
+
+/// Canonical DJ Link authority callback used by the single Web Remote
+/// listener. The transport has already authenticated and reserved the event
+/// identity; this lane supplies project admission, bounded play-session
+/// dedupe, and runtime-only EngineCommand dispatch. No project history or
+/// physical output API is reachable from this callback.
+fn dispatch_dj_link_event(
+    envelope: protocol::DjLinkEnvelope,
+    engine: &EngineHandle,
+    project_coordinator: &Mutex<ProjectCoordinator>,
+    runtime: &Mutex<DjLinkRuntime>,
+    external_admission: &ProjectExternalCommandAdmission,
+    project_transaction_active: &AtomicBool,
+) -> DjLinkDispatchOutcome {
+    let Some(_admission) = try_lock_project_external_command_admission(external_admission) else {
+        return DjLinkDispatchOutcome::Busy {
+            code: "project_admission_busy".to_string(),
+            state_generation: runtime
+                .lock()
+                .map(|runtime| runtime.state_generation)
+                .unwrap_or(0),
+        };
+    };
+    if project_transaction_active.load(Ordering::Acquire) {
+        return DjLinkDispatchOutcome::Busy {
+            code: "project_transaction_busy".to_string(),
+            state_generation: runtime
+                .lock()
+                .map(|runtime| runtime.state_generation)
+                .unwrap_or(0),
+        };
+    }
+    let coordinator = match project_coordinator.lock() {
+        Ok(coordinator) => coordinator,
+        Err(_) => return dj_link_rejected("project_coordinator_poisoned", 0),
+    };
+    let mut runtime = match runtime.lock() {
+        Ok(runtime) => runtime,
+        Err(_) => return dj_link_rejected("dj_link_runtime_poisoned", 0),
+    };
+    runtime.sync_project(&coordinator);
+    runtime.purge_dedupe(Instant::now());
+    let current_generation = runtime.state_generation;
+    match envelope.message_type {
+        protocol::DjLinkMessageType::MasterChanged => {
+            let payload = match serde_json::from_value::<protocol::DjLinkMasterChangedPayload>(
+                envelope.payload,
+            ) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    return dj_link_rejected("invalid_master_changed_payload", current_generation)
+                }
+            };
+            let next = match dj_link_next_generation(&runtime) {
+                Ok(next) => next,
+                Err(_) => {
+                    return dj_link_rejected("state_generation_exhausted", current_generation)
+                }
+            };
+            runtime.master_deck = payload.master_deck.or(payload.deck);
+            runtime.master = payload.master;
+            runtime.track_active = false;
+            runtime.playing = payload.playing;
+            runtime.track_playing = false;
+            runtime.track_content_id = None;
+            runtime.track_title = None;
+            runtime.track_artist = None;
+            runtime.track_deck_id = None;
+            runtime.track_started_at = None;
+            runtime.track_bpm = None;
+            runtime.position_sec = None;
+            runtime.last_event_id = Some(envelope.event_id);
+            runtime.state_generation = next;
+            dj_link_accepted(next)
+        }
+        protocol::DjLinkMessageType::MasterTrackActive => {
+            let payload = match serde_json::from_value::<protocol::DjLinkMasterTrackPayload>(
+                envelope.payload,
+            ) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    return dj_link_rejected("invalid_master_track_payload", current_generation)
+                }
+            };
+            if !payload.master
+                || !payload.playing
+                || !runtime.master
+                || runtime.master_deck.as_deref() != Some(payload.deck.as_str())
+            {
+                return dj_link_rejected("not_current_playing_master", current_generation);
+            }
+            runtime.track_content_id = payload.content_id.clone();
+            runtime.track_title = payload.title.clone();
+            runtime.track_artist = payload.artist.clone();
+            runtime.track_deck_id = payload.deck_id.clone();
+            runtime.track_started_at = payload.started_at.clone();
+            runtime.track_playing = payload.playing;
+            runtime.track_bpm = payload.track_bpm;
+            runtime.position_sec = payload.position_sec;
+            let Some(mapping) = dj_link_find_track_mapping(&runtime.mappings, &payload) else {
+                runtime.track_active = true;
+                runtime.last_event_id = Some(envelope.event_id);
+                return DjLinkDispatchOutcome::NoMapping {
+                    state_generation: current_generation,
+                };
+            };
+            let dedupe_key = format!(
+                "{}:{}:{}",
+                runtime.project_epoch, mapping.id, payload.play_session_id
+            );
+            if runtime.seen_play_sessions.contains_key(&dedupe_key) {
+                runtime.last_event_id = Some(envelope.event_id);
+                return dj_link_accepted(current_generation);
+            }
+            if runtime.seen_play_sessions.len() >= DJ_LINK_DEDUPE_LIMIT {
+                return dj_link_rejected("play_session_capacity", current_generation);
+            }
+            let next = match dj_link_next_generation(&runtime) {
+                Ok(next) => next,
+                Err(_) => {
+                    return dj_link_rejected("state_generation_exhausted", current_generation)
+                }
+            };
+            if engine.dj_link_start_timeline(mapping.timeline_id).is_err() {
+                return dj_link_rejected("engine_publication_rejected", current_generation);
+            }
+            runtime
+                .seen_play_sessions
+                .insert(dedupe_key, Instant::now());
+            runtime.master = true;
+            runtime.track_active = true;
+            runtime.playing = true;
+            runtime.released = false;
+            runtime.last_event_id = Some(envelope.event_id);
+            runtime.state_generation = next;
+            dj_link_accepted(next)
+        }
+        protocol::DjLinkMessageType::LoopState => {
+            let payload = match serde_json::from_value::<protocol::DjLinkLoopStatePayload>(
+                envelope.payload,
+            ) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    return dj_link_rejected("invalid_loop_state_payload", current_generation)
+                }
+            };
+            let next = match dj_link_next_generation(&runtime) {
+                Ok(next) => next,
+                Err(_) => {
+                    return dj_link_rejected("state_generation_exhausted", current_generation)
+                }
+            };
+            let target_released = !payload.enabled;
+            if runtime.loop_division == Some(payload.division)
+                && runtime.released == target_released
+            {
+                runtime.last_event_id = Some(envelope.event_id);
+                return dj_link_accepted(current_generation);
+            }
+            if engine
+                .dj_link_set_timeline_loop_absolute(payload.division, payload.enabled)
+                .is_err()
+            {
+                return dj_link_rejected("engine_publication_rejected", current_generation);
+            }
+            runtime.loop_division = Some(payload.division);
+            runtime.released = !payload.enabled;
+            runtime.last_event_id = Some(envelope.event_id);
+            runtime.state_generation = next;
+            dj_link_accepted(next)
+        }
+        protocol::DjLinkMessageType::Release => {
+            if serde_json::from_value::<protocol::DjLinkReleasePayload>(envelope.payload).is_err() {
+                return dj_link_rejected("invalid_release_payload", current_generation);
+            }
+            if runtime.released {
+                runtime.last_event_id = Some(envelope.event_id);
+                return dj_link_accepted(current_generation);
+            }
+            let next = match dj_link_next_generation(&runtime) {
+                Ok(next) => next,
+                Err(_) => {
+                    return dj_link_rejected("state_generation_exhausted", current_generation)
+                }
+            };
+            if engine.dj_link_release().is_err() {
+                return dj_link_rejected("engine_publication_rejected", current_generation);
+            }
+            runtime.released = true;
+            runtime.last_event_id = Some(envelope.event_id);
+            runtime.state_generation = next;
+            dj_link_accepted(next)
+        }
+        protocol::DjLinkMessageType::StateSync => {
+            let payload = match serde_json::from_value::<protocol::DjLinkStateSyncPayload>(
+                envelope.payload,
+            ) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    return dj_link_rejected("invalid_state_sync_payload", current_generation)
+                }
+            };
+            runtime.master_deck = payload.master_deck.clone();
+            runtime.master = runtime.master_deck.is_some();
+            runtime.released = payload.released;
+            if let Some(track) = payload.master_track.as_ref() {
+                runtime.track_active = true;
+                runtime.playing = track.playing;
+                runtime.track_playing = track.playing;
+                runtime.track_content_id = track.content_id.clone();
+                runtime.track_title = track.title.clone();
+                runtime.track_artist = track.artist.clone();
+            } else {
+                runtime.track_active = false;
+                runtime.playing = false;
+                runtime.track_playing = false;
+                runtime.track_content_id = None;
+                runtime.track_title = None;
+                runtime.track_artist = None;
+                runtime.track_deck_id = None;
+                runtime.track_started_at = None;
+                runtime.track_bpm = None;
+                runtime.position_sec = None;
+            }
+            if let Some(division) = payload.loop_division {
+                if !payload.released && runtime.loop_division != Some(division) {
+                    let next = match dj_link_next_generation(&runtime) {
+                        Ok(next) => next,
+                        Err(_) => {
+                            return dj_link_rejected(
+                                "state_generation_exhausted",
+                                current_generation,
+                            )
+                        }
+                    };
+                    if engine
+                        .dj_link_set_timeline_loop_absolute(division, true)
+                        .is_err()
+                    {
+                        return dj_link_rejected("engine_publication_rejected", current_generation);
+                    }
+                    runtime.state_generation = next;
+                }
+                runtime.loop_division = Some(division);
+            }
+            runtime.last_event_id = Some(envelope.event_id);
+            dj_link_accepted(runtime.state_generation)
+        }
+        protocol::DjLinkMessageType::Heartbeat | protocol::DjLinkMessageType::Hello => {
+            dj_link_accepted(current_generation)
+        }
+    }
+}
+
 struct AppState {
     engine: EngineHandle,
     /// The application handle is retained for fenced project replacement so
@@ -339,6 +752,9 @@ struct AppState {
     output_lease_registry: Mutex<OutputLeaseRegistry>,
     output_lease_clock_origin: Instant,
     next_output_lease_request_id: AtomicU64,
+    /// Process-local DJ Link credential.  `None` is a deliberate fail-closed
+    /// state when the OS CSPRNG cannot initialize during startup.
+    dj_link_token: Mutex<Option<String>>,
     /// The single background reaper for `media_asset_operations`, installed once
     /// during setup. Holding it here keeps the thread owned by `AppState` and
     /// joined on teardown instead of leaked.
@@ -390,6 +806,7 @@ struct AppState {
     midi_feedback_last_error: Arc<Mutex<Option<String>>>,
     osc_input: Mutex<Option<OscInput>>,
     remote_control: Mutex<Option<RemoteWsServer>>,
+    dj_link_runtime: Arc<Mutex<DjLinkRuntime>>,
     dmx_input: Mutex<Option<io::dmx_input::DmxInput>>,
     pending_project_open_paths: Mutex<Vec<String>>,
     current_project_path: Mutex<Option<PathBuf>>,
@@ -400,7 +817,7 @@ struct AppState {
     /// compatibility mirrors while the coordinator is migrated through the
     /// command surface; they must only be changed by coordinator-owned
     /// helpers.
-    project_coordinator: Mutex<ProjectCoordinator>,
+    project_coordinator: Arc<Mutex<ProjectCoordinator>>,
     /// Input callbacks deliberately do not take the coordinator mutex.  They
     /// compare this atomic generation immediately before an engine send so a
     /// callback captured by a retired project can never affect its successor.
@@ -468,6 +885,7 @@ struct AppState {
     native_video_output_workers: Mutex<HashMap<String, NativeVideoOutputWorker>>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OutputLeaseRegistrySnapshot {
     process_incarnation: u64,
@@ -557,6 +975,7 @@ impl AppState {
             .map_err(|_| "Output lease monotonic clock exceeded u64 milliseconds".to_string())
     }
 
+    #[cfg(test)]
     fn output_lease_registry_snapshot(&self) -> Result<OutputLeaseRegistrySnapshot, String> {
         let registry = self
             .output_lease_registry
@@ -13751,6 +14170,7 @@ struct ProjectLoadResult {
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
     warnings: Vec<String>,
     /// Backend-authoritative identity metadata.  Older frontends safely
     /// ignore these additive fields; current callers use them as a compare
@@ -13814,6 +14234,7 @@ struct ProjectAuthorityBundle {
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
     history: ProjectHistoryStatus,
     input_runtime: ProjectInputRuntimeStatus,
     /// Present only on the injected local authority read that issued this
@@ -13971,6 +14392,10 @@ struct ProjectControlMappings {
     osc_mappings: Vec<OscControlMapping>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dmx_mappings: Vec<DmxControlMapping>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
+    #[serde(skip)]
+    legacy_dj_transition_discarded: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -13982,6 +14407,7 @@ struct UserTemplateLoadResult {
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
     warnings: Vec<String>,
     project_epoch: u64,
     project_revision: u64,
@@ -14060,6 +14486,8 @@ struct ProjectBackupEnvelope {
     osc_mappings: Vec<OscControlMapping>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dmx_mappings: Vec<DmxControlMapping>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -14587,6 +15015,7 @@ struct ProjectControlMappingsStatus {
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
     /// Only a successful mapping mutation retires mapping-driven workers.
     /// The frontend uses this acknowledgement to clear connected indicators
     /// immediately instead of waiting for the next status poll.
@@ -14653,6 +15082,7 @@ fn project_control_mappings_status(
         midi_mappings: coordinator.mappings.midi_mappings.clone(),
         osc_mappings: coordinator.mappings.osc_mappings.clone(),
         dmx_mappings: coordinator.mappings.dmx_mappings.clone(),
+        dj_track_triggers: coordinator.mappings.dj_track_triggers.clone(),
         mapping_runtimes_retired: false,
     }
 }
@@ -14961,6 +15391,7 @@ fn project_authority_bundle_from_captured_snapshot(
         midi_mappings: coordinator.mappings.midi_mappings.clone(),
         osc_mappings: coordinator.mappings.osc_mappings.clone(),
         dmx_mappings: coordinator.mappings.dmx_mappings.clone(),
+        dj_track_triggers: coordinator.mappings.dj_track_triggers.clone(),
         history: project_history_status_for_coordinator(coordinator),
         input_runtime: project_input_runtime_status_from_state(state),
         authored_effect_fence: None,
@@ -15474,6 +15905,8 @@ struct UserTemplateFile {
     osc_mappings: Vec<OscControlMapping>,
     #[serde(default)]
     dmx_mappings: Vec<DmxControlMapping>,
+    #[serde(default)]
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
 }
 
 const VIDEO_FILE_EXTENSIONS: &[&str] = &[
@@ -18343,6 +18776,37 @@ fn validate_midi_control_mappings(
         .collect()
 }
 
+fn validate_dj_track_triggers(
+    mappings: Vec<protocol::DjTrackTriggerMapping>,
+) -> Result<Vec<protocol::DjTrackTriggerMapping>, String> {
+    protocol::validate_dj_track_trigger_mappings(&mappings)
+        .map_err(|error| format!("DJ track trigger mappings are invalid: {error}"))?;
+    Ok(mappings)
+}
+
+fn validate_dj_track_triggers_against_snapshot(
+    mappings: &[protocol::DjTrackTriggerMapping],
+    snapshot: &EngineSnapshot,
+) -> Result<(), String> {
+    protocol::validate_dj_track_trigger_mappings(mappings)
+        .map_err(|error| format!("DJ track trigger mappings are invalid: {error}"))?;
+    let mut authored_ids = snapshot
+        .timeline_bank
+        .iter()
+        .map(|timeline| timeline.id)
+        .collect::<HashSet<_>>();
+    authored_ids.insert(snapshot.timeline.id);
+    for mapping in mappings {
+        if !authored_ids.contains(&mapping.timeline_id) {
+            return Err(format!(
+                "DJ track mapping '{}' targets missing authored TimelineId {}",
+                mapping.id, mapping.timeline_id.0
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_midi_control_mapping(
     index: usize,
     mut mapping: MidiControlMapping,
@@ -19371,6 +19835,16 @@ fn build_remote_access_urls(config: &RemoteControlConfig, lan_ip: Option<IpAddr>
         .collect()
 }
 
+/// Generate the process-local DJ Link credential.  It is deliberately kept
+/// out of every project/config/status serializer; callers receive it only
+/// through the explicit rotate command's show-once response.
+fn generate_dj_link_token() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| format!("DJ Link token generation failed: {error}"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
 fn format_url_host(ip: IpAddr) -> String {
     match ip {
         IpAddr::V4(ip) => ip.to_string(),
@@ -19381,12 +19855,17 @@ fn format_url_host(ip: IpAddr) -> String {
 #[tauri::command]
 fn start_remote_control(
     state: State<'_, AppState>,
-    config: RemoteControlConfig,
+    mut config: RemoteControlConfig,
 ) -> Result<(), String> {
     let _external_admission = lock_project_external_command_admission(&state)?;
     let coordinator = lock_project_coordinator(&state)?;
     ensure_no_pending_project_transaction(&coordinator)?;
     drop(coordinator);
+    config.dj_link_token = state
+        .dj_link_token
+        .lock()
+        .map_err(|_| "DJ Link token state lock was poisoned".to_string())?
+        .clone();
     let command_engine = state.engine.clone();
     let remote_project_transaction_active = Arc::clone(&state.project_transaction_active);
     let remote_project_external_command_admission =
@@ -19406,7 +19885,22 @@ fn start_remote_control(
     let sync_ndi_transport = Arc::clone(&state.ndi_transport);
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     let sync_spout_transport = Arc::clone(&state.spout_transport);
-    let server = RemoteWsServer::start_with_snapshot_and_video_status_providers(
+    let dj_link_engine = state.engine.clone();
+    let dj_link_project_coordinator = Arc::clone(&state.project_coordinator);
+    let dj_link_runtime = Arc::clone(&state.dj_link_runtime);
+    let dj_link_external_admission = Arc::clone(&state.project_external_command_admission);
+    let dj_link_transaction_active = Arc::clone(&state.project_transaction_active);
+    let dj_link_handler: DjLinkDispatchHandler = Arc::new(move |envelope| {
+        dispatch_dj_link_event(
+            envelope,
+            &dj_link_engine,
+            dj_link_project_coordinator.as_ref(),
+            dj_link_runtime.as_ref(),
+            dj_link_external_admission.as_ref(),
+            dj_link_transaction_active.as_ref(),
+        )
+    });
+    let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link(
         config,
         move |event| {
             let persistence_admission = Arc::clone(&remote_project_external_command_admission);
@@ -19822,6 +20316,7 @@ fn start_remote_control(
                 }),
             }
         },
+        Some(dj_link_handler),
     )
     .map_err(|error| error.to_string())?;
     let mut guard = state
@@ -19838,10 +20333,59 @@ fn remote_control_status(state: State<'_, AppState>) -> Result<RemoteControlStat
         .remote_control
         .lock()
         .map_err(|_| "Remote control state lock was poisoned".to_string())?;
-    Ok(guard
+    let mut status = guard
         .as_ref()
         .map(RemoteWsServer::status)
-        .unwrap_or_default())
+        .unwrap_or_default();
+    drop(guard);
+    let transport = status.dj_link.take().unwrap_or_default();
+    let runtime = state
+        .dj_link_runtime
+        .lock()
+        .map_err(|_| "DJ Link runtime state lock was poisoned".to_string())?;
+    status.dj_link = Some(protocol::DjLinkRuntimeStatus {
+        connected: transport.connected,
+        peer: transport.peer,
+        generation: runtime.state_generation.max(transport.generation),
+        agent_id: transport.agent_id,
+        session_id: transport.session_id,
+        master: runtime.master,
+        track_active: runtime.track_active,
+        loop_division: runtime.loop_division,
+        released: runtime.released,
+        last_event_id: runtime.last_event_id.clone().or(transport.last_event_id),
+        age_ms: transport.age_ms,
+        master_deck: runtime.master_deck.clone(),
+        track_content_id: runtime.track_content_id.clone(),
+        track_title: runtime.track_title.clone(),
+        track_artist: runtime.track_artist.clone(),
+        track_deck_id: runtime.track_deck_id.clone(),
+        track_started_at: runtime.track_started_at.clone(),
+        track_playing: runtime.track_playing,
+        track_bpm: runtime.track_bpm,
+        position_sec: runtime.position_sec,
+    });
+    Ok(status)
+}
+
+/// Rotate the machine-local DJ Link secret.  The current listener is stopped
+/// so the next explicit start injects the new secret; the returned value is
+/// show-once and is never persisted or included in status.
+#[tauri::command]
+fn rotate_dj_link_token(state: State<'_, AppState>) -> Result<String, String> {
+    let token = generate_dj_link_token()?;
+    let mut secret = state
+        .dj_link_token
+        .lock()
+        .map_err(|_| "DJ Link token state lock was poisoned".to_string())?;
+    *secret = Some(token.clone());
+    drop(secret);
+    let mut remote = state
+        .remote_control
+        .lock()
+        .map_err(|_| "Remote control state lock was poisoned".to_string())?;
+    *remote = None;
+    Ok(token)
 }
 
 #[tauri::command]
@@ -32654,6 +33198,86 @@ fn take_over_output_control_v1(
     )
 }
 
+#[tauri::command]
+fn acquire_output_lease_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    control_plane_runtime::execute_output_lease_lifecycle_for_operation(
+        &window,
+        &state,
+        &query_state,
+        OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
+        request,
+    )
+}
+
+#[tauri::command]
+fn renew_output_lease_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    control_plane_runtime::execute_output_lease_lifecycle_for_operation(
+        &window,
+        &state,
+        &query_state,
+        OUTPUT_LEASE_RENEW_OPERATION_ID,
+        request,
+    )
+}
+
+#[tauri::command]
+fn recover_output_lease_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    control_plane_runtime::execute_output_lease_lifecycle_for_operation(
+        &window,
+        &state,
+        &query_state,
+        OUTPUT_LEASE_RECOVER_OPERATION_ID,
+        request,
+    )
+}
+
+#[tauri::command]
+fn relinquish_output_lease_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    control_plane_runtime::execute_output_lease_lifecycle_for_operation(
+        &window,
+        &state,
+        &query_state,
+        OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
+        request,
+    )
+}
+
+#[tauri::command]
+fn force_transfer_output_lease_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    control_plane_runtime::execute_output_lease_lifecycle_for_operation(
+        &window,
+        &state,
+        &query_state,
+        OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
+        request,
+    )
+}
+
 /// Engage the safer-direction, runtime-only DMX safety latch. There is no
 /// target boolean and therefore no release/toggle interpretation on this
 /// Full-Lock-capable emergency path.
@@ -33754,6 +34378,7 @@ fn save_user_template(
         midi_mappings: ticket.checkpoint.mappings.midi_mappings.clone(),
         osc_mappings: ticket.checkpoint.mappings.osc_mappings.clone(),
         dmx_mappings: ticket.checkpoint.mappings.dmx_mappings.clone(),
+        dj_track_triggers: ticket.checkpoint.mappings.dj_track_triggers.clone(),
     })?;
     let bytes = serde_json::to_vec_pretty(&template).map_err(|error| error.to_string())?;
     if bytes.len() as u64 > USER_TEMPLATE_MAX_BYTES {
@@ -33799,6 +34424,7 @@ fn load_user_template(
         midi_mappings,
         osc_mappings,
         dmx_mappings,
+        dj_track_triggers,
         ..
     } = template;
     let loaded = load_project_from_file_with_control_mappings_and_disposition(
@@ -33811,6 +34437,8 @@ fn load_user_template(
             midi_mappings: midi_mappings.clone(),
             osc_mappings: osc_mappings.clone(),
             dmx_mappings: dmx_mappings.clone(),
+            dj_track_triggers: dj_track_triggers.clone(),
+            legacy_dj_transition_discarded: false,
         },
         format!("Template {label}"),
         None,
@@ -33824,6 +34452,7 @@ fn load_user_template(
         midi_mappings,
         osc_mappings,
         dmx_mappings,
+        dj_track_triggers,
         warnings: loaded.warnings,
         project_epoch: loaded.project_epoch,
         project_revision: loaded.project_revision,
@@ -33920,17 +34549,35 @@ fn project_json_for_write(project: &ProjectFile) -> Result<String, String> {
     project_json_for_write_with_control_mappings(project, Vec::new(), Vec::new(), Vec::new())
 }
 
+#[cfg(test)]
 fn project_json_for_write_with_control_mappings(
     project: &ProjectFile,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<String, String> {
-    let value = project_root_value_with_control_mappings(
+    project_json_for_write_with_control_mappings_and_dj(
         project,
         midi_mappings,
         osc_mappings,
         dmx_mappings,
+        Vec::new(),
+    )
+}
+
+fn project_json_for_write_with_control_mappings_and_dj(
+    project: &ProjectFile,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
+) -> Result<String, String> {
+    let value = project_root_value_with_control_mappings_and_dj(
+        project,
+        midi_mappings,
+        osc_mappings,
+        dmx_mappings,
+        dj_track_triggers,
     )?;
     let json = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
     if json.len() as u64 > PROJECT_FILE_MAX_BYTES {
@@ -33942,18 +34589,22 @@ fn project_json_for_write_with_control_mappings(
     Ok(json)
 }
 
-fn project_root_value_with_control_mappings(
+fn project_root_value_with_control_mappings_and_dj(
     project: &ProjectFile,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
 ) -> Result<Value, String> {
     validate_project_file(project)?;
     let mappings = ProjectControlMappings {
         midi_mappings: validate_midi_control_mappings(midi_mappings)?,
         osc_mappings: validate_osc_control_mappings(osc_mappings)?,
         dmx_mappings: validate_dmx_control_mappings(dmx_mappings)?,
+        dj_track_triggers: validate_dj_track_triggers(dj_track_triggers)?,
+        legacy_dj_transition_discarded: false,
     };
+    validate_dj_track_triggers_against_snapshot(&mappings.dj_track_triggers, &project.snapshot)?;
     let mut value = serde_json::to_value(project).map_err(|error| error.to_string())?;
     let root = value
         .as_object_mut()
@@ -33976,6 +34627,12 @@ fn project_root_value_with_control_mappings(
             serde_json::to_value(&mappings.dmx_mappings).map_err(|error| error.to_string())?,
         );
     }
+    if !mappings.dj_track_triggers.is_empty() {
+        root.insert(
+            "dj_track_triggers".to_string(),
+            serde_json::to_value(&mappings.dj_track_triggers).map_err(|error| error.to_string())?,
+        );
+    }
     Ok(value)
 }
 
@@ -33995,11 +34652,12 @@ fn project_checkpoint_hash(
 ) -> Result<String, String> {
     // Hash compact canonical root JSON, never the human-readable pretty file
     // bytes.  A formatting-only rewrite must not invalidate a navigation CAS.
-    let root = project_root_value_with_control_mappings(
+    let root = project_root_value_with_control_mappings_and_dj(
         project,
         mappings.midi_mappings.clone(),
         mappings.osc_mappings.clone(),
         mappings.dmx_mappings.clone(),
+        mappings.dj_track_triggers.clone(),
     )?;
     let canonical = serde_json::to_vec(&root).map_err(|error| error.to_string())?;
     let digest = Sha256::digest(canonical);
@@ -34136,11 +34794,12 @@ fn prepare_project_save_ticket_write(
     path: &Path,
     ticket: &ProjectSaveTicket,
 ) -> Result<PathBuf, String> {
-    let json = project_json_for_write_with_control_mappings(
+    let json = project_json_for_write_with_control_mappings_and_dj(
         &ticket.checkpoint.project,
         ticket.checkpoint.mappings.midi_mappings.clone(),
         ticket.checkpoint.mappings.osc_mappings.clone(),
         ticket.checkpoint.mappings.dmx_mappings.clone(),
+        ticket.checkpoint.mappings.dj_track_triggers.clone(),
     )?;
     prepare_project_save_bytes(path, json.as_bytes())
 }
@@ -34385,6 +35044,8 @@ fn validate_frontend_mappings_match_authority(
         midi_mappings: validate_midi_control_mappings(midi_mappings)?,
         osc_mappings: validate_osc_control_mappings(osc_mappings)?,
         dmx_mappings: validate_dmx_control_mappings(dmx_mappings)?,
+        dj_track_triggers: coordinator.mappings.dj_track_triggers.clone(),
+        legacy_dj_transition_discarded: false,
     };
     if received == coordinator.mappings {
         Ok(())
@@ -34414,12 +35075,12 @@ fn set_project_control_mappings(
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
 ) -> Result<ProjectControlMappingsStatus, String> {
-    let mappings = ProjectControlMappings {
-        midi_mappings: validate_midi_control_mappings(midi_mappings)?,
-        osc_mappings: validate_osc_control_mappings(osc_mappings)?,
-        dmx_mappings: validate_dmx_control_mappings(dmx_mappings)?,
-    };
+    let midi_mappings = validate_midi_control_mappings(midi_mappings)?;
+    let osc_mappings = validate_osc_control_mappings(osc_mappings)?;
+    let dmx_mappings = validate_dmx_control_mappings(dmx_mappings)?;
+    let dj_track_triggers = validate_dj_track_triggers(dj_track_triggers)?;
     let _external_admission = lock_project_external_command_admission(&state)?;
     let mut coordinator = lock_project_coordinator(&state)?;
     reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
@@ -34430,6 +35091,14 @@ fn set_project_control_mappings(
             coordinator.epoch, coordinator.revision
         ));
     }
+    validate_dj_track_triggers_against_snapshot(&dj_track_triggers, &state.engine.snapshot())?;
+    let mappings = ProjectControlMappings {
+        midi_mappings,
+        osc_mappings,
+        dmx_mappings,
+        dj_track_triggers,
+        legacy_dj_transition_discarded: false,
+    };
     if coordinator.mappings == mappings {
         return Ok(project_control_mappings_status(&coordinator));
     }
@@ -34480,6 +35149,9 @@ fn set_project_control_mappings(
         next_publication_generation,
         ProjectAuthorityPublicationKind::Mutation,
     );
+    if let Ok(mut dj_link_runtime) = state.dj_link_runtime.lock() {
+        dj_link_runtime.sync_project(&coordinator);
+    }
     let mut status = project_control_mappings_status(&coordinator);
     status.mapping_runtimes_retired = true;
     Ok(status)
@@ -34503,11 +35175,12 @@ fn get_project_checkpoint(
         dmx_mappings,
     )?;
     let project = project_file_for_save_with_coordinator(&state, &coordinator)?;
-    let json = project_json_for_write_with_control_mappings(
+    let json = project_json_for_write_with_control_mappings_and_dj(
         &project,
         coordinator.mappings.midi_mappings.clone(),
         coordinator.mappings.osc_mappings.clone(),
         coordinator.mappings.dmx_mappings.clone(),
+        coordinator.mappings.dj_track_triggers.clone(),
     )?;
     serde_json::from_str(&json).map_err(|error| error.to_string())
 }
@@ -34531,11 +35204,12 @@ fn get_project_checkpoint_bundle(
             "Project changed before recovery capture (expected epoch {expected_epoch} revision {expected_revision})"
         ));
     }
-    let project = project_root_value_with_control_mappings(
+    let project = project_root_value_with_control_mappings_and_dj(
         &checkpoint.project,
         checkpoint.mappings.midi_mappings.clone(),
         checkpoint.mappings.osc_mappings.clone(),
         checkpoint.mappings.dmx_mappings.clone(),
+        checkpoint.mappings.dj_track_triggers.clone(),
     )?;
     Ok(ProjectCheckpointBundle {
         project,
@@ -35195,6 +35869,171 @@ fn ensure_output_lease_receipt_succeeded(
     }
 }
 
+fn ensure_output_lease_receipt_succeeded_or_commit_expiry(
+    live_registry: &mut OutputLeaseRegistry,
+    candidate: OutputLeaseRegistry,
+    receipt: &output_lease::OutputLeaseRequestReceipt,
+    context: &str,
+) -> Result<(), String> {
+    if matches!(
+        &receipt.outcome,
+        Err(output_lease::OutputLeaseError::Expired)
+    ) {
+        // Expiry is an intentional authority transition: the lease has
+        // already advanced to HeldOrphaned on the candidate and that truth
+        // must be published even though the ordinary physical action is
+        // rejected. Other authorization/physical failures remain candidate
+        // only and therefore cannot mutate live authority.
+        *live_registry = candidate;
+    }
+    ensure_output_lease_receipt_succeeded(receipt, context)
+}
+
+/// Submit one candidate authority transition at the physical commit boundary.
+/// A successful callback publishes the candidate; an ordinary callback error
+/// leaves live lease truth untouched. Deadline expiry is the sole intentional
+/// rejection that publishes its orphan transition before returning an error.
+fn submit_output_lease_candidate_with_commit<T, Commit>(
+    live_registry: &mut OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    now_ms: u64,
+    context: &str,
+    commit: Commit,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, String>,
+{
+    let mut candidate = live_registry.clone();
+    let receipt = candidate
+        .submit_request(request, now_ms)
+        .map_err(|error| format!("Output lease {context} admission failed: {error:?}"))?;
+    ensure_output_lease_receipt_succeeded_or_commit_expiry(
+        live_registry,
+        candidate.clone(),
+        &receipt,
+        context,
+    )?;
+    let committed = commit()?;
+    *live_registry = candidate;
+    Ok((committed, receipt))
+}
+
+fn output_lease_resources_for_control_action(
+    action: &protocol::control_plane_command::OutputControlActionV1,
+) -> Result<OutputLeaseResources, String> {
+    use protocol::control_plane_command::OutputControlTargetRoleV1;
+    let resources = match action {
+        protocol::control_plane_command::OutputControlActionV1::Arm { role, .. } => match role {
+            OutputControlTargetRoleV1::Lighting => vec![OutputLeaseResource::Lighting],
+            OutputControlTargetRoleV1::Video => vec![OutputLeaseResource::Video],
+            OutputControlTargetRoleV1::Both => {
+                vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
+            }
+        },
+        protocol::control_plane_command::OutputControlActionV1::ReleaseBlackout { .. }
+        | protocol::control_plane_command::OutputControlActionV1::TakeOverStandby { .. } => {
+            vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
+        }
+        _ => return Err("Output lease authority is not an ordinary output action".to_string()),
+    };
+    OutputLeaseResources::new(&resources)
+        .map_err(|error| format!("Output lease resources are invalid: {error:?}"))
+}
+
+pub(crate) fn build_output_lease_authorization_request(
+    state: &AppState,
+    binding: &str,
+    window_label: &str,
+    owner_incarnation: u64,
+    request_id: u64,
+    action: &protocol::control_plane_command::OutputControlActionV1,
+) -> Result<(OutputLeaseRequest, u64), String> {
+    use protocol::control_plane_command::OutputControlActionV1;
+    let authority = match action {
+        OutputControlActionV1::Arm { lease, .. }
+        | OutputControlActionV1::ReleaseBlackout { lease }
+        | OutputControlActionV1::TakeOverStandby { lease, .. } => lease,
+        _ => return Err("Output lease authority is not an ordinary output action".to_string()),
+    };
+    let lease_id = output_lease::OutputLeaseId::decode(&authority.lease_id)
+        .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
+    let resources = output_lease_resources_for_control_action(action)?;
+    let registry = state
+        .output_lease_registry
+        .lock()
+        .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
+    let owner = OutputLeaseOwner::new(
+        binding.to_string(),
+        window_label.to_string(),
+        registry.process_session_incarnation(),
+        owner_incarnation,
+    )
+    .map_err(|error| format!("Output lease owner is invalid: {error:?}"))?;
+    let request = OutputLeaseRequest::from_action(
+        binding.to_string(),
+        "output-control",
+        request_id,
+        OutputLeaseRequestAction::AuthorizeOrdinary {
+            lease_id,
+            owner,
+            expected_generation: authority.generation,
+            exact_resources: resources,
+        },
+    )
+    .map_err(|error| format!("Output lease request is invalid: {error:?}"))?;
+    let now_ms = state.output_lease_now_ms()?;
+    Ok((request, now_ms))
+}
+
+pub(crate) fn preflight_output_lease_for_control_action(
+    state: &AppState,
+    binding: &str,
+    window_label: &str,
+    owner_incarnation: u64,
+    request_id: u64,
+    action: &protocol::control_plane_command::OutputControlActionV1,
+) -> Result<(), String> {
+    let (request, now_ms) = build_output_lease_authorization_request(
+        state,
+        binding,
+        window_label,
+        owner_incarnation,
+        request_id,
+        action,
+    )?;
+    let registry = state
+        .output_lease_registry
+        .lock()
+        .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
+    registry
+        .preflight_request(&request, now_ms)
+        .map_err(|error| format!("Output lease preflight failed: {error:?}"))
+}
+
+pub(crate) fn submit_output_lease_lifecycle_request(
+    state: &AppState,
+    request: &OutputLeaseRequest,
+    _preflight_now_ms: u64,
+    require_output_transition: bool,
+) -> Result<output_lease::OutputLeaseRequestReceipt, output_lease::OutputLeaseError> {
+    let _output_transition = if require_output_transition {
+        Some(
+            lock_output_ownership_transition(state)
+                .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?,
+        )
+    } else {
+        None
+    };
+    let mut registry = state
+        .output_lease_registry
+        .lock()
+        .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?;
+    let final_now_ms = state
+        .output_lease_now_ms()
+        .map_err(|_| output_lease::OutputLeaseError::ClockRollback)?;
+    registry.submit_request(request, final_now_ms)
+}
+
 fn preflight_output_lease_owner_retirement(
     state: &AppState,
     registry: &OutputLeaseRegistry,
@@ -35230,6 +36069,15 @@ fn preflight_output_lease_project_orphan(
     registry: &OutputLeaseRegistry,
     project_epoch: u64,
 ) -> Result<OutputLeaseRegistry, String> {
+    preflight_output_lease_project_orphan_with_receipt(state, registry, project_epoch)
+        .map(|(candidate, _)| candidate)
+}
+
+fn preflight_output_lease_project_orphan_with_receipt(
+    state: &AppState,
+    registry: &OutputLeaseRegistry,
+    project_epoch: u64,
+) -> Result<(OutputLeaseRegistry, output_lease::OutputLeaseRequestReceipt), String> {
     let request = OutputLeaseRequest::from_action(
         "syndocal.lifecycle",
         "project-replacement",
@@ -35247,7 +36095,36 @@ fn preflight_output_lease_project_orphan(
         .submit_request(&request, now_ms)
         .map_err(|error| format!("AI3 output lease project admission failed: {error:?}"))?;
     ensure_output_lease_receipt_succeeded(&receipt, "project replacement")?;
-    Ok(candidate)
+    Ok((candidate, receipt))
+}
+
+fn select_output_lease_receipt_change(
+    receipt: &output_lease::OutputLeaseRequestReceipt,
+    lease_id: output_lease::OutputLeaseId,
+) -> Result<output_lease::OutputLeaseRequestReceipt, String> {
+    let change = receipt
+        .changes
+        .iter()
+        .find(|change| change.lease_id == lease_id)
+        .cloned()
+        .ok_or_else(|| "Output lease final truth omitted the authorized lease".to_string())?;
+    let mut selected = receipt.clone();
+    selected.lease_id = Some(lease_id);
+    selected.affected_lease_ids = vec![lease_id];
+    selected.resources = change
+        .before
+        .as_ref()
+        .and_then(|snapshot| snapshot.resources.clone())
+        .or_else(|| {
+            change
+                .after
+                .as_ref()
+                .and_then(|snapshot| snapshot.resources.clone())
+        });
+    selected.generation_before = change.before.as_ref().map(|snapshot| snapshot.generation);
+    selected.generation_after = change.after.as_ref().map(|snapshot| snapshot.generation);
+    selected.changes = vec![change];
+    Ok(selected)
 }
 
 /// The engine ACK is the only point where the preflighted process-local
@@ -35981,8 +36858,9 @@ fn navigate_project_history(
                 false,
                 |_, _, _| Ok(()),
                 |_, _, _| (),
+                None,
             )
-            .map(|(result, ())| result)
+            .map(|(result, (), _)| result)
         },
     )
 }
@@ -37406,7 +38284,10 @@ fn write_project_backup_in(
         midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
         osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
         dmx_mappings: validate_dmx_control_mappings(mappings.dmx_mappings)?,
+        dj_track_triggers: validate_dj_track_triggers(mappings.dj_track_triggers)?,
+        legacy_dj_transition_discarded: false,
     };
+    validate_dj_track_triggers_against_snapshot(&mappings.dj_track_triggers, &project.snapshot)?;
     let envelope = ProjectBackupEnvelope {
         version: PROJECT_BACKUP_VERSION,
         app: APP_NAME.to_string(),
@@ -37418,6 +38299,7 @@ fn write_project_backup_in(
         midi_mappings: mappings.midi_mappings,
         osc_mappings: mappings.osc_mappings,
         dmx_mappings: mappings.dmx_mappings,
+        dj_track_triggers: mappings.dj_track_triggers,
     };
     let bytes = serde_json::to_vec_pretty(&envelope).map_err(|error| error.to_string())?;
     let path = project_backup_path(directory, id);
@@ -37517,6 +38399,8 @@ fn load_project_backup(
             midi_mappings: backup.midi_mappings,
             osc_mappings: backup.osc_mappings,
             dmx_mappings: backup.dmx_mappings,
+            dj_track_triggers: backup.dj_track_triggers,
+            legacy_dj_transition_discarded: false,
         },
         format!("Backup {}", backup.created_at_unix_ms),
         current_path,
@@ -37700,11 +38584,12 @@ fn write_standby_checkpoint_in(
     written_at_unix_ms: u64,
 ) -> Result<StandbySyncManifest, String> {
     validate_project_file(project)?;
-    let project_bytes = project_json_for_write_with_control_mappings(
+    let project_bytes = project_json_for_write_with_control_mappings_and_dj(
         project,
         mappings.midi_mappings.clone(),
         mappings.osc_mappings.clone(),
         mappings.dmx_mappings.clone(),
+        mappings.dj_track_triggers.clone(),
     )?
     .into_bytes();
     let project_file = standby_project_file_name(session_id, generation);
@@ -38435,12 +39320,60 @@ where
     Ok(checkpoint)
 }
 
+#[cfg(test)]
 fn take_over_standby_core(
     state: &AppState,
     force: bool,
     selector: StandbyTakeoverCheckpointSelector,
     expected_output_fence: &OutputControlFenceV1,
 ) -> Result<(ProjectLoadResult, OutputControlFenceV1), String> {
+    take_over_standby_core_with_optional_lease(state, force, selector, expected_output_fence, None)
+        .map(|(result, fence, _)| (result, fence))
+}
+
+fn take_over_standby_core_with_lease(
+    state: &AppState,
+    force: bool,
+    selector: StandbyTakeoverCheckpointSelector,
+    expected_output_fence: &OutputControlFenceV1,
+    lease_request: &OutputLeaseRequest,
+    lease_now_ms: u64,
+) -> Result<
+    (
+        ProjectLoadResult,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
+    take_over_standby_core_with_optional_lease(
+        state,
+        force,
+        selector,
+        expected_output_fence,
+        Some((lease_request, lease_now_ms)),
+    )
+    .and_then(|(result, fence, receipt)| {
+        receipt
+            .map(|receipt| (result, fence, receipt))
+            .ok_or_else(|| "Take Over output lease authorization was not committed".to_string())
+    })
+}
+
+fn take_over_standby_core_with_optional_lease(
+    state: &AppState,
+    force: bool,
+    selector: StandbyTakeoverCheckpointSelector,
+    expected_output_fence: &OutputControlFenceV1,
+    lease_authorization: Option<(&OutputLeaseRequest, u64)>,
+) -> Result<
+    (
+        ProjectLoadResult,
+        OutputControlFenceV1,
+        Option<output_lease::OutputLeaseRequestReceipt>,
+    ),
+    String,
+> {
     let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
         let error = "Standby synchronization lifecycle lock was poisoned".to_string();
         state
@@ -38515,6 +39448,7 @@ fn take_over_standby_core(
         &standby_status,
         &selector,
         force,
+        lease_authorization,
     )?;
     let mut runtime = state
         .standby_sync
@@ -38863,6 +39797,8 @@ fn project_control_mappings_from_daslight_import_report(
         midi_mappings: report.midi_mappings.clone(),
         osc_mappings: Vec::new(),
         dmx_mappings: report.dmx_mappings.clone(),
+        dj_track_triggers: Vec::new(),
+        legacy_dj_transition_discarded: false,
     }
 }
 
@@ -39222,18 +40158,20 @@ fn project_and_control_mappings_from_value(
         return Err(format!("Unsupported project version {version}"));
     }
     migrate_legacy_spatial_parameter_models(&mut value)?;
+    let legacy_dj_transition_discarded = value.get("dj_transition").is_some();
     let project: ProjectFile =
         serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
     let mappings: ProjectControlMappings =
         serde_json::from_value(value).map_err(|error| error.to_string())?;
-    Ok((
-        project,
-        ProjectControlMappings {
-            midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
-            osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
-            dmx_mappings: validate_dmx_control_mappings(mappings.dmx_mappings)?,
-        },
-    ))
+    let mappings = ProjectControlMappings {
+        midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
+        osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
+        dmx_mappings: validate_dmx_control_mappings(mappings.dmx_mappings)?,
+        dj_track_triggers: validate_dj_track_triggers(mappings.dj_track_triggers)?,
+        legacy_dj_transition_discarded,
+    };
+    validate_dj_track_triggers_against_snapshot(&mappings.dj_track_triggers, &project.snapshot)?;
+    Ok((project, mappings))
 }
 
 fn migrate_legacy_spatial_parameter_models(value: &mut Value) -> Result<(), String> {
@@ -39514,7 +40452,15 @@ fn load_project_from_file_with_control_mappings_in_scope_and_expected_output_fen
     standby_status: &Arc<Mutex<StandbySyncStatus>>,
     selector: &StandbyTakeoverCheckpointSelector,
     force: bool,
-) -> Result<(ProjectLoadResult, OutputControlFenceV1), String> {
+    lease_authorization: Option<(&OutputLeaseRequest, u64)>,
+) -> Result<
+    (
+        ProjectLoadResult,
+        OutputControlFenceV1,
+        Option<output_lease::OutputLeaseRequestReceipt>,
+    ),
+    String,
+> {
     let mut prepared = prepare_project_load(project, mappings, path_label, current_path)?;
     prepared.authority_disposition = ProjectAuthorityDisposition::CleanAtPath;
     replace_prepared_project_snapshot_with_expected_output_fence(
@@ -39526,6 +40472,7 @@ fn load_project_from_file_with_control_mappings_in_scope_and_expected_output_fen
         standby_status,
         selector,
         force,
+        lease_authorization,
     )
 }
 
@@ -39575,8 +40522,9 @@ fn sanitize_current_project_runtime_under_authority(
         true,
         |_, _, _| Ok(()),
         |_, _, _| (),
+        None,
     )
-    .map(|(result, ())| result)
+    .map(|(result, (), _)| result)
 }
 
 fn prepare_project_load(
@@ -39585,10 +40533,13 @@ fn prepare_project_load(
     path_label: String,
     current_path: Option<&Path>,
 ) -> Result<PreparedProjectLoad, String> {
+    let legacy_dj_transition_discarded = mappings.legacy_dj_transition_discarded;
     let mappings = ProjectControlMappings {
         midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
         osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
         dmx_mappings: validate_dmx_control_mappings(mappings.dmx_mappings)?,
+        dj_track_triggers: validate_dj_track_triggers(mappings.dj_track_triggers)?,
+        legacy_dj_transition_discarded,
     };
     use_authored_video_snapshot(&mut project.snapshot);
     // Legacy `.sdc` files reach backend validation before the engine receives
@@ -39601,8 +40552,15 @@ fn prepare_project_load(
     normalize_project_timeline_layers(&mut project.snapshot);
     clear_runtime_programmer_state(&mut project.snapshot);
     reconcile_project_fixture_groups(&mut project)?;
+    validate_dj_track_triggers_against_snapshot(&mappings.dj_track_triggers, &project.snapshot)?;
     validate_project_file(&project)?;
-    let warnings = project_validation_warnings(&project);
+    let mut warnings = project_validation_warnings(&project);
+    if legacy_dj_transition_discarded {
+        warnings.push(
+            "Legacy dj_transition mapping was ignored; configure DJ Link track triggers instead"
+                .to_string(),
+        );
+    }
     let profiles = project.custom_profiles.clone();
     let custom_profiles = project
         .custom_profiles
@@ -39629,6 +40587,7 @@ fn prepare_project_load(
             midi_mappings: mappings.midi_mappings,
             osc_mappings: mappings.osc_mappings,
             dmx_mappings: mappings.dmx_mappings,
+            dj_track_triggers: mappings.dj_track_triggers,
             warnings,
             project_epoch: 0,
             project_revision: 0,
@@ -39873,8 +40832,9 @@ fn replace_prepared_project_snapshot_after_standby_stop(
             }
         },
         |_, _, _| (),
+        None,
     )
-    .map(|(result, ())| result)
+    .map(|(result, (), _)| result)
 }
 
 fn replace_prepared_project_snapshot_with_expected_output_fence(
@@ -39886,7 +40846,15 @@ fn replace_prepared_project_snapshot_with_expected_output_fence(
     standby_status: &Arc<Mutex<StandbySyncStatus>>,
     selector: &StandbyTakeoverCheckpointSelector,
     force: bool,
-) -> Result<(ProjectLoadResult, OutputControlFenceV1), String> {
+    lease_authorization: Option<(&OutputLeaseRequest, u64)>,
+) -> Result<
+    (
+        ProjectLoadResult,
+        OutputControlFenceV1,
+        Option<output_lease::OutputLeaseRequestReceipt>,
+    ),
+    String,
+> {
     if scope != ProjectSnapshotReplacementScope::LifecycleAlreadyHeld {
         return Err(
             "Output-control Take Over replacement requires the lifecycle guard to be held"
@@ -39937,6 +40905,7 @@ fn replace_prepared_project_snapshot_with_expected_output_fence(
                 safety.generation,
             )
         },
+        lease_authorization,
     )
 }
 
@@ -39953,7 +40922,15 @@ fn replace_prepared_project_snapshot_with_coordinator<Validate, Validation, Capt
     emit_authority_event: bool,
     validate_before_publication: Validate,
     capture_after_commit: Capture,
-) -> Result<(ProjectLoadResult, Captured), String>
+    lease_authorization: Option<(&OutputLeaseRequest, u64)>,
+) -> Result<
+    (
+        ProjectLoadResult,
+        Captured,
+        Option<output_lease::OutputLeaseRequestReceipt>,
+    ),
+    String,
+>
 where
     Validate: FnOnce(
         &AppState,
@@ -40024,21 +41001,22 @@ where
     // Preflight the process-local project orphan transition before any
     // callback/recovery/engine commit. The registry clone is held until the
     // engine ACK; only the ACK path swaps it into live authority.
-    let mut output_lease_registry =
-        if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
-            Some(
-                state
-                    .output_lease_registry
-                    .lock()
-                    .map_err(|_| "Output lease registry lock was poisoned".to_string())?,
-            )
-        } else {
-            None
-        };
-    let output_lease_candidate = output_lease_registry
-        .as_ref()
-        .map(|registry| preflight_output_lease_project_orphan(state, registry, coordinator.epoch))
-        .transpose()?;
+    let mut output_lease_candidate = if coordinator_effect
+        == ProjectReplacementCoordinatorEffect::IdentitySwap
+        && lease_authorization.is_none()
+    {
+        let registry = state
+            .output_lease_registry
+            .lock()
+            .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
+        Some(preflight_output_lease_project_orphan(
+            state,
+            &registry,
+            coordinator.epoch,
+        )?)
+    } else {
+        None
+    };
     if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
         // Identity and HistoryNavigation invalidate any prior browser
         // recovery image. Persist the new machine-local serial before input
@@ -40049,9 +41027,9 @@ where
                 if prepared.authority_disposition
                     == ProjectAuthorityDisposition::RecoveryPendingAck =>
             {
-                recovery_transition
-                    .clone()
-                    .expect("recovery publication request was validated before preflight")
+                recovery_transition.clone().ok_or_else(|| {
+                    "Recovery publication request was lost before preflight".to_string()
+                })?
             }
             ProjectReplacementCoordinatorEffect::IdentitySwap => {
                 ProjectRecoveryAuthorityTransition::ProjectPublication
@@ -40059,7 +41037,9 @@ where
             ProjectReplacementCoordinatorEffect::RevisionMutation => {
                 ProjectRecoveryAuthorityTransition::HistoryNavigation
             }
-            ProjectReplacementCoordinatorEffect::RuntimeSanitize => unreachable!(),
+            ProjectReplacementCoordinatorEffect::RuntimeSanitize => {
+                return Err("Runtime sanitize cannot advance project recovery authority".to_string())
+            }
         };
         advance_project_recovery_authority_serial_before_publication(
             state,
@@ -40087,6 +41067,56 @@ where
             })?,
     );
 
+    let mut lease_registry_guard = if lease_authorization.is_some() {
+        Some(
+            state
+                .output_lease_registry
+                .lock()
+                .map_err(|_| "Output lease registry lock was poisoned".to_string())?,
+        )
+    } else {
+        None
+    };
+    let lease_receipt = if let Some((lease_request, _preflight_lease_now_ms)) = lease_authorization
+    {
+        let registry = lease_registry_guard
+            .as_mut()
+            .ok_or_else(|| "Output lease guard was not acquired".to_string())?;
+        let mut candidate = (**registry).clone();
+        let final_lease_now_ms = state.output_lease_now_ms()?;
+        let receipt = candidate
+            .submit_request(lease_request, final_lease_now_ms)
+            .map_err(|error| format!("Output lease authorization failed: {error:?}"))?;
+        ensure_output_lease_receipt_succeeded_or_commit_expiry(
+            &mut **registry,
+            candidate.clone(),
+            &receipt,
+            "ordinary Take Over",
+        )?;
+        if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
+            let (orphaned_candidate, orphan_receipt) =
+                preflight_output_lease_project_orphan_with_receipt(
+                    state,
+                    &candidate,
+                    coordinator.epoch,
+                )?;
+            candidate = orphaned_candidate;
+            let authorized_lease_id = match lease_request.action.as_ref() {
+                Some(OutputLeaseRequestAction::AuthorizeOrdinary { lease_id, .. }) => *lease_id,
+                _ => return Err("Take Over lease authorization action is invalid".to_string()),
+            };
+            let orphan_receipt =
+                select_output_lease_receipt_change(&orphan_receipt, authorized_lease_id)?;
+            output_lease_candidate = Some(candidate);
+            Some(orphan_receipt)
+        } else {
+            output_lease_candidate = Some(candidate);
+            Some(receipt)
+        }
+    } else {
+        None
+    };
+
     let replacement = (|| {
         fence_and_retire_project_swap_output_resources(&app, state)?;
         publish_project_snapshot_with_runtime_reset_admission(state, prepared.snapshot.clone())
@@ -40105,10 +41135,16 @@ where
     // preflighted and is deliberately infallible; do not claim a rollback
     // after this point because the published snapshot is authoritative.
     reset_project_runtime_after_published_snapshot_infallible(state);
-    if let (Some(registry), Some(candidate)) =
-        (output_lease_registry.as_mut(), output_lease_candidate)
-    {
-        commit_project_replacement_output_lease_after_ack(&mut **registry, candidate);
+    if let Some(candidate) = output_lease_candidate {
+        if let Some(registry) = lease_registry_guard.as_mut() {
+            commit_project_replacement_output_lease_after_ack(&mut **registry, candidate);
+        } else {
+            let mut registry = state
+                .output_lease_registry
+                .lock()
+                .map_err(|_| "Output lease registry lock was poisoned after ACK".to_string())?;
+            commit_project_replacement_output_lease_after_ack(&mut registry, candidate);
+        }
     }
     let coordinator_mirrors_committed =
         if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
@@ -40116,8 +41152,9 @@ where
                 prepared.ancillary.clone(),
                 prepared.mappings.clone(),
                 next_checkpoint_hash.clone(),
-                identity_swap_counters
-                    .expect("identity swap counters were preflighted before publication"),
+                identity_swap_counters.ok_or_else(|| {
+                    "Identity swap counters were lost before publication commit".to_string()
+                })?,
                 prepared.authority_disposition,
             );
             false
@@ -40126,10 +41163,12 @@ where
                 state,
                 &prepared,
                 coordinator,
-                revision_mutation_disposition_generation
-                    .expect("history navigation disposition was preflighted before publication"),
-                revision_mutation_revision
-                    .expect("project revision was preflighted before publication"),
+                revision_mutation_disposition_generation.ok_or_else(|| {
+                    "History navigation disposition was lost before publication commit".to_string()
+                })?,
+                revision_mutation_revision.ok_or_else(|| {
+                    "History navigation revision was lost before publication commit".to_string()
+                })?,
                 next_checkpoint_hash.clone(),
             );
             true
@@ -40149,12 +41188,16 @@ where
         );
         commit_project_swap_ancillary_state_after_preflight(state, &mirrors_after_commit);
     }
+    if let Ok(mut dj_link_runtime) = state.dj_link_runtime.lock() {
+        dj_link_runtime.sync_project(coordinator);
+    }
 
     synchronize_project_load_result_authority_metadata(&mut prepared.result, coordinator);
+    let committed_transition = transition
+        .take()
+        .ok_or_else(|| "Project replacement transition was lost before finalization".to_string())?;
     match finish_project_snapshot_replacement_with_current_status_model(
-        transition
-            .take()
-            .expect("project replacement transition must remain live"),
+        committed_transition,
         desired_role,
     ) {
         Ok(_) => {}
@@ -40188,7 +41231,7 @@ where
     }
     let captured = capture_after_commit(state, coordinator, &_transition_guard);
     drop(_publication_validation);
-    Ok((prepared.result, captured))
+    Ok((prepared.result, captured, lease_receipt))
 }
 
 /// Assignment-only coordinator/mirror commit after a history-navigation
@@ -45734,7 +46777,16 @@ fn sync_external_video_transports_from_snapshot(
         all(feature = "spout", target_os = "windows", target_arch = "x86_64")
     ))]
     activation: Option<OutputOwnershipActivation>,
+    #[cfg(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    ))]
     maintenance_transition: Option<&mut engine::OutputOwnershipTransition>,
+    #[cfg(not(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    )))]
+    _maintenance_transition: Option<&mut engine::OutputOwnershipTransition>,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
     let plans =
         video::build_external_video_io_route_plans(&snapshot.video, &video::video_runtime_status());
@@ -45755,6 +46807,7 @@ fn sync_external_video_transports_from_snapshot(
     let mut spout = spout_transport
         .lock()
         .map_err(|_| "Spout transport state lock was poisoned".to_string())?;
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout
         .harvest_failed_workers(engine)
         .map_err(|error| error.message)?;
@@ -46596,7 +47649,16 @@ fn apply_output_ownership_role_with_output_control_fence(
     state: &AppState,
     role: MachineOutputRole,
     expected_fence: &OutputControlFenceV1,
-) -> Result<(bool, OutputControlFenceV1), String> {
+    lease_request: &OutputLeaseRequest,
+    _lease_now_ms: u64,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
     let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
         let error = "Standby synchronization lifecycle lock was poisoned".to_string();
         state
@@ -46641,21 +47703,40 @@ fn apply_output_ownership_role_with_output_control_fence(
                 project_publication_generation,
             ),
         )| {
-            let current = state.engine.output_ownership_status();
-            if current.state == protocol::OutputOwnershipState::Ready
-                && current.effective_role == role
-                && current.desired_role == role
-            {
-                // The no-op linearizes at exact revalidation. S0 engage is a
-                // separate priority lane and may advance immediately after
-                // that point, but a NoOp receipt must retain an identical
-                // before/after fence rather than absorb unrelated S0 state.
-                return Ok((false, expected_fence.clone()));
-            }
-            apply_output_ownership_role_with_transition_guard(app, state, role, transition_guard)?;
-            let safety = state.engine.safety_blackout_authority();
-            Ok((
-                true,
+            let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
+                "Output lease registry lock was poisoned before Arm publication".to_string()
+            })?;
+            let final_lease_now_ms = state.output_lease_now_ms()?;
+            let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
+                &mut lease_registry,
+                lease_request,
+                final_lease_now_ms,
+                "ordinary Arm",
+                || {
+                    let current = state.engine.output_ownership_status();
+                    if current.state == protocol::OutputOwnershipState::Ready
+                        && current.effective_role == role
+                        && current.desired_role == role
+                    {
+                        // The no-op linearizes at exact revalidation. S0 engage is a
+                        // separate priority lane and may advance immediately after
+                        // that point, but a NoOp receipt must retain an identical
+                        // before/after fence rather than absorb unrelated S0 state.
+                        return Ok(false);
+                    }
+                    apply_output_ownership_role_with_transition_guard(
+                        app,
+                        state,
+                        role,
+                        transition_guard,
+                    )?;
+                    Ok(true)
+                },
+            )?;
+            let fence_after = if !applied {
+                expected_fence.clone()
+            } else {
+                let safety = state.engine.safety_blackout_authority();
                 control_plane_runtime::committed_output_control_fence(
                     expected_fence,
                     project_epoch,
@@ -46666,8 +47747,9 @@ fn apply_output_ownership_role_with_output_control_fence(
                     output_generation_after,
                     safety.epoch,
                     safety.generation,
-                ),
-            ))
+                )
+            };
+            Ok((applied, fence_after, lease_receipt))
         },
     )
 }
@@ -46679,7 +47761,16 @@ fn apply_output_ownership_role_with_output_control_fence(
 fn release_safety_blackout_with_output_control_fence(
     state: &AppState,
     expected_fence: &OutputControlFenceV1,
-) -> Result<(bool, OutputControlFenceV1), String> {
+    lease_request: &OutputLeaseRequest,
+    _lease_now_ms: u64,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
     let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
         let error = "Standby synchronization lifecycle lock was poisoned".to_string();
         state
@@ -46732,32 +47823,47 @@ fn release_safety_blackout_with_output_control_fence(
                 project_publication_generation,
             ),
         )| {
-            state
-                .engine
-                .safety_blackout_release_published(
-                    expected_fence.safety_blackout_epoch,
-                    expected_fence.safety_blackout_generation,
-                    Instant::now() + Duration::from_secs(2),
-                )
-                .map(|disposition| {
-                    (
-                        matches!(
-                            disposition,
-                            engine::SafetyBlackoutReleaseDisposition::Applied
-                        ),
-                        control_plane_runtime::committed_output_control_fence(
-                            expected_fence,
-                            project_epoch,
-                            project_revision,
-                            &project_checkpoint_hash,
-                            project_publication_generation,
-                            expected_fence.output_epoch,
-                            expected_fence.output_generation,
-                            safety_epoch_after,
-                            safety_generation_after,
-                        ),
-                    )
-                })
+            let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
+                "Output lease registry lock was poisoned before blackout release".to_string()
+            })?;
+            let final_lease_now_ms = state.output_lease_now_ms()?;
+            let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
+                &mut lease_registry,
+                lease_request,
+                final_lease_now_ms,
+                "ordinary blackout release",
+                || {
+                    state
+                        .engine
+                        .safety_blackout_release_published(
+                            expected_fence.safety_blackout_epoch,
+                            expected_fence.safety_blackout_generation,
+                            Instant::now() + Duration::from_secs(2),
+                        )
+                        .map(|disposition| {
+                            matches!(
+                                disposition,
+                                engine::SafetyBlackoutReleaseDisposition::Applied
+                            )
+                        })
+                        .map_err(|error| error.to_string())
+                },
+            )?;
+            Ok((
+                applied,
+                control_plane_runtime::committed_output_control_fence(
+                    expected_fence,
+                    project_epoch,
+                    project_revision,
+                    &project_checkpoint_hash,
+                    project_publication_generation,
+                    expected_fence.output_epoch,
+                    expected_fence.output_generation,
+                    safety_epoch_after,
+                    safety_generation_after,
+                ),
+                lease_receipt,
+            ))
         },
     )
 }
@@ -54942,6 +56048,9 @@ pub(crate) mod tests {
             });
             let initial_project_coordinator =
                 project_coordinator_for_initial_snapshot(engine.snapshot());
+            let dj_link_runtime = Arc::new(Mutex::new(DjLinkRuntime::from_coordinator(
+                &initial_project_coordinator,
+            )));
             let output_lease_process_incarnation = ControlPlaneQueryState::new()
                 .expect("test control-plane process identity must initialize")
                 .process_incarnation();
@@ -54992,6 +56101,7 @@ pub(crate) mod tests {
                 output_lease_registry: Mutex::new(output_lease_registry),
                 output_lease_clock_origin: Instant::now(),
                 next_output_lease_request_id: AtomicU64::new(1),
+                dj_link_token: Mutex::new(generate_dj_link_token().ok()),
                 media_asset_reaper: Mutex::new(None),
                 media_asset_authoritative_publish_attempts: AtomicU64::new(0),
                 video_clip_slot_authoritative_publish_attempts: AtomicU64::new(0),
@@ -55041,7 +56151,8 @@ pub(crate) mod tests {
                 current_project_path: Mutex::new(None),
                 operator_policy: Mutex::new(None),
                 operator_selection: Arc::new(Mutex::new(OperatorSelectionContext::default())),
-                project_coordinator: Mutex::new(initial_project_coordinator),
+                dj_link_runtime,
+                project_coordinator: Arc::new(Mutex::new(initial_project_coordinator)),
                 project_callback_epoch: Arc::new(AtomicU64::new(0)),
                 project_mapping_callback_epoch: Arc::new(AtomicU64::new(0)),
                 project_transaction_active: Arc::new(AtomicBool::new(false)),
@@ -55400,6 +56511,99 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn output_lease_owner_query_returns_all_exact_leases_and_hides_expired_or_other_owner_truth() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let process_incarnation = harness
+            .state
+            .output_lease_registry
+            .lock()
+            .expect("query test registry lock")
+            .process_session_incarnation();
+        let query = ControlPlaneQueryState::for_process_incarnation(process_incarnation)
+            .expect("query test uses the backend registry process identity");
+        let owner = OutputLeaseOwner::new(
+            MEDIA_ASSET_A6_OWNER,
+            "media-asset-a6",
+            process_incarnation,
+            1,
+        )
+        .expect("query owner");
+        let acquire = |request_id, resource| {
+            OutputLeaseRequest::from_action(
+                MEDIA_ASSET_A6_OWNER,
+                "query-test",
+                request_id,
+                OutputLeaseRequestAction::Acquire {
+                    owner: owner.clone(),
+                    resources: OutputLeaseResources::new(&[resource])
+                        .expect("query resource is canonical"),
+                    project_identity: output_lease_project_identity(0),
+                    ttl_ms: output_lease::MAX_OUTPUT_LEASE_TTL_MS,
+                },
+            )
+            .expect("query acquire request")
+        };
+        {
+            let mut registry = harness
+                .state
+                .output_lease_registry
+                .lock()
+                .expect("query test acquire lock");
+            registry
+                .submit_request(&acquire(1, OutputLeaseResource::Lighting), 0)
+                .expect("lighting lease");
+            registry
+                .submit_request(&acquire(2, OutputLeaseResource::Video), 0)
+                .expect("video lease");
+        }
+
+        let result = query
+            .query_output_lease_authority_for_window("media-asset-a6", &harness.state)
+            .expect("production owner-bound query");
+        assert_eq!(result.statuses.len(), 2);
+        let authorities = result
+            .statuses
+            .iter()
+            .map(|status| {
+                match status {
+                protocol::control_plane_command::OutputLeaseAuthorityQueryStatusV1::HeldActive {
+                    authority,
+                    resources,
+                } => {
+                    assert_eq!(resources.len(), 1);
+                    authority.lease_id.clone()
+                }
+                _ => panic!("query must return each own active lease exactly"),
+            }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            authorities,
+            vec![
+                "lease-0000000000000001".to_string(),
+                "lease-0000000000000002".to_string()
+            ]
+        );
+        assert!(
+            query
+                .query_output_lease_authority_for_window("other-window", &harness.state)
+                .is_err(),
+            "an unregistered/other owner cannot enumerate lease IDs"
+        );
+
+        let registry = harness
+            .state
+            .output_lease_registry
+            .lock()
+            .expect("query test expiry lock");
+        let at_deadline = registry
+            .query_owner_leases(&owner, output_lease::MAX_OUTPUT_LEASE_TTL_MS)
+            .expect("fake-clock owner query");
+        assert!(at_deadline.is_empty(), "deadline equality is unavailable");
+        assert_eq!(registry.audit().len(), 2, "read-only query adds no audit");
+    }
+
+    #[test]
     fn output_lease_app_state_retirement_and_project_preflight_are_atomic() {
         let harness = MediaAssetA6CommandHarness::new();
         let process_incarnation = harness
@@ -55506,6 +56710,107 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn output_lease_candidate_commit_helper_keeps_physical_and_authority_boundaries() {
+        let owner = OutputLeaseOwner::new("candidate-owner", "candidate-window", 41, 1)
+            .expect("candidate owner");
+        let lighting = OutputLeaseResources::new(&[OutputLeaseResource::Lighting])
+            .expect("lighting resources");
+        let acquire = |request_id, ttl_ms| {
+            OutputLeaseRequest::from_action(
+                "candidate-owner",
+                "candidate-test",
+                request_id,
+                OutputLeaseRequestAction::Acquire {
+                    owner: owner.clone(),
+                    resources: lighting.clone(),
+                    project_identity: "project_epoch:0".to_string(),
+                    ttl_ms,
+                },
+            )
+            .expect("candidate acquire request")
+        };
+        let authorize = |request_id, lease_id| {
+            OutputLeaseRequest::from_action(
+                "candidate-owner",
+                "candidate-test",
+                request_id,
+                OutputLeaseRequestAction::AuthorizeOrdinary {
+                    lease_id,
+                    owner: owner.clone(),
+                    expected_generation: 1,
+                    exact_resources: lighting.clone(),
+                },
+            )
+            .expect("candidate authorize request")
+        };
+
+        let mut registry = OutputLeaseRegistry::fresh_process(41).expect("candidate registry");
+        let acquired = registry
+            .submit_request(&acquire(1, 100), 0)
+            .expect("candidate acquire");
+        let lease_id = acquired.lease_id.expect("candidate lease id");
+        let before_failure = registry.clone();
+        let physical_calls = Arc::new(AtomicU64::new(0));
+        let success_calls = Arc::clone(&physical_calls);
+        let (_, success_receipt) = submit_output_lease_candidate_with_commit(
+            &mut registry,
+            &authorize(2, lease_id),
+            1,
+            "candidate success",
+            move || {
+                success_calls.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        )
+        .expect("authorized candidate commits after physical success");
+        assert!(success_receipt.outcome.is_ok());
+        assert_eq!(physical_calls.load(Ordering::Acquire), 1);
+        assert_eq!(registry.audit().len(), before_failure.audit().len() + 1);
+
+        let before_physical_failure = registry.clone();
+        let failure_calls = Arc::clone(&physical_calls);
+        assert!(submit_output_lease_candidate_with_commit(
+            &mut registry,
+            &authorize(3, lease_id),
+            2,
+            "candidate physical failure",
+            move || {
+                failure_calls.fetch_add(1, Ordering::AcqRel);
+                Err::<(), _>("injected physical failure".to_string())
+            },
+        )
+        .is_err());
+        assert_eq!(physical_calls.load(Ordering::Acquire), 2);
+        assert_eq!(registry, before_physical_failure);
+
+        let mut expired_registry = OutputLeaseRegistry::fresh_process(41).expect("expiry registry");
+        let expired_acquired = expired_registry
+            .submit_request(&acquire(10, 10), 0)
+            .expect("expiry acquire");
+        let expired_lease_id = expired_acquired.lease_id.expect("expiry lease id");
+        let expiry_calls = Arc::new(AtomicU64::new(0));
+        let expiry_calls_for_commit = Arc::clone(&expiry_calls);
+        assert!(submit_output_lease_candidate_with_commit(
+            &mut expired_registry,
+            &authorize(11, expired_lease_id),
+            10,
+            "candidate deadline expiry",
+            move || {
+                expiry_calls_for_commit.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        )
+        .is_err());
+        assert_eq!(expiry_calls.load(Ordering::Acquire), 0);
+        let expired_view = expired_registry
+            .lease_view(expired_lease_id)
+            .expect("expired lease remains queryable");
+        assert_eq!(expired_view.snapshot.phase, OutputLeasePhase::HeldOrphaned);
+        assert_eq!(expired_view.snapshot.generation, 2);
+        assert_eq!(expired_registry.audit().len(), 2);
+    }
+
+    #[test]
     fn project_replacement_ack_core_orphans_only_old_epoch_and_failed_preflight_is_unchanged() {
         let harness = MediaAssetA6CommandHarness::new();
         let process_incarnation = harness
@@ -55536,9 +56841,9 @@ pub(crate) mod tests {
             )
             .unwrap()
         };
-        {
+        let old_epoch_lease_id = {
             let mut registry = harness.state.output_lease_registry.lock().unwrap();
-            registry
+            let old_epoch = registry
                 .submit_request(
                     &acquire(
                         owner_a,
@@ -55562,12 +56867,17 @@ pub(crate) mod tests {
                     0,
                 )
                 .unwrap();
-        }
-        let physical_before = harness.state.engine.safety_blackout_authority();
-        let candidate = {
-            let registry = harness.state.output_lease_registry.lock().unwrap();
-            preflight_output_lease_project_orphan(&harness.state, &registry, 0).unwrap()
+            old_epoch.lease_id.expect("old-epoch lease id")
         };
+        let physical_before = harness.state.engine.safety_blackout_authority();
+        let (candidate, orphan_receipt) = {
+            let registry = harness.state.output_lease_registry.lock().unwrap();
+            preflight_output_lease_project_orphan_with_receipt(&harness.state, &registry, 0)
+                .unwrap()
+        };
+        let returned_lease_receipt =
+            select_output_lease_receipt_change(&orphan_receipt, old_epoch_lease_id)
+                .expect("Take Over selects the final old-epoch lease truth");
         let candidate_views = candidate.lease_views();
         assert_eq!(
             candidate_views
@@ -55596,6 +56906,35 @@ pub(crate) mod tests {
             harness.state.engine.safety_blackout_authority(),
             physical_before,
             "project ACK registry commit has no physical output side effect"
+        );
+        let committed_view = harness
+            .state
+            .output_lease_registry
+            .lock()
+            .unwrap()
+            .lease_view(old_epoch_lease_id)
+            .expect("committed old-epoch lease remains queryable");
+        assert_eq!(
+            returned_lease_receipt.lease_id,
+            Some(committed_view.lease_id)
+        );
+        assert_eq!(
+            returned_lease_receipt.generation_after,
+            Some(committed_view.snapshot.generation)
+        );
+        assert_eq!(
+            returned_lease_receipt.resources,
+            committed_view.snapshot.resources
+        );
+        assert_eq!(returned_lease_receipt.changes.len(), 1);
+        assert_eq!(
+            returned_lease_receipt.changes[0].after.as_ref(),
+            Some(&committed_view.snapshot),
+            "the Take Over ACK receipt and live registry expose one identical orphan truth"
+        );
+        assert_eq!(
+            committed_view.snapshot.phase,
+            OutputLeasePhase::HeldOrphaned
         );
 
         let before_failed = committed;
@@ -56529,6 +57868,7 @@ pub(crate) mod tests {
                 midi_mappings: coordinator.mappings.midi_mappings.clone(),
                 osc_mappings: coordinator.mappings.osc_mappings.clone(),
                 dmx_mappings: coordinator.mappings.dmx_mappings.clone(),
+                dj_track_triggers: coordinator.mappings.dj_track_triggers.clone(),
                 history: project_history_status_for_coordinator(coordinator),
                 input_runtime: ProjectInputRuntimeStatus {
                     project_input_runtime_generation: 0,
@@ -63658,6 +64998,8 @@ pub(crate) mod tests {
                 midi_mappings: vec![midi_mapping.clone()],
                 osc_mappings: vec![osc_mapping.clone()],
                 dmx_mappings: vec![dmx_mapping.clone()],
+                dj_track_triggers: Vec::new(),
+                legacy_dj_transition_discarded: false,
             },
         )
         .unwrap();
@@ -63889,6 +65231,8 @@ pub(crate) mod tests {
                 high: 1.0,
             }],
             dmx_mappings: Vec::new(),
+            dj_track_triggers: Vec::new(),
+            legacy_dj_transition_discarded: false,
         };
         let manifest = write_standby_checkpoint_in(
             &directory,
@@ -63938,6 +65282,8 @@ pub(crate) mod tests {
                 high: 1.0,
             }],
             dmx_mappings: Vec::new(),
+            dj_track_triggers: Vec::new(),
+            legacy_dj_transition_discarded: false,
         };
         write_standby_checkpoint_in(&directory, &project, &mappings, "primary", 4, 4).unwrap();
         let polled = read_standby_checkpoint_for_session(&directory, Some("primary"))
@@ -66349,6 +67695,7 @@ f 1 2 3
                 low: 0.0,
                 high: 65_535.0,
             }],
+            dj_track_triggers: Vec::new(),
         };
 
         let json = serde_json::to_string_pretty(&template).unwrap();
@@ -66405,6 +67752,7 @@ f 1 2 3
             midi_mappings: Vec::new(),
             osc_mappings: Vec::new(),
             dmx_mappings: Vec::new(),
+            dj_track_triggers: Vec::new(),
         };
         let mut wrong_version = valid.clone();
         wrong_version.version += 1;
@@ -77027,6 +78375,324 @@ f 1 2 3
         assert_eq!(request.size_x, 0.25);
         assert_eq!(request.size_y, 0.25);
     }
+
+    fn dj_link_test_envelope(
+        message_type: protocol::DjLinkMessageType,
+        sequence: u64,
+        event_id: &str,
+        payload: Value,
+    ) -> protocol::DjLinkEnvelope {
+        protocol::DjLinkEnvelope {
+            v: protocol::DJ_LINK_PROTOCOL_VERSION,
+            message_type,
+            agent_id: "rekordbox".to_string(),
+            session_id: "session-1".to_string(),
+            sequence,
+            event_id: event_id.to_string(),
+            payload,
+        }
+    }
+
+    fn dj_link_test_mapping(
+        id: &str,
+        selector: protocol::DjTrackSelector,
+    ) -> protocol::DjTrackTriggerMapping {
+        protocol::DjTrackTriggerMapping {
+            id: id.to_string(),
+            selector,
+            timeline_id: TimelineId(7_701),
+            retrigger: protocol::DjTrackRetriggerPolicy::OncePerPlaySession,
+        }
+    }
+
+    #[test]
+    fn dj_link_selector_content_id_priority_and_nfc_title_artist_fallback() {
+        let mappings = vec![
+            dj_link_test_mapping(
+                "content",
+                protocol::DjTrackSelector {
+                    content_id: Some("content-1".to_string()),
+                    title: Some("Fallback title".to_string()),
+                    artist: Some("Fallback artist".to_string()),
+                },
+            ),
+            dj_link_test_mapping(
+                "title-artist",
+                protocol::DjTrackSelector {
+                    content_id: None,
+                    title: Some("Caf\u{e9}".to_string()),
+                    artist: Some("Artist".to_string()),
+                },
+            ),
+        ];
+        let content_payload = protocol::DjLinkMasterTrackPayload {
+            content_id: Some("content-1".to_string()),
+            title: Some("Cafe\u{301}".to_string()),
+            artist: Some("Artist".to_string()),
+            deck: "A".to_string(),
+            deck_id: None,
+            track_bpm: None,
+            position_sec: None,
+            started_at: None,
+            play_session_id: "play-1".to_string(),
+            playing: true,
+            master: true,
+        };
+        assert_eq!(
+            dj_link_find_track_mapping(&mappings, &content_payload)
+                .unwrap()
+                .id,
+            "content"
+        );
+        let title_payload = protocol::DjLinkMasterTrackPayload {
+            content_id: Some("unknown".to_string()),
+            ..content_payload.clone()
+        };
+        assert_eq!(
+            dj_link_find_track_mapping(&mappings, &title_payload)
+                .unwrap()
+                .id,
+            "title-artist"
+        );
+        assert!(validate_dj_track_triggers(vec![dj_link_test_mapping(
+            "title-only",
+            protocol::DjTrackSelector {
+                content_id: None,
+                title: Some("Track".to_string()),
+                artist: None,
+            },
+        )])
+        .is_err());
+    }
+
+    #[test]
+    fn dj_link_dispatch_dedupe_nonmaster_no_mapping_and_state_sync_nontrigger() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let initial_snapshot = engine.snapshot();
+        engine
+            .apply_timeline_bank_published(
+                vec![initial_snapshot.timeline.clone()],
+                initial_snapshot.timeline.id,
+                false,
+            )
+            .unwrap();
+        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let mut mapping = dj_link_test_mapping(
+            "content",
+            protocol::DjTrackSelector {
+                content_id: Some("content-1".to_string()),
+                title: None,
+                artist: None,
+            },
+        );
+        mapping.timeline_id = engine.snapshot().timeline.id;
+        coordinator.mappings.dj_track_triggers = vec![mapping];
+        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+        let coordinator = Mutex::new(coordinator);
+        let admission = ProjectExternalCommandAdmission::default();
+        let transaction_active = AtomicBool::new(false);
+        let master_changed = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterChanged,
+            1,
+            "master-1",
+            json!({"masterDeck":"A","master":true,"isPlaying":true}),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                master_changed,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        let active = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackActive,
+            2,
+            "active-1",
+            json!({
+                "contentId": "content-1",
+                "playSessionId": "play-1",
+                "isPlaying": true,
+                "master": true,
+                "deck": "A"
+            }),
+        );
+        let active_outcome = dispatch_dj_link_event(
+            active.clone(),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        );
+        assert!(matches!(
+            active_outcome,
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        let replay_with_new_event = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackActive,
+            3,
+            "active-2",
+            active.payload.clone(),
+        );
+        let first_generation = runtime.lock().unwrap().state_generation;
+        assert!(matches!(
+            dispatch_dj_link_event(
+                replay_with_new_event,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert_eq!(runtime.lock().unwrap().state_generation, first_generation);
+
+        let nonmaster = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackActive,
+            4,
+            "nonmaster",
+            json!({
+                "contentId": "content-1",
+                "playSessionId": "play-2",
+                "isPlaying": true,
+                "master": false,
+                "deck": "B"
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                nonmaster,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { .. }
+        ));
+
+        let engine_before_sync = engine.snapshot();
+        let sync = dj_link_test_envelope(
+            protocol::DjLinkMessageType::StateSync,
+            5,
+            "sync-1",
+            json!({
+                "loopDivision": 2,
+                "released": true,
+                "masterDeck": "A",
+                "masterTrack": {"contentId":"content-1","isPlaying":true}
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                sync,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        let runtime_after_sync = runtime.lock().unwrap();
+        assert_eq!(runtime_after_sync.seen_play_sessions.len(), 1);
+        assert!(runtime_after_sync.released);
+        assert_eq!(runtime_after_sync.loop_division, Some(2));
+        drop(runtime_after_sync);
+        assert_eq!(engine.snapshot(), engine_before_sync);
+
+        let missing = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackActive,
+            6,
+            "missing",
+            json!({
+                "contentId": "unknown",
+                "playSessionId": "play-3",
+                "isPlaying": true,
+                "master": true,
+                "deck": "A"
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                missing,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::NoMapping { .. }
+        ));
+    }
+
+    #[test]
+    fn dj_link_dispatch_cas_busy_and_persistence_legacy_discard_are_fail_closed() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+        let coordinator = Mutex::new(coordinator);
+        let admission = ProjectExternalCommandAdmission::default();
+        let transaction_active = AtomicBool::new(true);
+        let envelope = dj_link_test_envelope(
+            protocol::DjLinkMessageType::Release,
+            1,
+            "release-1",
+            json!({}),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                envelope,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Busy { .. }
+        ));
+
+        let mapping = dj_link_test_mapping(
+            "persisted",
+            protocol::DjTrackSelector {
+                content_id: Some("content-1".to_string()),
+                title: None,
+                artist: None,
+            },
+        );
+        let project = empty_project_file();
+        let mut mapping = mapping;
+        mapping.timeline_id = project.snapshot.timeline.id;
+        let json = project_json_for_write_with_control_mappings_and_dj(
+            &project,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![mapping.clone()],
+        )
+        .unwrap();
+        assert!(json.contains("dj_track_triggers"));
+        assert!(!json.contains("dj_transition"));
+        let mut legacy: Value = serde_json::from_str(&json).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .insert("dj_transition".to_string(), json!({"obsolete": true}));
+        let (_, loaded) = project_and_control_mappings_from_value(legacy).unwrap();
+        assert_eq!(loaded.dj_track_triggers, vec![mapping]);
+        assert!(loaded.legacy_dj_transition_discarded);
+    }
 }
 
 #[cfg(test)]
@@ -86932,6 +88598,9 @@ fn main() {
     install_crash_report_hook(Arc::clone(&crash_directory));
     let engine = EngineHandle::start(DmxOutputConfig::default());
     let initial_project_coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let dj_link_runtime = Arc::new(Mutex::new(DjLinkRuntime::from_coordinator(
+        &initial_project_coordinator,
+    )));
     let capture_inputs = Arc::new(Mutex::new(HashMap::new()));
     let capture_transport = Arc::new(Mutex::new(capture_transport::CaptureTransportState::new(
         Arc::clone(&capture_inputs),
@@ -87163,6 +88832,7 @@ fn main() {
             output_lease_registry: Mutex::new(output_lease_registry),
             output_lease_clock_origin: Instant::now(),
             next_output_lease_request_id: AtomicU64::new(1),
+            dj_link_token: Mutex::new(generate_dj_link_token().ok()),
             media_asset_reaper: Mutex::new(None),
             #[cfg(test)]
             media_asset_authoritative_publish_attempts: AtomicU64::new(0),
@@ -87215,7 +88885,8 @@ fn main() {
             current_project_path: Mutex::new(None),
             operator_policy: Mutex::new(None),
             operator_selection: Arc::new(Mutex::new(OperatorSelectionContext::default())),
-            project_coordinator: Mutex::new(initial_project_coordinator),
+            dj_link_runtime,
+            project_coordinator: Arc::new(Mutex::new(initial_project_coordinator)),
             project_callback_epoch: Arc::new(AtomicU64::new(0)),
             project_mapping_callback_epoch: Arc::new(AtomicU64::new(0)),
             project_transaction_active: Arc::new(AtomicBool::new(false)),
@@ -87282,6 +88953,7 @@ fn main() {
             query_control_plane_project_authority,
             query_control_plane_runtime_generations,
             query_control_plane_output_ownership,
+            query_output_lease_authority_v1,
             poll_control_plane_observation_events,
             get_application_update_configuration,
             check_application_update,
@@ -87394,6 +89066,7 @@ fn main() {
             remote_access_urls,
             start_remote_control,
             remote_control_status,
+            rotate_dj_link_token,
             disconnect_remote_client,
             stop_remote_control,
             start_dmx_input,
@@ -87624,6 +89297,11 @@ fn main() {
             release_blackout_output_control_v1,
             arm_output_control_v1,
             take_over_output_control_v1,
+            acquire_output_lease_v1,
+            renew_output_lease_v1,
+            recover_output_lease_v1,
+            relinquish_output_lease_v1,
+            force_transfer_output_lease_v1,
             safety_blackout_engage_v1,
             set_effect_video_target_position,
             move_effect,

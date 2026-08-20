@@ -683,42 +683,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               </svg>
             </button>
           </div>
-          <div class="topbarMasterCluster" data-topbar-masters data-tauri-drag-region>
-            <label
-              class="topbarMasterControl"
-              title={`${Math.round(props.lightingMaster * 100)}%`}
-              data-topbar-master="lighting"
-              {...controlMappingTargetData({ action: "LightingMaster", label: "Lighting Master" })}
-            >
-              <span>Lighting</span>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={props.lightingMaster}
-                aria-label="Lighting Master"
-                onInput={(event) => void props.onLightingMaster(Number(event.currentTarget.value))}
-              />
-            </label>
-            <label
-              class="topbarMasterControl"
-              title={`${Math.round(props.videoMaster * 100)}%`}
-              data-topbar-master="video"
-              {...controlMappingTargetData({ action: "VideoMaster", label: "Video Master" })}
-            >
-              <span>Video</span>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={props.videoMaster}
-                aria-label="Video Master"
-                onInput={(event) => void props.onVideoMaster(Number(event.currentTarget.value))}
-              />
-            </label>
-          </div>
           <span class="bpmReadout" data-tauri-drag-region>
             <small data-tauri-drag-region>BPM</small>
             <strong data-tauri-drag-region>{props.bpm.toFixed(0)}</strong>

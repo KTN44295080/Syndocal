@@ -184,6 +184,7 @@ impl AuthoredControlPlaneState {
         RetainedReceiptLookup::Missing
     }
 
+    #[cfg(test)]
     fn terminal_single_flight(
         &self,
         key: SetEffectEnabledReceiptKey,

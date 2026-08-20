@@ -14,8 +14,8 @@ requirements. The following documents remain normative for their domains:
   traceability, severity, hardware, distribution, and final integrated gate;
 - `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`: AI0-AI8 architecture and safety;
 - `qa/ASIO_INPUT_ACCEPTANCE.md`: mandatory Windows ASIO acceptance;
-- `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`: mandatory Syndocal-mastered
-  Stream Deck Pedal, Timeline Loop, MIDI OUT, and rekordbox transition acceptance;
+- `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`: mandatory wired DJ Agent,
+  Master Track mapping, absolute Timeline Loop, Release, and peer/hardware acceptance;
 - `qa/M4_IO_VALIDATION.md`, `qa/M5_RELIABILITY_VALIDATION.md`, and
   `qa/M6_RELEASE_VALIDATION.md`: physical I/O, soak, and release evidence;
 - `RELEASE_STATUS.md`: historical release evidence and external blockers;
@@ -307,10 +307,10 @@ Audio/recording/live-source clock and ownership semantics are complete.
   cache performance budgets.
 - [ ] L authored Audio schema/migration/history and explicit ShowClock/audio/PTS
   master-clock, resampling/slew/seek/loop/underrun/device-fault policy.
-- [ ] Implement `DJ_LOOP_HALF`, `DJ_FILTER_CLOSE`, and `DJ_RELEASE` through the
-  existing typed Trigger/Action path, musical A-B Loop, generic MIDI OUT, bounded
-  nonblocking CC ramp, deterministic stop, and optional reset sequence defined in
-  `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`; do not add a bridge application.
+- [ ] Extend the existing Web Remote listener with authenticated DJ Link events. Map
+  `DJ_MASTER_TRACK_ACTIVE` to project-owned Timeline starts, converge authored A-B
+  Loop from absolute `DJ_LOOP_STATE`, and make `DJ_RELEASE` idempotently disable/resume.
+  Do not add a second Agent/server or send rekordbox MIDI from Syndocal.
 - [ ] Stable live camera/screen/NDI/Spout/Syphon/generator identity and availability,
   permission/fault/reconnect truth, and old-worker retirement.
 - [ ] Recording `Idle -> Preparing -> Recording -> Finalizing -> Complete|Fault`,
@@ -330,9 +330,9 @@ Exit: maximum-condition one-hour A/V/Lighting/recording proof meets fixed budget
   across Setup, Edit, Control, Touch, native windows, and compact/full layouts.
 - [ ] H3 Setup completion: Patch/GDTF/OFL, mapping, I/O, output/device configuration,
   validation, empty/error states, keyboard/pointer reachability, and native proof.
-- [ ] H3 Pedal/DJ transition setup: configurable global shortcut, conflict truth,
-  stable MIDI output selection, learned Note/CC mappings, ramp/reset controls,
-  persistence, disconnect recovery, and one shared adapter-independent action path.
+- [ ] H3 DJ Link setup: explicit Show-LAN NIC/bind address, dedicated token rotation,
+  connection/session diagnostics, current Master Track, project Track-to-Timeline
+  mapping CAS, disconnect recovery, and `Use Current Track`. No Pedal/MIDI controls.
 - [ ] H4 Edit completion: Media, Timeline, Phase/Guide/loop/group/follow, FX, Stage,
   history/Undo/Redo, import/relink, save/reload focus, and native proof.
 - [ ] H5 Control completion: live Lighting/Video/Audio, Cue/Clip/Take/Transition,
@@ -383,10 +383,11 @@ driver/device, raw logs, operator, date, and measurement source.
   frame period/failure; RDM/TOD discovery/correlation/timeout/cancel/removal.
 - [ ] Physical MIDI Note/CC/Clock/MTC/feedback/All Notes Off; OSC and TouchOSC/iPad/
   Android Remote over wired/Wi-Fi with p50/p95/p99/max latency.
-- [ ] Physical Stream Deck Pedal -> Syndocal -> virtual MIDI -> rekordbox acceptance
-  for repeated Loop Half, timed filter close, deterministic stop, Timeline release/
-  continuation, optional reset, unfocused input, disconnect/reconnect, and next-use
-  readiness, with exact device/software/mapping/timestamp evidence.
+- [ ] Physical DJ-PC Pedal -> `rekordbox-DJ-Link-ForPCDJ` local MIDI plus wired
+  Agent -> Syndocal acceptance: preload/non-Master non-trigger, Master Track start,
+  absolute repeated Loop divisions, Filter isolation, idempotent Release, local
+  operation during disconnect, State Sync, ACK, and next-use readiness, with exact
+  device/software/repository/NIC/mapping/timestamp evidence.
 - [ ] Dual display/HDMI/fullscreen/DPI/refresh/unplug/reorder/GPU reset; NDI/Spout/
   Syphon, camera, and screen-capture fault and one-hour matrices.
 - [ ] macOS and Linux real-machine display/media/audio/project save/reload; CI package
@@ -466,3 +467,27 @@ After the documentation/version checkpoint containing this file:
    process-local request receipt/shape-conflict layer;
 3. independently review it before AppState/R4 integration;
 4. keep AI4, distributed ShowClock, ASIO completion claims, and public release closed.
+
+## 13. 2026-08-21 bounded completion-flow update
+
+The current AI3/DJ integration tranche has a frozen independent result of P0 0,
+P1 0, and P2 0. The DJ transport reuses Web Remote, generation-fences the
+irreversible handler boundary, recovers connection/admission state on handler
+panic, distinguishes StateSync from triggers, and keeps all rekordbox/Pedal/MIDI
+responsibility in `rekordbox-DJ-Link-ForPCDJ`. The topbar no longer carries the
+Lighting/Video master sliders; no adjacent UI was reduced in size.
+
+The focused Rust and frontend gates listed in the handoff pass, and the final
+Windows native `--no-bundle` build completed in 2m12s with zero first-party and
+zero Vite warnings. Seven locally measurable W0 configurations must now be
+promoted from pending using exact artifacts/output markers and a reviewed
+inventory-only checkpoint. macOS dev/release remain pending external evidence,
+so this update does not set `requiredMatrixComplete=true` and does not claim beta,
+RC, or release acceptance.
+
+After the inventory-only checkpoint and its docs-only normal-mode proof, launch
+the exact rebuilt executable, verify exactly one responsive maximized Syndocal,
+then perform the requested five-display VJ output exercise and leave the final
+operational state as editor plus LED panel plus projector. If physical
+OutputControl consent rejects synthetic input, stop rather than bypassing the Raw
+Input boundary and record the single human-keyboard action still required.

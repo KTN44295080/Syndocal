@@ -246,15 +246,26 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
      the converted source payloads stay out of the main chunk. */
   const [bundledFixtures, setBundledFixtures] = createSignal<GdtfProfileTreeFixture[]>([]);
   const [bundledAttributions, setBundledAttributions] = createSignal<BundledLibraryAttribution[]>([]);
-  onMount(() => {
-    void loadBundledLibraryFixtures()
-      .then((fixtures) => {
-        setBundledFixtures(fixtures);
-        return loadBundledLibraryAttributions();
-      })
-      .then((attributions) => setBundledAttributions(attributions))
-      .catch(() => setBundledFixtures([]));
-  });
+  const [bundledLoading, setBundledLoading] = createSignal(false);
+  const [bundledError, setBundledError] = createSignal<string | null>(null);
+  const refreshBundledLibrary = async () => {
+    setBundledLoading(true);
+    setBundledError(null);
+    try {
+      const fixtures = await loadBundledLibraryFixtures();
+      const attributions = await loadBundledLibraryAttributions();
+      setBundledFixtures(fixtures);
+      setBundledAttributions(attributions);
+    } catch (error) {
+      setBundledFixtures([]);
+      setBundledAttributions([]);
+      setBundledError("Bundled library failed to load.");
+      props.onMessage(`Bundled library failed to load: ${String(error)}`);
+    } finally {
+      setBundledLoading(false);
+    }
+  };
+  onMount(() => void refreshBundledLibrary());
   const visibleBundledFixtures = createMemo(() =>
     filterGdtfProfileTreeFixtures(bundledFixtures(), query()));
   const visibleBundledProfileCount = createMemo(() => visibleBundledFixtures()
@@ -728,10 +739,20 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
             })}
             onDragEnd={props.onProfileDragEnd}
           />
-          <Show when={bundledFixtures().length === 0}>
+          <Show when={bundledLoading()}>
             <p class="empty patchProfileRowEmpty" data-patch-bundled-loading>
               Loading the bundled library…
             </p>
+          </Show>
+          <Show when={bundledError()}>
+            {(error) => (
+              <div class="empty patchProfileRowEmpty" data-patch-bundled-error>
+                <p>{error()}</p>
+                <button type="button" onClick={() => void refreshBundledLibrary()}>
+                  Retry bundled library
+                </button>
+              </div>
+            )}
           </Show>
           <Show when={bundledFixtures().length > 0 && visibleBundledProfileCount() === 0}>
             <p class="empty patchProfileRowEmpty">No matching profiles.</p>

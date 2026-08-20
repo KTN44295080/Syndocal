@@ -1639,6 +1639,16 @@ pub const OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID: &str =
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v1";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v1";
 pub const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID: &str = "syndocal.output.standby.takeover.v1";
+pub const OUTPUT_LEASE_ACQUIRE_OPERATION_ID: &str = "syndocal.output.lease.acquire.v1";
+pub const OUTPUT_LEASE_RENEW_OPERATION_ID: &str = "syndocal.output.lease.renew.v1";
+pub const OUTPUT_LEASE_RECOVER_OPERATION_ID: &str = "syndocal.output.lease.recover.v1";
+pub const OUTPUT_LEASE_RELINQUISH_OPERATION_ID: &str = "syndocal.output.lease.relinquish.v1";
+pub const OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID: &str =
+    "syndocal.output.lease.force_transfer.v1";
+pub const OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID: &str =
+    "syndocal.output.lease.authority.query.v1";
+pub const OUTPUT_LEASE_TTL_MS: u64 = 60_000;
+pub const MAX_OUTPUT_LEASE_QUERY_STATUSES: usize = 64;
 pub const OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V1: &[u8] =
     b"syndocal.output-control.argument-fingerprint.v1\0";
 pub const OUTPUT_CONTROL_SHAPE_DOMAIN_V1: &[u8] = b"syndocal.output-control.command-shape.v1\0";
@@ -1963,6 +1973,7 @@ pub enum OutputControlValidationErrorV1 {
     InvalidFingerprint,
     InvalidStandbyIdentity,
     InvalidReceiptOutcome,
+    InvalidLeaseAuthority,
 }
 
 impl fmt::Display for OutputControlValidationErrorV1 {
@@ -1976,6 +1987,7 @@ impl fmt::Display for OutputControlValidationErrorV1 {
             Self::InvalidFingerprint => "output-control fingerprint must be lowercase SHA-256",
             Self::InvalidStandbyIdentity => "standby takeover identity is invalid",
             Self::InvalidReceiptOutcome => "output-control receipt outcome is invalid",
+            Self::InvalidLeaseAuthority => "output lease authority is not canonical",
         })
     }
 }
@@ -2115,7 +2127,7 @@ impl<'de> Deserialize<'de> for OutputControlFenceV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputControlTargetRoleV1 {
     Lighting,
@@ -2123,16 +2135,103 @@ pub enum OutputControlTargetRoleV1 {
     Both,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OutputLeaseAuthorityV1 {
+    pub lease_id: String,
+    pub generation: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputLeaseAuthorityV1Wire {
+    lease_id: String,
+    generation: u64,
+}
+
+impl OutputLeaseAuthorityV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        let token = self.lease_id.as_bytes();
+        let valid_id = token.len() == 22
+            && self.lease_id.is_ascii()
+            && token.starts_with(b"lease-")
+            && token[6..]
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+            && token[6..].iter().any(|byte| *byte != b'0');
+        if !valid_id || self.generation == 0 || self.generation > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(OutputControlValidationErrorV1::InvalidLeaseAuthority);
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, OutputControlValidationErrorV1> {
+        self.validate()?;
+        let mut bytes = b"output-lease-authority-v1\0".to_vec();
+        append_ascii(&mut bytes, &self.lease_id)
+            .map_err(|_| OutputControlValidationErrorV1::InvalidLeaseAuthority)?;
+        append_u64(&mut bytes, self.generation);
+        Ok(bytes)
+    }
+}
+
+impl Serialize for OutputLeaseAuthorityV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        OutputLeaseAuthorityV1Wire {
+            lease_id: self.lease_id.clone(),
+            generation: self.generation,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputLeaseAuthorityV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputLeaseAuthorityV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            lease_id: wire.lease_id,
+            generation: wire.generation,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutputControlActionV1 {
     Arm {
         role: OutputControlTargetRoleV1,
+        lease: OutputLeaseAuthorityV1,
     },
-    ReleaseBlackout,
+    ReleaseBlackout {
+        lease: OutputLeaseAuthorityV1,
+    },
     TakeOverStandby {
         force: bool,
         standby_session_id: String,
         standby_generation: u64,
+        lease: OutputLeaseAuthorityV1,
+    },
+    AcquireLease {
+        role: OutputControlTargetRoleV1,
+    },
+    RenewLease {
+        lease: OutputLeaseAuthorityV1,
+    },
+    RecoverLease {
+        lease: OutputLeaseAuthorityV1,
+    },
+    RelinquishOutputLease {
+        lease: OutputLeaseAuthorityV1,
+    },
+    ForceTransferLease {
+        lease: OutputLeaseAuthorityV1,
     },
 }
 
@@ -2141,12 +2240,31 @@ pub enum OutputControlActionV1 {
 enum OutputControlActionV1Wire {
     Arm {
         role: OutputControlTargetRoleV1,
+        lease: OutputLeaseAuthorityV1,
     },
-    ReleaseBlackout,
+    ReleaseBlackout {
+        lease: OutputLeaseAuthorityV1,
+    },
     TakeOverStandby {
         force: bool,
         standby_session_id: String,
         standby_generation: u64,
+        lease: OutputLeaseAuthorityV1,
+    },
+    AcquireLease {
+        role: OutputControlTargetRoleV1,
+    },
+    RenewLease {
+        lease: OutputLeaseAuthorityV1,
+    },
+    RecoverLease {
+        lease: OutputLeaseAuthorityV1,
+    },
+    RelinquishOutputLease {
+        lease: OutputLeaseAuthorityV1,
+    },
+    ForceTransferLease {
+        lease: OutputLeaseAuthorityV1,
     },
 }
 
@@ -2154,8 +2272,13 @@ impl OutputControlActionV1 {
     pub const fn operation_id(&self) -> &'static str {
         match self {
             Self::Arm { .. } => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
-            Self::ReleaseBlackout => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            Self::ReleaseBlackout { .. } => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
             Self::TakeOverStandby { .. } => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+            Self::AcquireLease { .. } => OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
+            Self::RenewLease { .. } => OUTPUT_LEASE_RENEW_OPERATION_ID,
+            Self::RecoverLease { .. } => OUTPUT_LEASE_RECOVER_OPERATION_ID,
+            Self::RelinquishOutputLease { .. } => OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
+            Self::ForceTransferLease { .. } => OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
         }
     }
 
@@ -2163,6 +2286,7 @@ impl OutputControlActionV1 {
         if let Self::TakeOverStandby {
             standby_session_id,
             standby_generation,
+            lease,
             ..
         } = self
         {
@@ -2177,22 +2301,54 @@ impl OutputControlActionV1 {
             {
                 return Err(OutputControlValidationErrorV1::InvalidStandbyIdentity);
             }
+            lease.validate()?;
+        }
+        match self {
+            Self::Arm { lease, .. }
+            | Self::ReleaseBlackout { lease }
+            | Self::RenewLease { lease }
+            | Self::RecoverLease { lease }
+            | Self::RelinquishOutputLease { lease }
+            | Self::ForceTransferLease { lease } => lease.validate()?,
+            Self::TakeOverStandby { .. } | Self::AcquireLease { .. } => {}
         }
         Ok(())
     }
 
     fn wire(&self) -> OutputControlActionV1Wire {
         match self {
-            Self::Arm { role } => OutputControlActionV1Wire::Arm { role: *role },
-            Self::ReleaseBlackout => OutputControlActionV1Wire::ReleaseBlackout,
+            Self::Arm { role, lease } => OutputControlActionV1Wire::Arm {
+                role: *role,
+                lease: lease.clone(),
+            },
+            Self::ReleaseBlackout { lease } => OutputControlActionV1Wire::ReleaseBlackout {
+                lease: lease.clone(),
+            },
             Self::TakeOverStandby {
                 force,
                 standby_session_id,
                 standby_generation,
+                lease,
             } => OutputControlActionV1Wire::TakeOverStandby {
                 force: *force,
                 standby_session_id: standby_session_id.clone(),
                 standby_generation: *standby_generation,
+                lease: lease.clone(),
+            },
+            Self::AcquireLease { role } => OutputControlActionV1Wire::AcquireLease { role: *role },
+            Self::RenewLease { lease } => OutputControlActionV1Wire::RenewLease {
+                lease: lease.clone(),
+            },
+            Self::RecoverLease { lease } => OutputControlActionV1Wire::RecoverLease {
+                lease: lease.clone(),
+            },
+            Self::RelinquishOutputLease { lease } => {
+                OutputControlActionV1Wire::RelinquishOutputLease {
+                    lease: lease.clone(),
+                }
+            }
+            Self::ForceTransferLease { lease } => OutputControlActionV1Wire::ForceTransferLease {
+                lease: lease.clone(),
             },
         }
     }
@@ -2203,25 +2359,62 @@ impl OutputControlActionV1 {
     ) -> Result<(), OutputControlValidationErrorV1> {
         self.validate()?;
         match self {
-            Self::Arm { role } => {
+            Self::Arm { role, lease } => {
                 output.push(0);
                 output.push(match role {
                     OutputControlTargetRoleV1::Lighting => 0,
                     OutputControlTargetRoleV1::Video => 1,
                     OutputControlTargetRoleV1::Both => 2,
                 });
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
             }
-            Self::ReleaseBlackout => output.push(1),
+            Self::ReleaseBlackout { lease } => {
+                output.push(1);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
             Self::TakeOverStandby {
                 force,
                 standby_session_id,
                 standby_generation,
+                lease,
             } => {
                 output.push(2);
                 output.push(u8::from(*force));
                 append_ascii(output, standby_session_id)
                     .map_err(|_| OutputControlValidationErrorV1::InvalidStandbyIdentity)?;
                 append_u64(output, *standby_generation);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::AcquireLease { role } => {
+                output.push(3);
+                output.push(match role {
+                    OutputControlTargetRoleV1::Lighting => 0,
+                    OutputControlTargetRoleV1::Video => 1,
+                    OutputControlTargetRoleV1::Both => 2,
+                });
+            }
+            Self::RenewLease { lease } => {
+                output.push(4);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::RecoverLease { lease } => {
+                output.push(5);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::RelinquishOutputLease { lease } => {
+                output.push(6);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::ForceTransferLease { lease } => {
+                output.push(7);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
             }
         }
         Ok(())
@@ -2245,17 +2438,28 @@ impl<'de> Deserialize<'de> for OutputControlActionV1 {
     {
         let wire = OutputControlActionV1Wire::deserialize(deserializer)?;
         let value = match wire {
-            OutputControlActionV1Wire::Arm { role } => Self::Arm { role },
-            OutputControlActionV1Wire::ReleaseBlackout => Self::ReleaseBlackout,
+            OutputControlActionV1Wire::Arm { role, lease } => Self::Arm { role, lease },
+            OutputControlActionV1Wire::ReleaseBlackout { lease } => Self::ReleaseBlackout { lease },
             OutputControlActionV1Wire::TakeOverStandby {
                 force,
                 standby_session_id,
                 standby_generation,
+                lease,
             } => Self::TakeOverStandby {
                 force,
                 standby_session_id,
                 standby_generation,
+                lease,
             },
+            OutputControlActionV1Wire::AcquireLease { role } => Self::AcquireLease { role },
+            OutputControlActionV1Wire::RenewLease { lease } => Self::RenewLease { lease },
+            OutputControlActionV1Wire::RecoverLease { lease } => Self::RecoverLease { lease },
+            OutputControlActionV1Wire::RelinquishOutputLease { lease } => {
+                Self::RelinquishOutputLease { lease }
+            }
+            OutputControlActionV1Wire::ForceTransferLease { lease } => {
+                Self::ForceTransferLease { lease }
+            }
         };
         value.validate().map_err(D::Error::custom)?;
         Ok(value)
@@ -2266,6 +2470,116 @@ impl<'de> Deserialize<'de> for OutputControlActionV1 {
 pub struct OutputControlAuthorityBundleV1 {
     pub operation_id: String,
     pub fence: OutputControlFenceV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OutputLeaseAuthorityQueryStatusV1 {
+    Unavailable,
+    HeldActive {
+        authority: OutputLeaseAuthorityV1,
+        resources: Vec<OutputControlTargetRoleV1>,
+    },
+    HeldOrphaned {
+        authority: OutputLeaseAuthorityV1,
+        resources: Vec<OutputControlTargetRoleV1>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputLeaseAuthorityQueryV1 {
+    pub operation_id: String,
+    pub statuses: Vec<OutputLeaseAuthorityQueryStatusV1>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputLeaseAuthorityQueryV1Wire {
+    operation_id: String,
+    statuses: Vec<OutputLeaseAuthorityQueryStatusV1>,
+}
+
+impl OutputLeaseAuthorityQueryV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        if self.operation_id != OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID
+            || self.statuses.is_empty()
+            || self.statuses.len() > MAX_OUTPUT_LEASE_QUERY_STATUSES
+        {
+            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
+        }
+        if self
+            .statuses
+            .iter()
+            .any(|status| matches!(status, OutputLeaseAuthorityQueryStatusV1::Unavailable))
+        {
+            if self.statuses.len() != 1
+                || !matches!(
+                    self.statuses.first(),
+                    Some(OutputLeaseAuthorityQueryStatusV1::Unavailable)
+                )
+            {
+                return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+            }
+            return Ok(());
+        }
+        let mut previous_lease_id: Option<&str> = None;
+        for status in &self.statuses {
+            let (authority, resources) = match status {
+                OutputLeaseAuthorityQueryStatusV1::HeldActive {
+                    authority,
+                    resources,
+                }
+                | OutputLeaseAuthorityQueryStatusV1::HeldOrphaned {
+                    authority,
+                    resources,
+                } => (authority, resources),
+                OutputLeaseAuthorityQueryStatusV1::Unavailable => {
+                    return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
+                }
+            };
+            authority.validate()?;
+            if previous_lease_id.is_some_and(|previous| previous >= authority.lease_id.as_str()) {
+                return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+            }
+            previous_lease_id = Some(authority.lease_id.as_str());
+            if resources.is_empty()
+                || resources.windows(2).any(|pair| pair[0] >= pair[1])
+                || resources.contains(&OutputControlTargetRoleV1::Both)
+            {
+                return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for OutputLeaseAuthorityQueryV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        OutputLeaseAuthorityQueryV1Wire {
+            operation_id: self.operation_id.clone(),
+            statuses: self.statuses.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputLeaseAuthorityQueryV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = OutputLeaseAuthorityQueryV1Wire::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: wire.operation_id,
+            statuses: wire.statuses,
+        };
+        value.validate().map_err(D::Error::custom)?;
+        Ok(value)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2416,6 +2730,11 @@ impl OutputConsentChallengeV1 {
                 OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                     | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+                    | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                    | OUTPUT_LEASE_RENEW_OPERATION_ID
+                    | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                    | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                    | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
             )
         {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -2717,6 +3036,250 @@ pub enum OutputControlErrorCodeV1 {
     Internal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputLeaseReceiptPhaseV1 {
+    Unclaimed,
+    HeldActive,
+    HeldOrphaned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputLeaseReceiptOutcomeV1 {
+    Acquired,
+    Renewed,
+    ExpiryObserved,
+    Recovered,
+    Relinquished,
+    Transferred,
+    OwnerRetired,
+    ProjectOrphaned,
+    Authorized,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputLeaseReceiptChangeV1 {
+    pub lease_id: String,
+    pub before_generation: Option<u64>,
+    pub after_generation: Option<u64>,
+    pub before_resources: Vec<OutputControlTargetRoleV1>,
+    pub after_resources: Vec<OutputControlTargetRoleV1>,
+    pub before_phase: Option<OutputLeaseReceiptPhaseV1>,
+    pub after_phase: Option<OutputLeaseReceiptPhaseV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputControlLeaseResultV1 {
+    pub authority: OutputLeaseAuthorityV1,
+    pub resources: Vec<OutputControlTargetRoleV1>,
+    pub phase: OutputLeaseReceiptPhaseV1,
+    pub outcome: OutputLeaseReceiptOutcomeV1,
+    pub audit_sequence: u64,
+    pub changes: Vec<OutputLeaseReceiptChangeV1>,
+}
+
+impl OutputControlLeaseResultV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        self.authority.validate()?;
+        if self.audit_sequence == 0 || self.audit_sequence > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
+        if self.resources.is_empty()
+            || self.resources.windows(2).any(|pair| pair[0] >= pair[1])
+            || self.resources.contains(&OutputControlTargetRoleV1::Both)
+        {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
+        if self.changes.len() != 1 {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
+        let change = &self.changes[0];
+        if change.lease_id != self.authority.lease_id {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
+        let change_generation = change
+            .after_generation
+            .or(change.before_generation)
+            .ok_or(OutputControlValidationErrorV1::InvalidReceiptOutcome)?;
+        if change_generation != self.authority.generation {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
+        let terminal_phase = change
+            .after_phase
+            .or(change.before_phase)
+            .ok_or(OutputControlValidationErrorV1::InvalidReceiptOutcome)?;
+        if terminal_phase != self.phase {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
+        let terminal_resources = if self.outcome == OutputLeaseReceiptOutcomeV1::Relinquished {
+            &change.before_resources
+        } else {
+            &change.after_resources
+        };
+        if terminal_resources != &self.resources {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
+        {
+            let authority = OutputLeaseAuthorityV1 {
+                lease_id: change.lease_id.clone(),
+                generation: change
+                    .before_generation
+                    .or(change.after_generation)
+                    .ok_or(OutputControlValidationErrorV1::InvalidReceiptOutcome)?,
+            };
+            authority.validate()?;
+            for generation in [change.before_generation, change.after_generation]
+                .into_iter()
+                .flatten()
+            {
+                if generation == 0 || generation > MAX_SAFE_JAVASCRIPT_INTEGER {
+                    return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+                }
+            }
+            if change
+                .before_resources
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+                || change
+                    .after_resources
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+                || change
+                    .before_resources
+                    .contains(&OutputControlTargetRoleV1::Both)
+                || change
+                    .after_resources
+                    .contains(&OutputControlTargetRoleV1::Both)
+            {
+                return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_for_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<(), OutputControlValidationErrorV1> {
+        self.validate()?;
+        let expected_outcome = match operation_id {
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID
+            | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+            | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Authorized,
+            OUTPUT_LEASE_ACQUIRE_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Acquired,
+            OUTPUT_LEASE_RENEW_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Renewed,
+            OUTPUT_LEASE_RECOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Recovered,
+            OUTPUT_LEASE_RELINQUISH_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Relinquished,
+            OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Transferred,
+            _ => return Err(OutputControlValidationErrorV1::UnexpectedOperationId),
+        };
+        let takeover_project_orphan = operation_id == OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+            && self.outcome == OutputLeaseReceiptOutcomeV1::ProjectOrphaned;
+        if (!takeover_project_orphan && self.outcome != expected_outcome) || self.changes.len() != 1
+        {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
+        let change = self
+            .changes
+            .first()
+            .ok_or(OutputControlValidationErrorV1::InvalidReceiptOutcome)?;
+        let before_generation = change.before_generation;
+        let after_generation = change.after_generation;
+        let transition_outcome = if takeover_project_orphan {
+            OutputLeaseReceiptOutcomeV1::ProjectOrphaned
+        } else {
+            expected_outcome
+        };
+        match transition_outcome {
+            OutputLeaseReceiptOutcomeV1::Authorized => {
+                if before_generation != after_generation
+                    || change.before_phase != Some(OutputLeaseReceiptPhaseV1::HeldActive)
+                    || change.after_phase != Some(OutputLeaseReceiptPhaseV1::HeldActive)
+                    || change.before_resources != self.resources
+                    || change.after_resources != self.resources
+                {
+                    return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+                }
+            }
+            OutputLeaseReceiptOutcomeV1::Acquired => {
+                if change.before_generation.is_some()
+                    || change.before_phase.is_some()
+                    || !change.before_resources.is_empty()
+                    || change.after_generation != Some(self.authority.generation)
+                    || change.after_phase != Some(OutputLeaseReceiptPhaseV1::HeldActive)
+                    || change.after_resources != self.resources
+                {
+                    return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+                }
+            }
+            OutputLeaseReceiptOutcomeV1::Renewed
+            | OutputLeaseReceiptOutcomeV1::Recovered
+            | OutputLeaseReceiptOutcomeV1::Transferred => {
+                if before_generation.is_none()
+                    || after_generation.is_none()
+                    || after_generation <= before_generation
+                    || change.after_generation != Some(self.authority.generation)
+                    || change.after_phase != Some(OutputLeaseReceiptPhaseV1::HeldActive)
+                    || change.after_resources != self.resources
+                    || change.before_resources.is_empty()
+                {
+                    return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+                }
+                let expected_before_phase = match transition_outcome {
+                    OutputLeaseReceiptOutcomeV1::Recovered => {
+                        OutputLeaseReceiptPhaseV1::HeldOrphaned
+                    }
+                    _ => OutputLeaseReceiptPhaseV1::HeldActive,
+                };
+                if change.before_phase != Some(expected_before_phase)
+                    || change.before_resources != self.resources
+                {
+                    return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+                }
+            }
+            OutputLeaseReceiptOutcomeV1::Relinquished => {
+                if before_generation.is_none()
+                    || after_generation.is_none()
+                    || after_generation <= before_generation
+                    || change.after_generation != Some(self.authority.generation)
+                    || change.after_phase != Some(OutputLeaseReceiptPhaseV1::Unclaimed)
+                    || !change.after_resources.is_empty()
+                    || change.before_resources != self.resources
+                    || !matches!(
+                        change.before_phase,
+                        Some(OutputLeaseReceiptPhaseV1::HeldActive)
+                            | Some(OutputLeaseReceiptPhaseV1::HeldOrphaned)
+                    )
+                {
+                    return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+                }
+            }
+            OutputLeaseReceiptOutcomeV1::ProjectOrphaned if takeover_project_orphan => {
+                if before_generation.is_none()
+                    || after_generation.is_none()
+                    || after_generation <= before_generation
+                    || change.after_generation != Some(self.authority.generation)
+                    || change.before_phase != Some(OutputLeaseReceiptPhaseV1::HeldActive)
+                    || change.after_phase != Some(OutputLeaseReceiptPhaseV1::HeldOrphaned)
+                    || change.before_resources != self.resources
+                    || change.after_resources != self.resources
+                {
+                    return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+                }
+            }
+            OutputLeaseReceiptOutcomeV1::ExpiryObserved
+            | OutputLeaseReceiptOutcomeV1::OwnerRetired
+            | OutputLeaseReceiptOutcomeV1::ProjectOrphaned => {
+                return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputControlReceiptV1 {
     pub operation_id: String,
@@ -2727,6 +3290,7 @@ pub struct OutputControlReceiptV1 {
     pub fence_before: OutputControlFenceV1,
     pub fence_after: OutputControlFenceV1,
     pub outcome: OutputControlReceiptOutcomeV1,
+    pub lease_result: Option<OutputControlLeaseResultV1>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2740,6 +3304,7 @@ struct OutputControlReceiptV1Wire {
     fence_before: OutputControlFenceV1,
     fence_after: OutputControlFenceV1,
     outcome: OutputControlReceiptOutcomeV1,
+    lease_result: Option<OutputControlLeaseResultV1>,
 }
 
 impl OutputControlReceiptV1 {
@@ -2749,6 +3314,11 @@ impl OutputControlReceiptV1 {
             OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                 | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                 | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+                | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                | OUTPUT_LEASE_RENEW_OPERATION_ID
+                | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
         }
@@ -2760,6 +3330,11 @@ impl OutputControlReceiptV1 {
         }
         self.fence_before.validate()?;
         self.fence_after.validate()?;
+        if let Some(lease_result) = &self.lease_result {
+            lease_result.validate_for_operation(&self.operation_id)?;
+        } else {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
         match self.outcome {
             OutputControlReceiptOutcomeV1::NoOp if self.fence_before != self.fence_after => {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
@@ -2787,6 +3362,7 @@ impl Serialize for OutputControlReceiptV1 {
             fence_before: self.fence_before.clone(),
             fence_after: self.fence_after.clone(),
             outcome: self.outcome,
+            lease_result: self.lease_result.clone(),
         }
         .serialize(serializer)
     }
@@ -2807,6 +3383,7 @@ impl<'de> Deserialize<'de> for OutputControlReceiptV1 {
             fence_before: wire.fence_before,
             fence_after: wire.fence_after,
             outcome: wire.outcome,
+            lease_result: wire.lease_result,
         };
         value.validate().map_err(D::Error::custom)?;
         Ok(value)
@@ -2835,6 +3412,11 @@ impl OutputControlRejectionV1 {
             OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                 | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                 | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+                | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                | OUTPUT_LEASE_RENEW_OPERATION_ID
+                | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
         }
@@ -3553,12 +4135,20 @@ mod tests {
         }
     }
 
+    fn lease_authority() -> OutputLeaseAuthorityV1 {
+        OutputLeaseAuthorityV1 {
+            lease_id: "lease-0000000000000001".to_string(),
+            generation: 1,
+        }
+    }
+
     #[test]
     fn output_consent_and_r4_command_wire_are_strict_and_exactly_bound() {
         let action = OutputControlActionV1::TakeOverStandby {
             force: true,
             standby_session_id: "primary-session-1".to_string(),
             standby_generation: 91,
+            lease: lease_authority(),
         };
         let prepared = OutputConsentPrepareRequestV1 {
             operation_id: OUTPUT_CONSENT_PREPARE_OPERATION_ID.to_string(),
@@ -3629,12 +4219,83 @@ mod tests {
             fence_before,
             fence_after,
             outcome: OutputControlReceiptOutcomeV1::Applied,
+            lease_result: Some(OutputControlLeaseResultV1 {
+                authority: lease_authority(),
+                resources: vec![
+                    OutputControlTargetRoleV1::Lighting,
+                    OutputControlTargetRoleV1::Video,
+                ],
+                phase: OutputLeaseReceiptPhaseV1::HeldActive,
+                outcome: OutputLeaseReceiptOutcomeV1::Authorized,
+                audit_sequence: 1,
+                changes: vec![OutputLeaseReceiptChangeV1 {
+                    lease_id: lease_authority().lease_id,
+                    before_generation: Some(1),
+                    after_generation: Some(1),
+                    before_resources: vec![
+                        OutputControlTargetRoleV1::Lighting,
+                        OutputControlTargetRoleV1::Video,
+                    ],
+                    after_resources: vec![
+                        OutputControlTargetRoleV1::Lighting,
+                        OutputControlTargetRoleV1::Video,
+                    ],
+                    before_phase: Some(OutputLeaseReceiptPhaseV1::HeldActive),
+                    after_phase: Some(OutputLeaseReceiptPhaseV1::HeldActive),
+                }],
+            }),
         });
         let response_json = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serde_json::from_value::<OutputControlResponseV1>(response_json.clone()).unwrap(),
             response
         );
+        let mut takeover_orphan = match response.clone() {
+            OutputControlResponseV1::Receipt(receipt) => receipt,
+            OutputControlResponseV1::Rejected(_) => unreachable!(),
+        };
+        takeover_orphan.operation_id = OUTPUT_STANDBY_TAKEOVER_OPERATION_ID.to_string();
+        let takeover_lease = takeover_orphan.lease_result.as_mut().unwrap();
+        takeover_lease.authority.generation = 2;
+        takeover_lease.phase = OutputLeaseReceiptPhaseV1::HeldOrphaned;
+        takeover_lease.outcome = OutputLeaseReceiptOutcomeV1::ProjectOrphaned;
+        takeover_lease.changes[0].after_generation = Some(2);
+        takeover_lease.changes[0].after_phase = Some(OutputLeaseReceiptPhaseV1::HeldOrphaned);
+        assert!(serde_json::to_value(takeover_orphan).is_ok());
+        let mut mismatched_authority = response_json.clone();
+        mismatched_authority["receipt"]["lease_result"]["authority"]["generation"] =
+            serde_json::json!(2);
+        assert!(serde_json::from_value::<OutputControlResponseV1>(mismatched_authority).is_err());
+        let mut mismatched_change = response_json.clone();
+        mismatched_change["receipt"]["lease_result"]["changes"][0]["lease_id"] =
+            serde_json::json!("lease-0000000000000002");
+        assert!(serde_json::from_value::<OutputControlResponseV1>(mismatched_change).is_err());
+        let mut mismatched_resources = response_json.clone();
+        mismatched_resources["receipt"]["lease_result"]["resources"] =
+            serde_json::json!(["lighting"]);
+        assert!(serde_json::from_value::<OutputControlResponseV1>(mismatched_resources).is_err());
+        let mut extra_change = response_json.clone();
+        extra_change["receipt"]["lease_result"]["changes"] = serde_json::json!([
+            {
+                "lease_id": "lease-0000000000000001",
+                "before_generation": 1,
+                "after_generation": 1,
+                "before_resources": ["lighting", "video"],
+                "after_resources": ["lighting", "video"],
+                "before_phase": "held_active",
+                "after_phase": "held_active"
+            },
+            {
+                "lease_id": "lease-0000000000000001",
+                "before_generation": 1,
+                "after_generation": 1,
+                "before_resources": ["lighting", "video"],
+                "after_resources": ["lighting", "video"],
+                "before_phase": "held_active",
+                "after_phase": "held_active"
+            }
+        ]);
+        assert!(serde_json::from_value::<OutputControlResponseV1>(extra_change).is_err());
         let mut unknown_terminal = response_json;
         unknown_terminal["type"] = serde_json::json!("future_terminal");
         assert!(serde_json::from_value::<OutputControlResponseV1>(unknown_terminal).is_err());
@@ -3659,5 +4320,55 @@ mod tests {
         let mut unknown_error = rejection_json;
         unknown_error["rejection"]["error"] = serde_json::json!("future_error");
         assert!(serde_json::from_value::<OutputControlResponseV1>(unknown_error).is_err());
+    }
+
+    #[test]
+    fn output_lease_authority_is_strict_opaque_and_operation_shapes_are_distinct() {
+        let authority = lease_authority();
+        assert!(authority.validate().is_ok());
+        assert_eq!(authority.lease_id.len(), 22);
+        assert!(
+            serde_json::from_value::<OutputLeaseAuthorityV1>(serde_json::json!({
+                "lease_id": "lease-0000000000000001",
+                "generation": 1,
+                "numeric": 1
+            }))
+            .is_err()
+        );
+        for lease_id in [
+            "lease-000000000000001",
+            "Lease-0000000000000001",
+            "lease-000000000000000g",
+            "lease-0000000000000000",
+        ] {
+            assert!(
+                serde_json::from_value::<OutputLeaseAuthorityV1>(serde_json::json!({
+                    "lease_id": lease_id,
+                    "generation": 1
+                }))
+                .is_err()
+            );
+        }
+        assert!(
+            serde_json::from_value::<OutputLeaseAuthorityV1>(serde_json::json!({
+                "lease_id": "lease-0000000000000001",
+                "generation": 0
+            }))
+            .is_err()
+        );
+        let acquire = OutputControlActionV1::AcquireLease {
+            role: OutputControlTargetRoleV1::Lighting,
+        };
+        let renew = OutputControlActionV1::RenewLease { lease: authority };
+        let mut acquire_shape = Vec::new();
+        acquire.append_canonical_bytes(&mut acquire_shape).unwrap();
+        let mut renew_shape = Vec::new();
+        renew.append_canonical_bytes(&mut renew_shape).unwrap();
+        assert_ne!(acquire_shape, renew_shape);
+        assert_ne!(acquire.operation_id(), renew.operation_id());
+        assert_ne!(
+            acquire.operation_id().as_bytes(),
+            renew.operation_id().as_bytes()
+        );
     }
 }

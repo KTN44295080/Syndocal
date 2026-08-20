@@ -1,8 +1,10 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
 };
+
+#[cfg(any(feature = "ndi", test))]
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "ndi")]
 use std::sync::{
@@ -10,17 +12,21 @@ use std::sync::{
     mpsc,
 };
 
+#[cfg(any(feature = "ndi", test))]
 use engine::{EngineHandle, TimelineFollowVideoRenderSnapshot};
 #[cfg(feature = "ndi")]
 use engine::{
     OutputOwnershipActivation, OutputOwnershipCreationLease, OutputOwnershipTeardownLease,
 };
+#[cfg(any(feature = "ndi", test))]
 use protocol::OutputOwnershipState;
+#[cfg(any(feature = "ndi", test))]
 use protocol::{
     TimelineFollowSettlementAck, TimelineFollowSettlementAckResult,
     TimelineFollowSettlementConsumerId, TimelineFollowSettlementDomain, VideoEffectScope,
-    VideoLayerId, VideoOutputId, VideoSourceKind, VideoTransitionEffectOwner,
+    VideoOutputId, VideoTransitionEffectOwner,
 };
+use protocol::{VideoLayerId, VideoSourceKind};
 
 #[cfg(all(test, feature = "ndi"))]
 use std::sync::atomic::AtomicUsize;
@@ -42,10 +48,14 @@ fn ndi_output_effect_render_context(
     }
 }
 
+#[cfg(feature = "ndi")]
 const TIMELINE_FOLLOW_SETTLEMENT_ACK_TTL: Duration = Duration::from_secs(1);
+#[cfg(any(feature = "ndi", test))]
 const TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY: Duration = Duration::from_millis(25);
+#[cfg(any(feature = "ndi", test))]
 const TIMELINE_FOLLOW_TERMINAL_RECEIPT_RETRIES: u8 = 3;
 
+#[cfg(any(feature = "ndi", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct TimelineFollowOutputFrameKey {
     pub(crate) epoch: u64,
@@ -58,6 +68,7 @@ struct TimelineFollowOutputFrameKey {
 /// Engine settlement identity intentionally excludes presentation size.
 /// Resizing a live output cannot create a second video consumer for a Follow
 /// generation, while a cached frame must remain size-specific.
+#[cfg(any(feature = "ndi", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct TimelineFollowOutputAckKey {
     epoch: u64,
@@ -65,6 +76,7 @@ struct TimelineFollowOutputAckKey {
     output_id: VideoOutputId,
 }
 
+#[cfg(any(feature = "ndi", test))]
 impl TimelineFollowOutputFrameKey {
     fn ack_key(self) -> TimelineFollowOutputAckKey {
         TimelineFollowOutputAckKey {
@@ -90,6 +102,7 @@ impl TimelineFollowOutputFrameKey {
     }
 }
 
+#[cfg(any(feature = "ndi", test))]
 #[derive(Debug, Clone)]
 struct PendingTimelineFollowSettlementAck {
     ack: TimelineFollowSettlementAck,
@@ -99,6 +112,7 @@ struct PendingTimelineFollowSettlementAck {
 /// Renderer-local continuity and acknowledgement state for one production
 /// output worker. A publication error retains the exact first result so a
 /// reply-loss retry can never change Fault into Applied for the same consumer.
+#[cfg(any(feature = "ndi", test))]
 #[derive(Debug, Default)]
 struct TimelineFollowOutputState {
     active_ack_key: Option<TimelineFollowOutputAckKey>,
@@ -108,6 +122,7 @@ struct TimelineFollowOutputState {
     published_ack: Option<TimelineFollowSettlementAck>,
 }
 
+#[cfg(any(feature = "ndi", test))]
 impl TimelineFollowOutputState {
     /// Follow acknowledgement identity excludes size, but cached frames do
     /// not. A generation/output rollover fences stale ACK retries; a resize
@@ -192,6 +207,7 @@ impl TimelineFollowOutputState {
     }
 }
 
+#[cfg(any(feature = "ndi", test))]
 #[derive(Debug)]
 enum TimelineFollowOutputRenderDecision {
     Frame {
@@ -205,6 +221,7 @@ enum TimelineFollowOutputRenderDecision {
     },
 }
 
+#[cfg(any(feature = "ndi", test))]
 fn timeline_follow_output_config<'a>(
     snapshot: &'a protocol::VideoSnapshot,
     output_id: VideoOutputId,
@@ -216,6 +233,7 @@ fn timeline_follow_output_config<'a>(
         .ok_or_else(|| format!("Timeline Follow output {output_id} was not found"))
 }
 
+#[cfg(any(feature = "ndi", test))]
 fn timeline_follow_render_fault(
     label: &str,
     evidence: &video::VideoOutputRenderEvidence,
@@ -233,6 +251,7 @@ fn timeline_follow_render_fault(
 /// The ownership permit prevents a transition while held, so sampling status
 /// immediately after acquisition binds the permit to its exact ownership
 /// epoch. A captured Follow frame from another epoch is never sendable.
+#[cfg(any(feature = "ndi", test))]
 fn timeline_follow_epoch_matches_ready_owner(
     engine: &EngineHandle,
     key: TimelineFollowOutputFrameKey,
@@ -250,6 +269,7 @@ fn timeline_follow_epoch_matches_ready_owner(
 /// output path, then apply the one canonical Follow Transition chain. The
 /// returned settlement result is intentionally independent from physical send;
 /// callers may publish Applied only after their SDK send succeeds.
+#[cfg(any(feature = "ndi", test))]
 fn render_timeline_follow_output<P: video::VideoFrameProvider>(
     renderer: &mut video::VideoPreviewRenderer<P>,
     engine_snapshot: &protocol::EngineSnapshot,
@@ -377,6 +397,7 @@ fn render_timeline_follow_output<P: video::VideoFrameProvider>(
     })
 }
 
+#[cfg(feature = "ndi")]
 fn timeline_follow_output_key(
     follow: &TimelineFollowVideoRenderSnapshot,
     output_id: VideoOutputId,
@@ -397,6 +418,7 @@ fn timeline_follow_output_key(
     }
 }
 
+#[cfg(feature = "ndi")]
 fn timeline_follow_not_applicable(
     follow: &TimelineFollowVideoRenderSnapshot,
     output_id: VideoOutputId,
@@ -408,6 +430,7 @@ fn timeline_follow_not_applicable(
     }
 }
 
+#[cfg(any(feature = "ndi", test))]
 fn timeline_follow_result_after_physical_send(
     rendered: TimelineFollowSettlementAckResult,
     send_error: Option<&str>,
@@ -422,6 +445,7 @@ fn timeline_follow_result_after_physical_send(
     }
 }
 
+#[cfg(feature = "ndi")]
 fn publish_timeline_follow_output_result(
     engine: &EngineHandle,
     state: &mut TimelineFollowOutputState,
@@ -438,6 +462,7 @@ fn publish_timeline_follow_output_result(
     })
 }
 
+#[cfg(feature = "ndi")]
 fn publish_timeline_follow_output_result_until_resolved(
     engine: &EngineHandle,
     state: &mut TimelineFollowOutputState,
@@ -462,6 +487,7 @@ fn publish_timeline_follow_output_result_until_resolved(
 
 /// An issued acknowledgement may have settled Follow even if the caller lost
 /// its reply. Replays are exact and bounded after that terminal transition.
+#[cfg(any(feature = "ndi", test))]
 fn publish_timeline_follow_output_result_until_resolved_with(
     engine: &EngineHandle,
     state: &mut TimelineFollowOutputState,
@@ -501,6 +527,7 @@ fn publish_timeline_follow_output_result_until_resolved_with(
 
 /// Close output admission before an acknowledgement retry can block. The
 /// caller retains the returned lease through its physical teardown path.
+#[cfg(any(feature = "ndi", test))]
 fn fence_timeline_follow_fault_before_ack(
     engine: &EngineHandle,
     state: &mut TimelineFollowOutputState,
@@ -526,14 +553,17 @@ fn fence_timeline_follow_fault_before_ack(
     (failure_lease, failed_key)
 }
 
+#[cfg(any(feature = "ndi", test))]
 #[derive(Default)]
 struct NdiStartupFailureFenceState {
     epoch: Option<u64>,
     lease: Option<engine::OutputOwnershipTeardownLease>,
 }
 
+#[cfg(any(feature = "ndi", test))]
 type NdiStartupFailureLeaseSlot = Arc<Mutex<NdiStartupFailureFenceState>>;
 
+#[cfg(any(feature = "ndi", test))]
 fn ensure_ndi_startup_failure_fence(
     engine: &EngineHandle,
     slot: &NdiStartupFailureLeaseSlot,
@@ -550,6 +580,7 @@ fn ensure_ndi_startup_failure_fence(
     state.epoch.expect("startup failure fence epoch must exist")
 }
 
+#[cfg(any(feature = "ndi", test))]
 fn take_ndi_startup_failure_lease(
     slot: &NdiStartupFailureLeaseSlot,
 ) -> Option<engine::OutputOwnershipTeardownLease> {
@@ -559,6 +590,7 @@ fn take_ndi_startup_failure_lease(
     }
 }
 
+#[cfg(any(feature = "ndi", test))]
 fn fence_timeline_follow_fault_before_ack_in_ndi_startup(
     engine: &EngineHandle,
     state: &mut TimelineFollowOutputState,
@@ -1996,11 +2028,14 @@ mod capture_decoder_tests {
         let mut state = TimelineFollowOutputState::default();
         let mut follow = follow_render_snapshot(protocol::VideoClipTakeKind::Crossfade);
         follow.outgoing_video.outputs[0].enabled = false;
-        assert!(matches!(
-            render_timeline_follow_output(&mut renderer, &engine_snapshot, &follow, 7, &mut state,)
-                .unwrap(),
-            TimelineFollowOutputRenderDecision::NotApplicable { .. }
-        ));
+        let disabled =
+            render_timeline_follow_output(&mut renderer, &engine_snapshot, &follow, 7, &mut state)
+                .unwrap();
+        let TimelineFollowOutputRenderDecision::NotApplicable { key, reason } = disabled else {
+            panic!("disabled Follow output must be explicitly not applicable");
+        };
+        assert_eq!(key.output_id, 7);
+        assert!(reason.contains("disabled"));
 
         assert_eq!(
             timeline_follow_result_after_physical_send(

@@ -16,28 +16,34 @@ use protocol::control_plane_command::{
     OutputConsentChallengeV1, OutputConsentPhysicalStateV1, OutputConsentPrepareRequestV1,
     OutputConsentStatusRequestV1, OutputConsentStatusV1, OutputControlActionV1,
     OutputControlAuthorityBundleV1, OutputControlCommandRequestV1, OutputControlErrorCodeV1,
-    OutputControlFenceV1, OutputControlReceiptOutcomeV1, OutputControlReceiptV1,
-    OutputControlRejectionV1, OutputControlResponseV1, RuntimeCommandAuthorityBundleV1,
-    RuntimeCommandErrorCodeV1, RuntimeCommandErrorV1, RuntimeCommandReceiptOutcomeV1,
-    RuntimeCommandReceiptV1, RuntimeCommandRejectionV1, RuntimeCommandRequestV1,
-    RuntimeCommandResponseV1, SafetyBlackoutEngageOutcomeV1, SafetyBlackoutEngageReceiptV1,
-    SafetyBlackoutEngageRejectionV1, SafetyBlackoutEngageRequestV1, SafetyBlackoutEngageResponseV1,
-    TimelineFollowAbortAuthorityBundleV1, TimelineFollowAbortRuntimeFenceV1,
-    TimelineFollowAbortRuntimeReceiptV1, TimelineFollowAbortRuntimeRejectionV1,
-    TimelineFollowAbortRuntimeRequestV1, TimelineFollowAbortRuntimeResponseV1,
-    TimelineTransportRuntimeFenceV1, MAX_SAFE_JAVASCRIPT_INTEGER,
-    OUTPUT_CONSENT_PREPARE_OPERATION_ID, OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
-    OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
-    SAFETY_BLACKOUT_ENGAGE_SHAPE_DOMAIN_V1, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
-    TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1, TIMELINE_FOLLOW_ABORT_SHAPE_DOMAIN_V1,
-    TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
-    TIMELINE_TRANSPORT_SET_PLAYING_SHAPE_DOMAIN_V1,
+    OutputControlFenceV1, OutputControlLeaseResultV1, OutputControlReceiptOutcomeV1,
+    OutputControlReceiptV1, OutputControlRejectionV1, OutputControlResponseV1,
+    OutputLeaseReceiptChangeV1, OutputLeaseReceiptOutcomeV1, OutputLeaseReceiptPhaseV1,
+    RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorCodeV1, RuntimeCommandErrorV1,
+    RuntimeCommandReceiptOutcomeV1, RuntimeCommandReceiptV1, RuntimeCommandRejectionV1,
+    RuntimeCommandRequestV1, RuntimeCommandResponseV1, SafetyBlackoutEngageOutcomeV1,
+    SafetyBlackoutEngageReceiptV1, SafetyBlackoutEngageRejectionV1, SafetyBlackoutEngageRequestV1,
+    SafetyBlackoutEngageResponseV1, TimelineFollowAbortAuthorityBundleV1,
+    TimelineFollowAbortRuntimeFenceV1, TimelineFollowAbortRuntimeReceiptV1,
+    TimelineFollowAbortRuntimeRejectionV1, TimelineFollowAbortRuntimeRequestV1,
+    TimelineFollowAbortRuntimeResponseV1, TimelineTransportRuntimeFenceV1,
+    MAX_SAFE_JAVASCRIPT_INTEGER, OUTPUT_CONSENT_PREPARE_OPERATION_ID,
+    OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_SHAPE_DOMAIN_V1,
+    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1,
+    TIMELINE_FOLLOW_ABORT_SHAPE_DOMAIN_V1, TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1,
+    TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_SHAPE_DOMAIN_V1,
 };
 use sha2::{Digest, Sha256};
 use tauri::WebviewWindow;
 
 use super::control_plane_security::{
     ConsentAuthorityBinding, ConsentCallerBinding, ConsentConsumeError, PreparedConsentState,
+};
+use super::output_lease::{
+    OutputLeaseId, OutputLeaseOperationOutcome, OutputLeaseOwner, OutputLeasePhase,
+    OutputLeaseRequest, OutputLeaseRequestAction, OutputLeaseRequestReceipt, OutputLeaseResource,
+    OutputLeaseResources, MAX_OUTPUT_LEASE_TTL_MS,
 };
 
 use super::{
@@ -53,6 +59,7 @@ const AUTHORITY_TTL: Duration = Duration::from_secs(60);
 const MAX_RECEIPTS_PER_PRINCIPAL_OPERATION: usize = 512;
 const MAX_TOTAL_RECEIPTS: usize = 1_024;
 const MAX_TOTAL_TOMBSTONES: usize = 1_024;
+const MAX_TOTAL_OUTPUT_CONTROL_IDENTITIES: usize = 2_048;
 const MAX_TOTAL_AUTHORITIES: usize = 1_024;
 const MAX_LANES: usize = 1_024;
 const TOKEN_BUCKET_BURST: f64 = 8.0;
@@ -211,6 +218,18 @@ pub(crate) fn execute_output_control(
         Ok(binding) => binding,
         Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
     };
+    if let Err(code) = state
+        .runtime_control_plane
+        .reserve_output_control_request_identity(
+            &binding,
+            request.action.operation_id(),
+            request.request_id,
+            &shape_sha256,
+            now,
+        )
+    {
+        return output_control_rejection(&request, code);
+    }
     let key = output_control_receipt_key(&request, &binding);
     let lane =
         match state
@@ -242,7 +261,9 @@ pub(crate) fn execute_output_control(
             OutputControlLaneReservation::Rejected(code) => {
                 output_control_rejection(&request, code)
             }
-            OutputControlLaneReservation::Lane(_) => unreachable!(),
+            OutputControlLaneReservation::Lane(_) => {
+                output_control_rejection(&request, OutputControlErrorCodeV1::Internal)
+            }
         };
     }
     if query_state
@@ -253,10 +274,12 @@ pub(crate) fn execute_output_control(
         )
         .is_err()
     {
-        state
-            .runtime_control_plane
-            .release_output_control_lane(&key);
-        return output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden);
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
+        );
     }
 
     let external_admission = match lock_project_external_command_admission(state) {
@@ -281,10 +304,12 @@ pub(crate) fn execute_output_control(
         || !exact_output_control_fence_matches(state, &coordinator, &request.expected_fence)
         || ensure_no_pending_project_transaction(&coordinator).is_err()
     {
-        state
-            .runtime_control_plane
-            .release_output_control_lane(&key);
-        return output_control_rejection(&request, OutputControlErrorCodeV1::StaleFence);
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV1::StaleFence),
+        );
     }
     if ensure_project_operator_video_clip_slot_runtime_allowed(
         state,
@@ -293,17 +318,60 @@ pub(crate) fn execute_output_control(
     )
     .is_err()
     {
-        state
-            .runtime_control_plane
-            .release_output_control_lane(&key);
-        return output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden);
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
+        );
     }
     if validate_output_action_current(state, &request.action).is_err() {
-        state
-            .runtime_control_plane
-            .release_output_control_lane(&key);
-        return output_control_rejection(&request, OutputControlErrorCodeV1::StaleFence);
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV1::StaleFence),
+        );
     }
+
+    // Probe the shared lease request identity before consent consumption. A
+    // same request ID with a different operation/shape must be rejected by
+    // the process-local registry before rate, consent, or physical work.
+    if super::preflight_output_lease_for_control_action(
+        state,
+        &binding.principal,
+        &binding.window_label,
+        binding.owner_incarnation,
+        request.request_id,
+        &request.action,
+    )
+    .is_err()
+    {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV1::InvalidRequest),
+        );
+    }
+    let (lease_request, lease_now_ms) = match super::build_output_lease_authorization_request(
+        state,
+        &binding.principal,
+        &binding.window_label,
+        binding.owner_incarnation,
+        request.request_id,
+        &request.action,
+    ) {
+        Ok(request) => request,
+        Err(_) => {
+            return retain_output_control_rejection(
+                state,
+                key,
+                shape_sha256,
+                output_control_rejection(&request, OutputControlErrorCodeV1::InvalidRequest),
+            );
+        }
+    };
 
     let (inflight, audit_sequence) =
         match state.runtime_control_plane.admit_and_audit_output_control(
@@ -315,10 +383,12 @@ pub(crate) fn execute_output_control(
         ) {
             Ok(admission) => admission,
             Err(code) => {
-                state
-                    .runtime_control_plane
-                    .release_output_control_lane(&key);
-                return output_control_rejection(&request, code);
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, code),
+                );
             }
         };
 
@@ -363,10 +433,15 @@ pub(crate) fn execute_output_control(
     drop(external_admission);
 
     let operation_result = match &request.action {
-        OutputControlActionV1::ReleaseBlackout => {
-            super::release_safety_blackout_with_output_control_fence(state, &request.expected_fence)
+        OutputControlActionV1::ReleaseBlackout { .. } => {
+            super::release_safety_blackout_with_output_control_fence(
+                state,
+                &request.expected_fence,
+                &lease_request,
+                lease_now_ms,
+            )
         }
-        OutputControlActionV1::Arm { role } => {
+        OutputControlActionV1::Arm { role, .. } => {
             let target = match role {
                 protocol::control_plane_command::OutputControlTargetRoleV1::Lighting => {
                     protocol::MachineOutputRole::Lighting
@@ -383,18 +458,40 @@ pub(crate) fn execute_output_control(
                 state,
                 target,
                 &request.expected_fence,
+                &lease_request,
+                lease_now_ms,
             )
         }
-        OutputControlActionV1::TakeOverStandby { .. } => execute_standby_takeover_action(
-            &request.action,
-            &request.expected_fence,
-            |force, selector, expected_fence| {
-                super::take_over_standby_core(state, force, selector, expected_fence)
-            },
-        ),
+        OutputControlActionV1::TakeOverStandby {
+            force,
+            standby_session_id,
+            standby_generation,
+            ..
+        } => {
+            let selector = StandbyTakeoverCheckpointSelector::Exact(StandbyCheckpointIdentity {
+                session_id: standby_session_id.clone(),
+                generation: *standby_generation,
+            });
+            super::take_over_standby_core_with_lease(
+                state,
+                *force,
+                selector,
+                &request.expected_fence,
+                &lease_request,
+                lease_now_ms,
+            )
+            .map(|(_load_result, fence_after, receipt)| (true, fence_after, receipt))
+        }
+        OutputControlActionV1::AcquireLease { .. }
+        | OutputControlActionV1::RenewLease { .. }
+        | OutputControlActionV1::RecoverLease { .. }
+        | OutputControlActionV1::RelinquishOutputLease { .. }
+        | OutputControlActionV1::ForceTransferLease { .. } => {
+            Err("Output lease lifecycle is not wired in this operation path".to_string())
+        }
     };
 
-    let (applied, fence_after) = match operation_result {
+    let (applied, fence_after, lease_receipt) = match operation_result {
         Ok(result) => result,
         Err(_) => {
             state
@@ -411,6 +508,24 @@ pub(crate) fn execute_output_control(
             return response;
         }
     };
+    let lease_result =
+        match output_control_lease_result_from_registry_receipt(&request.action, &lease_receipt) {
+            Ok(result) => result,
+            Err(_) => {
+                state
+                    .runtime_control_plane
+                    .finish_output_control_inflight(&inflight);
+                let response =
+                    output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
+                state.runtime_control_plane.store_output_control_terminal(
+                    key,
+                    shape_sha256,
+                    response.clone(),
+                    Instant::now(),
+                );
+                return response;
+            }
+        };
 
     let response = OutputControlResponseV1::Receipt(OutputControlReceiptV1 {
         operation_id: request.operation_id.clone(),
@@ -425,6 +540,7 @@ pub(crate) fn execute_output_control(
         } else {
             OutputControlReceiptOutcomeV1::NoOp
         },
+        lease_result: Some(lease_result),
     });
     debug_assert!(response.validate().is_ok());
     state
@@ -511,11 +627,12 @@ fn validate_output_action_current(
     action: &OutputControlActionV1,
 ) -> Result<(), String> {
     match action {
-        OutputControlActionV1::Arm { .. } | OutputControlActionV1::ReleaseBlackout => Ok(()),
+        OutputControlActionV1::Arm { .. } | OutputControlActionV1::ReleaseBlackout { .. } => Ok(()),
         OutputControlActionV1::TakeOverStandby {
             force,
             standby_session_id,
             standby_generation,
+            ..
         } => {
             let runtime = state
                 .standby_sync
@@ -537,6 +654,11 @@ fn validate_output_action_current(
             }
             Ok(())
         }
+        OutputControlActionV1::AcquireLease { .. }
+        | OutputControlActionV1::RenewLease { .. }
+        | OutputControlActionV1::RecoverLease { .. }
+        | OutputControlActionV1::RelinquishOutputLease { .. }
+        | OutputControlActionV1::ForceTransferLease { .. } => Ok(()),
     }
 }
 
@@ -564,6 +686,446 @@ pub(crate) fn execute_output_control_for_operation(
     execute_output_control(app, window, state, query_state, request)
 }
 
+fn output_lease_error_code(
+    error: super::output_lease::OutputLeaseError,
+) -> OutputControlErrorCodeV1 {
+    match error {
+        super::output_lease::OutputLeaseError::Busy => OutputControlErrorCodeV1::Busy,
+        super::output_lease::OutputLeaseError::RateLimited
+        | super::output_lease::OutputLeaseError::RequestCapacity
+        | super::output_lease::OutputLeaseError::LeaseCapacity
+        | super::output_lease::OutputLeaseError::LaneCapacity
+        | super::output_lease::OutputLeaseError::AuditCapacity => {
+            OutputControlErrorCodeV1::Overloaded
+        }
+        super::output_lease::OutputLeaseError::Conflict
+        | super::output_lease::OutputLeaseError::ReceiptNotRetained
+        | super::output_lease::OutputLeaseError::InvalidRequest
+        | super::output_lease::OutputLeaseError::InvalidOwner
+        | super::output_lease::OutputLeaseError::InvalidResources
+        | super::output_lease::OutputLeaseError::InvalidProject => {
+            OutputControlErrorCodeV1::InvalidRequest
+        }
+        super::output_lease::OutputLeaseError::Expired
+        | super::output_lease::OutputLeaseError::UnknownLease
+        | super::output_lease::OutputLeaseError::ResourceConflict
+        | super::output_lease::OutputLeaseError::InvalidTransition
+        | super::output_lease::OutputLeaseError::StaleOwner
+        | super::output_lease::OutputLeaseError::StaleGeneration
+        | super::output_lease::OutputLeaseError::InvalidTtl
+        | super::output_lease::OutputLeaseError::LeaseIdExhausted
+        | super::output_lease::OutputLeaseError::RequestNotInFlight
+        | super::output_lease::OutputLeaseError::ClockRollback
+        | super::output_lease::OutputLeaseError::GenerationExhausted
+        | super::output_lease::OutputLeaseError::ClockExhausted => {
+            OutputControlErrorCodeV1::Forbidden
+        }
+    }
+}
+
+fn build_output_lease_lifecycle_request(
+    state: &AppState,
+    binding: &CallerBinding,
+    request: &OutputControlCommandRequestV1,
+) -> Result<(OutputLeaseRequest, u64), String> {
+    let now_ms = state.output_lease_now_ms()?;
+    let process_incarnation = state
+        .output_lease_registry
+        .lock()
+        .map_err(|_| "Output lease registry lock was poisoned".to_string())?
+        .process_session_incarnation();
+    let owner = OutputLeaseOwner::new(
+        binding.principal.clone(),
+        binding.window_label.clone(),
+        process_incarnation,
+        binding.owner_incarnation,
+    )
+    .map_err(|error| format!("Output lease owner is invalid: {error:?}"))?;
+    let action = match &request.action {
+        OutputControlActionV1::AcquireLease { role } => {
+            let resources = match role {
+                protocol::control_plane_command::OutputControlTargetRoleV1::Lighting => {
+                    OutputLeaseResources::new(&[OutputLeaseResource::Lighting])
+                }
+                protocol::control_plane_command::OutputControlTargetRoleV1::Video => {
+                    OutputLeaseResources::new(&[OutputLeaseResource::Video])
+                }
+                protocol::control_plane_command::OutputControlTargetRoleV1::Both => {
+                    OutputLeaseResources::new(&[
+                        OutputLeaseResource::Lighting,
+                        OutputLeaseResource::Video,
+                    ])
+                }
+            }
+            .map_err(|error| format!("Output lease resources are invalid: {error:?}"))?;
+            OutputLeaseRequestAction::Acquire {
+                owner,
+                resources,
+                project_identity: format!("project_epoch:{}", request.expected_fence.project_epoch),
+                ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
+            }
+        }
+        OutputControlActionV1::RenewLease { lease } => OutputLeaseRequestAction::Renew {
+            lease_id: OutputLeaseId::decode(&lease.lease_id)
+                .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?,
+            owner,
+            expected_generation: lease.generation,
+            ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
+        },
+        OutputControlActionV1::RecoverLease { lease } => OutputLeaseRequestAction::Recover {
+            lease_id: OutputLeaseId::decode(&lease.lease_id)
+                .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?,
+            owner,
+            expected_generation: lease.generation,
+            ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
+        },
+        OutputControlActionV1::RelinquishOutputLease { lease } => {
+            OutputLeaseRequestAction::Relinquish {
+                lease_id: OutputLeaseId::decode(&lease.lease_id)
+                    .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?,
+                owner,
+                expected_generation: lease.generation,
+            }
+        }
+        OutputControlActionV1::ForceTransferLease { lease } => {
+            OutputLeaseRequestAction::ForceTransfer {
+                lease_id: OutputLeaseId::decode(&lease.lease_id)
+                    .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?,
+                expected_generation: lease.generation,
+                new_owner: owner,
+                ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
+            }
+        }
+        _ => return Err("Output lease lifecycle action is required".to_string()),
+    };
+    let lease_request = OutputLeaseRequest::from_action(
+        binding.principal.clone(),
+        "output-control",
+        request.request_id,
+        action,
+    )
+    .map_err(|error| format!("Output lease lifecycle request is invalid: {error:?}"))?;
+    Ok((lease_request, now_ms))
+}
+
+pub(crate) fn execute_output_lease_lifecycle_for_operation(
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    expected_operation_id: &'static str,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    if request.operation_id != expected_operation_id
+        || request.action.operation_id() != expected_operation_id
+        || request.validate().is_err()
+    {
+        return output_control_rejection_for_operation(
+            &request,
+            expected_operation_id,
+            OutputControlErrorCodeV1::InvalidRequest,
+        );
+    }
+    let shape_sha256 = match request.canonical_shape_bytes() {
+        Ok(bytes) => hex_sha256(&bytes),
+        Err(_) => {
+            return output_control_rejection_for_operation(
+                &request,
+                expected_operation_id,
+                OutputControlErrorCodeV1::InvalidRequest,
+            )
+        }
+    };
+    let argument_fingerprint = match request.argument_fingerprint_bytes() {
+        Ok(bytes) => hex_sha256(&bytes),
+        Err(_) => {
+            return output_control_rejection_for_operation(
+                &request,
+                expected_operation_id,
+                OutputControlErrorCodeV1::InvalidRequest,
+            )
+        }
+    };
+    let _owner_rotation = match state.project_transaction_owner_rotation.lock() {
+        Ok(guard) => guard,
+        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV1::Internal),
+    };
+    let binding = match capture_binding(state, window.label()) {
+        Ok(binding) => binding,
+        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
+    };
+    if let Err(code) = state
+        .runtime_control_plane
+        .reserve_output_control_request_identity(
+            &binding,
+            request.action.operation_id(),
+            request.request_id,
+            &shape_sha256,
+            Instant::now(),
+        )
+    {
+        return output_control_rejection_for_operation(&request, expected_operation_id, code);
+    }
+    let key = output_control_receipt_key(&request, &binding);
+    let lane = match state.runtime_control_plane.reserve_output_control_lane(
+        &key,
+        &shape_sha256,
+        Instant::now(),
+    ) {
+        OutputControlLaneReservation::Terminal(response) => return response,
+        OutputControlLaneReservation::Rejected(code) => {
+            return output_control_rejection(&request, code)
+        }
+        OutputControlLaneReservation::Lane(lane) => lane,
+    };
+    let _lane = match lane.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            state
+                .runtime_control_plane
+                .release_output_control_lane(&key);
+            return output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
+        }
+    };
+    if let Some(reservation) = state.runtime_control_plane.recheck_output_control_terminal(
+        &key,
+        &shape_sha256,
+        Instant::now(),
+    ) {
+        return match reservation {
+            OutputControlLaneReservation::Terminal(response) => response,
+            OutputControlLaneReservation::Rejected(code) => {
+                output_control_rejection(&request, code)
+            }
+            OutputControlLaneReservation::Lane(_) => {
+                output_control_rejection(&request, OutputControlErrorCodeV1::Internal)
+            }
+        };
+    }
+    if query_state
+        .validate_output_control_fence_window(
+            window.label(),
+            &request.expected_fence,
+            binding.owner_incarnation,
+        )
+        .is_err()
+    {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV1::StaleFence),
+        );
+    }
+    let _lifecycle_guard = match state.standby_sync_lifecycle.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            state
+                .runtime_control_plane
+                .release_output_control_lane(&key);
+            return output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
+        }
+    };
+    let external_admission = match lock_project_external_command_admission(state) {
+        Ok(guard) => guard,
+        Err(_) => {
+            state
+                .runtime_control_plane
+                .release_output_control_lane(&key);
+            return output_control_rejection(&request, OutputControlErrorCodeV1::Busy);
+        }
+    };
+    let mut coordinator = match lock_project_coordinator(state) {
+        Ok(coordinator) => coordinator,
+        Err(_) => {
+            state
+                .runtime_control_plane
+                .release_output_control_lane(&key);
+            return output_control_rejection(&request, OutputControlErrorCodeV1::Busy);
+        }
+    };
+    if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+        || !exact_output_control_fence_matches(state, &coordinator, &request.expected_fence)
+        || ensure_no_pending_project_transaction(&coordinator).is_err()
+        || ensure_project_operator_video_clip_slot_runtime_allowed(
+            state,
+            &coordinator,
+            &binding.principal,
+        )
+        .is_err()
+    {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV1::StaleFence),
+        );
+    }
+    let (lease_request, lease_now_ms) =
+        match build_output_lease_lifecycle_request(state, &binding, &request) {
+            Ok(request) => request,
+            Err(_) => {
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, OutputControlErrorCodeV1::InvalidRequest),
+                );
+            }
+        };
+    {
+        let registry = match state.output_lease_registry.lock() {
+            Ok(registry) => registry,
+            Err(_) => {
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, OutputControlErrorCodeV1::Internal),
+                );
+            }
+        };
+        if let Err(error) = registry.preflight_request(&lease_request, lease_now_ms) {
+            return retain_output_control_rejection(
+                state,
+                key,
+                shape_sha256,
+                output_control_rejection(&request, output_lease_error_code(error)),
+            );
+        }
+    }
+    let (inflight, audit_sequence) =
+        match state.runtime_control_plane.admit_and_audit_output_control(
+            &binding,
+            &key,
+            &shape_sha256,
+            &argument_fingerprint,
+            Instant::now(),
+        ) {
+            Ok(admission) => admission,
+            Err(code) => {
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, code),
+                );
+            }
+        };
+    let consent_binding = ConsentAuthorityBinding {
+        caller: ConsentCallerBinding {
+            principal: binding.principal.clone(),
+            window_label: binding.window_label.clone(),
+            owner_incarnation: binding.owner_incarnation,
+        },
+        operation_id: request.operation_id.clone(),
+        argument_fingerprint: argument_fingerprint.clone(),
+        project_epoch: request.expected_fence.project_epoch,
+        project_revision: request.expected_fence.project_revision,
+        project_checkpoint_hash: request.expected_fence.project_checkpoint_hash.clone(),
+        project_publication_generation: request.expected_fence.project_publication_generation,
+        output_epoch: request.expected_fence.output_epoch,
+        output_generation: request.expected_fence.output_generation,
+        safety_blackout_epoch: request.expected_fence.safety_blackout_epoch,
+        safety_blackout_generation: request.expected_fence.safety_blackout_generation,
+    };
+    if let Err(error) = state
+        .control_plane_security
+        .consume_consent(&consent_binding, &request.consent_token)
+    {
+        state
+            .runtime_control_plane
+            .finish_output_control_inflight(&inflight);
+        let response = output_control_rejection(&request, output_consent_error_code(error));
+        state.runtime_control_plane.store_output_control_terminal(
+            key,
+            shape_sha256,
+            response.clone(),
+            Instant::now(),
+        );
+        return response;
+    }
+    let require_transition = matches!(
+        request.action,
+        OutputControlActionV1::ForceTransferLease { .. }
+    );
+    let receipt = match super::submit_output_lease_lifecycle_request(
+        state,
+        &lease_request,
+        lease_now_ms,
+        require_transition,
+    ) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            state
+                .runtime_control_plane
+                .finish_output_control_inflight(&inflight);
+            let response = output_control_rejection(&request, output_lease_error_code(error));
+            state.runtime_control_plane.store_output_control_terminal(
+                key,
+                shape_sha256,
+                response.clone(),
+                Instant::now(),
+            );
+            return response;
+        }
+    };
+    drop(coordinator);
+    drop(external_admission);
+    if let Err(error) = receipt.outcome.clone() {
+        state
+            .runtime_control_plane
+            .finish_output_control_inflight(&inflight);
+        let response = output_control_rejection(&request, output_lease_error_code(error));
+        state.runtime_control_plane.store_output_control_terminal(
+            key,
+            shape_sha256,
+            response.clone(),
+            Instant::now(),
+        );
+        return response;
+    }
+    let lease_result =
+        match output_control_lease_result_from_registry_receipt(&request.action, &receipt) {
+            Ok(result) => result,
+            Err(_) => {
+                state
+                    .runtime_control_plane
+                    .finish_output_control_inflight(&inflight);
+                let response =
+                    output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
+                state.runtime_control_plane.store_output_control_terminal(
+                    key,
+                    shape_sha256,
+                    response.clone(),
+                    Instant::now(),
+                );
+                return response;
+            }
+        };
+    let response = OutputControlResponseV1::Receipt(OutputControlReceiptV1 {
+        operation_id: request.operation_id.clone(),
+        request_id: request.request_id,
+        shape_sha256: shape_sha256.clone(),
+        argument_fingerprint,
+        audit_sequence,
+        fence_before: request.expected_fence.clone(),
+        fence_after: request.expected_fence,
+        outcome: OutputControlReceiptOutcomeV1::NoOp,
+        lease_result: Some(lease_result),
+    });
+    state
+        .runtime_control_plane
+        .finish_output_control_inflight(&inflight);
+    state.runtime_control_plane.store_output_control_terminal(
+        key,
+        shape_sha256,
+        response.clone(),
+        Instant::now(),
+    );
+    response
+}
+
+#[cfg(test)]
 fn standby_takeover_selector(
     action: &OutputControlActionV1,
 ) -> Result<StandbyTakeoverCheckpointSelector, String> {
@@ -582,6 +1144,7 @@ fn standby_takeover_selector(
     }
 }
 
+#[cfg(test)]
 fn execute_standby_takeover_action<F, T>(
     action: &OutputControlActionV1,
     expected_fence: &OutputControlFenceV1,
@@ -644,6 +1207,163 @@ fn output_control_rejection_for_operation(
         request_id: request.request_id.clamp(1, MAX_SAFE_JAVASCRIPT_INTEGER),
         error,
     })
+}
+
+fn retain_output_control_rejection(
+    state: &AppState,
+    key: OutputControlReceiptKey,
+    shape_sha256: String,
+    response: OutputControlResponseV1,
+) -> OutputControlResponseV1 {
+    state.runtime_control_plane.store_output_control_terminal(
+        key,
+        shape_sha256,
+        response.clone(),
+        Instant::now(),
+    );
+    response
+}
+
+fn output_control_lease_result_from_registry_receipt(
+    action: &OutputControlActionV1,
+    receipt: &OutputLeaseRequestReceipt,
+) -> Result<OutputControlLeaseResultV1, String> {
+    let outcome = receipt
+        .outcome
+        .as_ref()
+        .map(|outcome| match outcome {
+            OutputLeaseOperationOutcome::Acquired => OutputLeaseReceiptOutcomeV1::Acquired,
+            OutputLeaseOperationOutcome::Renewed => OutputLeaseReceiptOutcomeV1::Renewed,
+            #[cfg(test)]
+            OutputLeaseOperationOutcome::ExpiryObserved => {
+                OutputLeaseReceiptOutcomeV1::ExpiryObserved
+            }
+            OutputLeaseOperationOutcome::Recovered => OutputLeaseReceiptOutcomeV1::Recovered,
+            OutputLeaseOperationOutcome::Relinquished => OutputLeaseReceiptOutcomeV1::Relinquished,
+            OutputLeaseOperationOutcome::Transferred => OutputLeaseReceiptOutcomeV1::Transferred,
+            OutputLeaseOperationOutcome::OwnerRetired => OutputLeaseReceiptOutcomeV1::OwnerRetired,
+            OutputLeaseOperationOutcome::ProjectOrphaned => {
+                OutputLeaseReceiptOutcomeV1::ProjectOrphaned
+            }
+            OutputLeaseOperationOutcome::Authorized => OutputLeaseReceiptOutcomeV1::Authorized,
+        })
+        .map_err(|error| format!("output lease operation did not succeed: {error:?}"))?;
+    let expected_outcome = match action {
+        OutputControlActionV1::Arm { .. }
+        | OutputControlActionV1::ReleaseBlackout { .. }
+        | OutputControlActionV1::TakeOverStandby { .. } => OutputLeaseReceiptOutcomeV1::Authorized,
+        OutputControlActionV1::AcquireLease { .. } => OutputLeaseReceiptOutcomeV1::Acquired,
+        OutputControlActionV1::RenewLease { .. } => OutputLeaseReceiptOutcomeV1::Renewed,
+        OutputControlActionV1::RecoverLease { .. } => OutputLeaseReceiptOutcomeV1::Recovered,
+        OutputControlActionV1::RelinquishOutputLease { .. } => {
+            OutputLeaseReceiptOutcomeV1::Relinquished
+        }
+        OutputControlActionV1::ForceTransferLease { .. } => {
+            OutputLeaseReceiptOutcomeV1::Transferred
+        }
+    };
+    let takeover_project_orphan = matches!(action, OutputControlActionV1::TakeOverStandby { .. })
+        && outcome == OutputLeaseReceiptOutcomeV1::ProjectOrphaned;
+    if outcome != expected_outcome && !takeover_project_orphan {
+        return Err("output lease receipt outcome does not match operation".to_string());
+    }
+    let lease_id = receipt
+        .lease_id
+        .ok_or_else(|| "output lease receipt omitted its lease id".to_string())?;
+    let generation = receipt
+        .generation_after
+        .or(receipt.generation_before)
+        .ok_or_else(|| "output lease receipt omitted its generation".to_string())?;
+    let resources = receipt
+        .resources
+        .as_ref()
+        .ok_or_else(|| "output lease receipt omitted its resources".to_string())?
+        .as_slice()
+        .iter()
+        .map(|resource| match resource {
+            OutputLeaseResource::Lighting => {
+                protocol::control_plane_command::OutputControlTargetRoleV1::Lighting
+            }
+            OutputLeaseResource::Video => {
+                protocol::control_plane_command::OutputControlTargetRoleV1::Video
+            }
+        })
+        .collect::<Vec<_>>();
+    let phase_for_snapshot =
+        |snapshot: &super::output_lease::OutputLeaseSnapshot| match snapshot.phase {
+            OutputLeasePhase::Unclaimed => OutputLeaseReceiptPhaseV1::Unclaimed,
+            OutputLeasePhase::HeldActive => OutputLeaseReceiptPhaseV1::HeldActive,
+            OutputLeasePhase::HeldOrphaned => OutputLeaseReceiptPhaseV1::HeldOrphaned,
+        };
+    let resources_for_snapshot = |snapshot: &super::output_lease::OutputLeaseSnapshot| -> Vec<_> {
+        snapshot
+            .resources
+            .as_ref()
+            .map(|resources| {
+                resources
+                    .as_slice()
+                    .iter()
+                    .map(|resource| match resource {
+                        OutputLeaseResource::Lighting => {
+                            protocol::control_plane_command::OutputControlTargetRoleV1::Lighting
+                        }
+                        OutputLeaseResource::Video => {
+                            protocol::control_plane_command::OutputControlTargetRoleV1::Video
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    if receipt.changes.is_empty() {
+        return Err("output lease receipt omitted its change truth".to_string());
+    }
+    let changes = receipt
+        .changes
+        .iter()
+        .map(|change| OutputLeaseReceiptChangeV1 {
+            lease_id: change.lease_id.encode(),
+            before_generation: change.before.as_ref().map(|snapshot| snapshot.generation),
+            after_generation: change.after.as_ref().map(|snapshot| snapshot.generation),
+            before_resources: change
+                .before
+                .as_ref()
+                .map(resources_for_snapshot)
+                .unwrap_or_default(),
+            after_resources: change
+                .after
+                .as_ref()
+                .map(resources_for_snapshot)
+                .unwrap_or_default(),
+            before_phase: change.before.as_ref().map(phase_for_snapshot),
+            after_phase: change.after.as_ref().map(phase_for_snapshot),
+        })
+        .collect::<Vec<_>>();
+    let last_change = receipt
+        .changes
+        .last()
+        .ok_or_else(|| "output lease receipt omitted its final change".to_string())?;
+    let phase = last_change
+        .after
+        .as_ref()
+        .or(last_change.before.as_ref())
+        .map(phase_for_snapshot)
+        .ok_or_else(|| "output lease receipt omitted its final phase".to_string())?;
+    let result = OutputControlLeaseResultV1 {
+        authority: protocol::control_plane_command::OutputLeaseAuthorityV1 {
+            lease_id: lease_id.encode(),
+            generation,
+        },
+        resources,
+        phase,
+        outcome,
+        audit_sequence: receipt.audit_sequence,
+        changes,
+    };
+    result
+        .validate()
+        .map_err(|error| format!("output lease receipt failed protocol validation: {error}"))?;
+    Ok(result)
 }
 
 fn output_control_receipt_key(
@@ -751,6 +1471,28 @@ struct OutputControlReceiptKey {
     request_id: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct OutputControlRequestIdentityKey {
+    principal: String,
+    window_label: String,
+    owner_incarnation: u64,
+    request_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct OutputControlRequestOriginKey {
+    principal: String,
+    window_label: String,
+    owner_incarnation: u64,
+}
+
+#[derive(Debug, Clone)]
+struct OutputControlRequestIdentityRecord {
+    operation_id: String,
+    shape_sha256: String,
+    expires_at: Instant,
+}
+
 #[derive(Debug, Clone)]
 struct OutputControlTerminalRecord {
     shape_sha256: String,
@@ -776,6 +1518,9 @@ struct OutputControlPlaneInner {
     receipts: HashMap<OutputControlReceiptKey, OutputControlTerminalRecord>,
     tombstones: HashMap<OutputControlReceiptKey, SafetyTombstoneRecord>,
     lanes: HashMap<OutputControlReceiptKey, Arc<Mutex<()>>>,
+    common_request_identities:
+        HashMap<OutputControlRequestIdentityKey, OutputControlRequestIdentityRecord>,
+    request_id_high_water: HashMap<OutputControlRequestOriginKey, u64>,
     token_buckets: HashMap<PrincipalDomainKey, TokenBucket>,
     inflight: HashSet<PrincipalDomainKey>,
     audit: Vec<OutputControlAuditRecord>,
@@ -953,6 +1698,115 @@ impl RuntimeControlPlaneState {
                 fence,
                 expires_at: now + AUTHORITY_TTL,
                 last_used,
+            },
+        );
+        Ok(())
+    }
+
+    /// Reserve the operation-independent caller/incarnation/request identity
+    /// before any fence, consent, rate, audit, registry, or physical work.
+    /// The operation-specific lane remains responsible for exact terminal
+    /// replay; this bounded identity map prevents a different operation from
+    /// laundering the same request id after a terminal is evicted.
+    fn reserve_output_control_request_identity(
+        &self,
+        binding: &CallerBinding,
+        operation_id: &str,
+        request_id: u64,
+        shape_sha256: &str,
+        now: Instant,
+    ) -> Result<(), OutputControlErrorCodeV1> {
+        let mut inner = match self.output_control.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => {
+                // A poisoned bookkeeping mutex cannot safely admit new work.
+                // An intact, already-recorded terminal may still be replayed;
+                // no new identity, rate token, lane, audit, or authority work
+                // is permitted on this path.
+                let inner = poisoned.into_inner();
+                let identity_key = OutputControlRequestIdentityKey {
+                    principal: binding.principal.clone(),
+                    window_label: binding.window_label.clone(),
+                    owner_incarnation: binding.owner_incarnation,
+                    request_id,
+                };
+                let operation_key = OutputControlReceiptKey {
+                    principal: binding.principal.clone(),
+                    window_label: binding.window_label.clone(),
+                    owner_incarnation: binding.owner_incarnation,
+                    operation_id: operation_id.to_string(),
+                    request_id,
+                };
+                let Some(identity) = inner.common_request_identities.get(&identity_key) else {
+                    return Err(OutputControlErrorCodeV1::Internal);
+                };
+                if identity.operation_id != operation_id || identity.shape_sha256 != shape_sha256 {
+                    return Err(OutputControlErrorCodeV1::InvalidRequest);
+                }
+                let Some(receipt) = inner.receipts.get(&operation_key) else {
+                    return Err(OutputControlErrorCodeV1::Internal);
+                };
+                if receipt.shape_sha256 == shape_sha256 {
+                    return Ok(());
+                }
+                return Err(OutputControlErrorCodeV1::InvalidRequest);
+            }
+        };
+        purge_output_control_expired(&mut inner, now);
+        let identity_key = OutputControlRequestIdentityKey {
+            principal: binding.principal.clone(),
+            window_label: binding.window_label.clone(),
+            owner_incarnation: binding.owner_incarnation,
+            request_id,
+        };
+        let operation_key = OutputControlReceiptKey {
+            principal: binding.principal.clone(),
+            window_label: binding.window_label.clone(),
+            owner_incarnation: binding.owner_incarnation,
+            operation_id: operation_id.to_string(),
+            request_id,
+        };
+        if let Some(record) = inner.common_request_identities.get_mut(&identity_key) {
+            if record.operation_id != operation_id || record.shape_sha256 != shape_sha256 {
+                return Err(OutputControlErrorCodeV1::InvalidRequest);
+            }
+            if inner.receipts.contains_key(&operation_key) {
+                return Ok(());
+            }
+            if inner.lanes.contains_key(&operation_key) {
+                return Err(OutputControlErrorCodeV1::Busy);
+            }
+            // The identity survived terminal eviction but its receipt did
+            // not. Do not re-execute an old request id.
+            return Err(OutputControlErrorCodeV1::InvalidRequest);
+        }
+        let origin_key = OutputControlRequestOriginKey {
+            principal: binding.principal.clone(),
+            window_label: binding.window_label.clone(),
+            owner_incarnation: binding.owner_incarnation,
+        };
+        if inner
+            .request_id_high_water
+            .get(&origin_key)
+            .is_some_and(|high_water| request_id <= *high_water)
+        {
+            return Err(OutputControlErrorCodeV1::InvalidRequest);
+        }
+        if inner.common_request_identities.len() >= MAX_TOTAL_OUTPUT_CONTROL_IDENTITIES {
+            return Err(OutputControlErrorCodeV1::Overloaded);
+        }
+        if !inner.request_id_high_water.contains_key(&origin_key)
+            && inner.request_id_high_water.len() >= MAX_TOTAL_OUTPUT_CONTROL_IDENTITIES
+        {
+            return Err(OutputControlErrorCodeV1::Overloaded);
+        }
+        inner.request_id_high_water.insert(origin_key, request_id);
+        inner.common_request_identities.insert(
+            identity_key,
+            OutputControlRequestIdentityRecord {
+                operation_id: operation_id.to_string(),
+                shape_sha256: shape_sha256.to_string(),
+                expires_at: now + TOMBSTONE_TTL,
             },
         );
         Ok(())
@@ -1448,10 +2302,22 @@ impl RuntimeControlPlaneState {
         shape_sha256: &str,
         now: Instant,
     ) -> OutputControlLaneReservation {
-        let mut inner = self
-            .output_control
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut inner = match self.output_control.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => {
+                let inner = poisoned.into_inner();
+                if let Some(record) = inner.receipts.get(key) {
+                    return if record.shape_sha256 == shape_sha256 {
+                        OutputControlLaneReservation::Terminal(record.response.clone())
+                    } else {
+                        OutputControlLaneReservation::Rejected(
+                            OutputControlErrorCodeV1::InvalidRequest,
+                        )
+                    };
+                }
+                return OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::Internal);
+            }
+        };
         purge_output_control_expired(&mut inner, now);
         let last_used = next_output_control_sequence(&mut inner);
         if let Some(record) = inner.receipts.get_mut(key) {
@@ -1485,10 +2351,24 @@ impl RuntimeControlPlaneState {
         shape_sha256: &str,
         now: Instant,
     ) -> Option<OutputControlLaneReservation> {
-        let mut inner = self
-            .output_control
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut inner = match self.output_control.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => {
+                let inner = poisoned.into_inner();
+                if let Some(record) = inner.receipts.get(key) {
+                    return Some(if record.shape_sha256 == shape_sha256 {
+                        OutputControlLaneReservation::Terminal(record.response.clone())
+                    } else {
+                        OutputControlLaneReservation::Rejected(
+                            OutputControlErrorCodeV1::InvalidRequest,
+                        )
+                    });
+                }
+                return Some(OutputControlLaneReservation::Rejected(
+                    OutputControlErrorCodeV1::Internal,
+                ));
+            }
+        };
         purge_output_control_expired(&mut inner, now);
         let last_used = next_output_control_sequence(&mut inner);
         if let Some(record) = inner.receipts.get_mut(key) {
@@ -1519,7 +2399,7 @@ impl RuntimeControlPlaneState {
         let mut inner = self
             .output_control
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|_| OutputControlErrorCodeV1::Internal)?;
         purge_output_control_expired(&mut inner, now);
         if inner.audit.len() >= MAX_SAFETY_AUDIT_RECORDS {
             return Err(OutputControlErrorCodeV1::Overloaded);
@@ -1559,11 +2439,9 @@ impl RuntimeControlPlaneState {
     }
 
     fn finish_output_control_inflight(&self, key: &PrincipalDomainKey) {
-        let mut inner = self
-            .output_control
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner.inflight.remove(key);
+        if let Ok(mut inner) = self.output_control.lock() {
+            inner.inflight.remove(key);
+        }
     }
 
     fn store_output_control_terminal(
@@ -1573,10 +2451,9 @@ impl RuntimeControlPlaneState {
         response: OutputControlResponseV1,
         now: Instant,
     ) {
-        let mut inner = self
-            .output_control
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Ok(mut inner) = self.output_control.lock() else {
+            return;
+        };
         purge_output_control_expired(&mut inner, now);
         enforce_output_control_receipt_capacity(&mut inner, &key, now);
         let last_used = next_output_control_sequence(&mut inner);
@@ -1593,11 +2470,9 @@ impl RuntimeControlPlaneState {
     }
 
     fn release_output_control_lane(&self, key: &OutputControlReceiptKey) {
-        let mut inner = self
-            .output_control
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner.lanes.remove(key);
+        if let Ok(mut inner) = self.output_control.lock() {
+            inner.lanes.remove(key);
+        }
     }
 
     /// Retire all server records for a renderer principal before its owner
@@ -1681,10 +2556,9 @@ impl RuntimeControlPlaneState {
             .retain(|key, _| key.principal != principal);
 
         drop(safety_blackout);
-        let mut output_control = self
-            .output_control
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Ok(mut output_control) = self.output_control.lock() else {
+            return;
+        };
         purge_output_control_expired(&mut output_control, now);
         let keys = output_control
             .receipts
@@ -1703,6 +2577,12 @@ impl RuntimeControlPlaneState {
             .retain(|key| key.principal != principal);
         output_control
             .token_buckets
+            .retain(|key, _| key.principal != principal);
+        output_control
+            .common_request_identities
+            .retain(|key, _| key.principal != principal);
+        output_control
+            .request_id_high_water
             .retain(|key, _| key.principal != principal);
     }
 }
@@ -2009,6 +2889,9 @@ fn purge_output_control_expired(inner: &mut OutputControlPlaneInner, now: Instan
         insert_output_control_tombstone(inner, key, now);
     }
     inner.tombstones.retain(|_, record| record.expires_at > now);
+    inner
+        .common_request_identities
+        .retain(|_, record| record.expires_at > now);
 }
 
 fn enforce_output_control_receipt_capacity(
@@ -2157,7 +3040,7 @@ fn engage_safety_blackout_bound(
                 safety_blackout_rejection(&request, code)
             }
             SafetyBlackoutLaneReservation::Lane(_) => {
-                unreachable!("safety terminal recheck never creates a lane")
+                safety_blackout_rejection(&request, RuntimeCommandErrorCodeV1::Internal)
             }
         };
     }
@@ -2329,7 +3212,7 @@ pub(crate) fn set_timeline_transport_playing(
         return match result {
             LaneReservation::Terminal(response) => response,
             LaneReservation::Rejected(code) => rejection(&request, code),
-            LaneReservation::Lane(_) => unreachable!("terminal recheck never creates a lane"),
+            LaneReservation::Lane(_) => rejection(&request, RuntimeCommandErrorCodeV1::Internal),
         };
     }
     if query_state
@@ -2599,7 +3482,7 @@ where
             FollowAbortLaneReservation::Terminal(response) => response,
             FollowAbortLaneReservation::Rejected(code) => follow_abort_rejection(&request, code),
             FollowAbortLaneReservation::Lane(_) => {
-                unreachable!("Follow abort terminal recheck never creates a lane")
+                follow_abort_rejection(&request, RuntimeCommandErrorCodeV1::Internal)
             }
         };
     }
@@ -2953,9 +3836,11 @@ fn safety_blackout_rejection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output_lease::OutputLeaseRegistry;
     use protocol::control_plane_command::{
         OutputControlActionV1, ProjectMutationFenceV1, SetTimelinePlayingRuntimePayloadV1,
-        OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+        OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
+        OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
     };
 
     fn test_binding(principal: &str, window_label: &str, owner_incarnation: u64) -> CallerBinding {
@@ -3144,17 +4029,305 @@ mod tests {
         );
         let shape = "f".repeat(64);
         let response = test_output_rejection(&key, OutputControlErrorCodeV1::PublicationFailed);
+        let binding = test_binding(&key.principal, &key.window_label, key.owner_incarnation);
+        assert!(state
+            .reserve_output_control_request_identity(
+                &binding,
+                &key.operation_id,
+                key.request_id,
+                &shape,
+                now,
+            )
+            .is_ok());
+
+        assert!(matches!(
+            state.reserve_output_control_lane(&key, &shape, now),
+            OutputControlLaneReservation::Lane(_)
+        ));
+        state.store_output_control_terminal(key.clone(), shape.clone(), response.clone(), now);
 
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = state.output_control.lock().unwrap();
             panic!("inject output-control bookkeeping poison");
         }));
-        state.store_output_control_terminal(key.clone(), shape.clone(), response.clone(), now);
 
+        assert!(state
+            .reserve_output_control_request_identity(
+                &binding,
+                &key.operation_id,
+                key.request_id,
+                &shape,
+                now,
+            )
+            .is_ok());
         assert!(matches!(
             state.reserve_output_control_lane(&key, &shape, now),
             OutputControlLaneReservation::Terminal(actual) if actual == response
         ));
+    }
+
+    #[test]
+    fn output_control_common_identity_reserves_cross_operation_ids_before_work() {
+        let state = RuntimeControlPlaneState::default();
+        let now = Instant::now();
+        let binding = test_binding("renderer-output-identity", "main", 9);
+        let request_id = 12_010;
+        let arm_key = test_output_key(
+            &binding.principal,
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+            request_id,
+            binding.owner_incarnation,
+        );
+        let arm_shape = "a".repeat(64);
+        let release_shape = "b".repeat(64);
+
+        assert!(state
+            .reserve_output_control_request_identity(
+                &binding,
+                OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+                request_id,
+                &arm_shape,
+                now,
+            )
+            .is_ok());
+        assert!(matches!(
+            state.reserve_output_control_lane(&arm_key, &arm_shape, now),
+            OutputControlLaneReservation::Lane(_)
+        ));
+        assert_eq!(
+            state.reserve_output_control_request_identity(
+                &binding,
+                OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+                request_id,
+                &arm_shape,
+                now,
+            ),
+            Err(OutputControlErrorCodeV1::Busy)
+        );
+
+        let response = test_output_rejection(&arm_key, OutputControlErrorCodeV1::PublicationFailed);
+        state.store_output_control_terminal(
+            arm_key.clone(),
+            arm_shape.clone(),
+            response.clone(),
+            now,
+        );
+        assert!(state
+            .reserve_output_control_request_identity(
+                &binding,
+                OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+                request_id,
+                &arm_shape,
+                now,
+            )
+            .is_ok());
+        assert!(matches!(
+            state.reserve_output_control_lane(&arm_key, &arm_shape, now),
+            OutputControlLaneReservation::Terminal(actual) if actual == response
+        ));
+
+        let before = {
+            let inner = state.output_control.lock().unwrap();
+            (
+                inner.audit.len(),
+                inner.audit_sequence,
+                inner.token_buckets.len(),
+            )
+        };
+        assert_eq!(
+            state.reserve_output_control_request_identity(
+                &binding,
+                OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+                request_id,
+                &release_shape,
+                now,
+            ),
+            Err(OutputControlErrorCodeV1::InvalidRequest)
+        );
+        assert_eq!(
+            state.reserve_output_control_request_identity(
+                &binding,
+                OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+                request_id,
+                &release_shape,
+                now,
+            ),
+            Err(OutputControlErrorCodeV1::InvalidRequest)
+        );
+        let inner = state.output_control.lock().unwrap();
+        assert_eq!(
+            (
+                inner.audit.len(),
+                inner.audit_sequence,
+                inner.token_buckets.len()
+            ),
+            before,
+            "cross-operation and changed-shape identity conflicts do not admit rate/audit work"
+        );
+    }
+
+    #[test]
+    fn output_control_common_identity_high_water_survives_terminal_and_tombstone_expiry() {
+        let state = RuntimeControlPlaneState::default();
+        let now = Instant::now();
+        let expired_now = now + TOMBSTONE_TTL + Duration::from_millis(1);
+        let binding = test_binding("renderer-output-high-water", "main", 19);
+        let request_id = 22_010;
+        let arm_shape = "c".repeat(64);
+        let arm_key = test_output_key(
+            &binding.principal,
+            OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+            request_id,
+            binding.owner_incarnation,
+        );
+
+        state
+            .reserve_output_control_request_identity(
+                &binding,
+                OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+                request_id,
+                &arm_shape,
+                now,
+            )
+            .expect("first valid envelope reserves the common identity");
+        assert!(matches!(
+            state.reserve_output_control_lane(&arm_key, &arm_shape, now),
+            OutputControlLaneReservation::Lane(_)
+        ));
+        state.store_output_control_terminal(
+            arm_key.clone(),
+            arm_shape,
+            test_output_rejection(&arm_key, OutputControlErrorCodeV1::StaleFence),
+            now,
+        );
+
+        let before = {
+            let mut inner = state.output_control.lock().unwrap();
+            purge_output_control_expired(&mut inner, expired_now);
+            assert!(inner.common_request_identities.is_empty());
+            (
+                inner.lanes.len(),
+                inner.audit.len(),
+                inner.audit_sequence,
+                inner.token_buckets.len(),
+                inner.inflight.len(),
+                inner.request_id_high_water.clone(),
+            )
+        };
+
+        for operation_id in [
+            OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            OUTPUT_LEASE_RENEW_OPERATION_ID,
+        ] {
+            assert_eq!(
+                state.reserve_output_control_request_identity(
+                    &binding,
+                    operation_id,
+                    request_id,
+                    &"d".repeat(64),
+                    expired_now,
+                ),
+                Err(OutputControlErrorCodeV1::InvalidRequest),
+                "an expired terminal cannot reopen its request id through another operation"
+            );
+        }
+        let after_rejections = {
+            let inner = state.output_control.lock().unwrap();
+            (
+                inner.lanes.len(),
+                inner.audit.len(),
+                inner.audit_sequence,
+                inner.token_buckets.len(),
+                inner.inflight.len(),
+                inner.request_id_high_water.clone(),
+            )
+        };
+        assert_eq!(after_rejections, before);
+
+        state
+            .reserve_output_control_request_identity(
+                &binding,
+                OUTPUT_LEASE_RENEW_OPERATION_ID,
+                request_id + 1,
+                &"e".repeat(64),
+                expired_now,
+            )
+            .expect("the next monotonic request id remains admissible");
+        let inner = state.output_control.lock().unwrap();
+        assert_eq!(
+            inner
+                .request_id_high_water
+                .get(&OutputControlRequestOriginKey {
+                    principal: binding.principal,
+                    window_label: binding.window_label,
+                    owner_incarnation: binding.owner_incarnation,
+                }),
+            Some(&(request_id + 1))
+        );
+    }
+
+    #[test]
+    fn output_control_takeover_identity_swap_returns_committed_orphan_truth() {
+        let mut registry = OutputLeaseRegistry::fresh_process(51).expect("orphan test registry");
+        let owner = OutputLeaseOwner::new("orphan-owner", "main", 51, 1).expect("orphan owner");
+        let resources =
+            OutputLeaseResources::new(&[OutputLeaseResource::Lighting]).expect("orphan resources");
+        let acquired = registry
+            .submit_request(
+                &OutputLeaseRequest::from_action(
+                    "orphan-owner",
+                    "orphan-test",
+                    1,
+                    OutputLeaseRequestAction::Acquire {
+                        owner: owner.clone(),
+                        resources: resources.clone(),
+                        project_identity: "project_epoch:3".to_string(),
+                        ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
+                    },
+                )
+                .expect("orphan acquire request"),
+                0,
+            )
+            .expect("orphan acquire");
+        let lease_id = acquired.lease_id.expect("orphan lease id");
+        let orphan_receipt = registry
+            .submit_request(
+                &OutputLeaseRequest::from_action(
+                    "syndocal.lifecycle",
+                    "orphan-test",
+                    2,
+                    OutputLeaseRequestAction::ProjectOrphan {
+                        project_identity: "project_epoch:3".to_string(),
+                        selected_lease_ids: Vec::new(),
+                        resource_scope: None,
+                    },
+                )
+                .expect("orphan project request"),
+                0,
+            )
+            .expect("orphan transition");
+        let selected = crate::select_output_lease_receipt_change(&orphan_receipt, lease_id)
+            .expect("selected orphan truth");
+        let action = OutputControlActionV1::TakeOverStandby {
+            force: true,
+            standby_session_id: "standby-a".to_string(),
+            standby_generation: 7,
+            lease: protocol::control_plane_command::OutputLeaseAuthorityV1 {
+                lease_id: lease_id.encode(),
+                generation: 1,
+            },
+        };
+        let result = output_control_lease_result_from_registry_receipt(&action, &selected)
+            .expect("Take Over response uses final orphan truth");
+        assert_eq!(result.outcome, OutputLeaseReceiptOutcomeV1::ProjectOrphaned);
+        assert_eq!(result.phase, OutputLeaseReceiptPhaseV1::HeldOrphaned);
+        assert_eq!(result.authority.generation, 2);
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].after_generation, Some(2));
+        assert_eq!(
+            result.changes[0].after_phase,
+            Some(OutputLeaseReceiptPhaseV1::HeldOrphaned)
+        );
     }
 
     #[test]
@@ -3163,6 +4336,10 @@ mod tests {
             force: true,
             standby_session_id: "primary-a".to_string(),
             standby_generation: 42,
+            lease: protocol::control_plane_command::OutputLeaseAuthorityV1 {
+                lease_id: "lease-0000000000000001".to_string(),
+                generation: 1,
+            },
         };
         let expected_fence = test_output_fence();
         let fence_after = OutputControlFenceV1 {

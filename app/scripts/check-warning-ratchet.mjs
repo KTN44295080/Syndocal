@@ -12,7 +12,7 @@ import {
   loadInventory,
   loadInventoryAtRef,
   resolveTrustedComparison,
-  runCargoConfiguration,
+  runWarningConfiguration,
   validateInventory,
 } from "./warning-ratchet-lib.mjs";
 
@@ -90,23 +90,35 @@ if (suppressions.length > 0) throw new Error(`warning suppression loophole detec
 
 console.log(`warning ratchet: ${configuration.id}`);
 console.log(`trusted comparison: ${comparison.base}...${comparison.head}${args.bootstrap ? " (explicit bootstrap)" : ""}`);
-console.log(`command: cargo ${configuration.command.args.join(" ")}`);
+console.log(`command: ${configuration.command.executable} ${configuration.command.args.join(" ")}`);
 console.log(`modified files considered: ${modifiedFiles.size}`);
-const result = await runCargoConfiguration(configuration, repoRoot);
-if (result.timedOut) throw new Error(`Cargo warning command timed out after ${configuration.timeoutMs}ms`);
-if (result.exitCode !== 0) throw new Error(`Cargo warning command exited with ${result.exitCode}`);
-if (result.invalidJsonLines.length > 0) throw new Error(`Cargo emitted ${result.invalidJsonLines.length} malformed JSON stdout line(s)`);
-if (result.buildFinished.length !== 1 || result.buildFinished[0] !== true) {
-  throw new Error(`Cargo build-finished coverage invalid: ${JSON.stringify(result.buildFinished)}`);
-}
-if (result.stderrWarning) throw new Error("Cargo emitted warning-shaped stderr outside structured JSON");
+const result = await runWarningConfiguration(configuration, repoRoot);
+if (result.timedOut) throw new Error(`${configuration.command.executable} warning command timed out after ${configuration.timeoutMs}ms`);
+if (result.outputLimitExceeded) throw new Error(`${configuration.command.executable} output exceeded the bounded capture limit`);
+if (result.exitCode !== 0) throw new Error(`${configuration.command.executable} warning command exited with ${result.exitCode}`);
 
-const coverage = compareArtifactCoverage(configuration.expectedArtifacts, result.artifacts);
-if (!coverage.ok) {
-  throw new Error(`Cargo artifact coverage mismatch: missing=${JSON.stringify(coverage.missing)} unexpected=${JSON.stringify(coverage.unexpected)}`);
+let diagnosticComparison;
+if (configuration.command.executable === "cargo") {
+  if (result.invalidJsonLines.length > 0) throw new Error(`Cargo emitted ${result.invalidJsonLines.length} malformed JSON stdout line(s)`);
+  if (result.buildFinished.length !== 1 || result.buildFinished[0] !== true) {
+    throw new Error(`Cargo build-finished coverage invalid: ${JSON.stringify(result.buildFinished)}`);
+  }
+  if (result.stderrWarning) throw new Error("Cargo emitted warning-shaped stderr outside structured JSON");
+  const coverage = compareArtifactCoverage(configuration.expectedArtifacts, result.artifacts);
+  if (!coverage.ok) {
+    throw new Error(`Cargo artifact coverage mismatch: missing=${JSON.stringify(coverage.missing)} unexpected=${JSON.stringify(coverage.unexpected)}`);
+  }
+  console.log(`artifact coverage: ${result.artifacts.length}/${configuration.expectedArtifacts.length}`);
+  diagnosticComparison = compareDiagnostics(configuration, result.diagnostics, modifiedFiles);
+} else {
+  if (result.warningShaped) throw new Error(`${configuration.command.executable} emitted warning-shaped output`);
+  if (!result.markerCoverage.ok) {
+    throw new Error(`generic output marker coverage mismatch: missing=${JSON.stringify(result.markerCoverage.missing)}`);
+  }
+  console.log(`output marker coverage: ${result.markerCoverage.expected.length}/${result.markerCoverage.expected.length}`);
+  console.log("warning-shaped output: none");
+  diagnosticComparison = compareDiagnostics(configuration, [], modifiedFiles);
 }
-const diagnosticComparison = compareDiagnostics(configuration, result.diagnostics, modifiedFiles);
-console.log(`artifact coverage: ${result.artifacts.length}/${configuration.expectedArtifacts.length}`);
 console.log(`baseline warnings: ${JSON.stringify(diagnosticComparison.baselineCounts)}`);
 console.log(`current warnings: ${JSON.stringify(diagnosticComparison.currentCounts)}`);
 console.log(`identity removals: ${diagnosticComparison.removed.length}`);

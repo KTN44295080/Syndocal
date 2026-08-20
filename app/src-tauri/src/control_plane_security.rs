@@ -84,7 +84,9 @@ struct ConsentRecord {
     binding: ConsentAuthorityBinding,
     challenge_id: String,
     consent_token: String,
+    #[cfg(any(target_os = "windows", test))]
     display_code: [u8; CHALLENGE_DIGITS],
+    #[cfg(any(target_os = "windows", test))]
     progress: usize,
     matched_device: Option<usize>,
     expires_at: Instant,
@@ -171,7 +173,9 @@ impl ControlPlaneSecurityState {
             binding,
             challenge_id: challenge_id.clone(),
             consent_token: consent_token.clone(),
+            #[cfg(any(target_os = "windows", test))]
             display_code,
+            #[cfg(any(target_os = "windows", test))]
             progress: 0,
             matched_device: None,
             expires_at,
@@ -254,22 +258,6 @@ impl ControlPlaneSecurityState {
         Ok(())
     }
 
-    pub(crate) fn retire_caller(&self, caller: &ConsentCallerBinding) {
-        let now = Instant::now();
-        if let Ok(mut inner) = self.inner.lock() {
-            prune_security_inner(&mut inner, now);
-            if inner
-                .active
-                .as_ref()
-                .is_some_and(|record| &record.binding.caller == caller)
-            {
-                if let Some(record) = inner.active.take() {
-                    push_tombstone(&mut inner, record.consent_token, now);
-                }
-            }
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn observe_physical_digit_for_test(&self, digit: u8, device: usize) {
         record_physical_digit(&self.inner, digit, device, Instant::now());
@@ -332,6 +320,7 @@ fn push_tombstone(inner: &mut SecurityInner, consent_token: String, now: Instant
     });
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn record_physical_digit(
     inner: &Arc<Mutex<SecurityInner>>,
     digit: u8,
@@ -362,6 +351,7 @@ fn record_physical_digit(
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn record_device_removal(inner: &Arc<Mutex<SecurityInner>>, device: usize, now: Instant) {
     if device == 0 {
         return;

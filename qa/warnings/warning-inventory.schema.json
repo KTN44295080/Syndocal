@@ -27,7 +27,7 @@
       "additionalProperties": false,
       "required": ["executable", "args"],
       "properties": {
-        "executable": { "type": "string", "minLength": 1 },
+        "executable": { "enum": ["cargo", "pnpm"] },
         "args": { "type": "array", "minItems": 1, "items": { "type": "string" } }
       }
     },
@@ -119,15 +119,54 @@
         "evidence": { "$ref": "#/$defs/evidence" },
         "blockingReason": { "type": "string", "minLength": 1 },
         "nextAction": { "type": "string", "minLength": 1 },
+        "expectedOutputMarkers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
         "expectedArtifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
         "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } },
         "externalWarningAllows": { "type": "array", "items": { "$ref": "#/$defs/externalAllow" } }
       },
       "allOf": [
         {
-          "if": { "properties": { "status": { "const": "enforced" } }, "required": ["status"] },
-          "then": { "required": ["evidence"], "properties": { "expectedArtifacts": { "type": "array", "minItems": 1 } } },
-          "else": { "required": ["blockingReason", "nextAction"], "properties": { "expectedArtifacts": { "type": "array", "maxItems": 0 }, "diagnostics": { "type": "array", "maxItems": 0 }, "externalWarningAllows": { "type": "array", "maxItems": 0 } } }
+          "if": {
+            "required": ["status", "command"],
+            "properties": {
+              "status": { "const": "enforced" },
+              "command": { "type": "object", "properties": { "executable": { "const": "cargo" } }, "required": ["executable"] }
+            }
+          },
+          "then": { "required": ["evidence"], "properties": { "expectedArtifacts": { "type": "array", "minItems": 1 } } }
+        },
+        {
+          "if": {
+            "required": ["status", "command"],
+            "properties": {
+              "status": { "const": "enforced" },
+              "command": { "type": "object", "properties": { "executable": { "const": "pnpm" } }, "required": ["executable"] }
+            }
+          },
+          "then": {
+            "required": ["evidence", "expectedOutputMarkers"],
+            "properties": {
+              "expectedArtifacts": { "type": "array", "maxItems": 0 },
+              "diagnostics": { "type": "array", "maxItems": 0 },
+              "externalWarningAllows": { "type": "array", "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "pending" } }, "required": ["status"] },
+          "then": {
+            "required": ["blockingReason", "nextAction"],
+            "properties": {
+              "expectedArtifacts": { "type": "array", "maxItems": 0 },
+              "diagnostics": { "type": "array", "maxItems": 0 },
+              "externalWarningAllows": { "type": "array", "maxItems": 0 }
+            }
+          }
         }
       ]
     }

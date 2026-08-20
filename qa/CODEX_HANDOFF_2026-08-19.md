@@ -12,7 +12,7 @@
 - The implementation/documentation commit for that checkpoint is `4e18b0ff134953c7312483d896c0404de115849c` (`docs: define completion flow and advance version`). This follow-up removes the two Markdown hard-break trailing spaces caught by the cached diff check and pins the implementation hash.
 - That build also records the warning debt requested for cleanup: Engine 9 warnings, Syndocal release target 58 warnings, and the Vite oversized-chunk warning. This is the provisional default-release baseline only, not a warning allowlist or the complete W0 feature/platform inventory.
 - The previous Codex reached its context/token limit while continuing AI3. Treat Timeline Transport and the canonical Timeline Follow Abort tranche as verified. AI3 has now been audited and remains incomplete in all five roadmap categories. The detailed audit matrix and ordered gaps are recorded in `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`.
-- The user-added Syndocal × rekordbox × Stream Deck Pedal product requirement is now normative in `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`. It requires Syndocal-mastered typed triggers (`DJ_LOOP_HALF`, `DJ_FILTER_CLOSE`, `DJ_RELEASE`), reuse of the existing musical A-B Loop, generic configurable MIDI OUT, a nonblocking CC ramp, deterministic stop/reset, and real Pedal/virtual-MIDI/rekordbox evidence. It is not yet an implementation or hardware-completion claim.
+- The replacement Syndocal × rekordbox × Stream Deck Pedal requirement is normative in `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`. `Seraf0-org/rekordbox-DJ-Link-ForPCDJ` is the sole DJ-PC Agent and owns Pedal/global-hotkey input plus all rekordbox MIDI, Filter, Stop, and reset behavior. Syndocal only receives authenticated `DJ_*` semantic events over the reused Web Remote listener, owns `.sdc` Track-to-Timeline mappings, and applies absolute Loop/Release show actions. The peer implementation and wired physical acceptance remain separate evidence and are not yet complete.
 - The 2026-08-20 P2/warning implementation checkpoint is `a228ba5e492841618ce0262038c965b5519d1ddd` (`fix: close takeover proof and reduce native warnings`). It closes the bounded Take Over proof gaps and removes honest production warning debt without suppression. It does not complete W0, AI3, physical video-output acceptance, or the new rekordbox/Pedal requirement.
 
 ## W0/W1 warning-ratchet checkpoint
@@ -439,3 +439,58 @@ hardware acceptance work.
 ## ASIO product requirement
 
 Windows ASIO support is an explicit product implementation and release requirement, not an optional undocumented experiment. Existing bridge, smoke, 100-cycle, and native-UI evidence must be preserved, but they do not close the requirement by themselves. Completion must also resolve the distribution/license boundary and the open acceptance items recorded in `qa/ASIO_INPUT_ACCEPTANCE.md`, including supported-driver breadth, device loss/recovery, sustained low-latency operation, observable actual buffer/XRUN behavior, and native end-to-end QA. Unsupported or failed ASIO selection must remain fail-closed and must not silently fall back to another driver or WASAPI.
+
+## 2026-08-21 DJ Link, output authority, warning-P2, and header checkpoint
+
+The active implementation remains on `codex/syndocal-v1.2`, based on
+`2885ac6a4b3844f67bf55ccaa6efafa190d698c8`. The Syndocal side of the
+replacement DJ Link specification extends the existing Web Remote listener; the
+separate `Seraf0-org/rekordbox-DJ-Link-ForPCDJ` repository was not modified. That
+peer still owns rekordbox discovery, Pedal/global-hotkey input, MIDI, Filter,
+Stop, reconnect, and its operator UI. Wired two-PC, rekordbox, and physical Pedal
+acceptance remains external evidence and is not claimed here.
+
+The frozen DJ transport authenticates a backend-issued token, requires strict
+HELLO/session envelopes, ACKs exact event identities, retains bounded high-water
+dedupe, treats StateSync as state rather than a trigger, applies absolute Loop
+division and idempotent Release through existing Engine paths, and persists exact
+Track-to-Timeline mappings in `.sdc`. Same-token socket replacement is fenced at
+the irreversible dispatch commit point. A dispatch lease serializes replacement
+against the physical handler, and handler panic/send/close paths return connection
+slots and terminalize the admitted identity without exposing panic details or
+allowing a physical retry. The final independent Terra review of the frozen diff
+reported P0 0, P1 0, and P2 0.
+
+Focused evidence at this checkpoint:
+
+- `io remote_ws`: 24/24, including the post-final-check ABA barrier and
+  max-connections=1 panic recovery;
+- `protocol dj_link`: 4/4, `engine dj_link`: 4/4, `syndocal dj_link`: 3/3;
+- Output Lease: 33/33; Output Control: 13/13;
+- frontend DJ, Output Control, bundled-library retry, invoke inventory (403),
+  localization (3512/3512), and topbar contract all passed;
+- the topbar contract now contains zero master sliders. Only the always-visible
+  Lighting and Video master sliders were removed; non-header master controls and
+  runtime APIs remain. No typography, button, spacing, or hit target was shrunk;
+- Vite transformed 265 modules and emitted no warning-shaped output. The largest
+  application chunk was about 435.5 kB, below the unchanged warning threshold;
+- the generic warning runner passes 52 assertion groups both through the official
+  pnpm script and direct Node. Package-manager variables are scrubbed from the
+  child process while `NODE_OPTIONS` remains fail-closed.
+
+Immediately before the final native build, exact-path inspection found zero
+running instances of this checkout's `target/release/syndocal.exe`. With FFmpeg
+8.1.2 shared, LLVM, and the Visual Studio 2022 MSVC linker explicitly selected,
+`pnpm --dir app tauri build --no-bundle` completed in 2m12s and emitted no
+first-party or Vite warning. Native launch/maximize and the five-display then
+three-display VJ workflow are intentionally the next operation after the warning
+inventory rebaseline, because the structured native warning gate performs another
+exact build and would otherwise invalidate the running-process evidence.
+
+`checked_deadline` is no longer dead code: Output Lease integration calls it from
+acquire, renew, transfer, receipt, and recovery paths. It must not be added to an
+allowlist. The seven locally measurable pending warning configurations are ready
+for a separately reviewed zero-warning inventory promotion; macOS dev/release
+remain externally blocked by the unavailable host and the recorded Actions billing
+failure. `requiredMatrixComplete` must therefore stay false until those two rows
+are measured.

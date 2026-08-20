@@ -56,6 +56,23 @@ const FORBIDDEN_WARNING_ENV = [
   /^RUSTC_(?:WRAPPER|WORKSPACE_WRAPPER|BOOTSTRAP)$/i,
 ];
 
+const FORBIDDEN_GENERIC_COMMAND_ENV = [
+  /^NODE_OPTIONS$/i,
+];
+// `pnpm run` injects these package-manager variables into the checker itself.
+// They have not affected the already-running Node process, so remove them from
+// the controlled child environment instead of making the official package
+// script impossible to execute. NODE_OPTIONS remains fail-closed because it
+// has already changed the checker process before this code runs.
+const STRIPPED_GENERIC_COMMAND_ENV = [
+  /^PNPM_.+/i,
+  /^NPM_CONFIG_/i,
+  /^NPM_EXEC_PATH$/i,
+  /^NPM_NODE_EXEC_PATH$/i,
+];
+const SUPPORTED_COMMAND_EXECUTABLES = new Set(["cargo", "pnpm"]);
+export const GENERIC_COMMAND_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
+
 const SUPPRESSION_PATTERNS = [
   { id: "rust-allow-or-expect-attribute", pattern: /#\s*!?\s*\[\s*(?:cfg_attr\s*\([\s\S]{0,300}?,\s*)?(?:allow|expect)\s*\(/i },
   { id: "rust-command-line-allow", pattern: /(?:^|[\s'",\[])(?:-A\s+(?:warnings|[a-zA-Z_][\w-]*)|-A(?:warnings|unused|dead_code|[a-zA-Z][\w-]*_[\w-]+))(?:$|[\s'",\]])/m },
@@ -272,6 +289,25 @@ export function controlledChildEnvironment(environment = process.env) {
   return Object.fromEntries(Object.entries(environment).filter(([key]) => !FORBIDDEN_WARNING_ENV.some((pattern) => pattern.test(key))));
 }
 
+export function forbiddenGenericCommandEnvironment(environment = process.env) {
+  return Object.entries(environment)
+    .filter(([key, value]) => value !== undefined && value !== ""
+      && !STRIPPED_GENERIC_COMMAND_ENV.some((pattern) => pattern.test(key))
+      && FORBIDDEN_GENERIC_COMMAND_ENV.some((pattern) => pattern.test(key)))
+    .map(([key]) => key)
+    .sort();
+}
+
+export function controlledGenericCommandEnvironment(environment = process.env) {
+  const rejected = forbiddenGenericCommandEnvironment(environment);
+  if (rejected.length > 0) {
+    throw new Error(`generic command environment is forbidden: ${rejected.join(", ")}`);
+  }
+  const controlled = controlledChildEnvironment(environment);
+  return Object.fromEntries(Object.entries(controlled)
+    .filter(([key]) => !STRIPPED_GENERIC_COMMAND_ENV.some((pattern) => pattern.test(key))));
+}
+
 function cargoConfigCandidates(repoRoot, environment) {
   const result = new Set();
   let current = path.resolve(repoRoot);
@@ -382,20 +418,47 @@ export function readCargoMetadata(repoRoot, configuration, environment = process
 }
 
 export async function runProcessWithTimeout(executable, args, options) {
+  const maxOutputBytes = options.maxOutputBytes === undefined ? null : options.maxOutputBytes;
+  if (maxOutputBytes !== null && (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1)) {
+    throw new Error("process output limit is invalid");
+  }
   const child = spawn(executable, args, {
     cwd: options.cwd,
     env: options.env,
+    shell: false,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
   let stderr = "";
+  let stdout = "";
+  let outputBytes = 0;
+  let outputLimitExceeded = false;
+  const captureChunk = (stream, chunk) => {
+    const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    if (outputLimitExceeded) return;
+    const bytes = Buffer.byteLength(text, "utf8");
+    if (maxOutputBytes !== null && outputBytes + bytes > maxOutputBytes) {
+      outputLimitExceeded = true;
+      child.kill("SIGKILL");
+      return;
+    }
+    if (maxOutputBytes !== null) outputBytes += bytes;
+    if (stream === "stdout") stdout += text;
+    else stderr += text;
+  };
   child.stderr.on("data", (chunk) => {
-    stderr += chunk;
+    captureChunk("stderr", chunk);
     if (options.forwardStderr) process.stderr.write(chunk);
   });
-  const stdoutReader = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
-  const stdoutClosed = once(stdoutReader, "close");
-  stdoutReader.on("line", (line) => options.onStdoutLine?.(line));
+  if (maxOutputBytes !== null) child.stdout.on("data", (chunk) => captureChunk("stdout", chunk));
+  let stdoutClosed;
+  if (options.onStdoutLine) {
+    const stdoutReader = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+    stdoutClosed = once(stdoutReader, "close");
+    stdoutReader.on("line", (line) => options.onStdoutLine(line));
+  } else {
+    stdoutClosed = once(child.stdout, "end");
+  }
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
@@ -407,11 +470,37 @@ export async function runProcessWithTimeout(executable, args, options) {
   });
   clearTimeout(timeout);
   await stdoutClosed;
-  return { exitCode, timedOut, stderr };
+  return { exitCode, timedOut, stdout, stderr, outputBytes, outputLimitExceeded };
 }
 
 export function warningShapedStderr(stderr) {
   return /(?:^|\r?\n)\s*warning(?:\[[^\]]+\])?\s*:/i.test(stderr);
+}
+
+export function warningShapedOutput(stdout = "", stderr = "") {
+  const output = `${stdout}\n${stderr}`;
+  return /(?:^|\r?\n)\s*warning(?:\[[^\]]+\])?\s*:/i.test(output)
+    || /\bWARN\b/i.test(output)
+    || /\(!\)/.test(output);
+}
+
+export function validateExpectedOutputMarkers(markers) {
+  if (!Array.isArray(markers) || markers.length === 0) {
+    throw new Error("expectedOutputMarkers must be a non-empty array");
+  }
+  if (markers.some((marker) => typeof marker !== "string" || marker.trim().length === 0)) {
+    throw new Error("expectedOutputMarkers must contain non-empty literal strings");
+  }
+  if (new Set(markers).size !== markers.length) {
+    throw new Error("expectedOutputMarkers must contain unique literal strings");
+  }
+  return [...markers];
+}
+
+export function compareOutputMarkerCoverage(expected, output) {
+  const markers = validateExpectedOutputMarkers(expected);
+  const missing = markers.filter((marker) => !output.includes(marker));
+  return { ok: missing.length === 0, missing, expected: markers };
 }
 
 export async function runCargoConfiguration(configuration, repoRoot, environment = process.env) {
@@ -433,6 +522,48 @@ export async function runCargoConfiguration(configuration, repoRoot, environment
   });
   const parsed = parseCargoJsonLines(lines, configuration, { ...metadata, repoRoot });
   return { ...processResult, ...parsed, stderrWarning: warningShapedStderr(processResult.stderr) };
+}
+
+function assertGenericCommandConfiguration(configuration) {
+  const executable = configuration?.command?.executable;
+  if (executable === "cargo") throw new Error(`configuration ${configuration.id} must use the Cargo dispatch`);
+  if (!SUPPORTED_COMMAND_EXECUTABLES.has(executable)) {
+    throw new Error(`configuration ${configuration?.id ?? "<unknown>"} uses unsupported command executable: ${executable ?? "<missing>"}`);
+  }
+  if (!Number.isInteger(configuration.timeoutMs) || configuration.timeoutMs < 1) {
+    throw new Error(`configuration ${configuration.id} timeoutMs is invalid`);
+  }
+  if (!Array.isArray(configuration.command.args) || configuration.command.args.length === 0
+    || configuration.command.args.some((arg) => typeof arg !== "string")) {
+    throw new Error(`configuration ${configuration.id} command args are invalid`);
+  }
+  validateExpectedOutputMarkers(configuration.expectedOutputMarkers);
+}
+
+export async function runGenericConfiguration(configuration, repoRoot, environment = process.env) {
+  assertGenericCommandConfiguration(configuration);
+  const args = [...configuration.command.args];
+  const processResult = await runProcessWithTimeout(configuration.command.executable, args, {
+    cwd: repoRoot,
+    env: controlledGenericCommandEnvironment(environment),
+    timeoutMs: configuration.timeoutMs,
+    maxOutputBytes: GENERIC_COMMAND_OUTPUT_LIMIT_BYTES,
+    forwardStderr: false,
+  });
+  const output = `${processResult.stdout}\n${processResult.stderr}`;
+  return {
+    ...processResult,
+    output,
+    warningShaped: warningShapedOutput(processResult.stdout, processResult.stderr),
+    markerCoverage: compareOutputMarkerCoverage(configuration.expectedOutputMarkers, output),
+  };
+}
+
+export async function runWarningConfiguration(configuration, repoRoot, environment = process.env) {
+  if (configuration?.command?.executable === "cargo") {
+    return runCargoConfiguration(configuration, repoRoot, environment);
+  }
+  return runGenericConfiguration(configuration, repoRoot, environment);
 }
 
 export function compareArtifactCoverage(expected, current) {
@@ -457,9 +588,31 @@ export function validateInventory(inventory, schema = null) {
   for (const configuration of inventory.configurations) {
     if (ids.has(configuration.id)) errors.push(`duplicate configuration id: ${configuration.id}`);
     ids.add(configuration.id);
+    const executable = configuration.command?.executable;
+    if (!SUPPORTED_COMMAND_EXECUTABLES.has(executable)) {
+      errors.push(`configuration ${configuration.id} uses unsupported command executable: ${executable ?? "<missing>"}`);
+    }
+    if (Object.hasOwn(configuration, "expectedOutputMarkers")) {
+      try {
+        validateExpectedOutputMarkers(configuration.expectedOutputMarkers);
+      } catch (error) {
+        errors.push(`configuration ${configuration.id} has invalid expectedOutputMarkers: ${error.message}`);
+      }
+    }
     if (configuration.status === "enforced") {
-      if (!Array.isArray(configuration.expectedArtifacts) || configuration.expectedArtifacts.length === 0) {
-        errors.push(`enforced configuration ${configuration.id} has zero expected artifact coverage`);
+      if (executable === "cargo"
+        && (!Array.isArray(configuration.expectedArtifacts) || configuration.expectedArtifacts.length === 0)) {
+        errors.push(`enforced Cargo configuration ${configuration.id} has zero expected artifact coverage`);
+      }
+      if (executable !== "cargo") {
+        if (!Object.hasOwn(configuration, "expectedOutputMarkers")) {
+          errors.push(`enforced generic configuration ${configuration.id} has no expected output markers`);
+        }
+        if ((configuration.expectedArtifacts?.length ?? 0) > 0
+          || (configuration.diagnostics?.length ?? 0) > 0
+          || (configuration.externalWarningAllows?.length ?? 0) > 0) {
+          errors.push(`enforced generic configuration ${configuration.id} must not carry Cargo artifacts or diagnostics`);
+        }
       }
       if (!/^[0-9a-f]{40}$/.test(configuration.evidence?.commit ?? "")) errors.push(`configuration ${configuration.id} evidence commit is invalid`);
       const diagnosticIds = new Set();

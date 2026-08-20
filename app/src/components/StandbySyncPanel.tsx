@@ -1,6 +1,18 @@
-import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
-import { executeOutputControl } from "../outputControlController";
+import {
+  executeOutputControl,
+  executeOutputLeaseLifecycle,
+  queryOutputLeaseAuthority,
+  selectOutputLeaseAuthority,
+} from "../outputControlController";
+import type {
+  OutputControlChallengeNotice,
+  OutputControlTargetRole,
+  OutputLeaseAuthority,
+  OutputLeaseAuthorityQuery,
+  OutputLeaseAuthorityQueryHeld,
+} from "../outputControlController";
 import type { MachineOutputRole, OutputOwnershipStatus } from "../types";
 
 type StandbySyncRole = "primary" | "standby";
@@ -55,6 +67,11 @@ const emptyOwnershipStatus: OutputOwnershipStatus = {
   lighting_reason: "StartupDenied",
   video_reason: "StartupDenied",
   error: "Machine output ownership has not been initialized",
+};
+
+const emptyLeaseQuery: OutputLeaseAuthorityQuery = {
+  operation_id: "syndocal.output.lease.authority.query.v1",
+  statuses: [{ status: "unavailable" }],
 };
 
 function storedValue(key: string): string {
@@ -119,14 +136,27 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const [status, setStatus] = createSignal<StandbySyncStatus>(emptyStatus);
   const [machineRole, setMachineRole] = createSignal<MachineOutputRole>("Standby");
   const [ownershipStatus, setOwnershipStatus] = createSignal<OutputOwnershipStatus>(emptyOwnershipStatus);
+  const [leaseQuery, setLeaseQuery] = createSignal<OutputLeaseAuthorityQuery>(emptyLeaseQuery);
+  const [selectedLeaseId, setSelectedLeaseId] = createSignal<string>("");
   const [busy, setBusy] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
   const [forceConfirmed, setForceConfirmed] = createSignal(false);
+  const [challengeNotice, setChallengeNotice] = createSignal<OutputControlChallengeNotice | null>(null);
   let takeoverDialog!: HTMLDialogElement;
 
   const effectiveError = createMemo(() => actionError() ?? status().last_error);
   const activeRole = createMemo(() => status().role ?? role());
   const forceRequired = createMemo(() => !status().takeover_ready || status().split_brain);
+  const heldLeases = createMemo(() => leaseQuery().statuses.filter(
+    (candidate): candidate is OutputLeaseAuthorityQueryHeld => candidate.status !== "unavailable",
+  ));
+  const selectedLease = createMemo<OutputLeaseAuthority | null>(() => {
+    const selected = heldLeases().find((candidate) => candidate.authority.lease_id === selectedLeaseId());
+    return selected ? selected.authority : null;
+  });
+  const selectedLeaseStatus = createMemo<OutputLeaseAuthorityQueryHeld | null>(() =>
+    heldLeases().find((candidate) => candidate.authority.lease_id === selectedLeaseId()) ?? null,
+  );
   const statusLabel = createMemo(() => {
     const current = status();
     if (!props.backendAvailable) return "Desktop required";
@@ -140,13 +170,18 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
 
   const pollStatus = async () => {
     try {
-      const [syncStatus, outputStatus] = await Promise.all([
+      const [syncStatus, outputStatus, outputLeases] = await Promise.all([
         props.invokeCommand<StandbySyncStatus>("standby_sync_status"),
         props.invokeCommand<OutputOwnershipStatus>("get_output_ownership_status"),
+        queryOutputLeaseAuthority(props.invokeCommand),
       ]);
       setStatus(syncStatus);
       setOwnershipStatus(outputStatus);
       setMachineRole(outputStatus.desired_role);
+      setLeaseQuery(outputLeases);
+      if (!outputLeases.statuses.some((candidate) => candidate.status !== "unavailable" && candidate.authority.lease_id === selectedLeaseId())) {
+        setSelectedLeaseId("");
+      }
     } catch (error) {
       setActionError(String(error));
     }
@@ -209,6 +244,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const changeMachineRole = async (nextRole: MachineOutputRole) => {
     setBusy(true);
     setActionError(null);
+    setChallengeNotice(null);
     try {
       if (nextRole === "Standby") {
         // Standby is the safer-direction disarm path and remains available
@@ -221,12 +257,12 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         setMachineRole(outputStatus.effective_role);
         return;
       }
+      const role = nextRole === "Lighting" ? "lighting" : nextRole === "Video" ? "video" : "both";
+      const lease = selectOutputLeaseAuthority(leaseQuery(), selectedLeaseId(), role === "lighting" ? ["lighting"] : role === "video" ? ["video"] : ["lighting", "video"]);
       await executeOutputControl(
         props.invokeCommand,
-        { kind: "arm", role: nextRole === "Lighting" ? "lighting" : nextRole === "Video" ? "video" : "both" },
-        ({ displayCode }) => setActionError(
-          `Arm ${nextRole} confirmation required: type ${displayCode} on the physical keyboard.`,
-        ),
+        { kind: "arm", role, lease },
+        (notice) => setChallengeNotice(notice),
       );
       setActionError(null);
       // The terminal receipt is authoritative, but status polling remains the
@@ -236,6 +272,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
       setActionError(String(error));
       await pollStatus();
     } finally {
+      setChallengeNotice(null);
       setBusy(false);
     }
   };
@@ -243,6 +280,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const armMachineRole = async () => {
     setBusy(true);
     setActionError(null);
+    setChallengeNotice(null);
     try {
       const requestedRole = machineRole();
       if (requestedRole === "Standby") {
@@ -253,12 +291,12 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         setMachineRole(outputStatus.desired_role);
         return;
       }
+      const role: OutputControlTargetRole = requestedRole === "Lighting" ? "lighting" : requestedRole === "Video" ? "video" : "both";
+      const lease = selectOutputLeaseAuthority(leaseQuery(), selectedLeaseId(), role === "lighting" ? ["lighting"] : role === "video" ? ["video"] : ["lighting", "video"]);
       await executeOutputControl(
         props.invokeCommand,
-        { kind: "arm", role: requestedRole === "Lighting" ? "lighting" : requestedRole === "Video" ? "video" : "both" },
-        ({ displayCode }) => setActionError(
-          `Arm ${requestedRole} confirmation required: type ${displayCode} on the physical keyboard.`,
-        ),
+        { kind: "arm", role, lease },
+        (notice) => setChallengeNotice(notice),
       );
       setActionError(null);
       await pollStatus();
@@ -266,6 +304,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
       setActionError(String(error));
       await pollStatus();
     } finally {
+      setChallengeNotice(null);
       setBusy(false);
     }
   };
@@ -278,11 +317,13 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const takeOver = async () => {
     setBusy(true);
     setActionError(null);
+    setChallengeNotice(null);
     try {
       const current = status();
       if (!current.session_id || current.generation === null) {
         throw new Error("Standby Take Over checkpoint is unavailable; nothing was applied.");
       }
+      const lease = selectOutputLeaseAuthority(leaseQuery(), selectedLeaseId(), ["lighting", "video"]);
       await executeOutputControl(
         props.invokeCommand,
         {
@@ -290,10 +331,9 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
           force: forceRequired(),
           standby_session_id: current.session_id,
           standby_generation: current.generation,
+          lease,
         },
-        ({ displayCode }) => setActionError(
-          `Take Over confirmation required: type ${displayCode} on the physical keyboard.`,
-        ),
+        (notice) => setChallengeNotice(notice),
       );
       setActionError(null);
       takeoverDialog.close();
@@ -301,9 +341,47 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
     } catch (error) {
       setActionError(String(error));
     } finally {
+      setChallengeNotice(null);
       setBusy(false);
     }
   };
+
+  const selectedLifecycleLease = (): OutputLeaseAuthority => {
+    const selected = selectedLease();
+    if (!selected) throw new Error("Select one exact output lease before continuing; nothing was applied.");
+    return { ...selected };
+  };
+
+  const runLeaseLifecycle = async (action: Parameters<typeof executeOutputLeaseLifecycle>[1]) => {
+    setBusy(true);
+    setActionError(null);
+    setChallengeNotice(null);
+    try {
+      await executeOutputLeaseLifecycle(props.invokeCommand, action, (notice) => setChallengeNotice(notice));
+      await pollStatus();
+    } catch (error) {
+      setActionError(String(error));
+      await pollStatus();
+    } finally {
+      setChallengeNotice(null);
+      setBusy(false);
+    }
+  };
+
+  const acquireLease = () => {
+    const role = machineRole() === "Lighting" ? "lighting" : machineRole() === "Video" ? "video" : "both";
+    return void runLeaseLifecycle({ kind: "acquire_lease", role });
+  };
+  const runSelectedLeaseLifecycle = (kind: "renew_lease" | "recover_lease" | "relinquish_output_lease") => {
+    try {
+      void runLeaseLifecycle({ kind, lease: selectedLifecycleLease() });
+    } catch (error) {
+      setActionError(String(error));
+    }
+  };
+  const renewLease = () => runSelectedLeaseLifecycle("renew_lease");
+  const recoverLease = () => runSelectedLeaseLifecycle("recover_lease");
+  const relinquishLease = () => runSelectedLeaseLifecycle("relinquish_output_lease");
 
   return (
     <section class="standbySyncDesk">
@@ -377,6 +455,59 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
       </dl>
       <Show when={ownershipStatus().error}>
         <p class="fieldError textPretty" role="alert" aria-live="polite">{ownershipStatus().error}</p>
+      </Show>
+
+      <section class="standbyLeasePanel" aria-label="Output lease authority">
+        <header class="ioDeskHeader">
+          <h3 class="textBalance">Output lease</h3>
+          <span class="tabularNums">
+            {leaseQuery().statuses.length === 1 && leaseQuery().statuses[0].status === "unavailable"
+              ? "Unavailable"
+              : `${heldLeases().length} held`}
+          </span>
+        </header>
+        <p class="textPretty">
+          Lease IDs are backend-issued capabilities. Select one exact lease; lighting and video leases are never merged.
+        </p>
+        <Show when={heldLeases().length > 0} fallback={<p class="inlineWarning">Output lease state is Unavailable.</p>}>
+          <div class="standbyStatusGrid tabularNums">
+            <For each={heldLeases()}>{(lease) => (
+              <div>
+                <dt>{lease.status === "held_active" ? "Held active" : "Held orphaned"}</dt>
+                <dd>{lease.authority.lease_id} · generation {lease.authority.generation} · {lease.resources.join(" + ")}</dd>
+              </div>
+            )}</For>
+          </div>
+          <label>
+            Selected exact lease
+            <select
+              aria-label="Selected exact output lease"
+              value={selectedLeaseId()}
+              onChange={(event) => setSelectedLeaseId(event.currentTarget.value)}
+              disabled={!props.backendAvailable || busy()}
+            >
+              <option value="">Select one lease</option>
+              <For each={heldLeases()}>{(lease) => (
+                <option value={lease.authority.lease_id}>
+                  {lease.authority.lease_id} · {lease.status === "held_active" ? "active" : "orphaned"} · g{lease.authority.generation}
+                </option>
+              )}</For>
+            </select>
+          </label>
+        </Show>
+        <div class="buttonRow">
+          <button onClick={acquireLease} disabled={!props.backendAvailable || busy()}>Acquire selected-role lease</button>
+          <button onClick={renewLease} disabled={!props.backendAvailable || busy() || selectedLeaseStatus()?.status !== "held_active"}>Renew</button>
+          <button onClick={recoverLease} disabled={!props.backendAvailable || busy() || selectedLeaseStatus()?.status !== "held_orphaned"}>Recover</button>
+          <button onClick={relinquishLease} disabled={!props.backendAvailable || busy() || !selectedLeaseStatus()}>Relinquish</button>
+        </div>
+      </section>
+
+      <Show when={challengeNotice()}>
+        <aside class="standbyLeaseChallenge" aria-live="polite" aria-label="Backend physical confirmation">
+          <strong>Backend physical confirmation required</strong>
+          <span>Type challenge code <code>{challengeNotice()?.displayCode}</code> on the physical keyboard.</span>
+        </aside>
       </Show>
 
       <label>
@@ -463,6 +594,15 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
               />
               I have fenced or disconnected every old Primary.
             </label>
+          </Show>
+          <p class="textPretty">
+            The checkbox above is operator isolation confirmation. The backend physical confirmation challenge is shown separately and must also be completed.
+          </p>
+          <Show when={challengeNotice()}>
+            <aside class="standbyLeaseChallenge" aria-live="polite" aria-label="Backend physical confirmation">
+              <strong>Backend physical confirmation required</strong>
+              <span>Type challenge code <code>{challengeNotice()?.displayCode}</code> on the physical keyboard.</span>
+            </aside>
           </Show>
           <Show when={actionError()}>
             <p class="fieldError textPretty" role="alert">{actionError()}</p>

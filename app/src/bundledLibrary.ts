@@ -34,6 +34,14 @@ interface BundledLibrarySource {
   load: () => Promise<BundledLibraryPayload>;
 }
 
+const loadBundledLibraryAsset = async (url: URL): Promise<BundledLibraryPayload> => {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Bundled fixture library could not be loaded (${response.status})`);
+  }
+  return response.json() as Promise<BundledLibraryPayload>;
+};
+
 export interface BundledLibraryAttribution {
   source: string;
   shortName: string;
@@ -49,16 +57,12 @@ const sources: BundledLibrarySource[] = [
   {
     id: "ofl",
     shortName: "OFL",
-    load: () => import("./generated/oflLibrary.json").then(
-      (module) => (module.default ?? module) as unknown as BundledLibraryPayload,
-    ),
+    load: () => loadBundledLibraryAsset(new URL("./generated/oflLibrary.json", import.meta.url)),
   },
   {
     id: "qlc",
     shortName: "QLC+",
-    load: () => import("./generated/qlcLibrary.json").then(
-      (module) => (module.default ?? module) as unknown as BundledLibraryPayload,
-    ),
+    load: () => loadBundledLibraryAsset(new URL("./generated/qlcLibrary.json", import.meta.url)),
   },
 ];
 
@@ -80,7 +84,14 @@ const loadPayloads = () => {
   payloadPromise ??= Promise.all(sources.map(async (source) => ({
     source,
     payload: await source.load(),
-  }))).then((entries) => entries.sort((left, right) => right.payload.priority - left.payload.priority));
+  })))
+    .then((entries) => entries.sort((left, right) => right.payload.priority - left.payload.priority))
+    .catch((error) => {
+      // A transient asset-protocol/read failure must not poison every later
+      // attempt for the lifetime of the application.
+      payloadPromise = null;
+      throw error;
+    });
   return payloadPromise;
 };
 

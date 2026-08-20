@@ -1,186 +1,245 @@
-# Syndocal × rekordbox × Stream Deck Pedal acceptance
+# Syndocal × rekordbox-DJ-Link-ForPCDJ acceptance
 
-Date: 2026-08-20
-Status: Required, not yet implemented or hardware-accepted
-Source authority: user-supplied integration specification received 2026-08-20
+Date: 2026-08-21
+Status: Required; Syndocal implementation in progress; DJ-Link peer implementation and hardware acceptance pending
+Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
-## 1. Product outcome
+This document supersedes the earlier design in which a Pedal entered Syndocal first
+and Syndocal sent MIDI to rekordbox. That design must not be restored.
 
-Syndocal is the sole input and show-control authority for the DJ-to-band transition.
-An Elgato Stream Deck Pedal gesture enters Syndocal first. One typed Syndocal trigger
-then drives both the existing Timeline/Loop runtime and configured MIDI output to
-rekordbox. rekordbox is not the master clock or state authority for this workflow.
-The required synchronization boundary is one input causing coordinated state
-transitions; exact beat-clock synchronization is not claimed.
+## 1. Deployed topology and ownership
 
-Do not create a separate bridge application. On Windows, rekordbox is reached through
-a user-selected virtual MIDI port such as loopMIDI. No rekordbox Note, CC, channel,
-device name, or toggle assumption may be hard-coded.
+The Stream Deck Pedal, rekordbox, virtual MIDI port, global hotkeys, MIDI mappings,
+filter ramp, stop, and optional post-release reset all live on the stage DJ PC. The
+existing `Seraf0-org/rekordbox-DJ-Link-ForPCDJ` Node server is extended in place and
+acts as the DJ Agent. No second Agent process, DLL injection, Hook UDP listener, or
+parallel DJ Link server is created.
 
-```text
-Stream Deck Pedal / UI / Keyboard / OSC / MIDI / API / Remote
-                              |
-                    typed Syndocal trigger
-                       /              \
-           existing Timeline action   configured MIDI action
-                                      |
-                               virtual MIDI port
-                                      |
-                                  rekordbox
-```
-
-## 2. Canonical trigger contract
-
-Physical inputs and product actions remain decoupled. The minimum typed trigger set is:
-
-| Trigger | Syndocal action | rekordbox MIDI action |
-| --- | --- | --- |
-| `DJ_LOOP_HALF` | Halve the active/armed musical A-B loop through the existing canonical Loop `1/2` action | User-mapped rekordbox `LOOP 1/2` message |
-| `DJ_FILTER_CLOSE` | No Timeline transport, loop, cue, lighting, or video mutation | Start one configured MIDI CC ramp toward the learned low-pass value |
-| `DJ_RELEASE` | Disable/release the active/armed loop without seeking, then continue normal Timeline progression | Send the configured deterministic stop action and optional reset sequence |
-
-The same trigger must be invocable by UI, configurable keyboard shortcut, MIDI, OSC,
-API/control plane, Stream Deck, and Remote only through the shared typed
-Trigger/Action/receipt path. Adapters contain no independent domain logic. Safety,
-authority, generation, rate-limit, reply-loss, and audit rules remain those of the
-canonical control plane; adding a pedal path must not bypass them.
-
-## 3. Pedal mapping
-
-The default proposed Stream Deck keyboard gestures are configurable examples, not
-hard-coded product behavior:
-
-| Pedal | Proposed gesture | Trigger |
-| --- | --- | --- |
-| Pedal 1 | `Ctrl+Alt+F1` | `DJ_RELEASE` |
-| Pedal 2 | `Ctrl+Alt+F2` | `DJ_LOOP_HALF` |
-| Pedal 3 | `Ctrl+Alt+F3` | `DJ_FILTER_CLOSE` |
-
-Syndocal must receive the gestures through a reviewed global-hotkey or equivalent
-native input path. Bindings are editable, conflict-checked, persisted, keyboard-layout
-aware, do not shadow text input or safety controls, and remain operable when the main
-window does not have focus. Device/input loss must be visible and fail closed.
-
-## 4. `DJ_LOOP_HALF`
-
-One trigger invokes the existing authored/runtime musical A-B Loop `1/2` command and
-the configured rekordbox Loop Half MIDI action from the same accepted event. Repeated
-accepted triggers may produce `4 -> 2 -> 1 -> 1/2 -> 1/4` beat lengths, subject to the
-existing minimum engine tick, grid quantization, and project/timeline boundary rules.
-
-The active loop start remains anchored. Halving must not create a second loop system,
-seek unexpectedly, double-fire boundary events, or derive Syndocal state by reading
-rekordbox. If either action cannot be admitted, the receipt and operator-visible result
-must truthfully distinguish full success, rejection before either action, and any
-bounded partial external-send failure. Retry with the same request identity may not
-halve twice or emit an untracked duplicate MIDI message.
-
-## 5. `DJ_FILTER_CLOSE`
-
-One trigger starts a non-blocking MIDI Control Change ramp. Defaults and editable
-parameters are:
-
-- duration: approximately `2000 ms` by default;
-- channel: `1..16` in the UI and canonical `0..15` on the MIDI wire;
-- CC number, start value, and end value: `0..127`;
-- output device: selected from current MIDI output enumeration;
-- update cadence: bounded and smooth enough for the configured duration;
-- direction and endpoint: learned/configured for the actual rekordbox mapping.
-
-The ramp runs outside the UI and Timeline realtime threads. It must not pause, release,
-seek, or otherwise mutate the Syndocal Timeline. A second `DJ_FILTER_CLOSE` while the
-same ramp is active is ignored by default and returns a truthful idempotent status;
-future restart/replace behavior requires an explicit setting and tests. Cancellation,
-device disconnect, send failure, shutdown, project replacement, stale callback, and
-reply loss are bounded, generation-fenced, logged, and cannot crash Syndocal.
-
-## 6. `DJ_RELEASE` and reset sequence
-
-One trigger releases/disables the current Syndocal loop without seeking so ordinary
-Lighting, Video, Audio, and other Show Control events continue on the Timeline. From
-the same accepted event, Syndocal sends a configured rekordbox stop action. The
-operator chooses the learned deterministic action only after native rekordbox testing;
-`PLAY/PAUSE` must not be assumed safe because an unobserved toggle can restart playback.
-
-An optional persisted reset sequence is supported and enabled/disabled as one mapping
-setting. Its actions and delays are editable and bounded. The initial required shape is:
+Syndocal runs at FOH. It receives authenticated semantic show events over the existing
+show-network WebSocket service, owns project-specific Track-to-Timeline mappings, and
+uses its existing Timeline/Loop/Video/Lighting runtime. Syndocal never sends rekordbox
+MIDI, owns no Pedal/global-hotkey configuration, and does not implement the filter,
+stop, Loop Off, or Filter Center reset.
 
 ```text
-0 ms    rekordbox Stop + Syndocal Loop Release
-100 ms  configured rekordbox Loop Off
-200 ms  configured rekordbox Filter Center
+Stage DJ PC                                      FOH
+
+Pedal -> rekordbox-DJ-Link-ForPCDJ               Syndocal
+          |             |                            |
+          |             +-- local MIDI -> rekordbox  +-- Timeline/Loop
+          +-- WebSocket over wired Show LAN --------+-- Video/Lighting
 ```
 
-The reset sequencer uses the same selected MIDI output and typed message configuration.
-It does not block Timeline progress. Repeated trigger, reply loss, device loss, project
-replacement, and shutdown cannot duplicate an already acknowledged step silently.
+The normal operating network is the existing managed, wired Show LAN. Host, port,
+bind address, and NIC are configurable; no production address is hard-coded. Wi-Fi is
+not the primary show-control path. The first release trusts the dedicated LAN and does
+not claim protection against a hostile LAN without a later TLS/mTLS tranche.
 
-## 7. Generic MIDI OUT and persistence
+## 2. Shared DJ Link wire contract
 
-Syndocal must enumerate MIDI output devices and support at least Note On, Note Off,
-and Control Change. Each action stores output-device identity, channel, message type,
-Note/CC number, and value. Device identity must survive ordinary reorder where an exact
-stable identity is available; a missing, stale, or ambiguous device locks the mapping
-instead of silently selecting another output.
+DJ-Link is the WebSocket client. Syndocal extends its existing Web Remote listener with
+the dedicated `/dj-link` role/path; it does not open an unrelated second server.
+Generic Remote authorization and DJ Link authorization remain separate.
 
-Trigger bindings, MIDI mappings, ramp parameters, stop choice, and reset sequence are
-project/profile data with additive backward-compatible defaults. Save, Save As,
-template, backup/recovery, Undo/Redo where applicable, project replacement, and future
-schema rejection follow the generic project-authority path. Product SemVer does not
-substitute for a mapping/project schema migration.
+Every DJ frame is a strict, bounded JSON envelope:
 
-## 8. Operator surface
+```json
+{
+  "v": 1,
+  "type": "DJ_MASTER_TRACK_ACTIVE",
+  "agentId": "stable-agent-id",
+  "sessionId": "connection-session-id",
+  "sequence": 104,
+  "eventId": "opaque-event-id",
+  "payload": {}
+}
+```
 
-Setup must provide one discoverable Pedal/DJ transition configuration surface within
-the existing I/O and mapping shell. It includes input gesture, conflict/error state,
-MIDI output selection and refresh, per-trigger mapping, CC ramp values/duration,
-retrigger policy, stop choice, reset enablement/steps, and a non-energizing validation
-or test path. Do not shrink shared controls to fit; use existing disclosure and internal
-scrolling contracts.
+`DJ_AGENT_HELLO` is the first frame and carries a dedicated token, Agent version, and
+capabilities. The token is backend-generated, shown only through an explicit rotation
+flow, and is never placed in a URL, query string, ordinary status response, `.sdc`,
+template, backup, or Standby checkpoint. Only an authenticated session may send:
 
-The surface exposes Idle, Looping, Filtering, and Released truth only if those states
-are derived from existing runtime/trigger state. Do not create a parallel state machine
-when the existing Loop and Action runtimes already carry the authority.
+- `DJ_HEARTBEAT`
+- `DJ_MASTER_CHANGED`
+- `DJ_MASTER_TRACK_ACTIVE`
+- `DJ_LOOP_STATE`
+- `DJ_RELEASE`
+- `DJ_STATE_SYNC`
 
-## 9. Required proof
+Sequence is a positive JavaScript-safe integer and increases monotonically for one
+`agentId`/`sessionId`; gaps are allowed. `eventId` is opaque and bounded. Same ID plus
+the same canonical shape returns the saved terminal response without repeating a side
+effect. Same ID with another shape, sequence rollback, unauthenticated traffic, and
+session impersonation are rejected. A newly authenticated session replaces an older
+session by generation; an old socket closing cannot clear the new session.
 
-Automated proof must cover:
+Acknowledgement includes the original ID and sequence:
 
-1. one physical-input event produces one canonical trigger and one terminal receipt;
-2. Loop Half changes Syndocal once and emits the configured MIDI action once;
-3. repeated Loop Half reaches each permitted musical length without boundary doubles;
-4. filter ramp endpoints, monotonic direction, cadence bounds, duration, and 0/127 edges;
-5. ramp re-entry is ignored by default and never blocks UI/Timeline processing;
-6. Release disables the loop without seeking and later Timeline cues continue;
-7. reset steps execute once in order at their configured delays;
-8. same-ID retry is idempotent and same-ID/different-shape is rejected;
-9. wrong owner/generation, rate limit, stale callback, and project replacement fail closed;
-10. missing/disconnected/renumbered MIDI output cannot crash or silently reroute;
-11. legacy project load supplies safe defaults and save/reload preserves exact mappings;
-12. UI, keyboard, MIDI, OSC, API/control plane, and Remote adapters converge on the same action.
+```json
+{
+  "v": 1,
+  "type": "ACK",
+  "eventId": "opaque-event-id",
+  "sequence": 104,
+  "outcome": "accepted",
+  "code": "ok",
+  "stateGeneration": 42
+}
+```
 
-Native/hardware acceptance must record exact app commit/artifact, Windows version,
-Stream Deck/Pedal model and firmware, Stream Deck software version, virtual MIDI
-driver/version/port, rekordbox version/deck, learned MIDI mapping, audio device,
-operator/date, and raw timestamp/video/log evidence. It must demonstrate all three
-pedals, repeated Loop Half, a timed filter ramp, deterministic stop, optional reset,
-unfocused/main-window focus changes, device disconnect/reconnect, and next-show reuse.
+Allowed outcomes are `accepted`, `duplicate`, `no_mapping`, `rejected`, and `busy`.
+`busy` is explicitly nonterminal: the peer retains the exact event identity and may
+retry it, while the other admitted outcomes are cached for idempotent replay. An ACK
+is sent only after validation and canonical admission, and `accepted` is returned only
+after the canonical engine lane reports the semantic result. It never falsely claims
+that an external physical action occurred. Heartbeat is approximately five seconds;
+Syndocal marks the peer disconnected after a bounded timeout of approximately fifteen
+seconds. Disconnect or timeout never implies Release.
 
-## 10. Completion gate
+The shared wire fixtures use the event names exactly as written above; implementations
+must not shorten them to `HELLO`, `MASTER_TRACK_ACTIVE`, or similar private aliases.
+`DJ_MASTER_TRACK_ACTIVE.payload` carries `deck`, `contentId`, `title`, `artist`,
+`trackBpm`, `positionSec`, `startedAt`, and `playSessionId`. `DJ_LOOP_STATE.payload`
+carries the absolute `division`. `DJ_STATE_SYNC.payload` carries `loopDivision`,
+`released`, `masterDeck`, and nested `masterTrack { contentId, title, artist,
+isPlaying }`. State Sync updates diagnostics and absolute Loop truth only; it cannot
+fire a Track mapping or infer Release.
 
-This requirement is complete only when all of the following are true on one reviewed
-native build:
+## 3. DJ-Link peer behavior
 
-- Stream Deck Pedal input is received by Syndocal through configurable bindings;
-- Pedal 2 halves both the Syndocal loop and the learned rekordbox loop on each press;
-- Pedal 3 ramps the learned rekordbox filter without changing Timeline state;
-- Pedal 1 stops rekordbox deterministically, releases the Syndocal loop, and normal
-  Timeline cues continue;
-- optional Loop Off and Filter Center reset leaves rekordbox ready for the next use;
-- no MIDI device or a disconnected device leaves Syndocal running with truthful error;
-- every binding/value/device is editable and persisted, with no rekordbox constants;
-- independent review, automated/native/hardware evidence, warning-zero supported
-  configurations, and the product's ordinary release gates pass.
+The peer reuses the existing hook, Hook UDP, master-change event, playback state,
+Socket.IO/Web UI, packaging, and installer. Its new show-control client sends explicit
+semantic events rather than the existing large browser `state` snapshot.
+The peer repository is implemented and reviewed in its own Codex flow. Syndocal does
+not modify that repository in this tranche; integration acceptance pins both immutable
+repository commits once the peer checkpoint is available.
 
-Until physical Stream Deck Pedal, virtual MIDI, and rekordbox evidence exists, the
-feature remains `Required / Hardware pending` and must not be advertised as complete.
+The Pedal defaults may use F13/F14/F15, but remain configurable and are acquired as
+native Windows global hotkeys on the DJ PC, not through browser `keydown` and not by
+Syndocal.
+
+- Pedal 2 sends one configured local MIDI Loop Half action and advances the Agent's
+  absolute `loopDivision`. It sends `DJ_LOOP_STATE` with the absolute division.
+- Pedal 3 runs the configured nonblocking local MIDI CC ramp. It sends no Syndocal
+  show event.
+- Pedal 1 sends the configured local deterministic stop, optional local reset steps,
+  and one idempotent `DJ_RELEASE` which is not complete until acknowledged.
+
+Network loss does not block local rekordbox control. The peer displays the loss and,
+after reconnecting, sends `DJ_STATE_SYNC` with current state instead of replaying old
+relative actions.
+
+## 4. Master Track Active event
+
+Track Loaded, Track Playing, and Master Track Active are distinct. Automatic show
+mapping uses only `DJ_MASTER_TRACK_ACTIVE`, generated when the deck is current Master,
+is actually playing, has a known identity, and differs from the prior active play
+session. It is also generated when an already-playing deck becomes Master.
+
+The payload contains bounded `deck`, `contentId`, `title`, `artist`, `trackBpm`,
+`positionSec`, `startedAt`, and `playSessionId`. An explicit hook master-change wins
+over explicit master state, which wins over the existing playback heuristic.
+
+## 5. Project Track-to-Timeline mapping
+
+Syndocal stores `DJ Track Trigger Mapping` in `.sdc` because show outcome is project
+data. The DJ-Link peer does not store it. A mapping contains:
+
+- stable mapping ID;
+- selector: exact opaque `contentId`, or exact normalized `title` plus `artist`;
+- event: `MasterTrackActive`;
+- action: `StartTimeline` with an existing Timeline ID;
+- retrigger policy: initially `OncePerPlaySession`.
+
+Exact `contentId` has priority. The fallback trims and Unicode-normalizes both title
+and artist and requires both to match. Title-only, fuzzy, basename, and guessed
+case-fold matches are forbidden. Ambiguous selectors are rejected at save time; one
+event cannot start multiple Timelines. The initial limit is 128 mappings.
+
+The mappings are an additive, backward-compatible part of the existing
+`ProjectControlMappings` CAS image and follow Save, Save As, Undo/Redo, project load,
+template, backup/recovery, and Standby checkpoint paths. Connection/runtime/session
+state and authentication token are process-local and are never replicated as project
+data.
+
+## 6. Syndocal event semantics
+
+`DJ_MASTER_CHANGED` updates diagnostics only. Load, preview, Cue preparation, a
+non-Master deck, and `DJ_STATE_SYNC` cannot start a Timeline.
+
+`DJ_MASTER_TRACK_ACTIVE` validates current Master/playing/identity, resolves at most
+one mapping, and invokes the existing canonical runtime Timeline start path. The
+dedupe key includes project epoch, mapping ID, and `playSessionId`; mapping CAS or
+project replacement invalidates the prior generation.
+
+`DJ_LOOP_STATE` is absolute. Division zero restores the authored A-B duration;
+division `N` sets the end to `A + (B-A)/2^N`. It uses the existing Loop runtime,
+rejects missing regions, bounds and overflow, and is a no-op when already converged.
+It must never implement absolute synchronization by repeatedly applying relative
+Loop Half.
+
+`DJ_RELEASE` disables the current DJ loop and resumes the Timeline through the
+canonical transport lane. Exact replay and repeated Release are idempotent and do not
+double-advance, double-cue, or seek.
+
+`DJ_STATE_SYNC` restores diagnostics and may converge an explicit absolute loop
+division only when the synchronized state is not released. A snapshot with
+`released: true` cannot re-enable or resume the loop. State Sync never replays Track
+Active mappings and never executes Release transport semantics from a snapshot.
+
+## 7. Syndocal operator surface
+
+The existing Web Remote/Setup I/O surface contains a `DJ Link agent` disclosure with:
+
+- configured Show-LAN bind address and endpoint state;
+- Connected/Disconnected, peer address, heartbeat age, and session generation;
+- Master deck, playing state, current title/artist/content ID, Loop division;
+- last event, last event age, and last terminal outcome;
+- explicit token rotation/show-once workflow;
+- Track mapping add/edit/remove and `Use Current Track`.
+
+It contains no Pedal, rekordbox MIDI, Filter, Stop, reset, or global-hotkey controls.
+Mappings use the existing project-authority CAS path and surface conflicts rather than
+silently overwriting concurrent edits.
+
+## 8. Automated proof
+
+Syndocal proof must cover:
+
+1. `/dj-link` and generic Remote role/path separation;
+2. HELLO-before-use, token failure, frame bounds, rate limiting, heartbeat timeout,
+   authenticated session replacement, and old-close ABA protection;
+3. same-ID replay, same-ID/different-shape rejection, sequence rollback, and truthful
+   terminal ACKs;
+4. content-ID priority, exact title+artist fallback, title-only/non-Master/no-mapping
+   rejection, and Once-per-play-session dedupe;
+5. Track Load and State Sync never triggering a Timeline;
+6. absolute Loop division 0/1/N, non-accumulation, no-op convergence, and invalid
+   authored-region/bounds rejection;
+7. Release replay disabling/resuming once without seek or duplicate cue;
+8. legacy project default, exact save/reload, mapping CAS conflict, template,
+   backup/recovery, and Standby mapping round-trip;
+9. project replacement or failed CAS producing no stale event side effect;
+10. token/session/runtime state never appearing in project artifacts or ordinary
+    status responses;
+11. existing Remote, MIDI, OSC, WebSocket, Timeline, Video, Lighting, and warning
+    ratchets remaining green.
+
+The DJ-Link peer separately proves Hook/Now Playing regression safety, Master Track
+Active generation, Pedal/global-hotkey input, local MIDI mappings/ramp/reset, local
+operation during disconnect, reconnect State Sync, and ACK display.
+
+## 9. Native and hardware acceptance
+
+End-to-end acceptance records both repository commits/artifacts, Windows and app
+versions, DJ/FOH NICs and switch path, rekordbox and Stream Deck versions, Pedal model
+and firmware, virtual MIDI device/mapping, operator/date, packet/log timestamps, and
+video evidence. It demonstrates Track pre-load without trigger, actual Master playback
+trigger, Master switch, absolute repeated Loop divisions, filter isolation, Release,
+disconnect/local operation/reconnect sync, same-session dedupe, app restart, and next
+show reuse while Art-Net/sACN traffic shares the wired network.
+
+Until the separately developed DJ-Link peer exposes the fixed contract and both builds
+pass the wired-LAN hardware matrix, this feature remains `Required / Peer and hardware
+pending`; Syndocal-side automated completion is not an end-to-end completion claim.

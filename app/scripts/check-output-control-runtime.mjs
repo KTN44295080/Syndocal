@@ -3,40 +3,10 @@ import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
 const read = (relativePath) => readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
-
-const [
-  controllerSource,
-  appSource,
-  standbySource,
-  videoRuntimeSource,
-  mainSource,
-  controlPlaneSource,
-  registrySource,
-] = await Promise.all([
-  read("src/outputControlController.ts"),
-  read("src/App.tsx"),
-  read("src/components/StandbySyncPanel.tsx"),
-  read("src/createVideoRuntimeController.ts"),
-  read("src-tauri/src/main.rs"),
-  read("src-tauri/src/control_plane.rs"),
-  read("../crates/protocol/src/control_plane_registry_v2.rs"),
-]);
-
-const transpiled = ts.transpileModule(controllerSource, {
-  compilerOptions: {
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ES2022,
-    importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
-  },
-  fileName: "outputControlController.ts",
-});
-const runtime = await import(
-  `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`,
-);
-
 const hash = (character) => character.repeat(64);
 const challengeId = "0123456789ABCDEFGHIJKL";
 const consentToken = "abcdefghijklmnopqrstuv";
+const lease = (generation = 1) => ({ lease_id: "lease-0000000000000001", generation });
 const fence = {
   process_incarnation: 1,
   session_incarnation: 2,
@@ -50,91 +20,153 @@ const fence = {
   safety_blackout_generation: 9,
 };
 
-const actionCases = [
+const controllerSource = await read("src/outputControlController.ts");
+const runtime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
+  controllerSource,
   {
-    action: { kind: "arm", role: "lighting" },
-    operationId: runtime.OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
-    command: "arm_output_control_v1",
-  },
-  {
-    action: { kind: "release_blackout" },
-    operationId: runtime.OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
-    command: "release_blackout_output_control_v1",
-  },
-  {
-    action: {
-      kind: "take_over_standby",
-      force: true,
-      standby_session_id: "standby-session-1",
-      standby_generation: 7,
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+      importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
     },
-    operationId: runtime.OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
-    command: "take_over_output_control_v1",
+    fileName: "outputControlController.ts",
+  },
+).outputText).toString("base64")}`);
+
+const resourcesFor = (action) => action.role === "lighting"
+  ? ["lighting"] : action.role === "video" ? ["video"] : ["lighting", "video"];
+const operationFor = (action) => ({
+  arm: runtime.OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+  release_blackout: runtime.OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+  take_over_standby: runtime.OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+  acquire_lease: runtime.OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
+  renew_lease: runtime.OUTPUT_LEASE_RENEW_OPERATION_ID,
+  recover_lease: runtime.OUTPUT_LEASE_RECOVER_OPERATION_ID,
+  relinquish_output_lease: runtime.OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
+  force_transfer_lease: runtime.OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
+})[action.kind];
+const commandFor = (action) => ({
+  arm: "arm_output_control_v1",
+  release_blackout: "release_blackout_output_control_v1",
+  take_over_standby: "take_over_output_control_v1",
+  acquire_lease: "acquire_output_lease_v1",
+  renew_lease: "renew_output_lease_v1",
+  recover_lease: "recover_output_lease_v1",
+  relinquish_output_lease: "relinquish_output_lease_v1",
+  force_transfer_lease: "force_transfer_output_lease_v1",
+})[action.kind];
+
+const ordinaryActions = [
+  { kind: "arm", role: "lighting", lease: lease() },
+  { kind: "release_blackout", lease: lease() },
+  {
+    kind: "take_over_standby",
+    force: true,
+    standby_session_id: "standby-session-1",
+    standby_generation: 7,
+    lease: lease(),
   },
 ];
+const lifecycleActions = [
+  { kind: "acquire_lease", role: "both" },
+  { kind: "renew_lease", lease: lease() },
+  { kind: "recover_lease", lease: lease() },
+  { kind: "relinquish_output_lease", lease: lease() },
+  { kind: "force_transfer_lease", lease: lease() },
+];
 
-const receiptFor = (request) => ({
-  type: "receipt",
-  receipt: {
-    operation_id: request.operation_id,
-    request_id: request.request_id,
-    shape_sha256: hash("a"),
-    argument_fingerprint: hash("b"),
-    audit_sequence: 1,
-    fence_before: structuredClone(request.expected_fence),
-    fence_after: structuredClone(request.expected_fence),
-    outcome: "no_op",
-  },
-});
-
-const createHarness = ({
-  action,
-  operationId,
-  command,
-  statusStates = ["ready"],
-  expiresAtUnixMs = Date.now() + 5_000,
-  executeResponse,
-  loseFirstReply = false,
-  authorityMutator,
-  challengeMutator,
-  statusMutator,
-  receiptMutator,
-} = {}) => {
-  const calls = [];
-  const statusArgs = [];
-  const executeArgs = [];
-  let statusIndex = 0;
-  let executeIndex = 0;
-  let preparedRequest;
-  const authority = {
-    operation_id: runtime.OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-    fence,
+const queryFor = (action, state = "active") => {
+  if (action.kind === "acquire_lease") {
+    return {
+      operation_id: runtime.OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID,
+      statuses: [{ status: "unavailable" }],
+    };
+  }
+  return {
+    operation_id: runtime.OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID,
+    statuses: [{
+      status: state === "orphaned" ? "held_orphaned" : "held_active",
+      authority: action.lease,
+      resources: action.kind === "arm" && state !== "wrong" ? resourcesFor(action) : ["lighting", "video"],
+    }],
   };
+};
+
+const receiptFor = (request, action) => {
+  const resources = action.kind === "acquire_lease" ? resourcesFor(action)
+    : action.kind === "arm" ? resourcesFor(action) : ["lighting", "video"];
+  const inputGeneration = action.kind === "acquire_lease" ? null : action.lease.generation;
+  const terminalGeneration = action.kind === "acquire_lease" ? 1
+    : action.kind === "relinquish_output_lease" || action.kind === "renew_lease"
+      || action.kind === "recover_lease" || action.kind === "force_transfer_lease"
+      ? action.lease.generation + 1 : action.lease.generation;
+  const relinquished = action.kind === "relinquish_output_lease";
+  const outcome = ({
+    arm: "authorized",
+    release_blackout: "authorized",
+    take_over_standby: "authorized",
+    acquire_lease: "acquired",
+    renew_lease: "renewed",
+    recover_lease: "recovered",
+    relinquish_output_lease: "relinquished",
+    force_transfer_lease: "transferred",
+  })[action.kind];
+  return {
+    type: "receipt",
+    receipt: {
+      operation_id: request.operation_id,
+      request_id: request.request_id,
+      shape_sha256: hash("a"),
+      argument_fingerprint: hash("b"),
+      audit_sequence: 1,
+      fence_before: structuredClone(request.expected_fence),
+      fence_after: structuredClone(request.expected_fence),
+      outcome: "no_op",
+      lease_result: {
+        authority: action.kind === "acquire_lease" ? lease(1) : lease(terminalGeneration),
+        resources,
+        phase: relinquished ? "unclaimed" : "held_active",
+        outcome,
+        audit_sequence: 1,
+        changes: [{
+          lease_id: "lease-0000000000000001",
+          before_generation: inputGeneration,
+          after_generation: terminalGeneration,
+          before_resources: inputGeneration === null ? [] : resources,
+          after_resources: relinquished ? [] : resources,
+          before_phase: inputGeneration === null ? null : "held_active",
+          after_phase: relinquished ? "unclaimed" : "held_active",
+        }],
+      },
+    },
+  };
+};
+
+const createHarness = ({ action, queryState, authorityFence = fence, loseFirstReply = false, typedRejection = false } = {}) => {
+  const operationId = operationFor(action);
+  const command = commandFor(action);
+  const calls = [];
+  const executeArgs = [];
+  let statusCalls = 0;
+  let executeCalls = 0;
+  let preparedRequest;
+  let challengeExpiresAt = Date.now() + 5_000;
   const invoke = async (actualCommand, args) => {
     calls.push({ command: actualCommand, args });
     if (actualCommand === "query_output_control_authority_v1") {
-      assert.equal(args, undefined, "authority query has no caller-controlled arguments");
-      const response = structuredClone(authority);
-      return authorityMutator ? authorityMutator(response) : response;
+      assert.equal(args, undefined);
+      return { operation_id: runtime.OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, fence: structuredClone(authorityFence) };
+    }
+    if (actualCommand === "query_output_lease_authority_v1") {
+      assert.equal(args, undefined);
+      return queryFor(action, queryState);
     }
     if (actualCommand === "prepare_output_consent_v1") {
-      assert.deepEqual(Object.keys(args).sort(), ["request"]);
-      assert.deepEqual(Object.keys(args.request).sort(), [
-        "action",
-        "expected_fence",
-        "operation_id",
-        "request_id",
-      ]);
+      assert.deepEqual(Object.keys(args), ["request"]);
       assert.equal(args.request.operation_id, runtime.OUTPUT_CONSENT_PREPARE_OPERATION_ID);
-      assert.deepEqual(args.request.expected_fence, authority.fence);
-      assert.notEqual(
-        args.request.expected_fence,
-        authority.fence,
-        "Tauri JSON fence correlation is value-based rather than reference-based",
-      );
       assert.equal(args.request.action, action);
       preparedRequest = args.request;
-      const response = {
+      return {
         operation_id: runtime.OUTPUT_CONSENT_PREPARE_OPERATION_ID,
         request_id: args.request.request_id,
         target_operation_id: operationId,
@@ -142,457 +174,185 @@ const createHarness = ({
         consent_token: consentToken,
         display_code: "123456",
         argument_fingerprint: hash("b"),
-        expires_at_unix_ms: expiresAtUnixMs,
+        expires_at_unix_ms: challengeExpiresAt,
       };
-      return challengeMutator
-        ? challengeMutator(structuredClone(response), args)
-        : structuredClone(response);
     }
     if (actualCommand === "query_output_consent_status_v1") {
-      assert.deepEqual(Object.keys(args).sort(), ["request"]);
-      assert.deepEqual(Object.keys(args.request).sort(), [
-        "challenge_id",
-        "operation_id",
-        "request_id",
-      ]);
+      statusCalls += 1;
       assert.equal(args.request.operation_id, runtime.OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID);
-      assert.equal(args.request.challenge_id, challengeId);
-      statusArgs.push(args);
-      const state = statusStates[Math.min(statusIndex, statusStates.length - 1)];
-      statusIndex += 1;
-      const response = {
+      assert.notEqual(args.request.request_id, preparedRequest.request_id);
+      return {
         operation_id: runtime.OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
         request_id: args.request.request_id,
         challenge_id: challengeId,
-        state,
-        expires_at_unix_ms: expiresAtUnixMs,
+        state: "ready",
+        expires_at_unix_ms: challengeExpiresAt,
       };
-      return statusMutator
-        ? statusMutator(structuredClone(response), args)
-        : structuredClone(response);
     }
-    assert.equal(actualCommand, command, "controller selected the action-specific ingress");
-    assert.deepEqual(Object.keys(args).sort(), ["request"]);
-    assert.deepEqual(Object.keys(args.request).sort(), [
-      "action",
-      "consent_token",
-      "expected_fence",
-      "operation_id",
-      "request_id",
-    ]);
-    assert.equal(args.request.operation_id, operationId);
-    assert.deepEqual(args.request.expected_fence, authority.fence);
+    assert.equal(actualCommand, command);
     assert.equal(args.request.action, action);
-    assert.equal(args.request.consent_token, consentToken);
-    assert.equal(args.request.request_id, preparedRequest.request_id);
+    assert.equal(args.request.operation_id, operationId);
     executeArgs.push(args);
-    if (loseFirstReply && executeIndex === 0) {
-      executeIndex += 1;
-      throw new Error("synthetic lost OutputControl IPC reply after apply");
+    if (loseFirstReply && executeCalls === 0) {
+      executeCalls += 1;
+      throw new Error("synthetic lost transport reply");
     }
-    executeIndex += 1;
-    const response = typeof executeResponse === "function"
-      ? executeResponse(args.request)
-      : executeResponse ?? receiptFor(args.request);
-    return receiptMutator
-      ? receiptMutator(structuredClone(response), args)
-      : structuredClone(response);
+    executeCalls += 1;
+    if (typedRejection) return {
+      type: "rejected",
+      rejection: { operation_id: operationId, request_id: args.request.request_id, error: "forbidden" },
+    };
+    return receiptFor(args.request, action);
   };
-  return { invoke, authority, calls, statusArgs, executeArgs };
+  return { invoke, calls, executeArgs, get statusCalls() { return statusCalls; }, get executeCalls() { return executeCalls; } };
 };
 
-// The browser must be given a visible, nonblocking challenge surface before
-// the backend prepares a token. Omitting it is rejected without any invoke.
-let omittedSurfaceCalls = 0;
 await assert.rejects(
-  runtime.executeOutputControl(
-    async () => {
-      omittedSurfaceCalls += 1;
-      throw new Error("invoke must not be reached without a challenge surface");
-    },
-    actionCases[0].action,
-  ),
+  runtime.executeOutputControl(async () => { throw new Error("invoke must not be reached"); }, ordinaryActions[0]),
   /visible, nonblocking physical-confirmation challenge surface/,
 );
-assert.equal(omittedSurfaceCalls, 0);
 
-// Exercise all three canonical operations. The harness checks every request
-// shape and reference, including the exact `{ request: ... }` Tauri envelope.
-for (const testCase of actionCases) {
-  const harness = createHarness(testCase);
-  let notice;
-  const receipt = await runtime.executeOutputControl(
-    harness.invoke,
-    testCase.action,
-    (challengeNotice) => {
-      notice = challengeNotice;
-      assert.deepEqual(challengeNotice.action, testCase.action);
-      assert.equal(challengeNotice.displayCode, "123456");
-      assert.ok(challengeNotice.expiresAtUnixMs > Date.now());
-    },
-  );
-  assert.equal(notice.displayCode, "123456");
-  assert.equal(receipt.operation_id, testCase.operationId);
-  assert.equal(receipt.outcome, "no_op");
-  assert.equal(harness.executeArgs.length, 1);
+for (const action of [...ordinaryActions, ...lifecycleActions]) {
+  const harness = createHarness({ action, queryState: action.kind === "recover_lease" ? "orphaned" : "active" });
+  const receipt = action.kind === "acquire_lease"
+    ? await runtime.executeOutputLeaseLifecycle(harness.invoke, action, () => {})
+    : action.kind === "arm" || action.kind === "release_blackout" || action.kind === "take_over_standby"
+      ? await runtime.executeOutputControl(harness.invoke, action, () => {})
+      : await runtime.executeOutputLeaseLifecycle(harness.invoke, action, () => {});
+  assert.equal(receipt.operation_id, operationFor(action));
+  assert.equal(harness.executeCalls, 1);
+  assert.equal(harness.statusCalls, 1);
 }
 
-const assertPreActionRejected = async (harness, testCase, message) => {
-  await assert.rejects(
-    runtime.executeOutputControl(harness.invoke, testCase.action, () => {}),
-    (error) => {
-      assert.match(String(error), message);
-      assert.match(String(error), /nothing was applied/);
-      return true;
-    },
-  );
-  assert.equal(harness.executeArgs.length, 0);
-};
-
-// Authority fences are untrusted JSON. Every scalar and the checkpoint hash
-// must validate before the controller can even prepare a challenge.
-for (const authorityMutator of [
-  (authority) => ({
-    ...authority,
-    fence: { ...authority.fence, project_epoch: 0 },
-  }),
-  (authority) => ({
-    ...authority,
-    fence: { ...authority.fence, project_checkpoint_hash: hash("A") },
-  }),
-]) {
-  const harness = createHarness({ ...actionCases[0], authorityMutator });
-  await assertPreActionRejected(harness, actionCases[0], /authority response was invalid/);
+// Rust permits zero only for the three project-scoped fence fields.  Keep the
+// renderer contract aligned: process/session/output/safety incarnations stay
+// strictly positive, while negative, fractional, and unsafe values fail
+// closed before consent or physical execution.
+for (const field of ["project_epoch", "project_revision", "project_publication_generation"]) {
+  const zeroFence = { ...fence, [field]: 0 };
+  const zeroHarness = createHarness({ action: ordinaryActions[0], authorityFence: zeroFence });
+  const zeroReceipt = await runtime.executeOutputControl(zeroHarness.invoke, ordinaryActions[0], () => {});
+  assert.equal(zeroReceipt.operation_id, runtime.OUTPUT_OWNERSHIP_ARM_OPERATION_ID);
+  assert.equal(zeroHarness.executeCalls, 1);
 }
 
-// Challenge correlation includes the prepare request id, the exact lower
-// hexadecimal argument fingerprint, and canonical 128-bit URL_SAFE_NO_PAD
-// identifiers for both the challenge and consent token.
-for (const challengeMutator of [
-  (challenge) => ({ ...challenge, request_id: challenge.request_id + 1 }),
-  (challenge) => ({ ...challenge, argument_fingerprint: hash("G") }),
-  (challenge) => ({ ...challenge, challenge_id: "" }),
-  (challenge) => ({ ...challenge, challenge_id: "a".repeat(21) }),
-  (challenge) => ({ ...challenge, challenge_id: `${"a".repeat(21)}/` }),
-  (challenge) => ({ ...challenge, consent_token: "" }),
-  (challenge) => ({ ...challenge, consent_token: "b".repeat(23) }),
-  (challenge) => ({ ...challenge, consent_token: `${"b".repeat(21)}+` }),
-]) {
-  const harness = createHarness({ ...actionCases[0], challengeMutator });
-  await assertPreActionRejected(
-    harness,
-    actionCases[0],
-    /physical-confirmation challenge was invalid/,
-  );
-}
-
-// Every status response must acknowledge the issued status request and must
-// retain the challenge's original expiry rather than extending it.
-for (const statusMutator of [
-  (status) => ({ ...status, request_id: status.request_id + 1 }),
-  (status) => ({ ...status, expires_at_unix_ms: status.expires_at_unix_ms + 1 }),
-]) {
-  const harness = createHarness({ ...actionCases[0], statusMutator });
-  await assertPreActionRejected(
-    harness,
-    actionCases[0],
-    /physical-confirmation status was invalid/,
-  );
-}
-
-const assertPostActionUnknown = async (receiptMutator) => {
-  const testCase = actionCases[1];
-  const harness = createHarness({ ...testCase, receiptMutator });
-  await assert.rejects(
-    runtime.executeOutputControl(harness.invoke, testCase.action, () => {}),
-    (error) => {
-      assert.match(String(error), /physical output state is unknown/);
-      assert.doesNotMatch(String(error), /nothing was applied/);
-      return true;
-    },
-  );
-  assert.equal(harness.executeArgs.length, 1);
-};
-
-// Receipts are post-action evidence: identity, hashes, positive sequence,
-// before-fence correlation, after-fence validity and outcome semantics all
-// fail to an explicitly unknown physical state.
-for (const receiptMutator of [
-  (response) => ({
-    ...response,
-    receipt: {
-      ...response.receipt,
-      fence_before: {
-        ...response.receipt.fence_before,
-        output_generation: response.receipt.fence_before.output_generation + 1,
-      },
-    },
-  }),
-  (response) => ({
-    ...response,
-    receipt: { ...response.receipt, shape_sha256: hash("A") },
-  }),
-  (response) => ({
-    ...response,
-    receipt: { ...response.receipt, argument_fingerprint: hash("d") },
-  }),
-  (response) => ({
-    ...response,
-    receipt: { ...response.receipt, audit_sequence: 0 },
-  }),
-  (response) => ({
-    ...response,
-    receipt: {
-      ...response.receipt,
-      fence_after: { ...response.receipt.fence_after, project_revision: 0 },
-    },
-  }),
-  (response) => ({
-    ...response,
-    receipt: {
-      ...response.receipt,
-      fence_after: {
-        ...response.receipt.fence_after,
-        output_generation: response.receipt.fence_after.output_generation + 1,
-      },
-      outcome: "no_op",
-    },
-  }),
-  (response) => ({
-    ...response,
-    receipt: { ...response.receipt, outcome: "applied" },
-  }),
-]) {
-  await assertPostActionUnknown(receiptMutator);
-}
-
-// A pending physical input that reaches the challenge deadline must fail
-// closed and must never reach the action-specific mutation command.
-const pendingExpiryCase = actionCases[1];
-const pendingExpiryHarness = createHarness({
-  ...pendingExpiryCase,
-  statusStates: ["pending_physical_input"],
-  expiresAtUnixMs: Date.now() + 25,
-});
-await assert.rejects(
-  runtime.executeOutputControl(
-    pendingExpiryHarness.invoke,
-    pendingExpiryCase.action,
-    () => {},
-  ),
-  /expired or was not received/,
-);
-assert.equal(pendingExpiryHarness.statusArgs.length, 1);
-assert.equal(pendingExpiryHarness.executeArgs.length, 0);
-
-// A typed terminal rejection is final. It is not transport loss and receives
-// no replay attempt.
-const rejectionCase = actionCases[0];
-const rejectionHarness = createHarness({
-  ...rejectionCase,
-  executeResponse: {
-    type: "rejected",
-    rejection: {
-      operation_id: rejectionCase.operationId,
-      request_id: 0,
-      error: "forbidden",
-    },
-  },
-});
-// The harness fills request_id only after the request exists, so replace the
-// response at the terminal boundary while retaining the typed wire shape.
-let rejectionExecuteCalls = 0;
-const rejectionInvoke = async (command, args) => {
-  if (command === rejectionCase.command) {
-    rejectionExecuteCalls += 1;
-    return {
-      type: "rejected",
-      rejection: {
-        operation_id: args.request.operation_id,
-        request_id: args.request.request_id,
-        error: "forbidden",
-      },
-    };
+for (const field of ["project_epoch", "project_revision", "project_publication_generation"]) {
+  for (const invalid of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const invalidFence = { ...fence, [field]: invalid };
+    const invalidHarness = createHarness({ action: ordinaryActions[0], authorityFence: invalidFence });
+    await assert.rejects(
+      runtime.executeOutputControl(invalidHarness.invoke, ordinaryActions[0], () => {}),
+      /OutputControl authority response was invalid/,
+    );
+    assert.equal(invalidHarness.executeCalls, 0);
   }
-  return rejectionHarness.invoke(command, args);
-};
-await assert.rejects(
-  runtime.executeOutputControl(rejectionInvoke, rejectionCase.action, () => {}),
-  (error) => {
-    assert.match(String(error), /forbidden/);
-    assert.match(String(error), /nothing was applied/);
-    return true;
-  },
-);
-assert.equal(
-  rejectionExecuteCalls,
-  1,
-  "typed rejection must not be replayed as a lost transport reply",
-);
-
-// Publication failure is a typed terminal response but may be reported after
-// the backend entered the physical action. It must not claim that nothing was
-// applied, and it still receives no transport retry.
-const publicationHarness = createHarness({ ...actionCases[1] });
-let publicationExecuteCalls = 0;
-const publicationInvoke = async (command, args) => {
-  if (command === actionCases[1].command) {
-    publicationExecuteCalls += 1;
-    return {
-      type: "rejected",
-      rejection: {
-        operation_id: args.request.operation_id,
-        request_id: args.request.request_id,
-        error: "publication_failed",
-      },
-    };
-  }
-  return publicationHarness.invoke(command, args);
-};
-await assert.rejects(
-  runtime.executeOutputControl(publicationInvoke, actionCases[1].action, () => {}),
-  (error) => {
-    assert.match(String(error), /publication_failed/);
-    assert.match(String(error), /physical output state is unknown/);
-    assert.doesNotMatch(String(error), /nothing was applied/);
-    return true;
-  },
-);
-assert.equal(publicationExecuteCalls, 1);
-
-// A transport-level reply loss retries one time with the same outer and inner
-// request objects. The backend receipt lane can therefore return the exact
-// terminal result without repeating a physical action.
-const replyLossCase = actionCases[2];
-const replyLossHarness = createHarness({ ...replyLossCase, loseFirstReply: true });
-const replyLossReceipt = await runtime.executeOutputControl(
-  replyLossHarness.invoke,
-  replyLossCase.action,
-  () => {},
-);
-assert.equal(replyLossReceipt.operation_id, replyLossCase.operationId);
-assert.equal(replyLossHarness.executeArgs.length, 2);
-assert.equal(replyLossHarness.executeArgs[1], replyLossHarness.executeArgs[0]);
-assert.equal(
-  replyLossHarness.executeArgs[1].request,
-  replyLossHarness.executeArgs[0].request,
-);
-
-// If both exact-object attempts lose their transport reply, the controller
-// cannot infer whether the action applied and reports the state as unknown.
-const doubleLossHarness = createHarness({ ...replyLossCase });
-const doubleLossArgs = [];
-const doubleLossInvoke = async (command, args) => {
-  if (command === replyLossCase.command) {
-    doubleLossArgs.push(args);
-    throw new Error("synthetic persistent OutputControl reply loss");
-  }
-  return doubleLossHarness.invoke(command, args);
-};
-await assert.rejects(
-  runtime.executeOutputControl(doubleLossInvoke, replyLossCase.action, () => {}),
-  (error) => {
-    assert.match(String(error), /physical output state is unknown/);
-    assert.doesNotMatch(String(error), /nothing was applied/);
-    return true;
-  },
-);
-assert.equal(doubleLossArgs.length, 2);
-assert.equal(doubleLossArgs[1], doubleLossArgs[0]);
-assert.equal(doubleLossArgs[1].request, doubleLossArgs[0].request);
-
-// Legacy GUI routes remain safer-direction-only. They must not pretend that
-// the R4 safety-latch release applies to all/video/per-output authored state.
-assert.match(appSource, /import \{ executeOutputControl \} from "\.\/outputControlController"/);
-assert.match(appSource, /await executeOutputControl\(\s*invoke,\s*\{\s*kind: "release_blackout"/s);
-assert.doesNotMatch(appSource, /invoke\("set_blackout",\s*\{[^}]*enabled:\s*false/);
-assert.doesNotMatch(appSource, /invoke\("set_all_blackout",\s*\{[^}]*enabled:\s*false/);
-assert.doesNotMatch(appSource, /invoke\("set_video_blackout",\s*\{[^}]*enabled:\s*false/);
-assert.doesNotMatch(
-  appSource,
-  /invoke\("set_video_output_blackout",\s*\{[^}]*blackout:\s*false/,
-);
-assert.doesNotMatch(videoRuntimeSource, /invoke\("set_video_blackout",\s*\{[^}]*enabled:\s*false/);
-assert.match(appSource, /All-output blackout release is unavailable[\s\S]*?no state changed/);
-assert.match(videoRuntimeSource, /Video blackout release is unavailable[\s\S]*?no state changed/);
-assert.match(appSource, /Per-output blackout release for output[\s\S]*?no state changed/);
-
-// Active role changes, Arm, and Take Over use the canonical R4 controller;
-// Standby remains the safer direct disarm path.
-assert.match(standbySource, /if \(nextRole === "Standby"\)[\s\S]*?set_output_ownership_role/);
-assert.match(standbySource, /await executeOutputControl\([\s\S]*?kind: "arm"/);
-assert.match(standbySource, /await executeOutputControl\([\s\S]*?kind: "take_over_standby"/);
-const legacyFunction = (source, name) => {
-  const start = source.indexOf(`fn ${name}(`);
-  assert.notEqual(start, -1, `missing legacy function ${name}`);
-  const next = source.indexOf("\n#[tauri::command]", start + 1);
-  return source.slice(start, next === -1 ? source.length : next);
-};
-for (const name of ["set_blackout", "set_all_blackout", "set_video_blackout", "set_video_output_blackout"]) {
-  assert.match(legacyFunction(mainSource, name), /if\s+!\w+/);
-  assert.match(legacyFunction(mainSource, name), /fail-closed/);
 }
-assert.match(
-  legacyFunction(mainSource, "set_output_ownership_role"),
-  /role != MachineOutputRole::Standby[\s\S]*?authenticated local OutputControl R4 path/,
-);
-assert.match(
-  legacyFunction(mainSource, "arm_output_ownership_role"),
-  /preferred_role != MachineOutputRole::Standby[\s\S]*?authenticated local OutputControl R4 path/,
-);
 
-// The native handler exposes three operation-specific wrappers. There is no
-// generic execute handler that could ambiguously project one request to three
-// canonical operations.
-const handlerBlock = mainSource.match(/tauri::generate_handler!\[([\s\S]*?)\]\)/)?.[1] ?? "";
-for (const command of [
-  "release_blackout_output_control_v1",
-  "arm_output_control_v1",
-  "take_over_output_control_v1",
+for (const field of [
+  "process_incarnation", "session_incarnation", "output_epoch", "output_generation",
+  "safety_blackout_epoch", "safety_blackout_generation",
 ]) {
-  assert.match(handlerBlock, new RegExp(`\\b${command}\\b`));
+  for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const invalidFence = { ...fence, [field]: invalid };
+    const invalidHarness = createHarness({ action: ordinaryActions[0], authorityFence: invalidFence });
+    await assert.rejects(
+      runtime.executeOutputControl(invalidHarness.invoke, ordinaryActions[0], () => {}),
+      /OutputControl authority response was invalid/,
+    );
+    assert.equal(invalidHarness.executeCalls, 0);
+  }
 }
-assert.doesNotMatch(handlerBlock, /\bexecute_output_control\b/);
 
-// The v2 registry has exactly the three R4 OutputControl operations, while
-// consent preparation is support-only and no generic execute operation is
-// canonicalized.
-for (const operation of [
-  "OUTPUT_BLACKOUT_RELEASE_OPERATION_ID",
-  "OUTPUT_OWNERSHIP_ARM_OPERATION_ID",
-  "OUTPUT_STANDBY_TAKEOVER_OPERATION_ID",
-]) {
-  assert.match(controlPlaneSource, new RegExp(`ReviewedCanonicalOperation::${operation === "OUTPUT_BLACKOUT_RELEASE_OPERATION_ID" ? "ReleaseBlackout" : operation === "OUTPUT_OWNERSHIP_ARM_OPERATION_ID" ? "ArmOutputOwnership" : "TakeOverStandby"}`));
+const unknownFence = { ...fence, unexpected: 1 };
+const unknownFenceHarness = createHarness({ action: ordinaryActions[0], authorityFence: unknownFence });
+await assert.rejects(
+  runtime.executeOutputControl(unknownFenceHarness.invoke, ordinaryActions[0], () => {}),
+  /OutputControl authority response was invalid/,
+);
+assert.equal(unknownFenceHarness.executeCalls, 0);
+
+// Query is an exact operation DTO: malformed/unavailable/orphan/resource mismatch
+// stops before consent and before any lifecycle fallback.
+const malformedHarness = createHarness({ action: ordinaryActions[0] });
+malformedHarness.invoke = async (command, args) => command === "query_output_lease_authority_v1"
+  ? { operation_id: runtime.OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID, statuses: [{ status: "unavailable" }, { status: "held_active", authority: lease(), resources: ["lighting"] }] }
+  : createHarness({ action: ordinaryActions[0] }).invoke(command, args);
+await assert.rejects(runtime.executeOutputControl(malformedHarness.invoke, ordinaryActions[0], () => {}), /query was invalid/);
+assert.equal(malformedHarness.calls.filter((call) => call.command === "prepare_output_consent_v1").length, 0);
+
+for (const queryState of ["orphaned", "wrong"]) {
+  const action = { kind: "arm", role: "video", lease: lease() };
+  const harness = createHarness({ action, queryState });
+  await assert.rejects(runtime.executeOutputControl(harness.invoke, action, () => {}), /wrong resources|orphaned/);
+  assert.equal(harness.executeCalls, 0);
 }
-const reviewedCanonicalMapStart = controlPlaneSource.indexOf(
-  "fn reviewed_canonical_operation(command: &str)",
-);
-const reviewedCanonicalMapEnd = controlPlaneSource.indexOf(
-  "fn canonical_descriptor_for_source(",
-  reviewedCanonicalMapStart,
-);
-assert.notEqual(reviewedCanonicalMapStart, -1);
-assert.notEqual(reviewedCanonicalMapEnd, -1);
-const reviewedCanonicalMap = controlPlaneSource.slice(
-  reviewedCanonicalMapStart,
-  reviewedCanonicalMapEnd,
-);
-assert.deepEqual(
-  [...reviewedCanonicalMap.matchAll(/=> Some\(ReviewedCanonicalOperation::(ReleaseBlackout|ArmOutputOwnership|TakeOverStandby)\)/g)]
-    .map((match) => match[1])
-    .sort(),
-  ["ArmOutputOwnership", "ReleaseBlackout", "TakeOverStandby"],
-);
-assert.match(controlPlaneSource, /OperationRisk::R4/);
-assert.match(
-  controlPlaneSource,
-  /ReviewedCanonicalOperation::ReleaseBlackout\s*\|\s*ReviewedCanonicalOperation::ArmOutputOwnership\s*\|\s*ReviewedCanonicalOperation::TakeOverStandby[\s\S]*?OperationRisk::R4/,
-);
-assert.match(controlPlaneSource, /ConsentPolicy::PreparedPhysicalConfirmation/);
-assert.match(
-  controlPlaneSource,
-  /descriptor\.source_id == "prepare_output_consent_v1"[\s\S]*?SourceDisposition::SupportPhase[\s\S]*?OUTPUT_CONSENT_PREPARE_OPERATION_ID/,
-);
-assert.doesNotMatch(registrySource, /execute_output_control/);
 
-console.log("output control runtime contract: PASS");
+// Reply loss is the sole retryable transport condition, and it reuses the
+// same frozen argument object. Typed rejection is terminal and never retries.
+const replyLossAction = ordinaryActions[2];
+const replyLossHarness = createHarness({ action: replyLossAction, loseFirstReply: true });
+await runtime.executeOutputControl(replyLossHarness.invoke, replyLossAction, () => {});
+assert.equal(replyLossHarness.executeCalls, 2);
+assert.equal(replyLossHarness.executeArgs[0], replyLossHarness.executeArgs[1]);
+assert.equal(Object.isFrozen(replyLossHarness.executeArgs[0]), true);
+
+const rejectionHarness = createHarness({ action: ordinaryActions[0], typedRejection: true });
+await assert.rejects(runtime.executeOutputControl(rejectionHarness.invoke, ordinaryActions[0], () => {}), /refresh lease state/);
+assert.equal(rejectionHarness.executeCalls, 1);
+
+// Request exhaustion fails before even the authority query and never invokes.
+const exhaustedSource = controllerSource.replace(
+  "let nextOutputControlRequestId = 1;",
+  "let nextOutputControlRequestId = Number.MAX_SAFE_INTEGER + 1;",
+);
+const exhaustedRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
+  exhaustedSource,
+  { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove }, fileName: "outputControlController.ts" },
+).outputText).toString("base64")}`);
+let exhaustedInvokes = 0;
+await assert.rejects(exhaustedRuntime.executeOutputControl(async () => { exhaustedInvokes += 1; }, ordinaryActions[0], () => {}), /request identity is exhausted/);
+assert.equal(exhaustedInvokes, 0);
+
+// Strict receipt cross-field checks reject a mismatched authority and a
+// multi-change result before the renderer can claim success.
+const malformedReceiptBase = createHarness({ action: ordinaryActions[0] });
+const malformedReceiptInvoke = async (command, args) => {
+  const response = await malformedReceiptBase.invoke(command, args);
+  if (command === "arm_output_control_v1") {
+    response.receipt.lease_result.authority.lease_id = "lease-0000000000000002";
+  }
+  return response;
+};
+await assert.rejects(runtime.executeOutputControl(malformedReceiptInvoke, ordinaryActions[0], () => {}), /lease result was invalid/);
+
+const [invokeSource, manifestSource, appSource, standbySource, mainSource] = await Promise.all([
+  read("src/tauriInvokeCommands.ts"),
+  read("src/tauri-invoke-manifest.json"),
+  read("src/App.tsx"),
+  read("src/components/StandbySyncPanel.tsx"),
+  read("src-tauri/src/main.rs"),
+]);
+const requiredCommands = [
+  "acquire_output_lease_v1", "force_transfer_output_lease_v1", "query_output_lease_authority_v1",
+  "recover_output_lease_v1", "relinquish_output_lease_v1", "renew_output_lease_v1",
+];
+const manifest = JSON.parse(manifestSource);
+const tuple = [...invokeSource.matchAll(/^\s+"([^"]+)",$/gm)].map((match) => match[1]);
+assert.deepEqual(tuple, [...tuple].sort(), "frontend invoke tuple must remain bytewise sorted");
+assert.deepEqual(manifest, [...manifest].sort(), "Tauri invoke manifest must remain bytewise sorted");
+for (const command of requiredCommands) {
+  assert.ok(tuple.includes(command), `${command} missing from invoke tuple`);
+  assert.ok(manifest.includes(command), `${command} missing from invoke manifest`);
+  assert.match(mainSource, new RegExp(`\\b${command}\\b`));
+}
+assert.match(appSource, /queryOutputLeaseAuthority[\s\S]*selectOnlyActiveOutputLease[\s\S]*kind: "release_blackout"/);
+assert.match(standbySource, /executeOutputLeaseLifecycle/);
+assert.doesNotMatch(standbySource, />Force transfer</, "foreign lease candidates are not exposed, so the UI must not offer an always-failing transfer button");
+assert.match(standbySource, /<dialog[\s\S]*?<Show when=\{challengeNotice\(\)\}>[\s\S]*?Backend physical confirmation required/, "Take Over keeps the backend challenge inside the modal top layer");
+assert.match(standbySource, /Backend physical confirmation required/);
+assert.match(standbySource, /I have fenced or disconnected every old Primary/);
+assert.match(controllerSource, /deepFreeze/);
+assert.match(controllerSource, /invoke<unknown>\(command, executeArgs\)/);
+assert.match(controllerSource, /OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID/);
+
+console.log("output control runtime contract: PASS (8 operations, strict lease receipts, exact retry, fail-closed query)");

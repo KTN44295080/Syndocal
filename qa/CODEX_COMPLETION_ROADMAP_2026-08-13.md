@@ -1215,9 +1215,9 @@ Loopback, mocks, SDK-free tests, and browser UI are prerequisites only. The matr
 
 - physical MIDI Note/CC/Clock/MTC input;
 - MIDI feedback and All Notes Off on the declared controllers;
-- Stream Deck Pedal keyboard input routed through Syndocal to repeated Loop Half, nonblocking rekordbox
-  filter CC ramp, deterministic DJ stop, Timeline Loop release/continuation, and optional reset, using the
-  exact virtual MIDI/rekordbox mapping recorded by `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`;
+- wired `rekordbox-DJ-Link-ForPCDJ` Agent integration: Master Track Active drives project-owned
+  Track-to-Timeline mappings, absolute Loop State converges the authored Timeline loop, and Release is
+  idempotent. Pedal/global-hotkey and all rekordbox MIDI/filter/stop/reset behavior remain on the DJ PC;
 - OSC over wired and Wi-Fi paths;
 - TouchOSC and iPad/Android Web Remote round trip;
 - Learn, conflict, disconnect/reconnect, stale reply, and project replacement;
@@ -1350,10 +1350,10 @@ physical multi-device routing acceptance remain part of the final L-TL7 boundary
 - Commands exist for Set A, Set B, Enable/Disable, Clear, `1/2`, and `x2`; all have configurable shortcuts
   and use the shared command/mapping system so keyboard, MIDI, OSC, DMX, Touch, and Remote can target the
   same typed action. Default keyboard bindings must not shadow text input or existing safety controls.
-- The required Stream Deck Pedal/rekordbox transition reuses this exact Loop `1/2` and Disable path; its
-  typed triggers, generic MIDI OUT, filter CC ramp, deterministic stop/reset, persistence, and physical
-  acceptance are normative in `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`. It must not create a second
-  loop runtime or a separate bridge application.
+- The required DJ Link integration reuses this authored Loop and Disable/Resume path, but receives an
+  absolute `DJ_LOOP_STATE` rather than a relative Half command. `rekordbox-DJ-Link-ForPCDJ` is the existing
+  DJ Agent; Syndocal must not create another bridge or send rekordbox MIDI. Project mapping and wired
+  physical acceptance are normative in `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`.
 
 ### L-TL3. Independent channel lanes and Media Library placement
 
@@ -2049,3 +2049,20 @@ Do not claim:
 - whole-product Daslight parity from loopback, fixture count, internal schema, or the currently measured subset of tasks.
 
 The next truthful milestone is: **Critical Path B / Clip Slot T2 protocol schema and migration, followed by its Engine/backend/frontend/gates checkpoints; Media T1 remains the accepted Windows dependency baseline**.
+
+## 27. 2026-08-21 active-train override
+
+The historical resume sentence above is not the current train entrypoint. Current
+authority is `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` and the latest operational
+state is `qa/CODEX_HANDOFF_2026-08-19.md`.
+
+- DJ Link integration on the Syndocal side is implemented and independently
+  reviewed P0/P1/P2=0; the external DJ-Link repository and physical wired
+  rekordbox/Pedal acceptance remain separate.
+- Output Lease/Output Control are integrated enough that `checked_deadline` has
+  real production callers and no longer represents suppressible dead code.
+- The always-visible Lighting/Video topbar master sliders were removed without
+  shrinking adjacent UI; non-header master controls remain.
+- Windows native release and frontend warning output are currently zero. Promote
+  the seven locally measurable P2 warning rows, keep both macOS rows pending, then
+  run the requested five-display and final three-display native VJ exercise.

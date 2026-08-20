@@ -13,8 +13,11 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use protocol::{
-    control_plane_command::OutputControlFenceV1,
-    control_plane_command::{ProjectMutationFenceV1, MAX_SAFE_JAVASCRIPT_INTEGER},
+    control_plane_command::{
+        OutputControlFenceV1, OutputControlTargetRoleV1, OutputLeaseAuthorityQueryStatusV1,
+        OutputLeaseAuthorityQueryV1, ProjectMutationFenceV1, MAX_SAFE_JAVASCRIPT_INTEGER,
+        OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID,
+    },
     control_plane_query::{
         CanonicalObservationEventPayload, CapabilityDescriptor, CapabilityDiscovery,
         ControlPlaneEvent, EventPage, EventPageRequest, GapMarker, GapReason, OpaqueCursorToken,
@@ -29,6 +32,7 @@ use protocol::{
 use sha2::{Digest, Sha256};
 use tauri::{State, WebviewWindow};
 
+use super::output_lease::{OutputLeaseOwner, OutputLeasePhase};
 use super::{AppState, ProjectCoordinator};
 
 const CURSOR_TTL: Duration = Duration::from_secs(60);
@@ -202,6 +206,110 @@ impl ControlPlaneQueryState {
     /// persisted/query wire state.
     pub(crate) fn process_incarnation(&self) -> u64 {
         self.process_incarnation
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_process_incarnation(process_incarnation: u64) -> Result<Self, String> {
+        if process_incarnation == 0 {
+            return Err("query process incarnation must be nonzero".to_string());
+        }
+        let mut state = Self::new().map_err(|error| error.to_string())?;
+        state.process_incarnation = process_incarnation;
+        Ok(state)
+    }
+
+    pub(crate) fn query_output_lease_authority_for_window(
+        &self,
+        window_label: &str,
+        app: &AppState,
+    ) -> Result<OutputLeaseAuthorityQueryV1, QueryError> {
+        // Owner retirement/registration linearizes under this lock. Keep the
+        // same guard through query capture, owner incarnation lookup, and the
+        // registry read so an ABA re-register cannot expose old lease IDs.
+        let _owner_rotation = app
+            .project_transaction_owner_rotation
+            .lock()
+            .map_err(|_| query_error(QueryErrorCode::Internal))?;
+        // Bind the query session to this registered window before exposing any
+        // lease identity. The browser never supplies a principal or lease id.
+        self.capture_for_window(window_label, app, false)?;
+        let owner_incarnation = registered_owner_incarnation_for_window(app, window_label)?;
+        let principal = app
+            .project_transaction_owners
+            .lock()
+            .map_err(|_| query_error(QueryErrorCode::Internal))?
+            .get(window_label)
+            .cloned()
+            .ok_or_else(|| query_error(QueryErrorCode::Forbidden))?;
+        let registry = app
+            .output_lease_registry
+            .lock()
+            .map_err(|_| query_error(QueryErrorCode::Internal))?;
+        if registry.process_session_incarnation() != self.process_incarnation {
+            return Err(query_error(QueryErrorCode::Unavailable));
+        }
+        // Observe monotonic time only after acquiring the authority lock so
+        // lock wait cannot turn an expired lease into a stale HeldActive read.
+        let now_ms = app
+            .output_lease_now_ms()
+            .map_err(|_| query_error(QueryErrorCode::Unavailable))?;
+        let owner = OutputLeaseOwner::new(
+            principal,
+            window_label.to_string(),
+            self.process_incarnation,
+            owner_incarnation,
+        )
+        .map_err(|_| query_error(QueryErrorCode::Forbidden))?;
+        let views = registry
+            .query_owner_leases(&owner, now_ms)
+            .map_err(|_| query_error(QueryErrorCode::Unavailable))?;
+        let mut statuses = Vec::with_capacity(views.len().max(1));
+        for view in views {
+            let resources = view
+                .snapshot
+                .resources
+                .as_ref()
+                .ok_or_else(|| query_error(QueryErrorCode::Unavailable))?
+                .as_slice()
+                .iter()
+                .map(|resource| match resource {
+                    super::output_lease::OutputLeaseResource::Lighting => {
+                        OutputControlTargetRoleV1::Lighting
+                    }
+                    super::output_lease::OutputLeaseResource::Video => {
+                        OutputControlTargetRoleV1::Video
+                    }
+                })
+                .collect::<Vec<_>>();
+            let authority = protocol::control_plane_command::OutputLeaseAuthorityV1 {
+                lease_id: view.lease_id.encode(),
+                generation: view.snapshot.generation,
+            };
+            statuses.push(match view.snapshot.phase {
+                OutputLeasePhase::HeldActive => OutputLeaseAuthorityQueryStatusV1::HeldActive {
+                    authority,
+                    resources,
+                },
+                OutputLeasePhase::HeldOrphaned => OutputLeaseAuthorityQueryStatusV1::HeldOrphaned {
+                    authority,
+                    resources,
+                },
+                OutputLeasePhase::Unclaimed => {
+                    return Err(query_error(QueryErrorCode::Unavailable))
+                }
+            });
+        }
+        if statuses.is_empty() {
+            statuses.push(OutputLeaseAuthorityQueryStatusV1::Unavailable);
+        }
+        let response = OutputLeaseAuthorityQueryV1 {
+            operation_id: OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID.to_string(),
+            statuses,
+        };
+        response
+            .validate()
+            .map_err(|_| query_error(QueryErrorCode::Internal))?;
+        Ok(response)
     }
 
     #[cfg(test)]
@@ -1583,6 +1691,15 @@ pub(crate) fn query_control_plane_output_ownership(
         SCHEMA_OUTPUT_PAGE,
         std::slice::from_ref(&view.output),
     )
+}
+
+#[tauri::command]
+pub(crate) fn query_output_lease_authority_v1(
+    window: WebviewWindow,
+    state: State<'_, ControlPlaneQueryState>,
+    app: State<'_, AppState>,
+) -> Result<OutputLeaseAuthorityQueryV1, QueryError> {
+    state.query_output_lease_authority_for_window(window.label(), &app)
 }
 
 #[tauri::command]

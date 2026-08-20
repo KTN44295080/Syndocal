@@ -328,6 +328,7 @@ where
     Ok(NdiOutputTeardown { state })
 }
 
+#[cfg(test)]
 fn teardown_with_ack<F>(cleanup: F, timeout: Duration) -> Result<(), NdiError>
 where
     F: FnOnce() + Send + 'static,
