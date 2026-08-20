@@ -15145,6 +15145,454 @@ fn reserve_project_callback_epoch(callback_epoch: &AtomicU64) -> Result<u64, Str
     }
 }
 
+/// Classify output-affecting commands arriving from an external callback.
+///
+/// MIDI, OSC, DMX input, and the legacy Web Remote are advisory input
+/// adapters; they do not carry the local OutputControl R4 lease, owner fence,
+/// or physical-consent challenge.  Their output authority transitions must
+/// therefore stop before the engine queue.  The safer-direction blackout
+/// engage is deliberately a separate `safety_blackout_engage_v1` control-plane
+/// path, not an exception here.  Keeping this policy at the shared callback
+/// boundary prevents a new adapter call site from accidentally reintroducing a
+/// physical bypass.
+///
+/// This match is intentionally exhaustive and has no default arm.  Adding an
+/// `EngineCommand` variant therefore fails compilation until it is classified
+/// as an R4-protected output command or an explicitly safe callback command.
+fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<&'static str> {
+    match command {
+        EngineCommand::SetOutput(..)
+        | EngineCommand::SetDmxOutputs(..)
+        | EngineCommand::SetOutputOwnershipRole { .. }
+        | EngineCommand::FenceOutputOwnership { .. }
+        | EngineCommand::PrepareOutputOwnershipRole { .. }
+        | EngineCommand::SetDmxInputFrame { .. }
+        | EngineCommand::ClearDmxInput(..)
+        | EngineCommand::Blackout(..)
+        | EngineCommand::SetAllBlackout(..)
+        | EngineCommand::SafetyBlackoutEngagePublished { .. }
+        | EngineCommand::SafetyBlackoutReleasePublished { .. }
+        | EngineCommand::SetLightingMaster(..)
+        | EngineCommand::SetGroupSubmaster { .. }
+        | EngineCommand::SetVideoMasterOpacity(..)
+        | EngineCommand::SetVideoBlackout(..)
+        | EngineCommand::AddVideoOutput(..)
+        | EngineCommand::RemoveVideoOutput(..)
+        | EngineCommand::SetVideoOutputConfig { .. }
+        | EngineCommand::SetVideoOutputEnabled { .. }
+        | EngineCommand::SetVideoOutputRouting { .. }
+        | EngineCommand::SetVideoOutputOpacity { .. }
+        | EngineCommand::FadeVideoOutputOpacity { .. }
+        | EngineCommand::SetVideoOutputBlackout { .. }
+        | EngineCommand::SetVideoOutputMapping { .. }
+        | EngineCommand::SetVideoOutputMappingField { .. }
+        | EngineCommand::ApplyVideoOutputMappingPreset { .. } => {
+            Some("legacy or output-affecting command; use OutputControl R4")
+        }
+        EngineCommand::PatchFixture { .. }
+        | EngineCommand::PatchFixturesPublished { .. }
+        | EngineCommand::RepairFixtureProfilePublished { .. }
+        | EngineCommand::ReplaceFixtureProfile { .. }
+        | EngineCommand::RemoveFixture(..)
+        | EngineCommand::SetAttribute { .. }
+        | EngineCommand::SetFixtureAttributeBatch { .. }
+        | EngineCommand::SetGroupAttribute { .. }
+        | EngineCommand::SetProgrammerMode { .. }
+        | EngineCommand::SetProgrammerAttribute { .. }
+        | EngineCommand::SetProgrammerFixtureAttributeBatch { .. }
+        | EngineCommand::SetProgrammerGroupAttribute { .. }
+        | EngineCommand::ClearProgrammer
+        | EngineCommand::CommitProgrammer { .. }
+        | EngineCommand::SetGroupHighlight { .. }
+        | EngineCommand::SetGroupSolo { .. }
+        | EngineCommand::SetGroupStrobe { .. }
+        | EngineCommand::SetGroupPark { .. }
+        | EngineCommand::SetGroupFixtureLimits { .. }
+        | EngineCommand::SetFixtureTransform { .. }
+        | EngineCommand::SetFixturePatch { .. }
+        | EngineCommand::SetFixtureLimits { .. }
+        | EngineCommand::SetFixtureGroups { .. }
+        | EngineCommand::ApplyFixtureGroupStatePublished { .. }
+        | EngineCommand::SetFixtureHighlight { .. }
+        | EngineCommand::SetFixtureSolo { .. }
+        | EngineCommand::SetFixturePark { .. }
+        | EngineCommand::ClearFixtureFlags(..)
+        | EngineCommand::ApplyAttributeValues { .. }
+        | EngineCommand::LoadProjectSnapshot(..)
+        | EngineCommand::LoadProjectSnapshotPublished { .. }
+        | EngineCommand::RequestPersistenceSnapshot { .. }
+        | EngineCommand::SetTouchSurface { .. }
+        | EngineCommand::SetStageMapConfig(..)
+        | EngineCommand::SaveStageMapPreset { .. }
+        | EngineCommand::UpsertStageMapPresetPublished { .. }
+        | EngineCommand::ApplyStageMapPreset { .. }
+        | EngineCommand::RemoveStageMapPreset { .. }
+        | EngineCommand::UpsertStageObject(..)
+        | EngineCommand::RemoveStageObject(..)
+        | EngineCommand::SetBpm(..)
+        | EngineCommand::TapBpm
+        | EngineCommand::MidiClockPulse
+        | EngineCommand::SyncExternalClock { .. }
+        | EngineCommand::MidiSongPositionPointer(..)
+        | EngineCommand::ResetTelemetry
+        | EngineCommand::AddLfoEffect { .. }
+        | EngineCommand::AddPositionWaveEffect { .. }
+        | EngineCommand::AddColorEffect { .. }
+        | EngineCommand::AddChaserEffect { .. }
+        | EngineCommand::AddMoveEffect { .. }
+        | EngineCommand::AddValueEffect { .. }
+        | EngineCommand::AddCurveEffect { .. }
+        | EngineCommand::AddMappingEffect { .. }
+        | EngineCommand::AddColorMappingEffect { .. }
+        | EngineCommand::UpdateLfoEffect { .. }
+        | EngineCommand::UpdatePositionWaveEffect { .. }
+        | EngineCommand::UpdateColorEffect { .. }
+        | EngineCommand::UpdateChaserEffect { .. }
+        | EngineCommand::UpdateMoveEffect { .. }
+        | EngineCommand::UpdateValueEffect { .. }
+        | EngineCommand::UpdateCurveEffect { .. }
+        | EngineCommand::UpdateMappingEffect { .. }
+        | EngineCommand::UpdateColorMappingEffect { .. }
+        | EngineCommand::SetEffectEnabled { .. }
+        | EngineCommand::SetEffectEnabledPublished { .. }
+        | EngineCommand::SetEffectVideoTargetPosition { .. }
+        | EngineCommand::MoveEffect { .. }
+        | EngineCommand::RemoveEffect(..)
+        | EngineCommand::UpsertNodeGraph(..)
+        | EngineCommand::UpsertNodeGraphPublished { .. }
+        | EngineCommand::SetNodeGraphEnabled { .. }
+        | EngineCommand::SetNodeGraphEnabledPublished { .. }
+        | EngineCommand::RemoveNodeGraph(..)
+        | EngineCommand::RemoveNodeGraphPublished { .. }
+        | EngineCommand::CreateCue { .. }
+        | EngineCommand::CreateCuePublished { .. }
+        | EngineCommand::UpdateCue { .. }
+        | EngineCommand::UpdateCuePublished { .. }
+        | EngineCommand::SetCueEffectTargetsPublished { .. }
+        | EngineCommand::SetCueStepsPublished { .. }
+        | EngineCommand::SetCueDetailsPublished { .. }
+        | EngineCommand::SetCueChildTimeline { .. }
+        | EngineCommand::SetCueColor { .. }
+        | EngineCommand::SetGroupColor { .. }
+        | EngineCommand::SetCueMetadata { .. }
+        | EngineCommand::SetCueParts { .. }
+        | EngineCommand::SetCueMark { .. }
+        | EngineCommand::SetCueMibFixtureIds { .. }
+        | EngineCommand::UpsertPalette(..)
+        | EngineCommand::RemovePalette(..)
+        | EngineCommand::ApplyPalette { .. }
+        | EngineCommand::SetCuePaletteTargets { .. }
+        | EngineCommand::MoveCue { .. }
+        | EngineCommand::DuplicateCue { .. }
+        | EngineCommand::UpsertCueList { .. }
+        | EngineCommand::RemoveCueList(..)
+        | EngineCommand::SetCueList { .. }
+        | EngineCommand::UpsertPlaybackExecutor(..)
+        | EngineCommand::RemovePlaybackExecutor(..)
+        | EngineCommand::SetPlaybackExecutorLevel { .. }
+        | EngineCommand::SetPlaybackMaster(..)
+        | EngineCommand::TriggerPlaybackExecutorNext(..)
+        | EngineCommand::TriggerPlaybackExecutorPrevious(..)
+        | EngineCommand::TriggerCue(..)
+        | EngineCommand::TriggerCueWithDirection { .. }
+        | EngineCommand::TriggerNextCue
+        | EngineCommand::TriggerPreviousCue
+        | EngineCommand::TriggerCueListNext(..)
+        | EngineCommand::TriggerCueListPrevious(..)
+        | EngineCommand::ReleaseCue(..)
+        | EngineCommand::SetCueLiveModifier { .. }
+        | EngineCommand::ClearCueLiveModifier(..)
+        | EngineCommand::SetCueLiveModifierDefaults { .. }
+        | EngineCommand::SetCueFadePaused(..)
+        | EngineCommand::RemoveCue(..)
+        | EngineCommand::RemoveCuePublished { .. }
+        | EngineCommand::AddTimelineCueEvent { .. }
+        | EngineCommand::SetTimelineCueEvent { .. }
+        | EngineCommand::RemoveTimelineEvent(..)
+        | EngineCommand::AddTimelineCueEventPublished { .. }
+        | EngineCommand::SetTimelineCueEventPublished { .. }
+        | EngineCommand::RemoveTimelineEventPublished { .. }
+        | EngineCommand::AddTimelineSceneBlockPublished { .. }
+        | EngineCommand::SetTimelineSceneBlockPublished { .. }
+        | EngineCommand::RemoveTimelineSceneBlockPublished { .. }
+        | EngineCommand::SnapTimelineItemsPublished { .. }
+        | EngineCommand::ReconformTimelineToBpm { .. }
+        | EngineCommand::AddTimelineLayer { .. }
+        | EngineCommand::UpdateTimelineLayer { .. }
+        | EngineCommand::RemoveTimelineLayer { .. }
+        | EngineCommand::ReorderTimelineLayers { .. }
+        | EngineCommand::AddTimelineAudioClip { .. }
+        | EngineCommand::UpdateTimelineAudioClip { .. }
+        | EngineCommand::RemoveTimelineAudioClip { .. }
+        | EngineCommand::SetTimelineAudioMaster { .. }
+        | EngineCommand::ApplyTimelineAdvancedAuthoringPublished { .. }
+        | EngineCommand::ApplyTimelineBankPublished { .. }
+        | EngineCommand::AbortTimelineFollow { .. }
+        | EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
+        | EngineCommand::AddTimelineAutomation { .. }
+        | EngineCommand::SetTimelineAutomation { .. }
+        | EngineCommand::AddTimelineVideoAutomation { .. }
+        | EngineCommand::SetTimelineVideoAutomation { .. }
+        | EngineCommand::SetTimelineAutomationEnabled { .. }
+        | EngineCommand::RemoveTimelineAutomation(..)
+        | EngineCommand::SetTimelineAudio(..)
+        | EngineCommand::SetTimelineMetronome { .. }
+        | EngineCommand::SetLiveAudioSpectrum(..)
+        | EngineCommand::PublishLiveAudioFrame { .. }
+        | EngineCommand::ClearLiveAudioInput { .. }
+        | EngineCommand::ClearLiveAudioInputPublished { .. }
+        | EngineCommand::ReportLiveAudioOnset { .. }
+        | EngineCommand::SetTimelinePlaying(..)
+        | EngineCommand::StartTimeline { .. }
+        | EngineCommand::DjLinkStartTimeline { .. }
+        | EngineCommand::SetTimelinePlayingPublished { .. }
+        | EngineCommand::SeekTimeline(..)
+        | EngineCommand::SetTimelineLoopEnabled(..)
+        | EngineCommand::SetTimelineLoopAbsolute { .. }
+        | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+        | EngineCommand::DjLinkRelease { .. }
+        | EngineCommand::ToggleTimelineLoop
+        | EngineCommand::ScaleTimelineLoop(..)
+        | EngineCommand::SetDirectChildTimelinePlaying { .. }
+        | EngineCommand::SeekDirectChildTimeline { .. }
+        | EngineCommand::SeekTimelineBeat { .. }
+        | EngineCommand::SyncTimelineTimecode { .. }
+        | EngineCommand::SetAutoVjConfig(..)
+        | EngineCommand::SetAutoVjArmed(..)
+        | EngineCommand::SetAutoVjHold(..)
+        | EngineCommand::SetAutoVjConfigPublished { .. }
+        | EngineCommand::SetAutoVjArmedPublished { .. }
+        | EngineCommand::SetAutoVjHoldPublished { .. }
+        | EngineCommand::AddVideoLayer { .. }
+        | EngineCommand::AddVideoLayerWithAllocatedAsset { .. }
+        | EngineCommand::DuplicateVideoLayer { .. }
+        | EngineCommand::DuplicateVideoLayerWithAllocatedSlots { .. }
+        | EngineCommand::DuplicateVideoLayerPublished { .. }
+        | EngineCommand::DuplicateVideoLayerPublishedWithAllocatedSlots { .. }
+        | EngineCommand::RemoveVideoLayer(..)
+        | EngineCommand::SetVideoLayerOrder(..)
+        | EngineCommand::SetVideoLayerLabel { .. }
+        | EngineCommand::SetVideoLayerSource { .. }
+        | EngineCommand::MediaAssetTransactionPublished { .. }
+        | EngineCommand::VideoClipSlotImportAndAssignPublished { .. }
+        | EngineCommand::CreateVideoClipSlotPublished { .. }
+        | EngineCommand::AssignVideoClipSlotAssetPublished { .. }
+        | EngineCommand::UpdateVideoClipSlotPublished { .. }
+        | EngineCommand::RemoveVideoClipSlotPublished { .. }
+        | EngineCommand::ReorderVideoClipSlotsPublished { .. }
+        | EngineCommand::DuplicateVideoClipSlotPublished { .. }
+        | EngineCommand::SetDefaultVideoClipSlotPublished { .. }
+        | EngineCommand::QueueVideoClipSlotPublished { .. }
+        | EngineCommand::CancelQueuedVideoClipSlotPublished { .. }
+        | EngineCommand::LaunchVideoClipSlotPublished { .. }
+        | EngineCommand::SeekVideoClipSlotPublished { .. }
+        | EngineCommand::LaunchVideoLayerTransitionBusPublished { .. }
+        | EngineCommand::ReleaseVideoLayerTransitionBusPublished { .. }
+        | EngineCommand::SetVideoLayerIsfEffect { .. }
+        | EngineCommand::SetVideoLayerIsfEffectWithAllocatedIds { .. }
+        | EngineCommand::SetVideoLayerIsfEffectPublished { .. }
+        | EngineCommand::SetVideoLayerIsfEffectPublishedWithAllocatedIds { .. }
+        | EngineCommand::ApplyVideoEffectCatalogPublished { .. }
+        | EngineCommand::MutateVideoLayerIsfStack { .. }
+        | EngineCommand::MutateVideoLayerIsfStackWithAllocatedIds { .. }
+        | EngineCommand::PulseVideoLayerIsfEvent { .. }
+        | EngineCommand::SetVideoLayerState { .. }
+        | EngineCommand::ExclusiveVideoTake { .. }
+        | EngineCommand::SetVideoLayerParam { .. }
+        | EngineCommand::FadeVideoLayerOpacity { .. }
+        | EngineCommand::SetVideoLayerEnabled { .. }
+        | EngineCommand::SetVideoLayerSolo { .. }
+        | EngineCommand::SetVideoLayerPlaying { .. }
+        | EngineCommand::SetVideoLayerLoop { .. }
+        | EngineCommand::AddVideoCuePoint { .. }
+        | EngineCommand::RemoveVideoCuePoint { .. }
+        | EngineCommand::SetVideoCuePoint { .. }
+        | EngineCommand::JumpVideoCuePoint { .. }
+        | EngineCommand::JumpVideoCuePointRelative { .. }
+        | EngineCommand::SetVideoLayerBlendMode { .. }
+        | EngineCommand::AddVideoComposition(..)
+        | EngineCommand::RemoveVideoComposition(..)
+        | EngineCommand::SetVideoCompositionLayers { .. }
+        | EngineCommand::BootstrapVjShow { .. }
+        | EngineCommand::BootstrapVjShowWithAllocatedAssets { .. }
+        | EngineCommand::SaveVideoOutputMappingPreset { .. }
+        | EngineCommand::RemoveVideoOutputMappingPreset { .. } => None,
+    }
+}
+
+fn external_control_source_requires_local_r4(source: &str) -> bool {
+    source.eq_ignore_ascii_case("DMX")
+}
+
+/// Return the common fail-closed error for legacy Tauri output commands.
+///
+/// These commands predate the R4 request/consent lane and cannot safely
+/// manufacture a lease or a physical challenge.  A generic result keeps the
+/// individual Tauri wrappers side-effect free while preserving their typed
+/// return shapes.
+fn reject_legacy_output_control_route<T>(operation: &str) -> Result<T, String> {
+    Err(format!(
+        "{operation} is fail-closed: use the authenticated local OutputControl R4 path with an active lease and physical consent"
+    ))
+}
+
+#[cfg(test)]
+mod legacy_output_control_route_tests {
+    use super::*;
+    use crate::tests::MediaAssetA6CommandHarness;
+
+    #[test]
+    fn external_output_authority_transitions_fail_closed_before_engine_send() {
+        let forbidden = [
+            EngineCommand::Blackout(false),
+            EngineCommand::SetAllBlackout(false),
+            EngineCommand::SetVideoBlackout(false),
+            EngineCommand::SetVideoOutputBlackout {
+                output_id: 1,
+                blackout: false,
+            },
+            EngineCommand::SetLightingMaster(0.5),
+            EngineCommand::SetGroupSubmaster {
+                group_id: "front".to_string(),
+                level: 0.5,
+            },
+            EngineCommand::SetDmxInputFrame {
+                universe: 1,
+                values: Box::new([0; 512]),
+                merge_mode: protocol::DmxMergeMode::Htp,
+            },
+            EngineCommand::ClearDmxInput(1),
+            EngineCommand::SetVideoMasterOpacity(0.5),
+            EngineCommand::SetVideoOutputEnabled {
+                output_id: 1,
+                enabled: true,
+            },
+            EngineCommand::SetVideoOutputOpacity {
+                output_id: 1,
+                opacity: 1.0,
+            },
+            EngineCommand::FadeVideoOutputOpacity {
+                output_id: 1,
+                opacity: 1.0,
+                duration_ms: 100,
+            },
+            EngineCommand::SetVideoOutputMapping {
+                output_id: 1,
+                mapping: VideoOutputMapping::default(),
+            },
+            EngineCommand::SetVideoOutputMappingField {
+                output_id: 1,
+                field: "scale_x".to_string(),
+                value: 1.0,
+            },
+            EngineCommand::ApplyVideoOutputMappingPreset {
+                output_id: 1,
+                label: "default".to_string(),
+            },
+        ];
+
+        assert!(forbidden
+            .iter()
+            .all(|command| external_output_command_requires_local_r4(command).is_some()));
+    }
+
+    #[test]
+    fn legacy_blackout_bools_are_all_rejected_and_s0_is_separate() {
+        let legacy_blackouts = [
+            EngineCommand::Blackout(true),
+            EngineCommand::Blackout(false),
+            EngineCommand::SetAllBlackout(true),
+            EngineCommand::SetAllBlackout(false),
+            EngineCommand::SetVideoBlackout(true),
+            EngineCommand::SetVideoBlackout(false),
+            EngineCommand::SetVideoOutputBlackout {
+                output_id: 1,
+                blackout: true,
+            },
+            EngineCommand::SetVideoOutputBlackout {
+                output_id: 1,
+                blackout: false,
+            },
+        ];
+        assert!(legacy_blackouts
+            .iter()
+            .all(|command| { external_output_command_requires_local_r4(command).is_some() }));
+
+        let error = reject_legacy_output_control_route::<()>("safety blackout test")
+            .expect_err("only the dedicated S0 command may mutate blackout state");
+        assert!(error.contains("OutputControl R4"));
+    }
+
+    #[test]
+    fn legacy_tauri_output_error_identifies_r4_and_physical_consent() {
+        let error = reject_legacy_output_control_route::<()>(&"video output enable")
+            .expect_err("legacy output routes must never produce a value");
+        assert!(error.contains("OutputControl R4"));
+        assert!(error.contains("physical consent"));
+    }
+
+    #[test]
+    fn dmx_mapping_source_is_fail_closed_while_osc_remains_on_shared_policy() {
+        assert!(external_control_source_requires_local_r4("DMX"));
+        assert!(external_control_source_requires_local_r4("dmx"));
+        assert!(!external_control_source_requires_local_r4("OSC"));
+    }
+
+    #[test]
+    fn generic_remote_external_video_sync_provider_is_read_only_fail_closed() {
+        let response = external_video_transport_sync_fail_closed();
+        assert_eq!(response["report"], Value::Null);
+        assert_eq!(response["events"], json!([]));
+        assert!(response["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("OutputControl R4")));
+    }
+
+    #[test]
+    fn shared_callback_seam_preserves_safe_commands_and_blocks_legacy_blackout() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let callback_installed = Arc::new(AtomicBool::new(true));
+        let captured_epoch = harness.state.project_callback_epoch.load(Ordering::Acquire);
+
+        send_engine_command_if_callback_epoch(
+            &harness.state.engine,
+            &harness.state.project_callback_epoch,
+            &harness.state.project_transaction_active,
+            &harness.state.project_external_command_admission,
+            &callback_installed,
+            captured_epoch,
+            EngineCommand::SetBpm(123.0),
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if (harness.state.engine.snapshot().clock.bpm - 123.0).abs() < f32::EPSILON {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "safe callback command was not admitted through the shared seam"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert!(!harness.state.engine.snapshot().blackout);
+        send_engine_command_if_callback_epoch(
+            &harness.state.engine,
+            &harness.state.project_callback_epoch,
+            &harness.state.project_transaction_active,
+            &harness.state.project_external_command_admission,
+            &callback_installed,
+            captured_epoch,
+            EngineCommand::Blackout(true),
+        );
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(
+            !harness.state.engine.snapshot().blackout,
+            "legacy blackout was sent through the shared callback seam"
+        );
+    }
+}
+
 fn send_engine_command_if_callback_epoch(
     engine: &EngineHandle,
     callback_epoch: &Arc<AtomicU64>,
@@ -15154,6 +15602,12 @@ fn send_engine_command_if_callback_epoch(
     captured_epoch: u64,
     command: EngineCommand,
 ) {
+    if let Some(reason) = external_output_command_requires_local_r4(&command) {
+        eprintln!(
+            "Ignoring external output command ({reason}); use the local OutputControl R4 path"
+        );
+        return;
+    }
     let mutates_persistence = command.mutates_persistence_snapshot();
     let admission = Arc::clone(project_external_command_admission);
     let _ = run_if_installed_project_callback_epoch(
@@ -17588,6 +18042,7 @@ fn clear_fixture_flags(state: State<'_, AppState>, kind: String) -> Result<(), S
 
 #[tauri::command]
 fn set_output_config(state: State<'_, AppState>, config: DmxOutputConfig) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("DMX output configuration")?;
     validate_dmx_output_config(&config)?;
     state
         .engine
@@ -17600,6 +18055,7 @@ fn set_dmx_outputs(
     state: State<'_, AppState>,
     configs: Vec<DmxOutputConfig>,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("DMX output route configuration")?;
     validate_dmx_output_routes(&configs)?;
     state
         .engine
@@ -17623,6 +18079,7 @@ fn send_dmx_test_frame(
     state: State<'_, AppState>,
     request: DmxTestFrameRequest,
 ) -> Result<DmxTestFrameResult, String> {
+    reject_legacy_output_control_route::<DmxTestFrameResult>("DMX test frame")?;
     let _lighting_permit = ensure_lighting_output_allowed(&state.engine)?;
     let frame = build_dmx_test_frame(request.channel, request.width, request.value)?;
     send_dmx_config_test_frame(
@@ -17639,6 +18096,7 @@ fn send_dmx_routes_test_frame(
     state: State<'_, AppState>,
     request: DmxRoutesTestFrameRequest,
 ) -> Result<Vec<DmxTestFrameResult>, String> {
+    reject_legacy_output_control_route::<Vec<DmxTestFrameResult>>("DMX route test frame")?;
     let _lighting_permit = ensure_lighting_output_allowed(&state.engine)?;
     let frame = build_dmx_test_frame(request.channel, request.width, request.value)?;
     send_dmx_route_test_frames(
@@ -17651,35 +18109,26 @@ fn send_dmx_routes_test_frame(
 }
 
 #[tauri::command]
-fn set_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    if !enabled {
-        return Err(
-            "Blackout release is fail-closed: use the authenticated local OutputControl R4 path"
-                .to_string(),
-        );
-    }
-    state
-        .engine
-        .send(EngineCommand::Blackout(enabled))
-        .map_err(|error| error.to_string())
+fn set_blackout(_state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    reject_legacy_output_control_route(if enabled {
+        "Legacy blackout engage"
+    } else {
+        "Legacy blackout release"
+    })
 }
 
 #[tauri::command]
-fn set_all_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    if !enabled {
-        return Err(
-            "All-blackout release is fail-closed: use the authenticated local OutputControl R4 path"
-                .to_string(),
-        );
-    }
-    state
-        .engine
-        .send(EngineCommand::SetAllBlackout(enabled))
-        .map_err(|error| error.to_string())
+fn set_all_blackout(_state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    reject_legacy_output_control_route(if enabled {
+        "Legacy all-blackout engage"
+    } else {
+        "Legacy all-blackout release"
+    })
 }
 
 #[tauri::command]
 fn set_lighting_master(state: State<'_, AppState>, master: f32) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Lighting master")?;
     if !master.is_finite() {
         return Err("Lighting master must be finite".to_string());
     }
@@ -17695,6 +18144,7 @@ fn set_group_submaster(
     group_id: String,
     level: f32,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Group submaster")?;
     let group_id = normalize_control_group_id(group_id)?;
     if !level.is_finite() {
         return Err("Submaster level must be finite".to_string());
@@ -19266,6 +19716,15 @@ fn dispatch_external_control_event(
     event: OscInputEvent,
     source: &str,
 ) {
+    if external_control_source_requires_local_r4(source) {
+        // DMX mappings are not bound to an R4 lease/owner or physical
+        // consent.  Dropping the complete mapping event is safer than
+        // allowing a fixture/video/timeline mapping to become an untracked
+        // physical mutation.  The S0 blackout engage is handled only by its
+        // dedicated safety command, not by DMX mapping.
+        eprintln!("Ignoring DMX mapping event; use the authenticated local OutputControl R4 path");
+        return;
+    }
     let command = match event {
         OscInputEvent::SetAttribute {
             fixture_id,
@@ -19852,6 +20311,17 @@ fn format_url_host(ip: IpAddr) -> String {
     }
 }
 
+/// The generic Web Remote is not an R4 adapter. Keep its legacy transport
+/// synchronization provider read-only and fail-closed; in particular, it must
+/// never enter the NDI/Spout start/stop driver or an output transition.
+fn external_video_transport_sync_fail_closed() -> Value {
+    json!({
+        "report": null,
+        "events": [],
+        "error": "External video transport synchronization is fail-closed: use the authenticated local OutputControl R4 path",
+    })
+}
+
 #[tauri::command]
 fn start_remote_control(
     state: State<'_, AppState>,
@@ -19876,15 +20346,6 @@ fn start_remote_control(
     let io_plans_engine = state.engine.clone();
     let transport_status = Arc::clone(&state.external_video_transport);
     let transport_status_engine = state.engine.clone();
-    let sync_engine = state.engine.clone();
-    let sync_output_ownership_transition = Arc::clone(&state.output_ownership_transition);
-    let sync_transport = Arc::clone(&state.external_video_transport);
-    let sync_events = Arc::clone(&state.external_video_transport_events);
-    let sync_capture_transport = Arc::clone(&state.capture_transport);
-    #[cfg(feature = "ndi")]
-    let sync_ndi_transport = Arc::clone(&state.ndi_transport);
-    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    let sync_spout_transport = Arc::clone(&state.spout_transport);
     let dj_link_engine = state.engine.clone();
     let dj_link_project_coordinator = Arc::clone(&state.project_coordinator);
     let dj_link_runtime = Arc::clone(&state.dj_link_runtime);
@@ -20175,6 +20636,12 @@ fn start_remote_control(
                             EngineCommand::SetLightingMaster(master)
                         }
                     };
+                    if let Some(reason) = external_output_command_requires_local_r4(&command) {
+                        eprintln!(
+                            "Ignoring remote output command ({reason}); use the local OutputControl R4 path"
+                        );
+                        return;
+                    }
                     let mutates_persistence = command.mutates_persistence_snapshot();
                     if command_engine.send(command).is_ok() && mutates_persistence {
                         persistence_admission.note_admitted_external_command();
@@ -20238,84 +20705,7 @@ fn start_remote_control(
                 "error": error,
             }),
         },
-        move || {
-            let Ok(_transition_guard) = sync_output_ownership_transition.lock() else {
-                sync_engine.mark_output_ownership_transition_failure(
-                    "Output ownership transition lock was poisoned during remote synchronization",
-                );
-                return json!({
-                    "report": null,
-                    "events": [],
-                    "error": "Output ownership transition lock was poisoned",
-                });
-            };
-            let snapshot = sync_engine.snapshot();
-            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-            if let Err(error) =
-                harvest_spout_output_failures(sync_spout_transport.as_ref(), &sync_engine)
-            {
-                return json!({
-                    "report": null,
-                    "events": [],
-                    "error": error,
-                });
-            }
-            let role = sync_engine.output_ownership_status().role;
-            let mut transition = match sync_engine.begin_output_ownership_transition(role) {
-                Ok(transition) => transition,
-                Err(error) => {
-                    return json!({
-                        "report": null,
-                        "events": [],
-                        "error": format!("External video sync admission failed: {error}"),
-                    });
-                }
-            };
-            if let Err(error) = sync_engine.fence_output_ownership() {
-                transition.fail(error.clone());
-                return json!({
-                    "report": null,
-                    "events": [],
-                    "error": error,
-                });
-            }
-            let result = sync_external_video_transports_from_snapshot(
-                &snapshot,
-                role,
-                sync_transport.as_ref(),
-                sync_events.as_ref(),
-                sync_capture_transport.as_ref(),
-                #[cfg(feature = "ndi")]
-                sync_ndi_transport.as_ref(),
-                #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-                sync_spout_transport.as_ref(),
-                #[cfg(any(
-                    feature = "ndi",
-                    all(feature = "spout", target_os = "windows", target_arch = "x86_64")
-                ))]
-                &sync_engine,
-                #[cfg(any(
-                    feature = "ndi",
-                    all(feature = "spout", target_os = "windows", target_arch = "x86_64")
-                ))]
-                None,
-                Some(&mut transition),
-            );
-            match finish_external_video_transport_maintenance_transition(transition, result) {
-                Ok(sync) => serde_json::to_value(sync).unwrap_or_else(|_| {
-                    json!({
-                        "report": null,
-                        "events": [],
-                        "error": "External video transport sync serialization failed",
-                    })
-                }),
-                Err(error) => json!({
-                    "report": null,
-                    "events": [],
-                    "error": error,
-                }),
-            }
-        },
+        external_video_transport_sync_fail_closed,
         Some(dj_link_handler),
     )
     .map_err(|error| error.to_string())?;
@@ -32344,6 +32734,7 @@ fn set_video_layer_blend_mode(
 
 #[tauri::command]
 fn set_video_master_opacity(state: State<'_, AppState>, opacity: f32) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video master opacity")?;
     if !opacity.is_finite() {
         return Err("Video master opacity must be finite".to_string());
     }
@@ -32354,17 +32745,12 @@ fn set_video_master_opacity(state: State<'_, AppState>, opacity: f32) -> Result<
 }
 
 #[tauri::command]
-fn set_video_blackout(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    if !enabled {
-        return Err(
-            "Video blackout release is fail-closed pending a target-aware OutputControl R4 action"
-                .to_string(),
-        );
-    }
-    state
-        .engine
-        .send(EngineCommand::SetVideoBlackout(enabled))
-        .map_err(|error| error.to_string())
+fn set_video_blackout(_state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    reject_legacy_output_control_route(if enabled {
+        "Legacy video blackout engage"
+    } else {
+        "Legacy video blackout release"
+    })
 }
 
 #[tauri::command]
@@ -32432,6 +32818,7 @@ fn add_video_output(
     monitor_id: Option<u32>,
     endpoint_name: Option<String>,
 ) -> Result<VideoOutputId, String> {
+    reject_legacy_output_control_route::<VideoOutputId>("Video output creation")?;
     let config = normalize_video_output_config(
         label,
         kind,
@@ -32466,6 +32853,7 @@ fn add_video_output(
 
 #[tauri::command]
 fn remove_video_output(state: State<'_, AppState>, output_id: VideoOutputId) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output removal")?;
     validate_video_output_exists(&state.engine.snapshot(), output_id)?;
     state
         .engine
@@ -32485,6 +32873,7 @@ fn set_video_output_config(
     monitor_id: Option<u32>,
     endpoint_name: Option<String>,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output configuration")?;
     validate_video_output_exists(&state.engine.snapshot(), output_id)?;
     let config = normalize_video_output_config(
         label,
@@ -32517,6 +32906,7 @@ fn set_video_output_enabled(
     output_id: VideoOutputId,
     enabled: bool,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output enable/release")?;
     validate_video_output_exists(&state.engine.snapshot(), output_id)?;
     state
         .engine
@@ -32530,6 +32920,7 @@ fn set_video_output_routing(
     output_id: VideoOutputId,
     composition_id: CompositionId,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output routing")?;
     let snapshot = state.engine.snapshot();
     validate_video_output_exists(&snapshot, output_id)?;
     validate_video_composition_exists(&snapshot, composition_id)?;
@@ -32548,6 +32939,7 @@ fn set_video_output_opacity(
     output_id: VideoOutputId,
     opacity: f32,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output opacity")?;
     if !opacity.is_finite() {
         return Err("Video output opacity must be finite".to_string());
     }
@@ -32565,6 +32957,7 @@ fn fade_video_output_opacity(
     opacity: f32,
     duration_ms: u64,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output opacity fade")?;
     if !opacity.is_finite() {
         return Err("Video output opacity must be finite".to_string());
     }
@@ -32581,24 +32974,16 @@ fn fade_video_output_opacity(
 
 #[tauri::command]
 fn set_video_output_blackout(
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     output_id: VideoOutputId,
     blackout: bool,
 ) -> Result<(), String> {
-    if !blackout {
-        return Err(
-            "Video-output blackout release is fail-closed pending a target-aware OutputControl R4 action"
-                .to_string(),
-        );
-    }
-    validate_video_output_exists(&state.engine.snapshot(), output_id)?;
-    state
-        .engine
-        .send(EngineCommand::SetVideoOutputBlackout {
-            output_id,
-            blackout,
-        })
-        .map_err(|error| error.to_string())
+    let operation = if blackout {
+        format!("Legacy video-output blackout engage for output {output_id}")
+    } else {
+        format!("Legacy video-output blackout release for output {output_id}")
+    };
+    reject_legacy_output_control_route(&operation)
 }
 
 #[tauri::command]
@@ -32607,6 +32992,7 @@ fn set_video_output_mapping(
     output_id: VideoOutputId,
     mapping: VideoOutputMapping,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output mapping")?;
     validate_video_output_exists(&state.engine.snapshot(), output_id)?;
     validate_video_output_mapping(&mapping)?;
     state
@@ -32622,6 +33008,7 @@ fn set_video_output_mapping_field(
     field: String,
     value: f32,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output mapping field")?;
     validate_video_output_exists(&state.engine.snapshot(), output_id)?;
     let field = normalize_video_output_mapping_field(field)?;
     if !value.is_finite() {
@@ -32661,6 +33048,7 @@ fn apply_video_output_mapping_preset(
     output_id: VideoOutputId,
     label: String,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output mapping preset")?;
     validate_video_output_exists(&state.engine.snapshot(), output_id)?;
     let label = normalize_video_output_mapping_preset_label(label)?;
     state
@@ -48173,6 +48561,9 @@ fn arm_output_ownership_role(
 fn sync_external_video_transports(
     state: State<'_, AppState>,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
+    reject_legacy_output_control_route::<ExternalVideoTransportSyncResponse>(
+        "External video transport synchronization",
+    )?;
     let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
         let error = "Output ownership transition lock was poisoned".to_string();
         state
@@ -51365,6 +51756,9 @@ async fn sync_open_video_output_windows(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<VideoOutputWindowSyncSummary, String> {
+    reject_legacy_output_control_route::<VideoOutputWindowSyncSummary>(
+        "Video output window synchronization",
+    )?;
     let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
         let error = "Output ownership transition lock was poisoned".to_string();
         state
@@ -51452,6 +51846,7 @@ async fn close_video_output_window(
     output_id: VideoOutputId,
     test_pattern: Option<bool>,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output window close")?;
     let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
         let error = "Output ownership transition lock was poisoned".to_string();
         state
@@ -51473,6 +51868,9 @@ async fn close_open_video_output_windows(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<VideoOutputWindowCloseSummary, String> {
+    reject_legacy_output_control_route::<VideoOutputWindowCloseSummary>(
+        "Video output window close-all",
+    )?;
     let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
         let error = "Output ownership transition lock was poisoned".to_string();
         state
@@ -51504,6 +51902,7 @@ async fn sync_video_output_window(
     output_id: VideoOutputId,
     test_pattern: Option<bool>,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output window synchronization")?;
     let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
         let error = "Output ownership transition lock was poisoned".to_string();
         state
@@ -51806,6 +52205,7 @@ async fn open_video_output_window(
     output_id: VideoOutputId,
     test_pattern: Option<bool>,
 ) -> Result<(), String> {
+    reject_legacy_output_control_route::<()>("Video output window open")?;
     let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
         let error = "Output ownership transition lock was poisoned".to_string();
         state

@@ -107,6 +107,15 @@ second-vendor successful-stream gate. It is not the remaining sample-rate/buffer
 channel matrix, occupied/reset/unplug fault matrix, one-hour soak, or physical
 input-to-pixel latency evidence.
 
+Additional one-cycle HOTONE trials passed at 44.1 kHz / native `i32` for
+one-channel 64 and 256 frames and two-channel 64 and 256 frames, each with two
+callbacks, exact applied buffer, clean Stop/Free, and zero warning/terminal/XRUN/
+nonfinite events. A later one-channel 128-frame attempt, after the separate
+TOPPING driver hang described below, did not return and its exact QA processes
+were terminated. Because driver-global state may have been contaminated, that
+attempt is recorded as unresolved rather than attributed to HOTONE or counted as
+a pass. The complete rate/buffer/channel matrix remains open.
+
 A broader TOPPING matrix probe was also attempted. The driver advertised 44.1,
 48, and 96 kHz (plus additional rates), one through six input channels, native
 `i32`, and 8..2048 buffer frames. Exact 44.1 kHz / one-channel / 64-frame and

@@ -142,7 +142,15 @@ const receiptFor = (request, action) => {
   };
 };
 
-const createHarness = ({ action, queryState, authorityFence = fence, loseFirstReply = false, typedRejection = false } = {}) => {
+const createHarness = ({
+  action,
+  queryState,
+  authorityFence = fence,
+  loseFirstReply = false,
+  typedRejection = false,
+  statusState = "ready",
+  statusExpiryOffsetMs = 0,
+} = {}) => {
   const operationId = operationFor(action);
   const command = commandFor(action);
   const calls = [];
@@ -185,8 +193,8 @@ const createHarness = ({ action, queryState, authorityFence = fence, loseFirstRe
         operation_id: runtime.OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
         request_id: args.request.request_id,
         challenge_id: challengeId,
-        state: "ready",
-        expires_at_unix_ms: challengeExpiresAt,
+        state: statusState,
+        expires_at_unix_ms: challengeExpiresAt + statusExpiryOffsetMs,
       };
     }
     assert.equal(actualCommand, command);
@@ -222,6 +230,33 @@ for (const action of [...ordinaryActions, ...lifecycleActions]) {
   assert.equal(receipt.operation_id, operationFor(action));
   assert.equal(harness.executeCalls, 1);
   assert.equal(harness.statusCalls, 1);
+}
+
+// The sixth physical digit may land immediately before the original expiry.
+// A single bounded Ready extension is accepted, while pending drift and an
+// over-cap extension fail before physical execution.
+const boundaryReadyHarness = createHarness({
+  action: lifecycleActions[0],
+  statusExpiryOffsetMs: 5_000,
+});
+await runtime.executeOutputLeaseLifecycle(
+  boundaryReadyHarness.invoke,
+  lifecycleActions[0],
+  () => {},
+);
+assert.equal(boundaryReadyHarness.executeCalls, 1);
+
+for (const invalidStatus of [
+  { statusState: "pending_physical_input", statusExpiryOffsetMs: 1 },
+  { statusState: "ready", statusExpiryOffsetMs: -1 },
+  { statusState: "ready", statusExpiryOffsetMs: 5_001 },
+]) {
+  const invalidStatusHarness = createHarness({ action: lifecycleActions[0], ...invalidStatus });
+  await assert.rejects(
+    runtime.executeOutputLeaseLifecycle(invalidStatusHarness.invoke, lifecycleActions[0], () => {}),
+    /physical-confirmation status was invalid/,
+  );
+  assert.equal(invalidStatusHarness.executeCalls, 0);
 }
 
 // Rust permits zero only for the three project-scoped fence fields.  Keep the

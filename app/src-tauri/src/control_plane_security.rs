@@ -1,10 +1,17 @@
 //! Backend-owned human-presence and prepared-consent service.
 //!
 //! The release path deliberately accepts evidence only from a Windows Raw
-//! Input message whose source is reported as hardware and whose non-null
-//! device handle is present in the current raw-input device catalog. DOM
-//! events, accelerator callbacks, posted messages and API traffic never enter
-//! this module's evidence path.
+//! Input message whose packet is a keyboard packet and whose non-null device
+//! handle is present in the current raw-input device catalog. DOM events,
+//! accelerator callbacks, posted messages and API traffic never enter this
+//! module's evidence path. The packet/device checks are intentional: the
+//! higher-level input-message source API is not the trust boundary for a
+//! `WM_INPUT` packet and can reject valid Raw Input keyboard messages.
+//! This is an in-process presence proof, not an attestation against a
+//! privileged signed UIAccess injector or a driver-level virtual device that
+//! can produce kernel-attributed Raw Input; those threats are outside this
+//! boundary. Ordinary `SendInput`, `PostMessage`, DOM events and API traffic
+//! are rejected by the packet/device checks below.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -22,9 +29,14 @@ use getrandom::getrandom;
 // is not the AI4 grant/presence service; this bound only prevents a prepared
 // challenge from remaining usable while a user or project state changes.
 const CONSENT_CHALLENGE_TTL: Duration = Duration::from_secs(15);
+// Once the physical sequence is complete, keep the Ready record for a small
+// internal handoff window so the status poll can reach the one-shot consume
+// path even when the original pending-input deadline is at the boundary.
+const CONSENT_READY_HANDOFF_TTL: Duration = Duration::from_secs(5);
 const CONSENT_TOMBSTONE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_CONSENT_RECORDS: usize = 64;
 const CHALLENGE_DIGITS: usize = 6;
+const MAX_RAW_INPUT_PACKET_BYTES: u32 = 4 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ConsentCallerBinding {
@@ -88,7 +100,10 @@ struct ConsentRecord {
     display_code: [u8; CHALLENGE_DIGITS],
     #[cfg(any(target_os = "windows", test))]
     progress: usize,
+    #[cfg(any(target_os = "windows", test))]
+    bound_device: Option<usize>,
     matched_device: Option<usize>,
+    ready_expires_at: Option<Instant>,
     expires_at: Instant,
     expires_at_unix_ms: u64,
 }
@@ -163,6 +178,10 @@ impl ControlPlaneSecurityState {
             .lock()
             .map_err(|_| "Consent state lock was poisoned".to_string())?;
         prune_security_inner(&mut inner, now);
+        // A removal invalidates the active challenge, but a newly prepared
+        // challenge starts a new device-observation generation. The next Raw
+        // Input packet must still carry a currently enumerated handle.
+        inner.removed_devices.clear();
         // There is exactly one physical confirmation challenge process-wide.
         // Starting a newer dialog invalidates the older dialog rather than
         // allowing one physical key sequence to approve multiple operations.
@@ -177,7 +196,10 @@ impl ControlPlaneSecurityState {
             display_code,
             #[cfg(any(target_os = "windows", test))]
             progress: 0,
+            #[cfg(any(target_os = "windows", test))]
+            bound_device: None,
             matched_device: None,
+            ready_expires_at: None,
             expires_at,
             expires_at_unix_ms,
         });
@@ -206,7 +228,7 @@ impl ControlPlaneSecurityState {
         if record.challenge_id != challenge_id || &record.binding.caller != caller {
             return Err(ConsentConsumeError::WrongBinding);
         }
-        if record.expires_at <= now {
+        if consent_record_deadline(record) <= now {
             return Err(ConsentConsumeError::Expired);
         }
         let state = if record.matched_device.is_some() {
@@ -241,7 +263,7 @@ impl ControlPlaneSecurityState {
         let Some(record) = inner.active.as_ref() else {
             return Err(ConsentConsumeError::Missing);
         };
-        if record.expires_at <= now {
+        if consent_record_deadline(record) <= now {
             return Err(ConsentConsumeError::Expired);
         }
         if &record.binding != binding || record.consent_token != consent_token {
@@ -295,19 +317,19 @@ fn validate_binding(binding: &ConsentAuthorityBinding) -> Result<(), String> {
 }
 
 fn prune_security_inner(inner: &mut SecurityInner, now: Instant) {
-    if inner
-        .active
-        .as_ref()
-        .is_some_and(|record| record.expires_at <= now)
-    {
-        if let Some(record) = inner.active.take() {
-            push_tombstone(inner, record.consent_token, now);
-        }
-    }
+    // Keep an expired active record until its next explicit prepare replaces
+    // it. Status/consume can then report `Expired` instead of losing the
+    // challenge identity and misreporting an ordinary timeout as `Missing`.
+    // A replacement or successful consume still moves the token to the
+    // bounded tombstone set, preserving one-shot/replay protection.
     inner.tombstones.retain(|entry| entry.expires_at > now);
     inner
         .removed_devices
         .retain(|_, removed_at| now.saturating_duration_since(*removed_at) < CONSENT_TOMBSTONE_TTL);
+}
+
+fn consent_record_deadline(record: &ConsentRecord) -> Instant {
+    record.ready_expires_at.unwrap_or(record.expires_at)
 }
 
 fn push_tombstone(inner: &mut SecurityInner, consent_token: String, now: Instant) {
@@ -334,17 +356,40 @@ fn record_physical_digit(
         return;
     };
     prune_security_inner(&mut inner, now);
-    inner.removed_devices.remove(&device);
+    if inner.removed_devices.contains_key(&device) {
+        return;
+    }
     let Some(record) = inner.active.as_mut() else {
         return;
     };
-    if record.expires_at <= now || record.matched_device.is_some() {
+    if consent_record_deadline(record) <= now || record.matched_device.is_some() {
         return;
+    }
+    if let Some(bound_device) = record.bound_device {
+        if bound_device != device {
+            return;
+        }
+    } else {
+        record.bound_device = Some(device);
     }
     if record.display_code[record.progress] == digit {
         record.progress += 1;
         if record.progress == CHALLENGE_DIGITS {
             record.matched_device = Some(device);
+            // A code entered early remains usable only until the original
+            // challenge expiry.  A code completed at the boundary receives
+            // one bounded five-second handoff.  The public deadline is
+            // monotonic so the renderer can distinguish this one transition
+            // from an attacker-controlled repeated extension.
+            let ready_expires_at = (now + CONSENT_READY_HANDOFF_TTL).max(record.expires_at);
+            record.ready_expires_at = Some(ready_expires_at);
+            // Publish the same one-shot handoff deadline that status and
+            // consume enforce. Keeping the public expiry at the original
+            // pending-input deadline would make a valid Ready response look
+            // stale to the renderer and discard the handoff window.
+            record.expires_at_unix_ms = record.expires_at_unix_ms.max(
+                current_unix_ms().saturating_add(CONSENT_READY_HANDOFF_TTL.as_millis() as u64),
+            );
         }
     } else {
         record.progress = usize::from(record.display_code[0] == digit);
@@ -358,7 +403,15 @@ fn record_device_removal(inner: &Arc<Mutex<SecurityInner>>, device: usize, now: 
     }
     if let Ok(mut inner) = inner.lock() {
         prune_security_inner(&mut inner, now);
-        inner.removed_devices.insert(device, now);
+        // Only a device that has already contributed to this challenge can
+        // invalidate it. Ignoring unrelated removal notifications keeps this
+        // map bounded even on systems with noisy device-change traffic.
+        let relevant = inner.active.as_ref().is_some_and(|record| {
+            record.bound_device == Some(device) || record.matched_device == Some(device)
+        });
+        if relevant {
+            inner.removed_devices.insert(device, now);
+        }
     }
 }
 
@@ -519,15 +572,11 @@ unsafe extern "system" fn raw_input_window_proc(
     use windows::Win32::{
         Foundation::{HANDLE, LRESULT},
         UI::{
-            Input::{
-                GetCurrentInputMessageSource, GetRawInputData, IMDT_KEYBOARD, IMO_HARDWARE,
-                INPUT_MESSAGE_SOURCE, RAWINPUT, RAWINPUTHEADER, RID_INPUT, RIM_TYPEKEYBOARD,
-            },
+            Input::{GetRawInputData, RAWINPUT, RAWINPUTHEADER, RID_INPUT},
             WindowsAndMessaging::{
                 DefWindowProcW, DestroyWindow, GetWindowLongPtrW, PostQuitMessage,
                 SetWindowLongPtrW, CREATESTRUCTW, GIDC_REMOVAL, GWLP_USERDATA, WM_APP, WM_DESTROY,
-                WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY,
-                WM_SYSKEYDOWN,
+                WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_NCCREATE, WM_NCDESTROY,
             },
         },
     };
@@ -544,17 +593,18 @@ unsafe extern "system" fn raw_input_window_proc(
     match message {
         WM_INPUT if !context.is_null() => {
             let inner = &*context;
+            // Do not use GetCurrentInputMessageSource as a second provenance
+            // check here: its IMO_HARDWARE value is not a documented
+            // WM_INPUT trust boundary and can include UIAccess injection.
+            // The accepted evidence is the bounded system WM_INPUT packet,
+            // its keyboard type, and its currently enumerated device handle.
+            if !raw_input_wparam_is_acceptable(wparam.0) {
+                return DefWindowProcW(hwnd, message, wparam, lparam);
+            }
             if !inner
                 .lock()
                 .map(|state| state.active.is_some())
                 .unwrap_or(false)
-            {
-                return DefWindowProcW(hwnd, message, wparam, lparam);
-            }
-            let mut source = INPUT_MESSAGE_SOURCE::default();
-            if GetCurrentInputMessageSource(&mut source).is_err()
-                || source.originId != IMO_HARDWARE
-                || source.deviceType != IMDT_KEYBOARD
             {
                 return DefWindowProcW(hwnd, message, wparam, lparam);
             }
@@ -567,11 +617,14 @@ unsafe extern "system" fn raw_input_window_proc(
                 &mut size,
                 size_of::<RAWINPUTHEADER>() as u32,
             );
-            if size < size_of::<RAWINPUT>() as u32 {
+            if !raw_input_size_is_acceptable(size, size_of::<RAWINPUT>() as u32) {
                 return DefWindowProcW(hwnd, message, wparam, lparam);
             }
-            let words = (size as usize).div_ceil(size_of::<usize>());
-            let mut buffer = vec![0usize; words];
+            // RAWINPUT contains a pointer-sized device handle. Keep the
+            // allocation typed so the cast below is aligned on every Windows
+            // target; a Vec<u8>/Vec<usize> does not document that contract.
+            let elements = (size as usize).div_ceil(size_of::<RAWINPUT>());
+            let mut buffer = vec![RAWINPUT::default(); elements];
             let copied = GetRawInputData(
                 raw_handle,
                 RID_INPUT,
@@ -582,23 +635,17 @@ unsafe extern "system" fn raw_input_window_proc(
             if copied == u32::MAX || copied != size {
                 return DefWindowProcW(hwnd, message, wparam, lparam);
             }
-            let raw = &*(buffer.as_ptr().cast::<RAWINPUT>());
-            if raw.header.dwType != RIM_TYPEKEYBOARD.0 || raw.header.hDevice.0.is_null() {
-                return DefWindowProcW(hwnd, message, wparam, lparam);
-            }
+            let raw = &buffer[0];
             let device = raw.header.hDevice.0 as usize;
-            if !raw_keyboard_device_is_enumerated(device) {
+            if !raw_keyboard_device_is_acceptable(
+                raw.header.dwType,
+                device,
+                raw_keyboard_device_is_enumerated(device),
+            ) {
                 return DefWindowProcW(hwnd, message, wparam, lparam);
             }
             let keyboard = raw.data.keyboard;
-            if keyboard.Message != WM_KEYDOWN && keyboard.Message != WM_SYSKEYDOWN {
-                return DefWindowProcW(hwnd, message, wparam, lparam);
-            }
-            let digit = match keyboard.VKey {
-                0x30..=0x39 => Some((keyboard.VKey - 0x30) as u8),
-                0x60..=0x69 => Some((keyboard.VKey - 0x60) as u8),
-                _ => None,
-            };
+            let digit = raw_keyboard_digit(keyboard.Message, keyboard.VKey);
             if let Some(digit) = digit {
                 record_physical_digit(inner, digit, device, Instant::now());
             }
@@ -627,6 +674,48 @@ unsafe extern "system" fn raw_input_window_proc(
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
     }
 }
+
+#[cfg(any(target_os = "windows", test))]
+fn raw_keyboard_device_is_acceptable(raw_type: u32, device: usize, enumerated: bool) -> bool {
+    raw_type == RIM_TYPEKEYBOARD_VALUE && device != 0 && enumerated
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn raw_input_size_is_acceptable(size: u32, minimum: u32) -> bool {
+    size >= minimum && size <= MAX_RAW_INPUT_PACKET_BYTES
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn raw_input_wparam_is_acceptable(wparam: usize) -> bool {
+    wparam == RAW_RIM_INPUT || wparam == RAW_RIM_INPUTSINK
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn raw_keyboard_digit(message: u32, vkey: u16) -> Option<u8> {
+    if message != RAW_WM_KEYDOWN && message != RAW_WM_SYSKEYDOWN {
+        return None;
+    }
+    match vkey {
+        0x30..=0x39 => Some((vkey - 0x30) as u8),
+        0x60..=0x69 => Some((vkey - 0x60) as u8),
+        _ => None,
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+const RIM_TYPEKEYBOARD_VALUE: u32 = 1;
+
+#[cfg(any(target_os = "windows", test))]
+const RAW_RIM_INPUT: usize = 0;
+
+#[cfg(any(target_os = "windows", test))]
+const RAW_RIM_INPUTSINK: usize = 1;
+
+#[cfg(any(target_os = "windows", test))]
+const RAW_WM_KEYDOWN: u32 = 0x0100;
+
+#[cfg(any(target_os = "windows", test))]
+const RAW_WM_SYSKEYDOWN: u32 = 0x0104;
 
 #[cfg(target_os = "windows")]
 unsafe fn raw_keyboard_device_is_enumerated(device: usize) -> bool {
@@ -725,6 +814,13 @@ mod tests {
                 .state,
             PreparedConsentState::Ready
         );
+        assert_eq!(
+            state
+                .consent_status(&authority.caller, &prepared.challenge_id)
+                .unwrap()
+                .state,
+            PreparedConsentState::Ready
+        );
         let mut wrong = authority.clone();
         wrong.output_generation += 1;
         assert_eq!(
@@ -756,6 +852,320 @@ mod tests {
         assert_eq!(
             state.consume_consent(&authority, &second.consent_token),
             Err(ConsentConsumeError::DeviceRemoved)
+        );
+    }
+
+    #[test]
+    fn ready_handoff_survives_original_deadline_until_one_shot_consume() {
+        let state = ControlPlaneSecurityState::default();
+        let authority = binding("syndocal.output.arm.v1", 9);
+        let prepared = state.prepare_consent(authority.clone()).unwrap();
+        enter_code(&state, &prepared.display_code, 0x9999);
+        {
+            let mut inner = state.inner.lock().unwrap();
+            let record = inner.active.as_mut().unwrap();
+            assert!(record.matched_device.is_some());
+            record.expires_at = Instant::now() - Duration::from_secs(1);
+        }
+
+        assert_eq!(
+            state
+                .consent_status(&authority.caller, &prepared.challenge_id)
+                .unwrap()
+                .state,
+            PreparedConsentState::Ready
+        );
+        assert_eq!(
+            state.consume_consent(&authority, &prepared.consent_token),
+            Ok(())
+        );
+        assert_eq!(
+            state.consume_consent(&authority, &prepared.consent_token),
+            Err(ConsentConsumeError::Replayed)
+        );
+    }
+
+    #[test]
+    fn boundary_ready_publishes_one_bounded_monotonic_handoff_deadline() {
+        let state = ControlPlaneSecurityState::default();
+        let authority = binding("syndocal.output.arm.v1", 9);
+        let prepared = state.prepare_consent(authority.clone()).unwrap();
+        let code = prepared
+            .display_code
+            .bytes()
+            .map(|digit| digit - b'0')
+            .collect::<Vec<_>>();
+        let boundary = Instant::now();
+        let pending_public_deadline = current_unix_ms().saturating_add(10);
+        {
+            let mut inner = state.inner.lock().unwrap();
+            let record = inner.active.as_mut().unwrap();
+            record.expires_at = boundary + Duration::from_millis(10);
+            record.expires_at_unix_ms = pending_public_deadline;
+        }
+        for digit in &code[..CHALLENGE_DIGITS - 1] {
+            record_physical_digit(&state.inner, *digit, 0x4242, boundary);
+        }
+        record_physical_digit(
+            &state.inner,
+            code[CHALLENGE_DIGITS - 1],
+            0x4242,
+            boundary + Duration::from_millis(9),
+        );
+
+        let status = state
+            .consent_status(&authority.caller, &prepared.challenge_id)
+            .unwrap();
+        assert_eq!(status.state, PreparedConsentState::Ready);
+        assert!(status.expires_at_unix_ms >= pending_public_deadline);
+        assert!(
+            status.expires_at_unix_ms
+                <= current_unix_ms()
+                    .saturating_add(CONSENT_READY_HANDOFF_TTL.as_millis() as u64)
+                    .saturating_add(100),
+            "Ready deadline exceeded its single bounded handoff"
+        );
+        assert_eq!(
+            state.consume_consent(&authority, &prepared.consent_token),
+            Ok(())
+        );
+        assert_eq!(
+            state.consume_consent(&authority, &prepared.consent_token),
+            Err(ConsentConsumeError::Replayed)
+        );
+    }
+
+    #[test]
+    fn expired_ready_handoff_is_fail_closed_until_replacement() {
+        let state = ControlPlaneSecurityState::default();
+        let authority = binding("syndocal.output.arm.v1", 9);
+        let prepared = state.prepare_consent(authority.clone()).unwrap();
+        enter_code(&state, &prepared.display_code, 0x9999);
+        {
+            let mut inner = state.inner.lock().unwrap();
+            inner.active.as_mut().unwrap().ready_expires_at =
+                Some(Instant::now() - Duration::from_secs(1));
+        }
+
+        assert_eq!(
+            state.consent_status(&authority.caller, &prepared.challenge_id),
+            Err(ConsentConsumeError::Expired)
+        );
+        assert_eq!(
+            state.consume_consent(&authority, &prepared.consent_token),
+            Err(ConsentConsumeError::Expired)
+        );
+        let _replacement = state.prepare_consent(authority.clone()).unwrap();
+        assert_eq!(
+            state.consume_consent(&authority, &prepared.consent_token),
+            Err(ConsentConsumeError::Replayed)
+        );
+    }
+
+    #[test]
+    fn expired_pending_challenge_is_reported_and_cannot_be_consumed() {
+        let state = ControlPlaneSecurityState::default();
+        let authority = binding("syndocal.output.arm.v1", 9);
+        let prepared = state.prepare_consent(authority.clone()).unwrap();
+        {
+            let mut inner = state.inner.lock().unwrap();
+            inner.active.as_mut().unwrap().expires_at = Instant::now() - Duration::from_secs(1);
+        }
+
+        assert_eq!(
+            state.consent_status(&authority.caller, &prepared.challenge_id),
+            Err(ConsentConsumeError::Expired)
+        );
+        assert_eq!(
+            state.consume_consent(&authority, &prepared.consent_token),
+            Err(ConsentConsumeError::Expired)
+        );
+        let _replacement = state.prepare_consent(authority.clone()).unwrap();
+        assert_eq!(
+            state.consume_consent(&authority, &prepared.consent_token),
+            Err(ConsentConsumeError::Replayed)
+        );
+    }
+
+    #[test]
+    fn raw_keyboard_digit_accepts_top_row_and_numpad_keydowns_only() {
+        assert_eq!(raw_keyboard_digit(RAW_WM_KEYDOWN, 0x30), Some(0));
+        assert_eq!(raw_keyboard_digit(RAW_WM_KEYDOWN, 0x39), Some(9));
+        assert_eq!(raw_keyboard_digit(RAW_WM_SYSKEYDOWN, 0x60), Some(0));
+        assert_eq!(raw_keyboard_digit(RAW_WM_SYSKEYDOWN, 0x69), Some(9));
+        assert_eq!(raw_keyboard_digit(0x0101, 0x31), None);
+        assert_eq!(raw_keyboard_digit(0x0105, 0x61), None);
+        assert_eq!(raw_keyboard_digit(RAW_WM_KEYDOWN, 0x41), None);
+        assert_eq!(raw_keyboard_digit(RAW_WM_KEYDOWN, 0x6a), None);
+    }
+
+    #[test]
+    fn raw_keyboard_device_acceptance_is_fail_closed() {
+        assert!(raw_keyboard_device_is_acceptable(
+            RIM_TYPEKEYBOARD_VALUE,
+            0x1234,
+            true
+        ));
+        assert!(!raw_keyboard_device_is_acceptable(
+            RIM_TYPEKEYBOARD_VALUE,
+            0,
+            true
+        ));
+        assert!(!raw_keyboard_device_is_acceptable(
+            RIM_TYPEKEYBOARD_VALUE,
+            0x1234,
+            false
+        ));
+        assert!(!raw_keyboard_device_is_acceptable(2, 0x1234, true));
+    }
+
+    #[test]
+    fn raw_input_size_is_bounded_and_requires_a_complete_header() {
+        assert!(!raw_input_size_is_acceptable(47, 48));
+        assert!(raw_input_size_is_acceptable(48, 48));
+        assert!(raw_input_size_is_acceptable(MAX_RAW_INPUT_PACKET_BYTES, 48));
+        assert!(!raw_input_size_is_acceptable(
+            MAX_RAW_INPUT_PACKET_BYTES + 1,
+            48
+        ));
+    }
+
+    #[test]
+    fn raw_input_wparam_accepts_only_system_raw_input_values() {
+        assert!(raw_input_wparam_is_acceptable(RAW_RIM_INPUT));
+        assert!(raw_input_wparam_is_acceptable(RAW_RIM_INPUTSINK));
+        assert!(!raw_input_wparam_is_acceptable(2));
+        assert!(!raw_input_wparam_is_acceptable(usize::MAX));
+    }
+
+    #[test]
+    fn physical_sequence_stays_bound_to_first_device_and_removal_is_sticky() {
+        let state = ControlPlaneSecurityState::default();
+        let authority = binding("syndocal.output.arm.v1", 9);
+        let prepared = state.prepare_consent(authority.clone()).unwrap();
+        let device = 0x1234;
+        let other_device = 0x5678;
+
+        for (index, digit) in prepared.display_code.bytes().enumerate() {
+            state.observe_physical_digit_for_test(
+                digit - b'0',
+                if index == CHALLENGE_DIGITS - 1 {
+                    other_device
+                } else {
+                    device
+                },
+            );
+        }
+        assert_eq!(
+            state
+                .consent_status(&authority.caller, &prepared.challenge_id)
+                .unwrap()
+                .state,
+            PreparedConsentState::PendingPhysicalInput
+        );
+
+        state.remove_physical_device_for_test(device);
+        for digit in prepared.display_code.bytes() {
+            state.observe_physical_digit_for_test(digit - b'0', device);
+        }
+        assert_eq!(
+            state
+                .consent_status(&authority.caller, &prepared.challenge_id)
+                .unwrap()
+                .state,
+            PreparedConsentState::PendingPhysicalInput
+        );
+
+        let fresh = state.prepare_consent(authority.clone()).unwrap();
+        enter_code(&state, &fresh.display_code, device);
+        assert_eq!(
+            state
+                .consent_status(&authority.caller, &fresh.challenge_id)
+                .unwrap()
+                .state,
+            PreparedConsentState::Ready
+        );
+    }
+
+    #[test]
+    fn unrelated_device_removals_are_ignored_and_bound_removal_blocks_input() {
+        let state = ControlPlaneSecurityState::default();
+        let authority = binding("syndocal.output.arm.v1", 9);
+        let prepared = state.prepare_consent(authority.clone()).unwrap();
+        let bound_device = 0x1234;
+
+        for device in 0x10000..0x10000 + 10_000 {
+            state.remove_physical_device_for_test(device);
+        }
+        assert!(state.inner.lock().unwrap().removed_devices.is_empty());
+
+        let first_digit = prepared.display_code.as_bytes()[0] - b'0';
+        state.observe_physical_digit_for_test(first_digit, bound_device);
+        for device in 0x20000..0x20000 + 10_000 {
+            state.remove_physical_device_for_test(device);
+        }
+        assert!(state.inner.lock().unwrap().removed_devices.is_empty());
+
+        state.remove_physical_device_for_test(bound_device);
+        assert_eq!(state.inner.lock().unwrap().removed_devices.len(), 1);
+        for digit in prepared.display_code.bytes().skip(1) {
+            state.observe_physical_digit_for_test(digit - b'0', bound_device);
+        }
+        assert_eq!(
+            state
+                .consent_status(&authority.caller, &prepared.challenge_id)
+                .unwrap()
+                .state,
+            PreparedConsentState::PendingPhysicalInput
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires an interactive Windows input desktop"]
+    fn send_input_does_not_satisfy_physical_confirmation() {
+        use std::mem::size_of;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+        };
+
+        let state = ControlPlaneSecurityState::default();
+        state.start_physical_input_monitor().unwrap();
+        let authority = binding("syndocal.output.arm.v1", 9);
+        let prepared = state.prepare_consent(authority.clone()).unwrap();
+        for digit in prepared.display_code.bytes() {
+            let key = VIRTUAL_KEY(u16::from(digit - b'0') + 0x30);
+            let inputs = [
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: key,
+                            ..Default::default()
+                        },
+                    },
+                },
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: key,
+                            dwFlags: KEYEVENTF_KEYUP,
+                            ..Default::default()
+                        },
+                    },
+                },
+            ];
+            let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+            assert_eq!(sent, inputs.len() as u32);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            state
+                .consent_status(&authority.caller, &prepared.challenge_id)
+                .unwrap()
+                .state,
+            PreparedConsentState::PendingPhysicalInput
         );
     }
 }

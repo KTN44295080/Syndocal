@@ -372,6 +372,8 @@ interface OutputConsentStatus {
   expires_at_unix_ms: number;
 }
 
+const OUTPUT_CONSENT_READY_HANDOFF_MS = 5_000;
+
 const assertChallenge = (value: unknown, operationId: string, requestId: number): OutputConsentChallenge => {
   if (!isObject(value) || !hasExactKeys(value, [
     "operation_id", "request_id", "target_operation_id", "challenge_id", "consent_token",
@@ -388,7 +390,10 @@ const assertStatus = (value: unknown, challenge: OutputConsentChallenge, request
   if (!isObject(value) || !hasExactKeys(value, ["operation_id", "request_id", "challenge_id", "state", "expires_at_unix_ms"])
     || value.operation_id !== OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID || value.request_id !== requestId
     || value.challenge_id !== challenge.challenge_id || value.state !== "pending_physical_input" && value.state !== "ready"
-    || !isPositiveSafeInteger(value.expires_at_unix_ms) || value.expires_at_unix_ms !== challenge.expires_at_unix_ms) {
+    || !isPositiveSafeInteger(value.expires_at_unix_ms)
+    || value.state === "pending_physical_input" && value.expires_at_unix_ms !== challenge.expires_at_unix_ms
+    || value.state === "ready" && (value.expires_at_unix_ms < challenge.expires_at_unix_ms
+      || value.expires_at_unix_ms > challenge.expires_at_unix_ms + OUTPUT_CONSENT_READY_HANDOFF_MS)) {
     throw new Error("OutputControl physical-confirmation status was invalid; nothing was applied.");
   }
   return value as unknown as OutputConsentStatus;
@@ -567,7 +572,15 @@ const executeOutputControlOperation = async (
   });
   const challenge = assertChallenge(await invoke<unknown>("prepare_output_consent_v1", prepareArgs), operationId, requestId);
   onChallenge({ action, displayCode: challenge.display_code, expiresAtUnixMs: challenge.expires_at_unix_ms });
-  const deadline = Math.min(challenge.expires_at_unix_ms, Date.now() + 15_000);
+  // The backend accepts digits only during the original challenge window.
+  // One final status query may cross that boundary when the sixth physical
+  // digit completed immediately before expiry; Ready then carries a single,
+  // bounded five-second handoff to the one-shot consume path.  Pending input
+  // still expires in the backend at the original deadline.
+  const deadline = Math.min(
+    challenge.expires_at_unix_ms + OUTPUT_CONSENT_READY_HANDOFF_MS,
+    Date.now() + 20_000,
+  );
   let statusRequestId = allocateRequestId();
   let ready = false;
   while (!ready) {

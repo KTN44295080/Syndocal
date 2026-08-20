@@ -570,9 +570,64 @@ XRUNs 0, nonfinite samples 0, and fallback 0. This closes the second-vendor stre
 gate but not the complete rate/buffer/channel matrix, fault injection, one-hour
 soak, physical latency, or ASIO distribution-license decision.
 
+Additional HOTONE one-cycle trials passed for 44.1 kHz / i32 at one-channel
+64/256 frames and two-channel 64/256 frames with exact buffers and zero warning,
+terminal, XRUN, or nonfinite events. After the separate TOPPING hang below, a
+HOTONE one-channel/128 attempt also stopped returning; its exact test processes
+were terminated and the result is kept unresolved rather than misattributed or
+counted as a pass.
+
 A subsequent bounded TOPPING matrix probe did not convert advertised capability
 into a false pass. Explicit 44.1 kHz / one-channel Starts at 64 and 128 frames
 failed with the driver's `hardware is malfunctioning` backend error and no
 fallback. The next 256-frame trial stopped returning, so the run was cancelled
 and the remaining matrix was not attempted. This is recorded hardware/driver
 failure evidence; rate/buffer/channel and fault-recovery acceptance remain open.
+
+## 2026-08-21 OutputControl Raw Input and generated-route checkpoint
+
+Work continues on `codex/syndocal-v1.2` from clean upstream base
+`d70eaf207930a17900785992ad70cc14e9edab7a`. The previous physical-keyboard
+attempt exposed a real Ready handoff race: backend state remained consumable for a
+short handoff, while the public expiry and frontend poll still ended at the
+original deadline. The current implementation publishes one monotonic deadline
+bounded to five seconds beyond the original challenge, keeps Pending expiry exact,
+accepts only the bounded Ready extension in the frontend, and exercises the full
+prepare/status/execute boundary in the controller harness. Expiry, replacement,
+replay, sticky device removal, and one-shot consumption remain fail closed.
+
+The warning/P2 ownership checker now derives candidate ingress from all production
+Tauri command bodies, not command names alone. Sorted sink markers cover DMX,
+native Display windows, NDI, Spout, and output-ownership transitions. Exact legacy
+reject and canonical R4/S0 inventories are enforced, with negative fixtures for an
+unknown native command, inventory removal, and rejection after a side effect. The
+frozen checker blob is `5f1c15cd2992f71139b4b99f5641b787992b4f4d`;
+the final independent read-only verdict is P0 0, P1 0, P2 0, ACCEPT.
+
+Current verified gates:
+
+- Raw Input security: 12 passed, 0 failed, 1 ignored interactive SendInput test;
+- legacy output routes: 6 passed; OutputControl: 19 passed;
+- frontend OutputControl contract: PASS (8 operations); ownership static gate:
+  PASS; DJ Link and safety-blackout runtime contracts: PASS;
+- warning-ratchet self-test: 61 groups; release metadata, `cargo fmt --check`, and
+  `git diff --check`: PASS;
+- final native build: `pnpm --dir app tauri build --no-bundle`, 1m31s, zero
+  first-party Rust warnings and zero Vite warnings.
+
+Immediately before that build, exact-path inspection found and stopped zero
+processes. The resulting release executable has SHA-256
+`D5CC6BF3908AE4295A134B21DDB7CF953D717BFF1AE52E68230EE27C7AC235A6` and
+FileVersion/ProductVersion `1.2.0-alpha.1`. It was launched as exact-path PID
+`89104`; inspection returned exactly one responsive `Syndocal` process and one
+main window. Computer Use selected that exact process-backed app, observed a
+1920x1032 client capture and the system `Restore` action, and kept the window
+maximized for every native action.
+
+A fresh six-digit challenge was issued, but no Ready/lease result was observed
+before expiry. The run did not synthesize Raw Input and therefore does not claim
+the physical positive. Resume only when the operator is at the keyboard: issue one
+new code, verify lease acquisition, issue the separate `Both` Arm confirmation,
+then measure all five fullscreen window origins and leave the requested editor +
+LED panel + projector state. The code-side checkpoint is committed and pushed
+independently of that explicitly unverified hardware boundary.

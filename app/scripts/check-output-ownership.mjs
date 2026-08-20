@@ -54,6 +54,18 @@ const assertOrderedMarkers = (source, markers, message) => {
   return indices;
 };
 
+const tauriCommandSegments = (source) => {
+  const matches = [...source.matchAll(/#\[tauri::command\]\s*(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*\(/g)];
+  return matches.map((match) => {
+    // rustfmt leaves a top-level function close at column zero. Limiting the
+    // segment there avoids attributing helper code between adjacent Tauri
+    // commands to the preceding command.
+    const end = source.indexOf("\n}\n", match.index);
+    assert(end >= 0, `${match[1]}: missing rustfmt top-level function close`);
+    return { name: match[1], source: source.slice(match.index, end + 3) };
+  });
+};
+
 const protocolProjectSwapConstructor = sliceBetween(
   protocol,
   "pub fn project_swap_disarmed(",
@@ -713,6 +725,12 @@ const serializedSync = sliceBetween(
   "fn get_video_runtime_status",
   "serialized external video sync path",
 );
+assertOrdered(
+  serializedSync,
+  "reject_legacy_output_control_route::<ExternalVideoTransportSyncResponse>",
+  "begin_output_ownership_transition",
+  "legacy Tauri external video sync must fail closed before transition admission",
+);
 assert.match(serializedSync, /begin_output_ownership_transition/);
 assert.match(serializedSync, /fence_output_ownership/);
 assert.match(serializedSync, /Some\(&mut transition\)/);
@@ -776,20 +794,399 @@ assertOrdered(
   "WindowBuilder",
   "native Display window creation/show must follow activation admission",
 );
+const remoteSyncFailClosed = sliceBetween(
+  appBackend,
+  "fn external_video_transport_sync_fail_closed()",
+  "fn start_remote_control(",
+  "remote external video synchronization fail-closed provider",
+);
+assert.match(remoteSyncFailClosed, /"report": null/);
+assert.match(remoteSyncFailClosed, /"events": \[\]/);
+assert.match(remoteSyncFailClosed, /OutputControl R4/);
+assert.doesNotMatch(remoteSyncFailClosed, /sync_external_video_transports_from_snapshot/);
 const remoteSyncAdmission = sliceBetween(
   appBackend,
-  "let Ok(_transition_guard) = sync_output_ownership_transition.lock()",
+  "fn start_remote_control(",
   "fn remote_control_status",
   "remote external video synchronization path",
 );
 assertOrdered(
   remoteSyncAdmission,
-  "sync_output_ownership_transition.lock()",
-  "sync_external_video_transports_from_snapshot",
-  "remote external sync must use the serialized ownership admission boundary",
+  "RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link",
+  "external_video_transport_sync_fail_closed",
+  "remote external sync must install the fail-closed provider",
 );
-assert.match(remoteSyncAdmission, /begin_output_ownership_transition/);
-assert.match(remoteSyncAdmission, /finish_external_video_transport_maintenance_transition/);
+assert.doesNotMatch(remoteSyncAdmission, /sync_external_video_transports_from_snapshot/);
+
+// Generated legacy-ingress inventory.  The explicit list makes removals and
+// additions review-visible; candidate discovery independently scans every
+// Tauri command for an R4-classified EngineCommand or a native output sink so
+// a new wrapper cannot silently bypass the list.
+const legacyTauriOutputRoutes = [
+  "add_video_output",
+  "apply_video_output_mapping_preset",
+  "close_open_video_output_windows",
+  "close_video_output_window",
+  "fade_video_output_opacity",
+  "open_video_output_window",
+  "remove_video_output",
+  "send_dmx_routes_test_frame",
+  "send_dmx_test_frame",
+  "set_all_blackout",
+  "set_blackout",
+  "set_dmx_outputs",
+  "set_group_submaster",
+  "set_lighting_master",
+  "set_output_config",
+  "set_video_blackout",
+  "set_video_master_opacity",
+  "set_video_output_blackout",
+  "set_video_output_config",
+  "set_video_output_enabled",
+  "set_video_output_mapping",
+  "set_video_output_mapping_field",
+  "set_video_output_opacity",
+  "set_video_output_routing",
+  "sync_external_video_transports",
+  "sync_open_video_output_windows",
+  "sync_video_output_window",
+];
+assert.deepEqual(
+  legacyTauriOutputRoutes,
+  [...legacyTauriOutputRoutes].sort(),
+  "legacy Tauri output-route inventory must remain bytewise sorted",
+);
+
+const classifier = sliceBetween(
+  appBackend,
+  "fn external_output_command_requires_local_r4(",
+  "fn external_control_source_requires_local_r4(",
+  "external output-command classifier",
+);
+assert.doesNotMatch(classifier, /_\s*=>/, "external output classifier must remain exhaustive");
+const forbiddenClassifierArm = classifier.slice(0, indexOfOrFail(
+  classifier,
+  'Some("legacy or output-affecting command; use OutputControl R4")',
+  "external output-command classifier",
+));
+const forbiddenVariants = new Set(
+  [...forbiddenClassifierArm.matchAll(/EngineCommand::([A-Za-z0-9_]+)/g)].map((match) => match[1]),
+);
+assert(forbiddenVariants.size >= 20, "R4 classifier unexpectedly lost output variants");
+
+const commandSegments = tauriCommandSegments(appBackend);
+const directNativeOutputNames = /^(?:sync_external_video_transports|sync_open_video_output_windows|close_open_video_output_windows|close_video_output_window|sync_video_output_window|open_video_output_window)$/;
+const externalAdapterRoutes = [
+  "connect_midi_control",
+  "start_dmx_input",
+  "start_osc_input",
+  "start_remote_control",
+];
+const usesForbiddenVariant = (source) => [...forbiddenVariants].some((variant) =>
+  new RegExp(`EngineCommand::${variant}(?:\\s|\\(|\\{)`).test(source));
+const discoveredLegacyRoutes = commandSegments
+  .filter(({ name, source }) => source.includes("reject_legacy_output_control_route")
+    || directNativeOutputNames.test(name)
+    || usesForbiddenVariant(source))
+  .filter(({ name }) => !externalAdapterRoutes.includes(name))
+  .map(({ name }) => name)
+  .sort();
+assert.deepEqual(
+  discoveredLegacyRoutes,
+  legacyTauriOutputRoutes,
+  "generated legacy Tauri output-route inventory changed; classify and fail-close every new ingress",
+);
+const discoveredExternalAdapters = commandSegments
+  .filter(({ source }) => usesForbiddenVariant(source))
+  .map(({ name }) => name)
+  .filter((name) => externalAdapterRoutes.includes(name))
+  .sort();
+assert.deepEqual(
+  discoveredExternalAdapters,
+  externalAdapterRoutes,
+  "MIDI/OSC/DMX/Web Remote output-ingress inventory changed",
+);
+
+for (const route of legacyTauriOutputRoutes) {
+  const matches = commandSegments.filter(({ name }) => name === route);
+  assert.equal(matches.length, 1, `${route}: expected one Tauri command`);
+  const body = matches[0].source;
+  const rejectIndex = indexOfOrFail(
+    body,
+    "reject_legacy_output_control_route",
+    `${route} fail-closed route`,
+  );
+  const sideEffectMarkers = [
+    "state.engine",
+    "begin_output_ownership_transition",
+    "sync_external_video_transports_from_snapshot",
+    "WindowBuilder",
+    "admit_output_activation",
+    "output_ownership_transition.lock",
+  ];
+  const sideEffectIndices = sideEffectMarkers
+    .map((marker) => body.indexOf(marker))
+    .filter((index) => index >= 0);
+  if (sideEffectIndices.length > 0) {
+    assert(
+      rejectIndex < Math.min(...sideEffectIndices),
+      `${route}: R4 rejection must precede every engine/native side effect`,
+    );
+  }
+}
+
+for (const route of externalAdapterRoutes) {
+  const matches = commandSegments.filter(({ name }) => name === route);
+  assert.equal(matches.length, 1, `${route}: expected one external adapter command`);
+  const body = matches[0].source;
+  assert(
+    body.includes("send_engine_command_if_callback_epoch")
+      || body.includes("external_output_command_requires_local_r4(&command)"),
+  `${route}: every produced command must enter an exhaustive R4 classifier before engine send`,
+  );
+}
+
+// Keep the physical-sink scan deliberately narrow and source-backed.  These
+// markers are only applied to production Tauri-command segments from main.rs;
+// strings in this checker and Rust tests are never scanned.  A new native
+// sink therefore cannot hide behind a new command name without either being
+// added to the explicit legacy/R4 inventory or failing this gate.
+const nativePhysicalSinkMarkers = [
+  "EngineCommand::AddVideoOutput(",
+  "EngineCommand::ApplyVideoOutputMappingPreset {",
+  "EngineCommand::Blackout(",
+  "EngineCommand::ClearDmxInput(",
+  "EngineCommand::FadeVideoOutputOpacity {",
+  "EngineCommand::SafetyBlackoutEngagePublished {",
+  "EngineCommand::SafetyBlackoutReleasePublished {",
+  "EngineCommand::SetAllBlackout(",
+  "EngineCommand::SetDmxInputFrame {",
+  "EngineCommand::SetDmxOutputs(",
+  "EngineCommand::SetGroupSubmaster {",
+  "EngineCommand::SetLightingMaster(",
+  "EngineCommand::SetOutput(",
+  "EngineCommand::SetOutputOwnershipRole {",
+  "EngineCommand::SetVideoBlackout(",
+  "EngineCommand::SetVideoMasterOpacity(",
+  "EngineCommand::SetVideoOutputBlackout {",
+  "EngineCommand::SetVideoOutputConfig {",
+  "EngineCommand::SetVideoOutputEnabled {",
+  "EngineCommand::SetVideoOutputMapping {",
+  "EngineCommand::SetVideoOutputMappingField {",
+  "EngineCommand::SetVideoOutputOpacity {",
+  "EngineCommand::SetVideoOutputRouting {",
+  "admit_output_activation(",
+  "apply_output_ownership_role(",
+  "begin_output_ownership_transition(",
+  "control_plane_runtime::engage_safety_blackout(",
+  "engine.acquire_lighting_output(",
+  "fence_output_ownership(",
+  "ndi_transport",
+  "retire_native_video_output_window(",
+  "retire_native_video_output_windows(",
+  "send_dmx_config_test_frame(",
+  "send_dmx_route_test_frames(",
+  "spout_transport",
+  "state.output_ownership_transition.lock(",
+  "sync_external_video_transports_from_snapshot(",
+  "tauri::window::WindowBuilder::new(",
+  "with_output_resource_creation_lease_with_cleanup(",
+];
+assert.deepEqual(
+  nativePhysicalSinkMarkers,
+  [...nativePhysicalSinkMarkers].sort(),
+  "native physical sink marker inventory must remain bytewise sorted",
+);
+
+const canonicalR4TauriOutputRoutes = [
+  "arm_output_control_v1",
+  "arm_output_ownership_role",
+  "force_transfer_output_lease_v1",
+  "recover_output_lease_v1",
+  "release_blackout_output_control_v1",
+  "relinquish_output_lease_v1",
+  "renew_output_lease_v1",
+  "safety_blackout_engage_v1",
+  "set_output_ownership_role",
+  "start_standby_sync",
+  "stop_standby_sync",
+  "take_over_output_control_v1",
+  "take_over_standby",
+];
+assert.deepEqual(
+  canonicalR4TauriOutputRoutes,
+  [...canonicalR4TauriOutputRoutes].sort(),
+  "canonical R4/S0 output-route inventory must remain bytewise sorted",
+);
+
+const nativeSinkHits = (source, markers = nativePhysicalSinkMarkers) =>
+  markers.filter((marker) => source.includes(marker));
+
+const assertNativeSinkInventory = (source, {
+  legacyRoutes,
+  canonicalRoutes,
+  protectedAdapterRoutes,
+}) => {
+  const segments = tauriCommandSegments(source);
+  const allowed = new Set([
+    ...legacyRoutes,
+    ...canonicalRoutes,
+  ]);
+  const detected = segments
+    .map(({ name, source: segment }) => ({
+      name,
+      // MIDI/OSC/DMX/Web Remote adapters are checked independently through
+      // the exhaustive R4 classifier above.  Their EngineCommand values are
+      // intent, not a native sink; a direct native marker in one of these
+      // adapters remains visible and fails the exact ingress inventory.
+      markers: nativeSinkHits(segment).filter((marker) =>
+        !protectedAdapterRoutes.includes(name) || !marker.startsWith("EngineCommand::")),
+    }))
+    .filter(({ markers }) => markers.length > 0);
+  for (const route of detected) {
+    assert(
+      allowed.has(route.name),
+      `${route.name}: native physical sink is outside the exact legacy/R4 ingress inventory (${route.markers.join(", ")})`,
+    );
+  }
+
+  const legacySet = new Set(legacyRoutes);
+  for (const route of detected.filter(({ name }) => legacySet.has(name))) {
+    const segment = segments.find(({ name }) => name === route.name).source;
+    const rejectIndex = indexOfOrFail(
+      segment,
+      "reject_legacy_output_control_route",
+      `${route.name} native sink rejection`,
+    );
+    for (const marker of route.markers) {
+      const markerIndex = segment.indexOf(marker);
+      assert(
+        rejectIndex < markerIndex,
+        `${route.name}: reject_legacy_output_control_route must precede ${marker}`,
+      );
+    }
+  }
+
+  const conditionalRoleRoutes = new Set([
+    "arm_output_ownership_role",
+    "set_output_ownership_role",
+  ]);
+  for (const route of detected.filter(({ name }) => conditionalRoleRoutes.has(name))) {
+    const segment = segments.find(({ name }) => name === route.name).source;
+    const guardIndex = indexOfOrFail(
+      segment,
+      "Active output arming is fail-closed",
+      `${route.name} conditional R4 guard`,
+    );
+    const applyIndex = indexOfOrFail(
+      segment,
+      "apply_output_ownership_role(",
+      `${route.name} conditional R4 guard`,
+    );
+    assert(
+      guardIndex < applyIndex,
+      `${route.name}: active role must be rejected before ownership transition`,
+    );
+  }
+
+  const s0 = segments.find(({ name }) => name === "safety_blackout_engage_v1");
+  assert(s0, "dedicated safety_blackout_engage_v1 must remain a Tauri command");
+  assert.match(
+    s0.source,
+    /control_plane_runtime::engage_safety_blackout\(/,
+    "dedicated S0 must use the target-less safety runtime",
+  );
+  assert.doesNotMatch(
+    s0.source,
+    /reject_legacy_output_control_route/,
+    "dedicated S0 must not be misclassified as a legacy route",
+  );
+
+  return detected;
+};
+
+const nativeSinkDetected = assertNativeSinkInventory(appBackend, {
+  legacyRoutes: legacyTauriOutputRoutes,
+  canonicalRoutes: canonicalR4TauriOutputRoutes,
+  protectedAdapterRoutes: externalAdapterRoutes,
+});
+assert(
+  nativeSinkDetected.some(({ name }) => name === "open_video_output_window"),
+  "native Display window ingress must be covered by the native-sink inventory",
+);
+
+// Negative fixtures prove that this is an executable detector rather than a
+// documentation-only list.  They are intentionally temporary source strings;
+// no fixture text is read by the production scan above.
+assert.throws(
+  () => assertNativeSinkInventory(appBackend, {
+    legacyRoutes: legacyTauriOutputRoutes.filter((name) => name !== "set_output_config"),
+    canonicalRoutes: canonicalR4TauriOutputRoutes,
+    protectedAdapterRoutes: externalAdapterRoutes,
+  }),
+  /set_output_config|outside the exact legacy\/R4 ingress inventory/,
+  "removing an ingress from the explicit inventory must fail",
+);
+const unknownNativeCommand = `${appBackend}\n\n#[tauri::command]\nfn future_video_output_sink(state: State<'_, AppState>) -> Result<(), String> {\n    state.engine.send(EngineCommand::SetVideoOutputEnabled { output_id: 1, enabled: true }).map_err(|error| error.to_string())\n}\n`;
+assert.throws(
+  () => assertNativeSinkInventory(unknownNativeCommand, {
+    legacyRoutes: legacyTauriOutputRoutes,
+    canonicalRoutes: canonicalR4TauriOutputRoutes,
+    protectedAdapterRoutes: externalAdapterRoutes,
+  }),
+  /future_video_output_sink|outside the exact legacy\/R4 ingress inventory/,
+  "a new command with a native sink must fail closed until classified",
+);
+const setOutputCommand = commandSegments.find(({ name }) => name === "set_output_config");
+assert(setOutputCommand, "set_output_config fixture source must exist");
+const movedRejectBody = setOutputCommand.source
+  .replace('    reject_legacy_output_control_route::<()>("DMX output configuration")?;\n', "")
+  .replace(
+    "        .map_err(|error| error.to_string())\n}",
+    '        .map_err(|error| error.to_string())\n    reject_legacy_output_control_route::<()>("DMX output configuration")?;\n}',
+  );
+assert.throws(
+  () => assertNativeSinkInventory(
+    appBackend.replace(setOutputCommand.source, movedRejectBody),
+    {
+      legacyRoutes: legacyTauriOutputRoutes,
+      canonicalRoutes: canonicalR4TauriOutputRoutes,
+      protectedAdapterRoutes: externalAdapterRoutes,
+    },
+  ),
+  /set_output_config: reject_legacy_output_control_route must precede/,
+  "moving rejection after a physical sink must fail closed",
+);
+
+const sharedExternalCallback = sliceBetween(
+  appBackend,
+  "fn send_engine_command_if_callback_epoch(",
+  "fn callback_epoch_allows_send(",
+  "MIDI/OSC shared external callback seam",
+);
+assertOrdered(
+  sharedExternalCallback,
+  "external_output_command_requires_local_r4(&command)",
+  "engine.send(command)",
+  "MIDI/OSC shared callback must classify before the engine queue",
+);
+const remoteExternalCallback = sliceBetween(
+  appBackend,
+  "RemoteInputEvent::SetVideoOutputBlackout",
+  "move || snapshot_engine.snapshot()",
+  "Web Remote external callback seam",
+);
+assertOrdered(
+  remoteExternalCallback,
+  "external_output_command_requires_local_r4(&command)",
+  "command_engine.send(command)",
+  "Web Remote callback must classify before the engine queue",
+);
+assert.match(
+  appBackend,
+  /fn safety_blackout_engage_v1\([\s\S]*?control_plane_runtime::engage_safety_blackout/,
+  "dedicated target-less S0 path must remain separate from legacy callback routing",
+);
 assert.match(appBackend, /output_ownership_target_is_not_durable_until_preparation_succeeds/);
 assert.match(appBackend, /standby_sync_running_publication_requires_completed_all_deny_status/);
 assert.match(protocol, /pub enum MachineOutputRole/);

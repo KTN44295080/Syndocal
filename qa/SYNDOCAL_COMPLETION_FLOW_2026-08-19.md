@@ -528,3 +528,38 @@ hardware action is one coordinated physical-keyboard consent pass, followed by
 opening all five output windows, verifying their screen origins, and leaving the
 operator state as editor plus LED panel plus projector. Until that pass is recorded,
 the five-display and final three-display acceptance boxes remain unchecked.
+
+## 16. 2026-08-21 OutputControl Raw Input and route-inventory checkpoint
+
+Windows-first OutputControl integration now closes the code-side Ready handoff
+race that previously converted a physical six-digit input near the original
+deadline into `challenge was not found`. The backend publishes one monotonic,
+bounded Ready deadline (`max(original, completion + 5 seconds)`); the frontend
+keeps Pending expiry exact, accepts only that bounded Ready extension, and polls
+through the one-shot consume window. Expiry, replacement, replay, device removal,
+and synthetic-input rejection remain fail closed.
+
+The P2 route proof now scans every production `#[tauri::command]` body for the
+reviewed DMX, Display, NDI, Spout, and ownership-transition sink markers. A route
+must be in the exact legacy-rejected inventory or the exact canonical R4/S0
+inventory; an unknown command, an inventory removal, or a rejection moved after a
+side effect fails the gate. This supplements, rather than replaces, the exhaustive
+EngineCommand classifier and external MIDI/OSC/DMX/Web Remote adapter checks.
+The frozen independent review returned P0 0, P1 0, and P2 0.
+
+Focused evidence is 12/12 Raw Input tests with the interactive SendInput negative
+test still separately ignored, 6/6 legacy-route tests, 19/19 OutputControl tests,
+the eight-operation frontend controller contract, DJ Link and safety-blackout
+contracts, 61 warning-ratchet self-test groups, release metadata, formatting, and
+`git diff --check`. The final `pnpm --dir app tauri build --no-bundle` completed in
+1m31s with zero first-party Rust warnings and zero Vite warnings. The exact release
+executable has SHA-256
+`D5CC6BF3908AE4295A134B21DDB7CF953D717BFF1AE52E68230EE27C7AC235A6`, is the
+only responsive exact-path Syndocal process, and its sole main window is maximized.
+
+Physical hardware acceptance is still deliberately open. A newly issued challenge
+expired without an observed Ready/lease result; no synthetic input or automation
+was substituted. The next action remains a coordinated human-keyboard lease
+confirmation, a second confirmation for `Both` Arm, five fullscreen origin checks,
+and the final editor + LED panel + projector state. Do not mark those boxes complete
+until that native evidence is recorded.
