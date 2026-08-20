@@ -511,3 +511,20 @@ The following are P0/P1 until closed:
 Until AI0-AI8 are accepted, Syndocal may claim that selected backend and Remote
 operations exist, but not that the whole product is AI-drivable, that MCP has full
 feature parity, or that unattended high-risk automation is safe.
+
+## 9. 2026-08-21 Windows native output-control verification boundary
+
+The current release executable is running as the sole exact-checkout process with
+one responsive maximized Syndocal main window. Five enabled Display outputs are
+configured against monitor indices 0 through 4. The live ownership query remains
+fail closed: `Both` is requested and persisted, while effective ownership is
+Standby and lighting/video are fenced. Acquisition and active Arm require the
+backend-issued Output Lease plus the fresh six-digit Raw Input challenge.
+
+This is the intended R4 boundary, not a test failure and not permission to inject
+synthetic input. A successful human-keyboard consent, five physical fullscreen
+windows, verified monitor origins, and the final editor + LED panel + projector
+state remain the next hardware acceptance action. The Windows warning workflow
+now covers all nine enforced Windows configurations and its frozen diff received
+independent P0 0 / P1 0 / P2 0 review; the two macOS-only warning rows remain a
+separate cross-platform blocker.

@@ -14,6 +14,7 @@
 - The previous Codex reached its context/token limit while continuing AI3. Treat Timeline Transport and the canonical Timeline Follow Abort tranche as verified. AI3 has now been audited and remains incomplete in all five roadmap categories. The detailed audit matrix and ordered gaps are recorded in `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`.
 - The replacement Syndocal × rekordbox × Stream Deck Pedal requirement is normative in `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`. `Seraf0-org/rekordbox-DJ-Link-ForPCDJ` is the sole DJ-PC Agent and owns Pedal/global-hotkey input plus all rekordbox MIDI, Filter, Stop, and reset behavior. Syndocal only receives authenticated `DJ_*` semantic events over the reused Web Remote listener, owns `.sdc` Track-to-Timeline mappings, and applies absolute Loop/Release show actions. The peer implementation and wired physical acceptance remain separate evidence and are not yet complete.
 - The 2026-08-20 P2/warning implementation checkpoint is `a228ba5e492841618ce0262038c965b5519d1ddd` (`fix: close takeover proof and reduce native warnings`). It closes the bounded Take Over proof gaps and removes honest production warning debt without suppression. It does not complete W0, AI3, physical video-output acceptance, or the new rekordbox/Pedal requirement.
+- The current Windows-first follow-up starts from pushed HEAD `68a75b94f301ab0f6e955d592020ad762027997a`. The pending workflow diff wires all nine Windows-enforced warning configurations, including SDK validation and exact-checkout process retirement before native builds. Independent read-only review of workflow SHA-256 `B94512DB87C7990F4505635FE78760620F8BFFEE189E55B4688CE39DAC2A90AA` returned P0 0, P1 0, and P2 0. macOS dev/release remain the only two pending warning rows.
 
 ## W0/W1 warning-ratchet checkpoint
 
@@ -516,3 +517,35 @@ and native marker coverage was complete with no warning-shaped output. The
 inventory is now 11 enforced / 2 pending. Only macOS dev/release remain pending,
 so `requiredMatrixComplete` remains false and cross-platform W0 completion is not
 claimed.
+
+## 2026-08-21 Windows-first CI and five-display continuation
+
+The Windows warning checkpoint is now CI-complete in the working diff. The Windows
+job enforces all nine inventory rows: default dev, release, tests, Spout, ASIO
+loader, NDI, separately licensed ASIO bridge, frontend, and native release. The
+job fails closed unless `FFMPEG_DIR`, `LIBCLANG_PATH`, `NDI_SDK_DIR`, and
+`CPAL_ASIO_DIR` resolve to the expected SDK directories/files. It also resolves
+and stops only this checkout's `target/release/syndocal.exe` before both the native
+warning ratchet and bundle build. The frozen workflow diff was independently
+reviewed with P0 0, P1 0, and P2 0. This closes the Windows CI P2 boundary; it does
+not change `requiredMatrixComplete=false` because the two macOS rows remain pending.
+
+The exact rebuilt executable was restarted after an earlier PID became
+unresponsive. Current native evidence is PID `13652`, exact path
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, one exact process,
+`Responding=True`, one titled `Syndocal` main window, and the window remained
+maximized throughout UI work. The header has no Lighting/Video master sliders and
+no adjacent controls were reduced.
+
+Five enabled Display outputs are configured in the live native UI against monitor
+indices 0 through 4. The visible output names are `Video Output 1`, `3`, `4`, `5`,
+and `6`; the skipped label is only creation-sequence naming, not a missing target.
+The status surface reports five video outputs. Their native fullscreen windows
+remain correctly fenced: `Both` is requested and persisted, but effective role is
+still Standby and both lighting/video ownership report startup denial. Output Lease
+acquisition and active-role arming intentionally require the backend-issued lease
+plus the visible six-digit challenge entered on a physical keyboard. Computer
+automation must not synthesize that Raw Input consent. Therefore five-target native
+configuration is verified, while successful physical fullscreen placement and the
+final editor + LED panel + projector three-screen state still require one coordinated
+human-keyboard consent pass. Do not claim those hardware gates complete yet.

@@ -145,6 +145,44 @@ jobs:
         if: runner.os == 'Windows'
         run: pnpm --dir app run prepare:runtime-libs
 
+      - name: Validate Windows warning ratchet SDK paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          # These SDKs are deliberately not downloaded by CI: NDI and ASIO
+          # require an explicit, locally licensed runner installation. An
+          # absent repository variable therefore fails the ratchet closed.
+          NDI_SDK_DIR: ${{ vars.NDI_SDK_DIR }}
+          CPAL_ASIO_DIR: ${{ vars.CPAL_ASIO_DIR }}
+        run: |
+          $required = @('FFMPEG_DIR', 'LIBCLANG_PATH', 'NDI_SDK_DIR', 'CPAL_ASIO_DIR')
+          foreach ($name in $required) {
+            $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              throw "$name is required for the Windows warning ratchet and is not configured."
+            }
+            if (-not (Test-Path -LiteralPath $value -PathType Container)) {
+              throw "$name must name an existing directory: $value"
+            }
+          }
+          $requiredFiles = @{
+            FFMPEG_DIR = @('include', 'lib', 'bin')
+            LIBCLANG_PATH = @('libclang.dll')
+            NDI_SDK_DIR = @('Include', 'Lib\x64', 'Bin\x64')
+            CPAL_ASIO_DIR = @('common\asio.h', 'common\asiosys.h', 'host\asiodrivers.h')
+          }
+          foreach ($entry in $requiredFiles.GetEnumerator()) {
+            foreach ($relative in $entry.Value) {
+              $candidate = Join-Path ([Environment]::GetEnvironmentVariable($entry.Key, 'Process')) $relative
+              $pathType = if ($relative.Contains('.')) { 'Leaf' } else { 'Container' }
+              if (-not (Test-Path -LiteralPath $candidate -PathType $pathType)) {
+                throw "$($entry.Key) is missing required SDK path: $candidate"
+              }
+            }
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "NDI_SDK_DIR=$env:NDI_SDK_DIR"
+          Add-Content -Path $env:GITHUB_ENV -Value "CPAL_ASIO_DIR=$env:CPAL_ASIO_DIR"
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -161,6 +199,32 @@ jobs:
           pnpm --dir app run check:warnings -- --configuration windows-default-release
           pnpm --dir app run check:warnings -- --configuration windows-workspace-tests
           pnpm --dir app run check:warnings -- --configuration windows-syndocal-spout
+          pnpm --dir app run check:warnings -- --configuration windows-syndocal-asio
+          pnpm --dir app run check:warnings -- --configuration windows-syndocal-ndi
+          pnpm --dir app run check:warnings -- --configuration windows-asio-bridge
+          pnpm --dir app run check:warnings -- --configuration frontend-typescript-vite-windows
+
+      - name: Stop checkout Syndocal before native warning ratchet
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $target = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'target\release\syndocal.exe'))
+          Get-CimInstance Win32_Process | ForEach-Object {
+            $executable = $_.ExecutablePath
+            if (-not [string]::IsNullOrWhiteSpace($executable)) {
+              try { $resolved = [IO.Path]::GetFullPath($executable) } catch { $resolved = $null }
+              if ($resolved -and $resolved.Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+              }
+            }
+          }
+
+      - name: Enforce Windows native release warning ratchet
+        if: runner.os == 'Windows'
+        env:
+          WARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
+        run: pnpm --dir app run check:warnings -- --configuration windows-native-release
 
       - name: Test Rust workspace
         run: cargo test --workspace --locked -- --test-threads=1
@@ -176,6 +240,21 @@ jobs:
 
       - name: Check release metadata
         run: pnpm --dir app run check:release
+
+      - name: Stop checkout Syndocal before native bundle build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $target = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'target\release\syndocal.exe'))
+          Get-CimInstance Win32_Process | ForEach-Object {
+            $executable = $_.ExecutablePath
+            if (-not [string]::IsNullOrWhiteSpace($executable)) {
+              try { $resolved = [IO.Path]::GetFullPath($executable) } catch { $resolved = $null }
+              if ($resolved -and $resolved.Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+              }
+            }
+          }
 
       - name: Bundle Windows installers
         if: runner.os == 'Windows'

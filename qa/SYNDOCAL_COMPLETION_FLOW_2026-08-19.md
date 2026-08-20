@@ -503,3 +503,23 @@ baseline immutability was not relaxed. Exact coverage is recorded in
 pending. Both remaining rows are macOS-only and therefore keep
 `requiredMatrixComplete=false`; this is a bounded P2 resolution, not beta/RC or
 whole-product completion.
+
+## 15. 2026-08-21 Windows-first CI and VJ execution state
+
+Windows is the active completion priority. The reviewed workflow now executes all
+nine Windows-enforced warning rows and fails closed on missing FFmpeg, libclang,
+NDI, or licensed ASIO SDK inputs. Exact-checkout process targeting is applied before
+the native warning ratchet and the native bundle build. Independent review of the
+frozen workflow returned P0 0, P1 0, and P2 0. This closes the remaining Windows CI
+warning P2 item, but the two unmeasured macOS rows keep W0 cross-platform completion
+and beta/RC acceptance open.
+
+The exact Windows native executable is responsive and the sole main Syndocal window
+is maximized. Five enabled Display outputs are configured against monitor indices
+0..4. Physical fullscreen activation is still fenced because OutputControl R4
+requires an acquired backend lease and the visible challenge code entered through
+real Raw Input. Synthetic input must not be used to bypass that boundary. The next
+hardware action is one coordinated physical-keyboard consent pass, followed by
+opening all five output windows, verifying their screen origins, and leaving the
+operator state as editor plus LED panel plus projector. Until that pass is recorded,
+the five-display and final three-display acceptance boxes remain unchecked.
