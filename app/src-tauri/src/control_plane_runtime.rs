@@ -385,13 +385,13 @@ pub(crate) fn execute_output_control(
                 &request.expected_fence,
             )
         }
-        OutputControlActionV1::TakeOverStandby { force, .. } => {
-            standby_takeover_selector(&request.action)
-                .and_then(|selector| {
-                    super::take_over_standby_core(state, *force, selector, &request.expected_fence)
-                })
-                .map(|(_load_result, fence_after)| (true, fence_after))
-        }
+        OutputControlActionV1::TakeOverStandby { .. } => execute_standby_takeover_action(
+            &request.action,
+            &request.expected_fence,
+            |force, selector, expected_fence| {
+                super::take_over_standby_core(state, force, selector, expected_fence)
+            },
+        ),
     };
 
     let (applied, fence_after) = match operation_result {
@@ -580,6 +580,26 @@ fn standby_takeover_selector(
         )),
         _ => Err("Output control action is not a Standby Take Over".to_string()),
     }
+}
+
+fn execute_standby_takeover_action<F, T>(
+    action: &OutputControlActionV1,
+    expected_fence: &OutputControlFenceV1,
+    execute_core: F,
+) -> Result<(bool, OutputControlFenceV1), String>
+where
+    F: FnOnce(
+        bool,
+        StandbyTakeoverCheckpointSelector,
+        &OutputControlFenceV1,
+    ) -> Result<(T, OutputControlFenceV1), String>,
+{
+    let OutputControlActionV1::TakeOverStandby { force, .. } = action else {
+        return Err("Output control action is not Standby Take Over".to_string());
+    };
+    let selector = standby_takeover_selector(action)?;
+    execute_core(*force, selector, expected_fence)
+        .map(|(_load_result, fence_after)| (true, fence_after))
 }
 
 fn output_consent_error_message(error: ConsentConsumeError) -> String {
@@ -3140,18 +3160,38 @@ mod tests {
     #[test]
     fn output_control_takeover_passes_exact_standby_identity_to_core() {
         let action = OutputControlActionV1::TakeOverStandby {
-            force: false,
+            force: true,
             standby_session_id: "primary-a".to_string(),
             standby_generation: 42,
         };
+        let expected_fence = test_output_fence();
+        let fence_after = OutputControlFenceV1 {
+            output_generation: expected_fence.output_generation + 1,
+            ..expected_fence.clone()
+        };
+        let mut observed = None;
+
+        let result = execute_standby_takeover_action(
+            &action,
+            &expected_fence,
+            |force, selector, actual_fence| {
+                observed = Some((force, selector, actual_fence.clone()));
+                Ok(((), fence_after.clone()))
+            },
+        );
+
+        assert_eq!(result, Ok((true, fence_after)));
         assert_eq!(
-            standby_takeover_selector(&action),
-            Ok(StandbyTakeoverCheckpointSelector::Exact(
-                StandbyCheckpointIdentity {
+            observed,
+            Some((
+                true,
+                StandbyTakeoverCheckpointSelector::Exact(StandbyCheckpointIdentity {
                     session_id: "primary-a".to_string(),
                     generation: 42,
-                },
-            ))
+                }),
+                expected_fence,
+            )),
+            "the real OutputControl action branch must pass force, Exact identity, and fence to the core"
         );
     }
 

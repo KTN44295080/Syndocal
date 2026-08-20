@@ -81,15 +81,14 @@ use protocol::{
     TimelineVideoClipSummary, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
     ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
     VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary, VideoClipTakeDuration,
-    VideoClipTakeDurationUnit, VideoClipTakeKind, VideoEffectChainSummary, VideoEffectKind,
-    VideoEffectPresetSummary, VideoEffectScope, VideoEffectTarget, VideoIsfControlKind,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerGroupSummary, VideoLayerId,
-    VideoLayerState, VideoLayerTarget, VideoLayerTransitionBusSummary, VideoLayerTransitionCurve,
-    VideoLayerTransitionRuntimeSnapshot, VideoLayerTransitionTarget, VideoOutputId,
-    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary, VideoTransitionBusId,
-    COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
+    VideoClipTakeKind, VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary,
+    VideoEffectScope, VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary,
+    VideoIsfEffectSummary, VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
+    VideoLayerTransitionTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
+    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    VideoTransitionBusId, COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -11443,7 +11442,7 @@ impl MediaAudioSyncRuntime {
                                 audio.sync_to_video_layers(&snapshot.layers);
                             }
                             let timeline_sync_result =
-                                audio.sync_to_timeline_audio_evidenced(&snapshot.timeline_audio);
+                                audio.sync_to_timeline_audio(&snapshot.timeline_audio);
                             audio.sync_metronome(&snapshot.timeline_audio);
                             audio.sync_timeline_guide(&snapshot.timeline_audio);
                             (
@@ -13035,8 +13034,11 @@ impl MediaAudioPlayback {
         }
     }
 
-    fn sync_to_timeline_audio(&mut self, timeline: &engine::TimelineAudioRuntimeSnapshot) {
-        let _ = self.sync_to_timeline_audio_evidenced(timeline);
+    fn sync_to_timeline_audio(
+        &mut self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+    ) -> Result<(), String> {
+        self.sync_to_timeline_audio_evidenced(timeline)
     }
 
     fn play_metronome_click(&mut self, accented: bool) -> Result<(), String> {
@@ -14060,9 +14062,6 @@ pub(crate) struct StandbyCheckpointIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StandbyTakeoverCheckpointSelector {
-    /// Legacy local command behavior: choose the latest valid checkpoint after
-    /// taking the lifecycle lock.
-    LocalLatest,
     /// Control-plane behavior: require the exact consent-bound identity.
     Exact(StandbyCheckpointIdentity),
 }
@@ -14657,13 +14656,14 @@ fn run_if_installed_project_callback_epoch<T>(
     callback_installed: &AtomicBool,
     send: impl FnOnce() -> T,
 ) -> Option<T> {
-    let _admission =
-        try_lock_project_external_command_admission(project_external_command_admission)?;
-    let result = (callback_installed.load(Ordering::Acquire)
-        && !project_transaction_active.load(Ordering::Acquire)
-        && callback_epoch_allows_send(callback_epoch, captured_epoch))
-    .then(send);
-    result
+    run_if_project_callback_epoch(
+        project_external_command_admission,
+        callback_epoch,
+        captured_epoch,
+        project_transaction_active,
+        || callback_installed.load(Ordering::Acquire).then(send),
+    )
+    .flatten()
 }
 
 fn run_if_project_callback_epoch_while_admitted<T>(
@@ -14718,9 +14718,11 @@ fn run_if_callback_epoch_when_transaction_idle<T>(
     project_transaction_active: &AtomicBool,
     send: impl FnOnce() -> T,
 ) -> Option<T> {
-    (!project_transaction_active.load(Ordering::Acquire)
-        && callback_epoch_allows_send(callback_epoch, captured_epoch))
-    .then(send)
+    if project_transaction_active.load(Ordering::Acquire) {
+        None
+    } else {
+        run_if_callback_epoch(callback_epoch, captured_epoch, send)
+    }
 }
 
 fn project_input_installation_is_current(
@@ -27757,6 +27759,7 @@ fn capture_legacy_video_effect_catalog_authority_for_binding(
     })
 }
 
+#[cfg(test)]
 fn capture_legacy_video_effect_catalog_authority(
     state: &AppState,
     owner_id: String,
@@ -27776,6 +27779,7 @@ fn capture_legacy_video_effect_catalog_authority(
 /// never a caller-built catalog read before authority admission. `after_a` is
 /// intentionally internal/testable: it proves a racing C1 publish makes the
 /// old adapter candidate fail closed instead of overwriting it.
+#[cfg(test)]
 fn mutate_legacy_video_effect_catalog_authoritatively<T, F, H>(
     state: &AppState,
     owner_id: String,
@@ -27854,14 +27858,21 @@ where
                 &binding,
                 Some(&expected_authority),
             )?;
-            let video = legacy_video_effect_catalog_video(&capture.snapshot);
+            let LegacyVideoEffectCatalogAuthorityCapture {
+                owner_id: captured_owner_id,
+                binding: captured_binding,
+                authority: captured_authority,
+                snapshot,
+            } = capture;
+            let video = legacy_video_effect_catalog_video(&snapshot);
             let mut request = legacy_video_effect_catalog_request(&video);
             mutate(&video, &mut request)?;
+            ensure_video_clip_slot_caller_binding_current(state, &captured_binding)?;
             commit_authoritative_video_effect_catalog(
                 state,
-                expected_authority.epoch,
-                &owner_id,
-                &expected_authority,
+                captured_authority.epoch,
+                &captured_owner_id,
+                &captured_authority,
                 &request,
             )
             .map(VideoEffectCatalogAuthoritativeTerminalResult::Applied)
@@ -28591,22 +28602,20 @@ fn validate_project_isf_source_budget_after_addition(
     snapshot: &EngineSnapshot,
     added_source_bytes: usize,
 ) -> Result<(), String> {
-    let total_source_bytes = project_isf_source_bytes(snapshot)?
-        .checked_add(added_source_bytes)
-        .ok_or_else(|| "Project ISF source size overflowed".to_string())?;
-    validate_project_isf_source_budget(total_source_bytes)
+    validate_project_isf_source_budget_after_change(snapshot, None, None, added_source_bytes)
 }
 
-fn validate_project_isf_source_budget_after_replacement(
+fn validate_project_isf_source_budget_after_change(
     snapshot: &EngineSnapshot,
-    layer_id: VideoLayerId,
+    replaced_layer_id: Option<VideoLayerId>,
     replacement: Option<&VideoIsfEffectSummary>,
+    added_source_bytes: usize,
 ) -> Result<(), String> {
     let current_source_bytes = snapshot
         .video
         .layers
         .iter()
-        .find(|layer| layer.id == layer_id)
+        .find(|layer| Some(layer.id) == replaced_layer_id)
         .and_then(|layer| layer.isf_effect.as_ref())
         .map(video_isf_effect_source_bytes)
         .transpose()?
@@ -28618,6 +28627,7 @@ fn validate_project_isf_source_budget_after_replacement(
     let total_source_bytes = project_isf_source_bytes(snapshot)?
         .checked_sub(current_source_bytes)
         .and_then(|total| total.checked_add(replacement_source_bytes))
+        .and_then(|total| total.checked_add(added_source_bytes))
         .ok_or_else(|| "Project ISF source size overflowed".to_string())?;
     validate_project_isf_source_budget(total_source_bytes)
 }
@@ -34756,64 +34766,74 @@ fn commit_project_transaction(
     let _external_admission = lock_project_external_command_admission(&state)?;
     let mut coordinator = lock_project_coordinator(&state)?;
     ensure_project_transaction_owner_registered(&state, &owner_id)?;
-    let pending = project_transaction_for_owner_epoch(
+    let _pending = project_transaction_for_owner_epoch(
         &coordinator,
         transaction_id,
         expected_epoch,
         &owner_id,
     )?;
-    // Commit consumes a pending reservation even for a no-op edit. Preflight
-    // its observable history generation before any fallible checkpoint/hash
-    // work so the success path assigns it exactly once.
-    let next_history_generation = checked_project_history_generation_after_change(&coordinator)?;
-    // The single-pending reservation makes all engine mutations between Begin
-    // and Commit one intended transaction. Do not compare the current hash to
-    // `before`: a normal edit necessarily changes it from A to B.
-    let mut after = project_checkpoint_for_coordinator(&state, &coordinator)?;
-    let changed =
-        pending.before.project != after.project || pending.before.mappings != after.mappings;
-    let prepared_revision_and_hash = if changed {
-        let revision = checked_project_revision_after_mutation(&coordinator)?;
-        let hash = project_checkpoint_hash(&after.project, &after.mappings)?;
-        after.revision = revision;
-        after.hash = hash.clone();
-        Some((revision, hash))
-    } else {
-        None
-    };
-    let next_publication_generation = prepared_revision_and_hash
-        .is_some()
-        .then(|| checked_project_authority_publication_generation_after_change(&coordinator))
-        .transpose()?;
-    // Build history on a clone so a fallible entry/coalesce step cannot alter
-    // revision/hash/history while the pending ticket remains cancellable.
-    let mut next_history = coordinator.history.clone();
-    commit_project_history_entry(
-        &mut next_history,
-        pending,
-        after,
-        current_unix_ms().min(u64::MAX as u128) as u64,
-    )?;
-    next_history.pending.remove(&transaction_id);
-    if let Some((revision, hash)) = prepared_revision_and_hash {
-        coordinator.revision = revision;
-        coordinator.checkpoint_hash = hash;
-        commit_project_authority_publication_after_preflight(
-            &mut coordinator,
-            next_publication_generation
-                .expect("a changed transaction preflights its mutation publication"),
-            ProjectAuthorityPublicationKind::Mutation,
-        );
-    }
-    coordinator.history = next_history;
-    coordinator.history_generation = next_history_generation;
-    state
-        .project_transaction_active
-        .store(false, Ordering::Release);
-    Ok(ProjectHistoryMutationResult {
-        history_status: project_history_status_for_coordinator(&coordinator),
-        authority: project_authority_bundle_from_coordinator(&state, &coordinator),
-    })
+    with_retained_project_transaction(
+        &mut coordinator,
+        transaction_id,
+        expected_epoch,
+        |coordinator, pending| {
+            // Commit consumes a pending reservation even for a no-op edit.
+            // Preflight its observable history generation before any fallible
+            // checkpoint/hash work so the success path assigns it exactly once.
+            let next_history_generation =
+                checked_project_history_generation_after_change(coordinator)?;
+            // The single-pending reservation makes all engine mutations between
+            // Begin and Commit one intended transaction. Do not compare the
+            // current hash to `before`: a normal edit necessarily changes it
+            // from A to B.
+            let mut after = project_checkpoint_for_coordinator(&state, coordinator)?;
+            let changed = pending.before.project != after.project
+                || pending.before.mappings != after.mappings;
+            let prepared_revision_and_hash = if changed {
+                let revision = checked_project_revision_after_mutation(coordinator)?;
+                let hash = project_checkpoint_hash(&after.project, &after.mappings)?;
+                after.revision = revision;
+                after.hash = hash.clone();
+                Some((revision, hash))
+            } else {
+                None
+            };
+            let next_publication_generation = prepared_revision_and_hash
+                .is_some()
+                .then(|| checked_project_authority_publication_generation_after_change(coordinator))
+                .transpose()?;
+            // Build history on a clone so a fallible entry/coalesce step cannot
+            // alter revision/hash/history while the pending ticket remains
+            // cancellable.
+            let mut next_history = coordinator.history.clone();
+            commit_project_history_entry(
+                &mut next_history,
+                pending,
+                after,
+                current_unix_ms().min(u64::MAX as u128) as u64,
+            )?;
+            next_history.pending.remove(&transaction_id);
+            if let Some((revision, hash)) = prepared_revision_and_hash {
+                coordinator.revision = revision;
+                coordinator.checkpoint_hash = hash;
+                commit_project_authority_publication_after_preflight(
+                    coordinator,
+                    next_publication_generation
+                        .expect("a changed transaction preflights its mutation publication"),
+                    ProjectAuthorityPublicationKind::Mutation,
+                );
+            }
+            coordinator.history = next_history;
+            coordinator.history_generation = next_history_generation;
+            state
+                .project_transaction_active
+                .store(false, Ordering::Release);
+            Ok(ProjectHistoryMutationResult {
+                history_status: project_history_status_for_coordinator(coordinator),
+                authority: project_authority_bundle_from_coordinator(&state, coordinator),
+            })
+        },
+    )
 }
 
 fn project_transaction_for_epoch(
@@ -35984,10 +36004,6 @@ fn load_project_recovery_authority_state_from_path(
         validate_pending_project_clean_save(state.serial, pending)?;
     }
     Ok(state)
-}
-
-fn load_project_recovery_authority_serial_from_path(path: &Path) -> Result<u64, String> {
-    load_project_recovery_authority_state_from_path(path).map(|state| state.serial)
 }
 
 fn persist_project_recovery_authority_serial_to_path(
@@ -37997,12 +38013,7 @@ fn lock_and_validate_standby_takeover_status<'a>(
     let status = status
         .lock()
         .map_err(|_| "Standby synchronization status lock was poisoned".to_string())?;
-    let expected = match selector {
-        StandbyTakeoverCheckpointSelector::Exact(expected) => expected,
-        StandbyTakeoverCheckpointSelector::LocalLatest => {
-            return Err("Output-control Take Over requires an exact Standby checkpoint".to_string())
-        }
-    };
+    let StandbyTakeoverCheckpointSelector::Exact(expected) = selector;
     if !status.running
         || status.role != Some(StandbySyncRole::Standby)
         || status.session_id.as_deref() != Some(expected.session_id.as_str())
@@ -38012,6 +38023,59 @@ fn lock_and_validate_standby_takeover_status<'a>(
         return Err("Standby Take Over status changed before fenced publication".to_string());
     }
     Ok(status)
+}
+
+/// Validate and read the checkpoint while the worker is still alive. Every
+/// error in this phase returns before the caller can set the stop token or
+/// publish a project/output transition.
+fn read_standby_takeover_checkpoint_before_stop<F>(
+    directory: &Path,
+    status_snapshot: &StandbySyncStatus,
+    selector: &StandbyTakeoverCheckpointSelector,
+    force: bool,
+    validate_output_fence: F,
+) -> Result<StandbyCheckpoint, String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    validate_takeover_running_status(status_snapshot)?;
+    if status_snapshot.split_brain && !force {
+        return Err(
+            "Multiple active Primary sessions are present; confirm forced Take Over to continue"
+                .to_string(),
+        );
+    }
+    if !status_snapshot.heartbeat_stale && !force {
+        return Err(
+            "Primary heartbeat is still active; confirm forced Take Over to continue".to_string(),
+        );
+    }
+
+    let StandbyTakeoverCheckpointSelector::Exact(expected) = selector;
+    // Re-check the status after taking lifecycle ownership. The control plane
+    // validated this identity before consuming consent, but the polling worker
+    // can advance status while the external locks are released. A changed
+    // status is stale even before reading the file.
+    if status_snapshot.session_id.as_deref() != Some(expected.session_id.as_str())
+        || status_snapshot.generation != Some(expected.generation)
+    {
+        return Err("Standby takeover checkpoint is stale".to_string());
+    }
+
+    // Validate the project/output identity before reading and stopping the
+    // standby worker. The replacement boundary repeats this check after
+    // stop/join; this early check avoids retiring a healthy worker for an
+    // already-stale consent while lifecycle ownership is held.
+    validate_output_fence()?;
+
+    let StandbyTakeoverCheckpointSelector::Exact(expected) = selector;
+    // Read the latest manifest for the consent-bound session and reject any
+    // generation advance before stopping the worker. This is intentionally
+    // fail-closed and never falls back to an older checkpoint when a newer
+    // manifest exists.
+    let checkpoint = read_standby_checkpoint_for_exact_takeover(directory, expected)?;
+    validate_exact_standby_takeover_manifest(&checkpoint.manifest, expected)?;
+    Ok(checkpoint)
 }
 
 fn take_over_standby_core(
@@ -38049,65 +38113,29 @@ fn take_over_standby_core(
             .ok_or_else(|| "Standby synchronization worker is not running".to_string())?;
         (directory, status, standby_stop, standby_status)
     };
-    validate_takeover_running_status(&status_snapshot)?;
-    if status_snapshot.split_brain && !force {
-        return Err(
-            "Multiple active Primary sessions are present; confirm forced Take Over to continue"
-                .to_string(),
-        );
-    }
-    if !status_snapshot.heartbeat_stale && !force {
-        return Err(
-            "Primary heartbeat is still active; confirm forced Take Over to continue".to_string(),
-        );
-    }
-
-    if let StandbyTakeoverCheckpointSelector::Exact(expected) = &selector {
-        // Re-check the status after taking lifecycle ownership. The control
-        // plane validated this identity before consuming consent, but the
-        // polling worker can advance status while the external locks are
-        // released. A changed status is stale even before reading the file.
-        if status_snapshot.session_id.as_deref() != Some(expected.session_id.as_str())
-            || status_snapshot.generation != Some(expected.generation)
-        {
-            return Err("Standby takeover checkpoint is stale".to_string());
-        }
-    }
-
-    // Validate the project/output identity before reading and stopping the
-    // standby worker. The replacement boundary repeats this check after
-    // stop/join; this early check avoids retiring a healthy worker for an
-    // already-stale consent while lifecycle ownership is held.
-    {
-        let _external_admission = lock_project_external_command_admission(state)?;
-        let mut coordinator = lock_project_coordinator(state)?;
-        if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
-            || !control_plane_runtime::exact_output_control_fence_matches(
-                state,
-                &coordinator,
-                expected_output_fence,
-            )
-            || ensure_no_pending_project_transaction(&coordinator).is_err()
-        {
-            return Err("Output control fence changed before Standby Take Over stop".to_string());
-        }
-    }
-
-    let checkpoint = match &selector {
-        StandbyTakeoverCheckpointSelector::LocalLatest => {
-            read_standby_checkpoint_for_session(&directory, status_snapshot.session_id.as_deref())?
-                .ok_or_else(|| "No standby checkpoint is available for Take Over".to_string())?
-        }
-        StandbyTakeoverCheckpointSelector::Exact(expected) => {
-            // Read the latest manifest for the consent-bound session and
-            // reject any generation advance before stopping the worker. This
-            // is intentionally fail-closed and never falls back to an older
-            // checkpoint when a newer manifest exists.
-            let checkpoint = read_standby_checkpoint_for_exact_takeover(&directory, expected)?;
-            validate_exact_standby_takeover_manifest(&checkpoint.manifest, expected)?;
-            checkpoint
-        }
-    };
+    let checkpoint = read_standby_takeover_checkpoint_before_stop(
+        &directory,
+        &status_snapshot,
+        &selector,
+        force,
+        || {
+            let _external_admission = lock_project_external_command_admission(state)?;
+            let mut coordinator = lock_project_coordinator(state)?;
+            if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+                || !control_plane_runtime::exact_output_control_fence_matches(
+                    state,
+                    &coordinator,
+                    expected_output_fence,
+                )
+                || ensure_no_pending_project_transaction(&coordinator).is_err()
+            {
+                return Err(
+                    "Output control fence changed before Standby Take Over stop".to_string()
+                );
+            }
+            Ok(())
+        },
+    )?;
     // Keep the worker alive until the fenced publication commits. A stale
     // consent must not leave an otherwise healthy Standby worker stopped.
     // The commit closure sets this token while external/coordinator/output
@@ -38276,27 +38304,6 @@ fn export_diagnostic_package(
     let crash_directory = app_data_subdirectory(&app, CRASH_REPORT_DIRECTORY)?;
     write_diagnostic_archive(file, &entries, &crash_directory)?;
     Ok(Some(path.to_string_lossy().to_string()))
-}
-
-fn set_current_project_path_with_coordinator(
-    state: &AppState,
-    coordinator: &mut ProjectCoordinator,
-    path: &Path,
-) -> Result<(), String> {
-    let mut current_path = state
-        .current_project_path
-        .lock()
-        .map_err(|_| "Current project path lock was poisoned".to_string())?;
-    let next = Some(path.to_path_buf());
-    if coordinator.ancillary.current_project_path != next {
-        coordinator.path_generation =
-            coordinator.path_generation.checked_add(1).ok_or_else(|| {
-                "Project path generation is exhausted; restart Syndocal before saving".to_string()
-            })?;
-    }
-    coordinator.ancillary.current_project_path = next;
-    *current_path = coordinator.ancillary.current_project_path.clone();
-    Ok(())
 }
 
 fn use_authored_video_snapshot(snapshot: &mut EngineSnapshot) {
@@ -39090,23 +39097,6 @@ fn load_project_from_file(
         current_path,
         ProjectSnapshotReplacementScope::ExternalCaller,
         None,
-    )
-}
-
-fn load_project_from_file_with_control_mappings(
-    state: &AppState,
-    project: ProjectFile,
-    mappings: ProjectControlMappings,
-    path_label: String,
-    current_path: Option<&Path>,
-) -> Result<ProjectLoadResult, String> {
-    load_project_from_file_with_control_mappings_and_disposition(
-        state,
-        project,
-        mappings,
-        path_label,
-        current_path,
-        ProjectAuthorityDisposition::CleanAtPath,
     )
 }
 
@@ -50592,40 +50582,6 @@ async fn open_video_output_window(
     )
 }
 
-fn load_patch_profile(
-    state: &State<'_, AppState>,
-    profile_path: &str,
-) -> Result<FixtureProfileSummary, String> {
-    let profile_path = profile_path.trim();
-    if profile_path.starts_with("memory://") || profile_path.starts_with("snapshot://") {
-        let coordinator = lock_project_coordinator(state)?;
-        return coordinator
-            .ancillary
-            .custom_profiles
-            .get(profile_path)
-            .cloned()
-            .ok_or_else(|| format!("Memory fixture profile {profile_path} was not found"));
-    }
-    match gdtf::load_profile(profile_path) {
-        // Resolving a disk profile is session-only. Patch/Repair owns the
-        // later project-embedding boundary after every validation succeeds.
-        Ok(profile) => Ok(profile),
-        Err(error) => {
-            let coordinator = lock_project_coordinator(state)?;
-            coordinator
-                .ancillary
-                .custom_profiles
-                .get(profile_path)
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "Fixture profile {profile_path} could not be loaded from disk or project cache: {error}"
-                    )
-                })
-        }
-    }
-}
-
 fn resolve_patch_profile_against_authority(
     profile_path: &str,
     inline_profile: Option<&FixtureProfileSummary>,
@@ -52168,6 +52124,7 @@ fn prepare_fixture_patches_against_authority(
     Ok(prepared)
 }
 
+#[cfg(test)]
 fn validate_patch_address_conflicts(
     request: &PatchFixtureRequest,
     profile: &FixtureProfileSummary,
@@ -59624,7 +59581,9 @@ pub(crate) mod tests {
         let path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
 
         assert_eq!(
-            load_project_recovery_authority_serial_from_path(&path).unwrap(),
+            load_project_recovery_authority_state_from_path(&path)
+                .unwrap()
+                .serial,
             0
         );
         persist_project_recovery_authority_serial_to_path(
@@ -59634,7 +59593,9 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(
-            load_project_recovery_authority_serial_from_path(&path).unwrap(),
+            load_project_recovery_authority_state_from_path(&path)
+                .unwrap()
+                .serial,
             7
         );
         assert_eq!(
@@ -59684,7 +59645,7 @@ pub(crate) mod tests {
             .any(|entry| entry.file_name().to_string_lossy().contains(".tmp")));
 
         fs::write(&path, b"not-json").unwrap();
-        assert!(load_project_recovery_authority_serial_from_path(&path)
+        assert!(load_project_recovery_authority_state_from_path(&path)
             .unwrap_err()
             .contains("corrupt"));
 
@@ -59699,7 +59660,7 @@ pub(crate) mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert!(load_project_recovery_authority_serial_from_path(&path)
+        assert!(load_project_recovery_authority_state_from_path(&path)
             .unwrap_err()
             .contains("Unsupported project recovery authority state version"));
         let _ = fs::remove_dir_all(&directory);
@@ -60590,6 +60551,101 @@ pub(crate) mod tests {
         // of applying either the newer image or silently falling back to old.
         assert!(validate_exact_standby_takeover_manifest(&local_latest, &expected).is_err());
         assert!(validate_exact_standby_takeover_manifest(&old_manifest, &expected).is_ok());
+    }
+
+    #[test]
+    fn exact_takeover_stale_pre_stop_rejection_keeps_worker_and_effects_unchanged() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("standby-exact-pre-stop-stale");
+        fs::create_dir_all(&directory).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = std::thread::spawn(move || {
+            while !worker_stop.load(Ordering::Acquire) {
+                std::thread::park_timeout(Duration::from_millis(1));
+            }
+        });
+        let status = Arc::new(Mutex::new(StandbySyncStatus {
+            running: true,
+            role: Some(StandbySyncRole::Standby),
+            directory: Some(directory.to_string_lossy().into_owned()),
+            session_id: Some("primary-a".to_string()),
+            // The polling worker advanced after consent captured generation 10.
+            generation: Some(11),
+            heartbeat_stale: true,
+            ..StandbySyncStatus::default()
+        }));
+        {
+            let mut runtime = harness
+                .state
+                .standby_sync
+                .lock()
+                .expect("install deterministic Standby worker");
+            runtime.stop = Some(Arc::clone(&stop));
+            runtime.worker = Some(worker);
+            runtime.status = Arc::clone(&status);
+        }
+        let selector = StandbyTakeoverCheckpointSelector::Exact(StandbyCheckpointIdentity {
+            session_id: "primary-a".to_string(),
+            generation: 10,
+        });
+        let result = take_over_standby_core(
+            &harness.state,
+            false,
+            selector,
+            &OutputControlFenceV1 {
+                process_incarnation: 1,
+                session_incarnation: 1,
+                project_epoch: 1,
+                project_revision: 1,
+                project_checkpoint_hash: "a".repeat(64),
+                project_publication_generation: 1,
+                output_epoch: 1,
+                output_generation: 1,
+                safety_blackout_epoch: 1,
+                safety_blackout_generation: 1,
+            },
+        );
+
+        assert!(result.is_err(), "stale Exact consent must be rejected");
+        assert!(
+            result.unwrap_err().contains("stale"),
+            "the exact generation advance is the rejection reason"
+        );
+        assert!(
+            !stop.load(Ordering::Acquire),
+            "the worker stop token is untouched"
+        );
+        assert!(
+            harness
+                .state
+                .standby_sync
+                .lock()
+                .expect("inspect deterministic Standby worker")
+                .worker
+                .as_ref()
+                .is_some_and(|worker| !worker.is_finished()),
+            "the installed worker remains live after stale Exact rejection"
+        );
+        assert!(
+            status.lock().expect("inspect Standby status").running,
+            "stale rejection cannot publish a stopped status"
+        );
+
+        stop.store(true, Ordering::Release);
+        let worker = harness
+            .state
+            .standby_sync
+            .lock()
+            .expect("retire deterministic Standby worker")
+            .worker
+            .take();
+        worker
+            .expect("deterministic Standby worker remains installed")
+            .join()
+            .expect("join deterministic Standby worker");
+
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -62850,6 +62906,31 @@ pub(crate) mod tests {
                 .generation,
             10
         );
+
+        // Empty, signed, and alphabetic tails are malformed candidates for
+        // this exact session. Exact mode must fail closed for each one while
+        // the general LocalLatest reader continues to ignore the malformed
+        // file and return the valid generation-10 checkpoint.
+        for generation_tail in ["", "+011", "alphabetic"] {
+            let malformed_manifest = directory.join(format!(
+                "syndocal-standby-{session_id}-{generation_tail}.json"
+            ));
+            fs::write(&malformed_manifest, b"{ invalid json").unwrap();
+            assert!(
+                read_standby_checkpoint_for_exact_takeover(&directory, &expected_ten).is_err(),
+                "exact reader must reject malformed generation tail {generation_tail:?}"
+            );
+            assert_eq!(
+                read_standby_checkpoint_for_session(&directory, Some(session_id))
+                    .unwrap()
+                    .unwrap()
+                    .manifest
+                    .generation,
+                10,
+                "LocalLatest fallback should remain limited to the general reader"
+            );
+            fs::remove_file(malformed_manifest).unwrap();
+        }
 
         // A non-canonical numeric tail is an invalid candidate for this
         // exact session, not a longer-session collision. Exact mode must
@@ -69365,10 +69446,11 @@ f 1 2 3
                 .unwrap_err()
                 .contains("Project ISF source size exceeds")
         );
-        assert!(validate_project_isf_source_budget_after_replacement(
+        assert!(validate_project_isf_source_budget_after_change(
             &project.snapshot,
-            33,
+            Some(33),
             Some(&test_isf_effect()),
+            0,
         )
         .unwrap_err()
         .contains("Project ISF source size exceeds"));
@@ -84146,7 +84228,7 @@ mod live_audio_input_tests {
                 default_to: second.clone(),
                 default_kind: VideoClipTakeKind::Crossfade,
                 default_duration: VideoClipTakeDuration {
-                    unit: VideoClipTakeDurationUnit::Beats,
+                    unit: protocol::VideoClipTakeDurationUnit::Beats,
                     value_milliunits: 1_000,
                 },
                 default_curve: VideoLayerTransitionCurve::EaseInOut,
@@ -85236,7 +85318,7 @@ mod live_audio_input_tests {
             transition_kind: VideoClipTakeKind::Wipe,
             transition_duration_ms: 0,
             transition_duration: Some(VideoClipTakeDuration {
-                unit: VideoClipTakeDurationUnit::Beats,
+                unit: protocol::VideoClipTakeDurationUnit::Beats,
                 value_milliunits: 500,
             }),
         };
