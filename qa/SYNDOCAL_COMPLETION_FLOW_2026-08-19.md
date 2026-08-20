@@ -181,6 +181,25 @@ Repeat the Rust/native gates for each supported feature/platform combination. A
 temporary third-party allowlist is a versioned release artifact with expiry; it may
 not contain warnings originating in repository first-party source.
 
+### 5.1 Current bounded W1 checkpoint
+
+Implementation commit `3ee303f4ce7fed897e4d2473ddf80b4335b20591`
+establishes the reviewed Windows warning ratchet for four configurations: default
+all-targets 83/67 warnings/identities with 11/11 artifacts, release 83/67 with
+11/11, tests `--no-run` 25/21 with 11/11, and isolated Spout 79/67 with 9/9.
+The 52-group negative harness and independent review found no remaining P0/P1 in
+that bounded gate. Native release verification reproduced Engine 9, Syndocal 58,
+and one Vite chunk warning without growth.
+
+This does not check the Phase 0 W0 box. Nine configurations remain pending in the
+versioned inventory: ASIO loader, excluded ASIO bridge, NDI, macOS default/release,
+Linux default/release, frontend structured warnings, and native-release structured
+warnings. `requiredMatrixComplete` therefore remains false. H1 uses a reviewed
+one-time local bootstrap; the docs-only follow-up must prove normal mode with H1 as
+the immutable prior inventory. GitHub Actions run `32351887066` executed zero steps
+because account billing/spending limits blocked every job, so no CI/platform claim
+is derived from that run.
+
 ## 6. Dependency-ordered remaining implementation
 
 ### Phase 0 — Rebaseline, version, warnings, and ledgers
@@ -414,7 +433,9 @@ gate is unavailable, or any claim exceeds the proven platform/hardware boundary.
 
 After the documentation/version checkpoint containing this file:
 
-1. finish W0 warning inventory and no-growth automation;
+1. preserve the bounded Windows W1 ratchet and finish the nine pending W0 warning
+   configurations; do not claim W0, beta, or RC warning acceptance before the
+   required matrix is complete and first-party warnings reach zero;
 2. continue AI3 with the bounded multi-lease/resource-overlap registry and exact
    process-local request receipt/shape-conflict layer;
 3. independently review it before AppState/R4 integration;

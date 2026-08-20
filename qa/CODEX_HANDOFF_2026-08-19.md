@@ -2,17 +2,76 @@
 
 ## Current checkpoint
 
-- Branch: `codex/syndocal-v1.0`
-- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.1`; the branch name is historical and is not artifact version truth.
+- Branch: `codex/syndocal-v1.2`
+- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.1`.
 - Baseline HEAD at takeover: `df7e335c14fe82bb534fbd8867dcd431777e1522`
 - Verified local OutputControl R4 implementation checkpoint: `105c522e795ad021776649bff07d2ecf77bb0d0f` (`feat: route local output controls through R4`). The verified documentation follow-up is `94f4259eb982b4ecfa7b6ea3c645bbf8bd0c64ac`; both were pushed successfully to `origin/codex/syndocal-v1.0`.
 - The owner-incarnation output-lease acceptance contract was fixed in docs-only checkpoint `7b411c4e5a7b26ddf9ae91cea4fa8181daedfa24` (`docs: define AI3 output lease contract`). The later pure transition-core checkpoint is `2b889a753a6f55fc308ff5d82509138cfffd41a0` (`feat: add pure output lease transition core`); it is intentionally not AppState/runtime integration.
-- The next checkpoint must finish the warning inventory/no-growth ratchet before or alongside the multi-lease registry. First-party warnings are now tracked debt and must reach zero before beta/RC; do not suppress them globally.
+- The bounded Windows W1 warning ratchet is implemented at `3ee303f4ce7fed897e4d2473ddf80b4335b20591` (`feat: enforce Windows warning ratchet`). W0 remains incomplete because nine required configurations are still pending. First-party warnings remain tracked debt and must reach zero before beta/RC; do not suppress them globally.
 - The completion-flow/version checkpoint advances every checked product metadata surface and all first-party Cargo packages to `1.2.0-alpha.1`. `pnpm --dir app run check:release`, `cargo check -p protocol`, locked Cargo metadata, Markdown local-link validation, Rust format, and `git diff --check` passed. The fresh native build used the same full VS/FFmpeg/libclang/Node command recorded below and completed in 2m50s after exact checkout PID `9436` was stopped and the remaining exact count reached zero. The rebuilt executable reports ProductVersion/FileVersion `1.2.0-alpha.1`; it was launched as PID `35944` with one exact process, one responsive `Syndocal` window, and `IsZoomed=True`.
 - The implementation/documentation commit for that checkpoint is `4e18b0ff134953c7312483d896c0404de115849c` (`docs: define completion flow and advance version`). This follow-up removes the two Markdown hard-break trailing spaces caught by the cached diff check and pins the implementation hash.
 - That build also records the warning debt requested for cleanup: Engine 9 warnings, Syndocal release target 58 warnings, and the Vite oversized-chunk warning. This is the provisional default-release baseline only, not a warning allowlist or the complete W0 feature/platform inventory.
 - The previous Codex reached its context/token limit while continuing AI3. Treat Timeline Transport and the canonical Timeline Follow Abort tranche as verified. AI3 has now been audited and remains incomplete in all five roadmap categories. The detailed audit matrix and ordered gaps are recorded in `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`.
 - The working tree was clean before this handoff-document update. Do not assume that code present in the baseline commit is complete merely because it is committed.
+
+## W0/W1 warning-ratchet checkpoint
+
+The H1 implementation commit is
+`3ee303f4ce7fed897e4d2473ddf80b4335b20591`. It pins Rust/Cargo `1.97.1`,
+Node `22.22.1`, pnpm `10.9.0`, a schema-versioned warning inventory, and a
+fail-closed Cargo JSON runner. Independent adversarial review of the exact
+11-file hash set concluded P0 0 and P1 0 for this bounded Windows W1 gate.
+
+The enforced configurations and exact first-party baselines are:
+
+- Windows workspace default all targets: 83 occurrences, 67 identities,
+  artifact coverage 11/11;
+- Windows workspace release all targets: 83 occurrences, 67 identities,
+  artifact coverage 11/11;
+- Windows workspace tests `--no-run`: 25 occurrences, 21 identities,
+  artifact coverage 11/11;
+- Windows isolated Spout: 79 occurrences, 67 identities, artifact coverage
+  9/9.
+
+The deterministic ratchet self-test passes 52 assertion groups. The gate checks
+exact identity multiplicity, line-independent paths, changed files, trusted Git
+base/head state, baseline laundering, toolchain drift, `build-finished`, expected
+artifacts, timeout, malformed JSON, warning-shaped stderr, first-party ownership,
+external-warning ownership/expiry, Windows path forms, and warning/compiler input
+through environment variables and semantic Cargo TOML. Added `allow`/`expect`,
+warning flags, compiler wrappers, profile/target overrides, malformed Cargo config,
+and Vite chunk-limit increases fail closed.
+
+This is not W0 completion. `qa/warnings/warning-inventory.json` intentionally keeps
+`requiredMatrixComplete=false`. Pending configurations are Windows ASIO loader,
+the separately licensed excluded ASIO bridge, NDI, macOS default/release, Linux
+default/release, structured frontend warnings, and structured native-release
+warnings. The ASIO loader currently also fails at `main.rs:45388-45389` because the
+no-default-feature build references missing `spout` and uses the `engine` crate as
+a value. Local NDI capture is blocked first by missing NDI 6 headers and retains
+the same no-Spout source boundary afterward. These are code/environment blockers,
+not zero-warning results.
+
+Native integration was rerun with the exact checkout process count at zero before
+each attempt. Two setup attempts failed because Git's Unix `link.exe` was selected;
+the successful invocation fixed
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` to the Visual Studio 2022 Community
+MSVC linker and used the local FFmpeg 8.1.2 shared SDK plus LLVM. The final
+`pnpm --dir app tauri build --no-bundle` completed in 2m55s. Its log reproduced
+Engine 9 warnings, Syndocal 58 warnings, and one Vite oversized-chunk warning:
+no increase from the observed native baseline and no threshold change. The rebuilt
+executable reports FileVersion/ProductVersion `1.2.0-alpha.1`; it was launched as
+PID `59296`, with exactly one exact-path process, one visible responsive `Syndocal`
+window, and `IsZoomed=True`.
+
+Bootstrap is deliberately not available to normal CI. H1 was locally verified with
+explicit bootstrap against evidence commit
+`e87ad9c9629bc25b847d9197216dd8aa20181dd8`. The documentation-only H2 must leave
+all gate, inventory, workflow, package, lock, toolchain, and fixture files unchanged,
+then run all four ratchets in normal mode with `base=H1` and `head=H2`. The first H1
+Actions run, `32351887066`, had zero job steps: every OS was rejected by GitHub for
+account billing/spending limits. Do not interpret it as code or platform evidence,
+and do not claim PR bootstrap until the target base already contains the inventory.
 
 ## Take Over repair checkpoint
 
