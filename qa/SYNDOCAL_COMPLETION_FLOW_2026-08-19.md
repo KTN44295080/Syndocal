@@ -491,3 +491,15 @@ then perform the requested five-display VJ output exercise and leave the final
 operational state as editor plus LED panel plus projector. If physical
 OutputControl consent rejects synthetic input, stop rather than bypassing the Raw
 Input boundary and record the single human-keyboard action still required.
+
+## 14. 2026-08-21 warning-P2 promotion result
+
+The seven locally executable warning rows are now enforced with zero first-party
+warnings: Windows ASIO loader, NDI, separately licensed ASIO bridge, frontend,
+native release, and Linux dev/release. The promotion is reproducible through the
+inventory-only `--promote-zero-warning` gate and host-specific execution; ordinary
+baseline immutability was not relaxed. Exact coverage is recorded in
+`qa/warnings/warning-inventory.json`. The required matrix is 11 enforced / 2
+pending. Both remaining rows are macOS-only and therefore keep
+`requiredMatrixComplete=false`; this is a bounded P2 resolution, not beta/RC or
+whole-product completion.

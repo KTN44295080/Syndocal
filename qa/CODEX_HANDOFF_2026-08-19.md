@@ -494,3 +494,25 @@ for a separately reviewed zero-warning inventory promotion; macOS dev/release
 remain externally blocked by the unavailable host and the recorded Actions billing
 failure. `requiredMatrixComplete` must therefore stay false until those two rows
 are measured.
+
+## 2026-08-21 warning-P2 promotion checkpoint
+
+The warning promotion mechanism and inventory were deliberately separated. Commit
+`bd360277592c22a02ec584b7027d816a8a44af72` adds an explicit, inventory-only
+`--promote-zero-warning` audit; normal and bootstrap immutability remain unchanged.
+The audit requires explicit trusted base/head and configuration ID, exact host and
+toolchain, zero diagnostics/warning-shaped output, complete Cargo artifact or
+generic marker coverage, no suppressions, and an inventory-only diff. Commit
+`98b1f6947125888e17f643d8f5938a4c370b3a22` promotes seven measured rows. Commit
+`dd46dd3a9ec50d0e9e88c8db9f1d65079d7e9b7e` adds the final safe rule that a pending
+row may gain a stricter required SDK environment while an existing requirement
+cannot be removed or changed.
+
+Promotion audits passed on the pinned toolchain for Windows ASIO loader, NDI,
+licensed ASIO bridge, frontend production, Windows native release, Linux dev, and
+Linux release. All seven report zero first-party warnings. Cargo coverage was 9/9
+for ASIO and NDI, 2/2 for the bridge, and 11/11 for each Linux profile; frontend
+and native marker coverage was complete with no warning-shaped output. The
+inventory is now 11 enforced / 2 pending. Only macOS dev/release remain pending,
+so `requiredMatrixComplete` remains false and cross-platform W0 completion is not
+claimed.

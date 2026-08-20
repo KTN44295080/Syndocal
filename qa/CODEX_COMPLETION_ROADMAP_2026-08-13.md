@@ -2066,3 +2066,14 @@ state is `qa/CODEX_HANDOFF_2026-08-19.md`.
 - Windows native release and frontend warning output are currently zero. Promote
   the seven locally measurable P2 warning rows, keep both macOS rows pending, then
   run the requested five-display and final three-display native VJ exercise.
+
+## 28. 2026-08-21 warning-P2 promotion closure
+
+- The seven locally measurable warning rows have been promoted through an
+  inventory-only, host/toolchain-bound zero-warning audit. All seven are at zero
+  first-party warnings with exact artifact/output coverage.
+- The structured warning matrix is now 11 enforced and 2 pending. macOS dev and
+  release remain the only pending rows; `requiredMatrixComplete` remains false.
+- The immediate next gate is the exact-executable, one-window, maximized native VJ
+  exercise across all five OS-visible displays, followed by the requested retained
+  three-screen editor + LED panel + projector state.
