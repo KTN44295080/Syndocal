@@ -122,6 +122,12 @@ use control_plane_query::{
     query_control_plane_project_authority, query_control_plane_runtime_generations,
     ControlPlaneQueryState,
 };
+use output_lease::{
+    OutputLeaseOwner, OutputLeasePhase, OutputLeaseRegistry, OutputLeaseRequest,
+    OutputLeaseRequestAction,
+};
+#[cfg(test)]
+use output_lease::{OutputLeaseResource, OutputLeaseResources};
 
 type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
     video::DecoderBackedFrameProvider<ndi_transport::NdiAwareVideoFrameDecoder>,
@@ -327,6 +333,12 @@ struct AppState {
     authored_control_plane: authored_control_plane::AuthoredControlPlaneState,
     runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState,
     control_plane_security: control_plane_security::ControlPlaneSecurityState,
+    /// Process-local AI3 authority. It is deliberately not persisted or
+    /// reconstructed from project/query state; every production mutation
+    /// enters through `submit_request`.
+    output_lease_registry: Mutex<OutputLeaseRegistry>,
+    output_lease_clock_origin: Instant,
+    next_output_lease_request_id: AtomicU64,
     /// The single background reaper for `media_asset_operations`, installed once
     /// during setup. Holding it here keeps the thread owned by `AppState` and
     /// joined on teardown instead of leaked.
@@ -410,6 +422,12 @@ struct AppState {
     /// stale same-string IPC cannot cross a retire/re-register ABA boundary.
     project_transaction_owner_incarnations: Mutex<HashMap<String, u64>>,
     next_project_transaction_owner_incarnation: AtomicU64,
+    /// A Destroyed callback that cannot complete both owner/lease and query
+    /// retirement permanently fences this concrete window label.  Entries are
+    /// process-local and intentionally have no clear path: restart is the
+    /// only recovery for a dead authority boundary.
+    project_transaction_owner_retirement_failures: Mutex<HashSet<String>>,
+    project_transaction_owner_retirement_failure_overflow: AtomicBool,
     /// Serializes capture/revalidation of a B3 caller incarnation with owner
     /// rotation. This is intentionally distinct from external command
     /// admission because authored/runtime commit helpers acquire that gate.
@@ -448,6 +466,123 @@ struct AppState {
     native_video_output_metrics:
         Mutex<HashMap<VideoOutputId, Arc<Mutex<NativeVideoOutputMetrics>>>>,
     native_video_output_workers: Mutex<HashMap<String, NativeVideoOutputWorker>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OutputLeaseRegistrySnapshot {
+    process_incarnation: u64,
+    active_count: usize,
+    orphan_count: usize,
+    unclaimed_count: usize,
+    max_generation: u64,
+    audit_sequence: u64,
+    generation_stamp: u64,
+}
+
+impl AppState {
+    pub(crate) fn ensure_window_authority_not_blocked(
+        &self,
+        window_label: &str,
+    ) -> Result<(), String> {
+        validate_project_transaction_window_label(window_label)?;
+        if self
+            .project_transaction_owner_retirement_failure_overflow
+            .load(Ordering::Acquire)
+        {
+            return Err(
+                "Project window authority failure registry is full; restart Syndocal".to_string(),
+            );
+        }
+        let failures = self
+            .project_transaction_owner_retirement_failures
+            .lock()
+            .map_err(|_| {
+                "Project window authority failure registry lock was poisoned; restart Syndocal"
+                    .to_string()
+            })?;
+        if failures.contains(window_label) {
+            return Err(format!(
+                "Project window '{window_label}' is permanently blocked after failed authority retirement; restart Syndocal"
+            ));
+        }
+        Ok(())
+    }
+
+    fn record_window_authority_retirement_failure(&self, window_label: &str) -> Result<(), String> {
+        validate_project_transaction_window_label(window_label)?;
+        if self
+            .project_transaction_owner_retirement_failure_overflow
+            .load(Ordering::Acquire)
+        {
+            return Err(
+                "Project window authority failure registry is full; restart Syndocal".to_string(),
+            );
+        }
+        let mut failures = self
+            .project_transaction_owner_retirement_failures
+            .lock()
+            .map_err(|_| {
+                "Project window authority failure registry lock was poisoned; restart Syndocal"
+                    .to_string()
+            })?;
+        if !failures.contains(window_label)
+            && failures.len() >= MAX_PROJECT_TRANSACTION_OWNER_RETIREMENT_FAILURES
+        {
+            self.project_transaction_owner_retirement_failure_overflow
+                .store(true, Ordering::Release);
+            return Err(
+                "Project window authority failure registry is full; restart Syndocal".to_string(),
+            );
+        }
+        failures.insert(window_label.to_string());
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn blocked_window_authority_count(&self) -> Result<usize, String> {
+        self.project_transaction_owner_retirement_failures
+            .lock()
+            .map(|failures| failures.len())
+            .map_err(|_| {
+                "Project window authority failure registry lock was poisoned; restart Syndocal"
+                    .to_string()
+            })
+    }
+
+    fn output_lease_now_ms(&self) -> Result<u64, String> {
+        let elapsed = Instant::now()
+            .checked_duration_since(self.output_lease_clock_origin)
+            .ok_or_else(|| "Output lease monotonic clock moved backwards".to_string())?;
+        u64::try_from(elapsed.as_millis())
+            .map_err(|_| "Output lease monotonic clock exceeded u64 milliseconds".to_string())
+    }
+
+    fn output_lease_registry_snapshot(&self) -> Result<OutputLeaseRegistrySnapshot, String> {
+        let registry = self
+            .output_lease_registry
+            .lock()
+            .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
+        let views = registry.lease_views();
+        let mut snapshot = OutputLeaseRegistrySnapshot {
+            process_incarnation: registry.process_session_incarnation(),
+            active_count: 0,
+            orphan_count: 0,
+            unclaimed_count: 0,
+            max_generation: 0,
+            audit_sequence: registry.audit().back().map_or(0, |record| record.sequence),
+            generation_stamp: 0,
+        };
+        for view in views {
+            snapshot.max_generation = snapshot.max_generation.max(view.snapshot.generation);
+            match view.snapshot.phase {
+                OutputLeasePhase::HeldActive => snapshot.active_count += 1,
+                OutputLeasePhase::HeldOrphaned => snapshot.orphan_count += 1,
+                OutputLeasePhase::Unclaimed => snapshot.unclaimed_count += 1,
+            }
+        }
+        snapshot.generation_stamp = snapshot.max_generation.max(snapshot.audit_sequence);
+        Ok(snapshot)
+    }
 }
 
 /// Cancelable -> Admitted | Cancelled linearization for one media operation.
@@ -34882,6 +35017,20 @@ fn normalize_project_transaction_owner_id(owner_id: String) -> Result<String, St
     Ok(owner_id.to_string())
 }
 
+const MAX_PROJECT_TRANSACTION_WINDOW_LABEL_BYTES: usize = 128;
+const MAX_PROJECT_TRANSACTION_OWNER_RETIREMENT_FAILURES: usize = 128;
+
+fn validate_project_transaction_window_label(window_label: &str) -> Result<(), String> {
+    if window_label.trim().is_empty()
+        || window_label.len() > MAX_PROJECT_TRANSACTION_WINDOW_LABEL_BYTES
+    {
+        return Err(format!(
+            "Project transaction window label must be 1 to {MAX_PROJECT_TRANSACTION_WINDOW_LABEL_BYTES} bytes"
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_project_transaction_owner_registered(
     state: &AppState,
     owner_id: &str,
@@ -34906,6 +35055,7 @@ fn capture_video_clip_slot_caller_binding_for_window_label(
     window_label: &str,
     owner_id: &str,
 ) -> Result<VideoClipSlotCallerBinding, String> {
+    state.ensure_window_authority_not_blocked(window_label)?;
     let owner_id = normalize_project_transaction_owner_id(owner_id.to_string())?;
     let owners = state
         .project_transaction_owners
@@ -34936,6 +35086,7 @@ fn ensure_video_clip_slot_caller_binding_current(
     state: &AppState,
     binding: &VideoClipSlotCallerBinding,
 ) -> Result<(), String> {
+    state.ensure_window_authority_not_blocked(&binding.window_label)?;
     let owners = state
         .project_transaction_owners
         .lock()
@@ -35005,6 +35156,109 @@ fn allocate_project_transaction_owner_incarnation(state: &AppState) -> Result<u6
             Err(actual) => incarnation = actual,
         }
     }
+}
+
+fn allocate_output_lease_request_id(state: &AppState) -> Result<u64, String> {
+    let mut current = state.next_output_lease_request_id.load(Ordering::Acquire);
+    loop {
+        if current == 0 {
+            return Err("AI3 output lease request identity reached zero".to_string());
+        }
+        let next = current.checked_add(1).ok_or_else(|| {
+            "AI3 output lease request identity space is exhausted; restart Syndocal".to_string()
+        })?;
+        match state.next_output_lease_request_id.compare_exchange_weak(
+            current,
+            next,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return Ok(current),
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+fn output_lease_project_identity(project_epoch: u64) -> String {
+    format!("project_epoch:{project_epoch}")
+}
+
+fn ensure_output_lease_receipt_succeeded(
+    receipt: &output_lease::OutputLeaseRequestReceipt,
+    context: &str,
+) -> Result<(), String> {
+    match &receipt.outcome {
+        Ok(_) => Ok(()),
+        Err(error) => Err(format!(
+            "AI3 output lease {context} transition failed: {error:?}"
+        )),
+    }
+}
+
+fn preflight_output_lease_owner_retirement(
+    state: &AppState,
+    registry: &OutputLeaseRegistry,
+    window_label: &str,
+    owner_id: &str,
+    owner_incarnation: u64,
+) -> Result<OutputLeaseRegistry, String> {
+    let owner = OutputLeaseOwner::new(
+        owner_id.to_string(),
+        window_label.to_string(),
+        registry.process_session_incarnation(),
+        owner_incarnation,
+    )
+    .map_err(|error| format!("AI3 output lease retirement owner is invalid: {error:?}"))?;
+    let request = OutputLeaseRequest::from_action(
+        owner_id.to_string(),
+        "owner-retirement",
+        allocate_output_lease_request_id(state)?,
+        OutputLeaseRequestAction::RetireOwner { owner },
+    )
+    .map_err(|error| format!("AI3 output lease retirement request is invalid: {error:?}"))?;
+    let now_ms = state.output_lease_now_ms()?;
+    let mut candidate = registry.clone();
+    let receipt = candidate
+        .submit_request(&request, now_ms)
+        .map_err(|error| format!("AI3 output lease retirement admission failed: {error:?}"))?;
+    ensure_output_lease_receipt_succeeded(&receipt, "owner retirement")?;
+    Ok(candidate)
+}
+
+fn preflight_output_lease_project_orphan(
+    state: &AppState,
+    registry: &OutputLeaseRegistry,
+    project_epoch: u64,
+) -> Result<OutputLeaseRegistry, String> {
+    let request = OutputLeaseRequest::from_action(
+        "syndocal.lifecycle",
+        "project-replacement",
+        allocate_output_lease_request_id(state)?,
+        OutputLeaseRequestAction::ProjectOrphan {
+            project_identity: output_lease_project_identity(project_epoch),
+            selected_lease_ids: Vec::new(),
+            resource_scope: None,
+        },
+    )
+    .map_err(|error| format!("AI3 output lease project request is invalid: {error:?}"))?;
+    let now_ms = state.output_lease_now_ms()?;
+    let mut candidate = registry.clone();
+    let receipt = candidate
+        .submit_request(&request, now_ms)
+        .map_err(|error| format!("AI3 output lease project admission failed: {error:?}"))?;
+    ensure_output_lease_receipt_succeeded(&receipt, "project replacement")?;
+    Ok(candidate)
+}
+
+/// The engine ACK is the only point where the preflighted process-local
+/// orphan candidate becomes visible. The production replacement path calls
+/// this infallible seam after ACK; tests use the same seam to prove old-epoch
+/// retirement and failed-preflight non-mutation without touching output.
+fn commit_project_replacement_output_lease_after_ack(
+    registry: &mut OutputLeaseRegistry,
+    candidate: OutputLeaseRegistry,
+) {
+    *registry = candidate;
 }
 
 /// Old media IPC has no owner argument. Derive it only from the concrete
@@ -35168,19 +35422,29 @@ fn register_project_transaction_owner(
     state: State<'_, AppState>,
     owner_id: String,
 ) -> Result<Option<ProjectHistoryMutationResult>, String> {
+    register_project_transaction_owner_for_window_label(&state, window.label(), owner_id)
+}
+
+fn register_project_transaction_owner_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    owner_id: String,
+) -> Result<Option<ProjectHistoryMutationResult>, String> {
+    validate_project_transaction_window_label(window_label)?;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     let _owner_rotation = state
         .project_transaction_owner_rotation
         .lock()
         .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    state.ensure_window_authority_not_blocked(window_label)?;
     let _external_admission = lock_project_external_command_admission(&state)?;
     let mut coordinator = lock_project_coordinator(&state)?;
     let mut owners = state
         .project_transaction_owners
         .lock()
         .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
-    ensure_project_transaction_owner_unique_to_window(&owners, window.label(), &owner_id)?;
-    let retired_preview_owner = owners.get(window.label()).cloned();
+    ensure_project_transaction_owner_unique_to_window(&owners, window_label, &owner_id)?;
+    let retired_preview_owner = owners.get(window_label).cloned();
     let same_incarnation = retired_preview_owner.as_deref() == Some(owner_id.as_str());
     let mut incarnations = state
         .project_transaction_owner_incarnations
@@ -35189,7 +35453,7 @@ fn register_project_transaction_owner(
             "Project transaction owner incarnation registry lock was poisoned".to_string()
         })?;
     let next_incarnation = if same_incarnation {
-        incarnations.get(window.label()).copied().ok_or_else(|| {
+        incarnations.get(window_label).copied().ok_or_else(|| {
             "Registered project owner is missing its backend incarnation".to_string()
         })?
     } else {
@@ -35204,11 +35468,36 @@ fn register_project_transaction_owner(
         .project_operator_sessions
         .lock()
         .map_err(|_| "Project operator session registry lock was poisoned".to_string())?;
+    let mut output_lease_registry = state
+        .output_lease_registry
+        .lock()
+        .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
+    let output_lease_candidate = if !same_incarnation {
+        retired_preview_owner
+            .as_deref()
+            .map(|retired_owner| {
+                let retired_incarnation =
+                    incarnations.get(window_label).copied().ok_or_else(|| {
+                        "Retired project transaction owner is missing its backend incarnation"
+                            .to_string()
+                    })?;
+                preflight_output_lease_owner_retirement(
+                    &state,
+                    &output_lease_registry,
+                    window_label,
+                    retired_owner,
+                    retired_incarnation,
+                )
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let recovered = transition_project_transaction_window_owner_with_operator_session(
         &mut owners,
         &mut sessions,
         &mut coordinator,
-        window.label(),
+        window_label,
         Some(owner_id.clone()),
         |previous_owner, coordinator| {
             let Some(previous_owner) = previous_owner else {
@@ -35222,8 +35511,12 @@ fn register_project_transaction_owner(
             cancel_pending_project_transaction_locked(&state, coordinator, pending).map(Some)
         },
     )?;
-    incarnations.insert(window.label().to_string(), next_incarnation);
+    incarnations.insert(window_label.to_string(), next_incarnation);
+    if let Some(candidate) = output_lease_candidate {
+        *output_lease_registry = candidate;
+    }
     drop(sessions);
+    drop(output_lease_registry);
     drop(incarnations);
     drop(owners);
     drop(coordinator);
@@ -35311,6 +35604,25 @@ fn retire_project_transaction_owner_for_window(
         .project_operator_sessions
         .lock()
         .map_err(|_| "Project operator session registry lock was poisoned".to_string())?;
+    let mut output_lease_registry = state
+        .output_lease_registry
+        .lock()
+        .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
+    let output_lease_candidate = retired_preview_owner
+        .as_deref()
+        .map(|retired_owner| {
+            let retired_incarnation = incarnations.get(window_label).copied().ok_or_else(|| {
+                "Retired project transaction owner is missing its backend incarnation".to_string()
+            })?;
+            preflight_output_lease_owner_retirement(
+                state,
+                &output_lease_registry,
+                window_label,
+                retired_owner,
+                retired_incarnation,
+            )
+        })
+        .transpose()?;
     let recovered = transition_project_transaction_window_owner_with_operator_session(
         &mut owners,
         &mut sessions,
@@ -35330,7 +35642,11 @@ fn retire_project_transaction_owner_for_window(
         },
     )?;
     incarnations.remove(window_label);
+    if let Some(candidate) = output_lease_candidate {
+        *output_lease_registry = candidate;
+    }
     drop(sessions);
+    drop(output_lease_registry);
     drop(incarnations);
     drop(owners);
     drop(coordinator);
@@ -35348,6 +35664,47 @@ fn retire_project_transaction_owner_for_window(
         state.runtime_control_plane.retire_principal(retired_owner);
     }
     Ok(recovered)
+}
+
+/// Retire one destroyed renderer's AppState and query authority as one
+/// fail-closed lifecycle boundary. Owner/lease retirement is attempted first,
+/// then query retirement is always attempted as a best-effort fence even when
+/// the AppState transition fails. This removes already-issued query/output
+/// fences; a blocked-label record prevents any new authority from being
+/// issued. A query retirement failure is likewise permanently blocked for the
+/// remainder of this process; only restart can recover a dead label.
+fn handle_destroyed_window_authority_retirement(
+    state: &AppState,
+    query: &ControlPlaneQueryState,
+    window_label: &str,
+) -> Result<(), String> {
+    let owner_error = match validate_project_transaction_window_label(window_label) {
+        Ok(()) => retire_project_transaction_owner_for_window(state, window_label).err(),
+        Err(error) => Some(format!("window label validation failed: {error}")),
+    };
+    let query_error = query.retire_window(window_label).err();
+    if owner_error.is_none() && query_error.is_none() {
+        return Ok(());
+    }
+    let block_error = state
+        .record_window_authority_retirement_failure(window_label)
+        .err();
+    let mut errors = Vec::with_capacity(3);
+    if let Some(error) = owner_error {
+        errors.push(format!("owner/lease retirement failed: {error}"));
+    }
+    if let Some(error) = query_error {
+        errors.push(format!("query retirement failed: {error}"));
+    }
+    if let Some(error) = block_error {
+        errors.push(format!("fail-closed block registry unavailable: {error}"));
+    } else {
+        errors.push("window authority was permanently blocked".to_string());
+    }
+    Err(format!(
+        "Destroyed window '{window_label}' authority retirement failed; {}",
+        errors.join("; ")
+    ))
 }
 
 fn transition_project_transaction_window_owner<T>(
@@ -39664,6 +40021,24 @@ where
     // same guard remains live through publication and terminal-fence capture.
     let _publication_validation =
         validate_before_publication(state, coordinator, &_transition_guard)?;
+    // Preflight the process-local project orphan transition before any
+    // callback/recovery/engine commit. The registry clone is held until the
+    // engine ACK; only the ACK path swaps it into live authority.
+    let mut output_lease_registry =
+        if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
+            Some(
+                state
+                    .output_lease_registry
+                    .lock()
+                    .map_err(|_| "Output lease registry lock was poisoned".to_string())?,
+            )
+        } else {
+            None
+        };
+    let output_lease_candidate = output_lease_registry
+        .as_ref()
+        .map(|registry| preflight_output_lease_project_orphan(state, registry, coordinator.epoch))
+        .transpose()?;
     if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
         // Identity and HistoryNavigation invalidate any prior browser
         // recovery image. Persist the new machine-local serial before input
@@ -39730,6 +40105,11 @@ where
     // preflighted and is deliberately infallible; do not claim a rollback
     // after this point because the published snapshot is authoritative.
     reset_project_runtime_after_published_snapshot_infallible(state);
+    if let (Some(registry), Some(candidate)) =
+        (output_lease_registry.as_mut(), output_lease_candidate)
+    {
+        commit_project_replacement_output_lease_after_ack(&mut **registry, candidate);
+    }
     let coordinator_mirrors_committed =
         if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
             coordinator.finish_identity_swap_after_preflight(
@@ -50285,10 +50665,11 @@ async fn open_pane_window(
     window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Destroyed) {
             let state = emit_app.state::<AppState>();
+            let query = emit_app.state::<ControlPlaneQueryState>();
             if let Err(error) =
-                retire_project_transaction_owner_for_window(&state, &retire_owner_label)
+                handle_destroyed_window_authority_retirement(&state, &query, &retire_owner_label)
             {
-                eprintln!("failed to recover pane transaction owner after Destroyed: {error}");
+                eprintln!("Destroyed window authority was fail-closed: {error}");
             }
             let _ = emit_app.emit("syndocal://pane-window-closed", emit_pane.clone());
         }
@@ -54561,6 +54942,12 @@ pub(crate) mod tests {
             });
             let initial_project_coordinator =
                 project_coordinator_for_initial_snapshot(engine.snapshot());
+            let output_lease_process_incarnation = ControlPlaneQueryState::new()
+                .expect("test control-plane process identity must initialize")
+                .process_incarnation();
+            let output_lease_registry =
+                OutputLeaseRegistry::fresh_process(output_lease_process_incarnation)
+                    .expect("test output-lease registry must initialize");
             let capture_inputs = Arc::new(Mutex::new(HashMap::new()));
             let capture_transport = Arc::new(Mutex::new(
                 capture_transport::CaptureTransportState::new(Arc::clone(&capture_inputs)),
@@ -54602,6 +54989,9 @@ pub(crate) mod tests {
                 runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState::default(),
                 control_plane_security: control_plane_security::ControlPlaneSecurityState::default(
                 ),
+                output_lease_registry: Mutex::new(output_lease_registry),
+                output_lease_clock_origin: Instant::now(),
+                next_output_lease_request_id: AtomicU64::new(1),
                 media_asset_reaper: Mutex::new(None),
                 media_asset_authoritative_publish_attempts: AtomicU64::new(0),
                 video_clip_slot_authoritative_publish_attempts: AtomicU64::new(0),
@@ -54664,6 +55054,8 @@ pub(crate) mod tests {
                     1,
                 )])),
                 next_project_transaction_owner_incarnation: AtomicU64::new(1),
+                project_transaction_owner_retirement_failures: Mutex::new(HashSet::new()),
+                project_transaction_owner_retirement_failure_overflow: AtomicBool::new(false),
                 project_transaction_owner_rotation: Mutex::new(()),
                 project_operator_sessions: Mutex::new(HashMap::new()),
                 video_clip_slot_runtime_generation: AtomicU64::new(0),
@@ -54976,6 +55368,457 @@ pub(crate) mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn output_lease_app_state_initializes_process_identity_and_snapshot_metadata() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let snapshot = harness
+            .state
+            .output_lease_registry_snapshot()
+            .expect("fresh AppState output lease snapshot is readable");
+        assert_ne!(snapshot.process_incarnation, 0);
+        assert_eq!(snapshot.active_count, 0);
+        assert_eq!(snapshot.orphan_count, 0);
+        assert_eq!(snapshot.unclaimed_count, 0);
+        assert_eq!(snapshot.max_generation, 0);
+        assert_eq!(snapshot.audit_sequence, 0);
+        assert_eq!(snapshot.generation_stamp, 0);
+        assert_eq!(output_lease_project_identity(71), "project_epoch:71");
+    }
+
+    #[test]
+    fn output_lease_registry_process_identity_matches_query_backend_identity() {
+        let query = ControlPlaneQueryState::new().expect("query process identity initializes");
+        let registry = OutputLeaseRegistry::fresh_process(query.process_incarnation())
+            .expect("registry accepts query process identity");
+        assert_ne!(query.process_incarnation(), 0);
+        assert_eq!(
+            registry.process_session_incarnation(),
+            query.process_incarnation()
+        );
+    }
+
+    #[test]
+    fn output_lease_app_state_retirement_and_project_preflight_are_atomic() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let process_incarnation = harness
+            .state
+            .output_lease_registry
+            .lock()
+            .expect("fresh output lease registry lock")
+            .process_session_incarnation();
+        let owner = OutputLeaseOwner::new("owner-a", "window-a", process_incarnation, 1)
+            .expect("test output lease owner");
+        let acquire = OutputLeaseRequest::from_action(
+            "owner-a",
+            "test",
+            1,
+            OutputLeaseRequestAction::Acquire {
+                owner: owner.clone(),
+                resources: OutputLeaseResources::new(&[OutputLeaseResource::Lighting])
+                    .expect("test lighting resource"),
+                project_identity: output_lease_project_identity(0),
+                ttl_ms: 10_000,
+            },
+        )
+        .expect("test acquire request");
+        {
+            let mut registry = harness
+                .state
+                .output_lease_registry
+                .lock()
+                .expect("output lease registry lock for acquire");
+            registry
+                .submit_request(&acquire, 0)
+                .expect("test acquire receipt");
+        }
+
+        let before_retirement = harness
+            .state
+            .output_lease_registry_snapshot()
+            .expect("snapshot before retirement");
+        let candidate = {
+            let registry = harness
+                .state
+                .output_lease_registry
+                .lock()
+                .expect("output lease registry lock for retirement preflight");
+            preflight_output_lease_owner_retirement(
+                &harness.state,
+                &registry,
+                "window-a",
+                "owner-a",
+                1,
+            )
+            .expect("second owner retirement preflight")
+        };
+        assert_eq!(
+            harness
+                .state
+                .output_lease_registry_snapshot()
+                .expect("snapshot after uncommitted retirement preflight"),
+            before_retirement
+        );
+        {
+            let mut registry = harness
+                .state
+                .output_lease_registry
+                .lock()
+                .expect("output lease registry lock for retirement commit");
+            *registry = candidate;
+        }
+        let retired = harness
+            .state
+            .output_lease_registry_snapshot()
+            .expect("snapshot after retirement commit");
+        assert_eq!(retired.active_count, 0);
+        assert_eq!(retired.orphan_count, 1);
+        assert_eq!(retired.max_generation, 2);
+        assert!(retired.audit_sequence >= 2);
+        assert_eq!(
+            retired.generation_stamp,
+            retired.max_generation.max(retired.audit_sequence)
+        );
+
+        let before_project_failure = retired.clone();
+        harness
+            .state
+            .next_output_lease_request_id
+            .store(u64::MAX, Ordering::Release);
+        assert!(preflight_output_lease_project_orphan(
+            &harness.state,
+            &harness
+                .state
+                .output_lease_registry
+                .lock()
+                .expect("output lease registry lock for failed project preflight"),
+            0,
+        )
+        .is_err());
+        assert_eq!(
+            harness
+                .state
+                .output_lease_registry_snapshot()
+                .expect("snapshot after failed project preflight"),
+            before_project_failure
+        );
+    }
+
+    #[test]
+    fn project_replacement_ack_core_orphans_only_old_epoch_and_failed_preflight_is_unchanged() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let process_incarnation = harness
+            .state
+            .output_lease_registry
+            .lock()
+            .unwrap()
+            .process_session_incarnation();
+        let owner_a = OutputLeaseOwner::new("owner-a", "window-a", process_incarnation, 1)
+            .expect("lighting owner");
+        let owner_b = OutputLeaseOwner::new("owner-b", "window-b", process_incarnation, 2)
+            .expect("video owner");
+        let acquire = |owner: OutputLeaseOwner,
+                       principal: &str,
+                       request_id: u64,
+                       resource: OutputLeaseResource,
+                       project_identity: &str| {
+            OutputLeaseRequest::from_action(
+                principal.to_string(),
+                "test",
+                request_id,
+                OutputLeaseRequestAction::Acquire {
+                    owner,
+                    resources: OutputLeaseResources::new(&[resource]).unwrap(),
+                    project_identity: project_identity.to_string(),
+                    ttl_ms: 10_000,
+                },
+            )
+            .unwrap()
+        };
+        {
+            let mut registry = harness.state.output_lease_registry.lock().unwrap();
+            registry
+                .submit_request(
+                    &acquire(
+                        owner_a,
+                        "owner-a",
+                        1,
+                        OutputLeaseResource::Lighting,
+                        "project_epoch:0",
+                    ),
+                    0,
+                )
+                .unwrap();
+            registry
+                .submit_request(
+                    &acquire(
+                        owner_b,
+                        "owner-b",
+                        2,
+                        OutputLeaseResource::Video,
+                        "project_epoch:99",
+                    ),
+                    0,
+                )
+                .unwrap();
+        }
+        let physical_before = harness.state.engine.safety_blackout_authority();
+        let candidate = {
+            let registry = harness.state.output_lease_registry.lock().unwrap();
+            preflight_output_lease_project_orphan(&harness.state, &registry, 0).unwrap()
+        };
+        let candidate_views = candidate.lease_views();
+        assert_eq!(
+            candidate_views
+                .iter()
+                .filter(|view| view.snapshot.phase == OutputLeasePhase::HeldOrphaned)
+                .count(),
+            1
+        );
+        assert!(candidate_views.iter().any(|view| {
+            view.project_identity == "project_epoch:0"
+                && view.snapshot.phase == OutputLeasePhase::HeldOrphaned
+                && view.snapshot.generation == 2
+        }));
+        assert!(candidate_views.iter().any(|view| {
+            view.project_identity == "project_epoch:99"
+                && view.snapshot.phase == OutputLeasePhase::HeldActive
+        }));
+        {
+            let mut registry = harness.state.output_lease_registry.lock().unwrap();
+            commit_project_replacement_output_lease_after_ack(&mut registry, candidate);
+        }
+        let committed = harness.state.output_lease_registry_snapshot().unwrap();
+        assert_eq!(committed.active_count, 1);
+        assert_eq!(committed.orphan_count, 1);
+        assert_eq!(
+            harness.state.engine.safety_blackout_authority(),
+            physical_before,
+            "project ACK registry commit has no physical output side effect"
+        );
+
+        let before_failed = committed;
+        harness
+            .state
+            .next_output_lease_request_id
+            .store(u64::MAX, Ordering::Release);
+        let failed = {
+            let registry = harness.state.output_lease_registry.lock().unwrap();
+            preflight_output_lease_project_orphan(&harness.state, &registry, 0)
+        };
+        assert!(failed.is_err());
+        assert_eq!(
+            harness.state.output_lease_registry_snapshot().unwrap(),
+            before_failed,
+            "failed replacement preflight leaves live lease truth unchanged"
+        );
+    }
+
+    #[test]
+    fn output_lease_app_state_lock_poison_fails_closed() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = state
+                .output_lease_registry
+                .lock()
+                .expect("fresh output lease registry lock");
+            panic!("poison output lease registry for fail-closed test");
+        }));
+        assert!(harness.state.output_lease_registry_snapshot().is_err());
+    }
+
+    #[test]
+    fn destroyed_window_retirement_success_is_one_production_authority_boundary() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let query = ControlPlaneQueryState::new().expect("query state initializes");
+        let physical_before = harness.state.engine.safety_blackout_authority();
+
+        handle_destroyed_window_authority_retirement(&harness.state, &query, "media-asset-a6")
+            .expect("Destroyed retirement succeeds through production helper");
+
+        assert!(harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .get("media-asset-a6")
+            .is_none());
+        assert!(harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .get("media-asset-a6")
+            .is_none());
+        assert_eq!(harness.state.blocked_window_authority_count().unwrap(), 0);
+        assert!(harness.state.output_lease_registry_snapshot().is_ok());
+        assert!(query
+            .issue_output_control_fence_for_window("media-asset-a6", &harness.state)
+            .is_err());
+        assert_eq!(
+            harness.state.engine.safety_blackout_authority(),
+            physical_before,
+            "authority retirement performs no physical output operation"
+        );
+    }
+
+    #[test]
+    fn destroyed_window_lease_failure_blocks_registration_and_r4_issue() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let query = ControlPlaneQueryState::new().expect("query state initializes");
+        let old_output_fence = query
+            .issue_output_control_fence_for_window("media-asset-a6", &harness.state)
+            .expect("production query path issues the pre-destroyed output fence");
+        let state = Arc::clone(&harness.state);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = state
+                .output_lease_registry
+                .lock()
+                .expect("output lease registry before poison");
+            panic!("poison output lease registry during Destroyed");
+        }));
+
+        assert!(handle_destroyed_window_authority_retirement(
+            &harness.state,
+            &query,
+            "media-asset-a6",
+        )
+        .is_err());
+        assert_eq!(harness.state.blocked_window_authority_count().unwrap(), 1);
+        assert!(harness
+            .state
+            .ensure_window_authority_not_blocked("media-asset-a6")
+            .is_err());
+        assert!(register_project_transaction_owner_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            "replacement-owner".to_string(),
+        )
+        .is_err());
+        assert!(query
+            .issue_output_control_fence_for_window("media-asset-a6", &harness.state)
+            .is_err());
+        assert!(query
+            .validate_output_control_fence_window("media-asset-a6", &old_output_fence, 1)
+            .is_err());
+        assert!(harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .contains_key("media-asset-a6"));
+    }
+
+    #[test]
+    fn destroyed_window_request_id_overflow_blocks_without_partial_owner_change() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let query = ControlPlaneQueryState::new().expect("query state initializes");
+        harness
+            .state
+            .next_output_lease_request_id
+            .store(u64::MAX, Ordering::Release);
+
+        assert!(handle_destroyed_window_authority_retirement(
+            &harness.state,
+            &query,
+            "media-asset-a6",
+        )
+        .is_err());
+        assert_eq!(harness.state.blocked_window_authority_count().unwrap(), 1);
+        assert!(harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .contains_key("media-asset-a6"));
+        assert!(harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .contains_key("media-asset-a6"));
+        assert!(
+            harness
+                .state
+                .output_lease_registry_snapshot()
+                .expect("registry remains readable after overflow")
+                .active_count
+                == 0
+        );
+    }
+
+    #[test]
+    fn destroyed_window_query_failure_blocks_after_app_retirement() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let query = ControlPlaneQueryState::new().expect("query state initializes");
+        let physical_before = harness.state.engine.safety_blackout_authority();
+        let query_for_poison = &query;
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            query_for_poison.poison_for_test();
+        }));
+
+        assert!(handle_destroyed_window_authority_retirement(
+            &harness.state,
+            &query,
+            "media-asset-a6",
+        )
+        .is_err());
+        assert_eq!(harness.state.blocked_window_authority_count().unwrap(), 1);
+        assert!(harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .get("media-asset-a6")
+            .is_none());
+        assert!(harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .get("media-asset-a6")
+            .is_none());
+        assert!(harness.state.output_lease_registry_snapshot().is_ok());
+        assert_eq!(
+            harness.state.engine.safety_blackout_authority(),
+            physical_before
+        );
+        assert!(register_project_transaction_owner_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            "replacement-owner".to_string(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn poisoned_window_failure_registry_fences_registration_and_query_issue() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let query = ControlPlaneQueryState::new().expect("query state initializes");
+        let state = Arc::clone(&harness.state);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = state
+                .project_transaction_owner_retirement_failures
+                .lock()
+                .expect("failure registry before poison");
+            panic!("poison window failure registry");
+        }));
+
+        assert!(harness
+            .state
+            .ensure_window_authority_not_blocked("media-asset-a6")
+            .is_err());
+        assert!(register_project_transaction_owner_for_window_label(
+            &harness.state,
+            "media-asset-a6",
+            "replacement-owner".to_string(),
+        )
+        .is_err());
+        assert!(query
+            .issue_output_control_fence_for_window("media-asset-a6", &harness.state)
+            .is_err());
     }
 
     fn media_asset_a6_concurrent_exact<R>(
@@ -86124,6 +86967,15 @@ fn main() {
     );
     let control_plane_query_state = ControlPlaneQueryState::new()
         .expect("OS randomness must initialize the local control-plane query session");
+    let output_lease_process_incarnation = control_plane_query_state.process_incarnation();
+    let output_lease_registry =
+        match OutputLeaseRegistry::fresh_process(output_lease_process_incarnation) {
+            Ok(registry) => registry,
+            Err(error) => {
+                eprintln!("AI3 output lease authority remains unavailable: {error:?}");
+                return;
+            }
+        };
     tauri::Builder::default()
         .setup(move |app| {
             #[cfg(target_os = "windows")]
@@ -86308,6 +87160,9 @@ fn main() {
             authored_control_plane: authored_control_plane::AuthoredControlPlaneState::default(),
             runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState::default(),
             control_plane_security: control_plane_security::ControlPlaneSecurityState::default(),
+            output_lease_registry: Mutex::new(output_lease_registry),
+            output_lease_clock_origin: Instant::now(),
+            next_output_lease_request_id: AtomicU64::new(1),
             media_asset_reaper: Mutex::new(None),
             #[cfg(test)]
             media_asset_authoritative_publish_attempts: AtomicU64::new(0),
@@ -86367,6 +87222,8 @@ fn main() {
             project_transaction_owners: Mutex::new(HashMap::new()),
             project_transaction_owner_incarnations: Mutex::new(HashMap::new()),
             next_project_transaction_owner_incarnation: AtomicU64::new(0),
+            project_transaction_owner_retirement_failures: Mutex::new(HashSet::new()),
+            project_transaction_owner_retirement_failure_overflow: AtomicBool::new(false),
             project_transaction_owner_rotation: Mutex::new(()),
             project_operator_sessions: Mutex::new(HashMap::new()),
             video_clip_slot_runtime_generation: AtomicU64::new(0),
@@ -86387,14 +87244,12 @@ fn main() {
         .manage(control_plane_query_state)
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                window
-                    .state::<ControlPlaneQueryState>()
-                    .retire_window(window.label());
-                if let Err(error) = retire_project_transaction_owner_for_window(
+                if let Err(error) = handle_destroyed_window_authority_retirement(
                     &window.state::<AppState>(),
+                    &window.state::<ControlPlaneQueryState>(),
                     window.label(),
                 ) {
-                    eprintln!("failed to retire project transaction owner after Destroyed: {error}");
+                    eprintln!("Destroyed window authority was fail-closed: {error}");
                 }
             }
         })

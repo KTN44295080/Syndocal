@@ -197,26 +197,42 @@ impl ControlPlaneQueryState {
         })
     }
 
-    pub(crate) fn retire_window(&self, label: &str) {
-        if let Ok(mut inner) = self.inner.lock() {
-            if let Some(incarnation) = inner.window_incarnations.remove(label) {
-                inner.cursors.retain(|_, entry| {
-                    entry.owner.label != label || entry.owner.incarnation != incarnation
-                });
-                inner.handoffs.remove(&WindowOwner {
-                    label: label.to_string(),
-                    incarnation,
-                });
-                inner.authored_mutation_fences.remove(&WindowOwner {
-                    label: label.to_string(),
-                    incarnation,
-                });
-                inner.output_control_fences.remove(&WindowOwner {
-                    label: label.to_string(),
-                    incarnation,
-                });
-            }
+    /// Backend process identity is the sole source for process-local
+    /// registries. It is intentionally read-only and never reconstructed from
+    /// persisted/query wire state.
+    pub(crate) fn process_incarnation(&self) -> u64 {
+        self.process_incarnation
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poison_for_test(&self) {
+        let _guard = self.inner.lock().expect("query state lock before poison");
+        panic!("poison query state for lifecycle fail-closed test");
+    }
+
+    pub(crate) fn retire_window(&self, label: &str) -> Result<(), String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Control-plane query state lock was poisoned".to_string())?;
+        if let Some(incarnation) = inner.window_incarnations.remove(label) {
+            inner.cursors.retain(|_, entry| {
+                entry.owner.label != label || entry.owner.incarnation != incarnation
+            });
+            inner.handoffs.remove(&WindowOwner {
+                label: label.to_string(),
+                incarnation,
+            });
+            inner.authored_mutation_fences.remove(&WindowOwner {
+                label: label.to_string(),
+                incarnation,
+            });
+            inner.output_control_fences.remove(&WindowOwner {
+                label: label.to_string(),
+                incarnation,
+            });
         }
+        Ok(())
     }
 
     /// Issue the exact local query identity plus project E/R/H/publication
@@ -251,6 +267,11 @@ impl ControlPlaneQueryState {
         app: &AppState,
         now: Instant,
     ) -> Result<ProjectMutationFenceV1, QueryError> {
+        // Validate the live AppState owner before query capture can bind a
+        // renderer incarnation. This closes the Destroyed -> reissue race;
+        // the second validation below still fences an owner rotation racing
+        // the observational capture.
+        registered_owner_incarnation_for_window(app, window_label)?;
         let view = self.capture_for_window(window_label, app, false)?;
         // Capture the registered owner incarnation only after the query view
         // has finished its coordinator observation. No owner registry lock is
@@ -336,6 +357,7 @@ impl ControlPlaneQueryState {
         app: &AppState,
     ) -> Result<OutputControlFenceV1, QueryError> {
         for _ in 0..MAX_CAPTURE_ATTEMPTS {
+            registered_owner_incarnation_for_window(app, window_label)?;
             let safety_before = app.engine.safety_blackout_authority();
             let view = self.capture_for_window(window_label, app, false)?;
             let safety_after = app.engine.safety_blackout_authority();
@@ -420,6 +442,8 @@ impl ControlPlaneQueryState {
         app: &AppState,
         issue_handoff: bool,
     ) -> Result<CanonicalView, QueryError> {
+        app.ensure_window_authority_not_blocked(label)
+            .map_err(|_| query_error(QueryErrorCode::Forbidden))?;
         self.capture_serialized(label, issue_handoff, || capture_source(app))
     }
 
@@ -665,6 +689,8 @@ fn registered_owner_incarnation_for_window(
     app: &AppState,
     window_label: &str,
 ) -> Result<u64, QueryError> {
+    app.ensure_window_authority_not_blocked(window_label)
+        .map_err(|_| query_error(QueryErrorCode::Forbidden))?;
     let owners = app
         .project_transaction_owners
         .lock()
@@ -2049,7 +2075,7 @@ mod tests {
                 .code(),
             QueryErrorCode::CursorInvalid
         );
-        state.retire_window("main");
+        state.retire_window("main").unwrap();
         assert_eq!(state.cursor_count_for_window("main"), 0);
     }
 
