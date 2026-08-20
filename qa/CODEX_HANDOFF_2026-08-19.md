@@ -77,6 +77,13 @@ toolchain, and fixture files remained unchanged. The first H1 Actions run,
 billing/spending limits. Do not interpret it as code or platform evidence, and do
 not claim PR bootstrap until the target base already contains the inventory.
 
+The 2026-08-20 pushed checkpoint triggered Cross-platform run `32358575019` at
+HEAD `48f9d1779f440dd364c67d9f44afdd3d624698eb`. Windows, macOS, and Ubuntu each
+completed with failure and zero steps. The GitHub check annotation states that the
+jobs were not started because recent account payments failed or the spending limit
+must be increased. This is the same external billing block, not Windows/macOS/Linux
+build evidence.
+
 ## Take Over repair checkpoint
 
 The source-level Take Over blocker from the takeover baseline is repaired in the
