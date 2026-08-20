@@ -514,6 +514,11 @@ frozen workflow returned P0 0, P1 0, and P2 0. This closes the remaining Windows
 warning P2 item, but the two unmeasured macOS rows keep W0 cross-platform completion
 and beta/RC acceptance open.
 
+The implementation/documentation commit is
+`85d6eb2b6d7877cd49801c288357d3c72a36046f` and is pushed to
+`origin/codex/syndocal-v1.2`. Warning-ratchet self-test (61 groups), release
+metadata, workflow YAML parsing, and `git diff --check` passed before commit.
+
 The exact Windows native executable is responsive and the sole main Syndocal window
 is maximized. Five enabled Display outputs are configured against monitor indices
 0..4. Physical fullscreen activation is still fenced because OutputControl R4

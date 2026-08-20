@@ -14,7 +14,7 @@
 - The previous Codex reached its context/token limit while continuing AI3. Treat Timeline Transport and the canonical Timeline Follow Abort tranche as verified. AI3 has now been audited and remains incomplete in all five roadmap categories. The detailed audit matrix and ordered gaps are recorded in `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`.
 - The replacement Syndocal × rekordbox × Stream Deck Pedal requirement is normative in `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`. `Seraf0-org/rekordbox-DJ-Link-ForPCDJ` is the sole DJ-PC Agent and owns Pedal/global-hotkey input plus all rekordbox MIDI, Filter, Stop, and reset behavior. Syndocal only receives authenticated `DJ_*` semantic events over the reused Web Remote listener, owns `.sdc` Track-to-Timeline mappings, and applies absolute Loop/Release show actions. The peer implementation and wired physical acceptance remain separate evidence and are not yet complete.
 - The 2026-08-20 P2/warning implementation checkpoint is `a228ba5e492841618ce0262038c965b5519d1ddd` (`fix: close takeover proof and reduce native warnings`). It closes the bounded Take Over proof gaps and removes honest production warning debt without suppression. It does not complete W0, AI3, physical video-output acceptance, or the new rekordbox/Pedal requirement.
-- The current Windows-first follow-up starts from pushed HEAD `68a75b94f301ab0f6e955d592020ad762027997a`. The pending workflow diff wires all nine Windows-enforced warning configurations, including SDK validation and exact-checkout process retirement before native builds. Independent read-only review of workflow SHA-256 `B94512DB87C7990F4505635FE78760620F8BFFEE189E55B4688CE39DAC2A90AA` returned P0 0, P1 0, and P2 0. macOS dev/release remain the only two pending warning rows.
+- The Windows-first CI checkpoint is `85d6eb2b6d7877cd49801c288357d3c72a36046f` (`ci: enforce complete Windows warning matrix`). It wires all nine Windows-enforced warning configurations, including SDK validation and exact-checkout process retirement before native builds. Independent read-only review of workflow SHA-256 `B94512DB87C7990F4505635FE78760620F8BFFEE189E55B4688CE39DAC2A90AA` returned P0 0, P1 0, and P2 0. macOS dev/release remain the only two pending warning rows.
 
 ## W0/W1 warning-ratchet checkpoint
 
@@ -520,7 +520,8 @@ claimed.
 
 ## 2026-08-21 Windows-first CI and five-display continuation
 
-The Windows warning checkpoint is now CI-complete in the working diff. The Windows
+The Windows warning checkpoint is CI-complete in commit
+`85d6eb2b6d7877cd49801c288357d3c72a36046f`. The Windows
 job enforces all nine inventory rows: default dev, release, tests, Spout, ASIO
 loader, NDI, separately licensed ASIO bridge, frontend, and native release. The
 job fails closed unless `FFMPEG_DIR`, `LIBCLANG_PATH`, `NDI_SDK_DIR`, and
@@ -549,3 +550,9 @@ automation must not synthesize that Raw Input consent. Therefore five-target nat
 configuration is verified, while successful physical fullscreen placement and the
 final editor + LED panel + projector three-screen state still require one coordinated
 human-keyboard consent pass. Do not claim those hardware gates complete yet.
+
+Checkpoint validation passed with `pnpm --dir app run
+check:warnings:self-test` (61 assertion groups), `pnpm --dir app run
+check:release`, PyYAML parsing of `.github/workflows/cross-platform.yml`, and
+`git diff --check`. Commit `85d6eb2b6d7877cd49801c288357d3c72a36046f`
+was pushed to `origin/codex/syndocal-v1.2`.
