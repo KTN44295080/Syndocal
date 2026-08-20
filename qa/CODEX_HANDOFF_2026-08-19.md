@@ -12,7 +12,8 @@
 - The implementation/documentation commit for that checkpoint is `4e18b0ff134953c7312483d896c0404de115849c` (`docs: define completion flow and advance version`). This follow-up removes the two Markdown hard-break trailing spaces caught by the cached diff check and pins the implementation hash.
 - That build also records the warning debt requested for cleanup: Engine 9 warnings, Syndocal release target 58 warnings, and the Vite oversized-chunk warning. This is the provisional default-release baseline only, not a warning allowlist or the complete W0 feature/platform inventory.
 - The previous Codex reached its context/token limit while continuing AI3. Treat Timeline Transport and the canonical Timeline Follow Abort tranche as verified. AI3 has now been audited and remains incomplete in all five roadmap categories. The detailed audit matrix and ordered gaps are recorded in `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`.
-- The working tree was clean before this handoff-document update. Do not assume that code present in the baseline commit is complete merely because it is committed.
+- The user-added Syndocal × rekordbox × Stream Deck Pedal product requirement is now normative in `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`. It requires Syndocal-mastered typed triggers (`DJ_LOOP_HALF`, `DJ_FILTER_CLOSE`, `DJ_RELEASE`), reuse of the existing musical A-B Loop, generic configurable MIDI OUT, a nonblocking CC ramp, deterministic stop/reset, and real Pedal/virtual-MIDI/rekordbox evidence. It is not yet an implementation or hardware-completion claim.
+- The 2026-08-20 P2/warning implementation checkpoint is `a228ba5e492841618ce0262038c965b5519d1ddd` (`fix: close takeover proof and reduce native warnings`). It closes the bounded Take Over proof gaps and removes honest production warning debt without suppression. It does not complete W0, AI3, physical video-output acceptance, or the new rekordbox/Pedal requirement.
 
 ## W0/W1 warning-ratchet checkpoint
 
@@ -104,11 +105,13 @@ The later local OutputControl R4 checkpoint below supersedes that compatibility
 detail: the production legacy Take Over Tauri handler is now fail-closed, so
 `LocalLatest` is no longer reachable from a production command.
 
-Independent adversarial review found no remaining P0/P1 in this repair. Residual
-P2 proof hardening remains: add explicit empty/`+011`/alphabetic manifest-tail
-cases, a deterministic core test proving stale Exact rejection leaves the worker
-running, and an execute-to-core integration seam beyond the current selector and
-filesystem tests.
+The 2026-08-20 follow-up closes the three residual proof gaps: explicit
+empty/`+011`/alphabetic manifest-tail cases, a deterministic production-core test
+proving stale Exact rejection leaves the installed worker running, and a shared
+production execute-to-core seam which passes the actual `TakeOverStandby` action's
+force bit, exact session/generation selector, and unchanged fence. Independent
+adversarial review of the frozen follow-up returned P0 0, P1 0, and P2 0 for this
+bounded repair.
 
 ## Local OutputControl R4 checkpoint
 
@@ -346,6 +349,78 @@ Verification for this pure-core checkpoint:
 This native evidence proves only that the pure core compiles into the application;
 because the core is deliberately not wired to AppState or commands, it is not
 runtime output-lease acceptance or physical hardware proof.
+
+## 2026-08-20 P2, warning, native, and five-display checkpoint
+
+Implementation commit `a228ba5e492841618ce0262038c965b5519d1ddd`
+closes the bounded Take Over P2 proof set and removes honest warning debt. The
+production `TakeOverStandby` branch and its test now share the same injectable
+production helper; the test proves `force=true`, `Exact(primary-a, 42)`, and the
+unchanged consent-bound fence arrive at the core call. The earlier test-only
+request/identity dispatch was removed. Focused serial proof passed 6/6 takeover
+tests, including the actual stale-worker continuation case. The final independent
+read-only review returned P0 0, P1 0, and P2 0 for this bounded repair.
+
+The four enforced Windows warning ratchets passed without changing the inventory:
+
+- default all-targets: 83 -> 61 first-party occurrences, 17 identities removed,
+  artifact coverage 11/11;
+- release all-targets: 83 -> 61, 17 identities removed, coverage 11/11;
+- workspace tests `--no-run`: 25 -> 20, 5 identities removed, coverage 11/11;
+- isolated Spout: 79 -> 57, 17 identities removed, coverage 9/9.
+
+This cleanup reconnected real helpers and removed genuinely obsolete production
+paths. It did not add `allow`, fake reads, warning flags, or a Vite threshold change.
+The `output_lease.rs::checked_deadline` warning remains because the entire pure
+Output Lease transition module is still deliberately disconnected from AppState/R4.
+Deleting or suppressing that one helper would conceal the unfinished AI3 integration;
+wire the whole reviewed lease state machine at the next AI3 boundary instead. The
+current native build therefore still reports Engine 9 warnings, Syndocal 41 warnings,
+and the known Vite oversized-chunk warning. W0 and warning-zero acceptance remain open.
+
+The broader workspace test run performed before the final shared-helper replacement
+selected 769 tests: 755 passed, 9 ignored, and 5 failed. Four failures were
+parallel shared-state flakes and the same `authored_control_plane::tests::` set
+passed 12/12 when rerun serially. The remaining deterministic pre-existing blocker
+is `control_plane::tests::legacy_v1_registry_json_and_count_remain_inventory_honest`
+with expected 1410 versus actual 1423. This checkpoint does not launder that count
+by blindly updating the assertion. The final focused takeover run after the helper
+replacement is green as recorded above.
+
+Immediately before the successful native build, exact-path inspection stopped only
+PID 63932 whose resolved executable was this checkout's
+`target/release/syndocal.exe`; the remaining exact count and debug-port 9339 listener
+count were both zero. The first build attempt selected Git's `/usr/bin/link` and
+failed before application linking. The retry fixed
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` to the Visual Studio 2022 Community
+MSVC linker and `pnpm --dir app tauri build --no-bundle` completed successfully in
+2m41s. The resulting executable has SHA-256
+`4D85B345021FCF507440BE9ADB3B205BBE906E5D4CAAE583A1B00590F2A506E5` and
+FileVersion/ProductVersion `1.2.0-alpha.1`. It was launched as PID 31076; exactly
+one exact-path process and one responsive `Syndocal` window existed, and the window
+was maximized (`IsZoomed=True`, observed rectangle 1936x1048 including frame bounds).
+
+The Windows display topology observed for video-output QA was:
+
+- `DISPLAY2` primary: 1920x1080 at (0, 0);
+- `DISPLAY1`: 2048x1152 at (1920, -364);
+- `DISPLAY3`: 2560x1440 at (-3840, -429);
+- `DISPLAY5`: 1280x720 at (-2465, 1731);
+- `DISPLAY6`: 2560x720 at (1598, 1080).
+
+All five were 32 bpp. The installed adapters included AMD Radeon Graphics and an
+NVIDIA GeForce RTX 5090, but also Parsec Virtual Display Adapter and Meta Virtual
+Monitor. Therefore the OS-visible count of five is not proof of five physical
+panels. In the same-checkout runtime probe, five enabled fullscreen Display outputs
+were configured with monitor indices 0 through 4. Opening them was correctly
+blocked while the effective machine role was Standby and output ownership reason
+was `ProjectSwapDisarmed`. The visible six-digit OutputControl R4 challenge also
+rejected synthetic key injection, preserving the physical Raw Input boundary.
+Consequently this run proves fail-closed multi-display routing and the five-target
+enumeration, but it does **not** claim successful physical fullscreen output. The
+intended three-screen editor + LED panel + projector workflow, refresh/DPI/reorder/
+unplug behavior, and successful human-entered physical consent remain explicit
+hardware acceptance work.
 
 ## Persistent collaboration and checkpoint rules
 

@@ -14,6 +14,8 @@ requirements. The following documents remain normative for their domains:
   traceability, severity, hardware, distribution, and final integrated gate;
 - `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`: AI0-AI8 architecture and safety;
 - `qa/ASIO_INPUT_ACCEPTANCE.md`: mandatory Windows ASIO acceptance;
+- `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`: mandatory Syndocal-mastered
+  Stream Deck Pedal, Timeline Loop, MIDI OUT, and rekordbox transition acceptance;
 - `qa/M4_IO_VALIDATION.md`, `qa/M5_RELIABILITY_VALIDATION.md`, and
   `qa/M6_RELEASE_VALIDATION.md`: physical I/O, soak, and release evidence;
 - `RELEASE_STATUS.md`: historical release evidence and external blockers;
@@ -191,6 +193,16 @@ The 52-group negative harness and independent review found no remaining P0/P1 in
 that bounded gate. Native release verification reproduced Engine 9, Syndocal 58,
 and one Vite chunk warning without growth.
 
+The focused warning/P2 checkpoint
+`a228ba5e492841618ce0262038c965b5519d1ddd` reduces the current first-party
+occurrences without editing the baseline: default and release 83 -> 61, workspace
+tests 25 -> 20, and isolated Spout 79 -> 57, with unchanged exact artifact coverage.
+The current native release reports Engine 9 and Syndocal 41 warnings plus the same
+Vite chunk warning. Its independent review returned P0 0, P1 0, and P2 0 for the
+bounded Take Over repair. The still-disconnected Output Lease module, including
+`checked_deadline`, remains owned AI3 integration debt and is not suppressed or
+deleted in isolation.
+
 This does not check the Phase 0 W0 box. Nine configurations remain pending in the
 versioned inventory: ASIO loader, excluded ASIO bridge, NDI, macOS default/release,
 Linux default/release, frontend structured warnings, and native-release structured
@@ -295,6 +307,10 @@ Audio/recording/live-source clock and ownership semantics are complete.
   cache performance budgets.
 - [ ] L authored Audio schema/migration/history and explicit ShowClock/audio/PTS
   master-clock, resampling/slew/seek/loop/underrun/device-fault policy.
+- [ ] Implement `DJ_LOOP_HALF`, `DJ_FILTER_CLOSE`, and `DJ_RELEASE` through the
+  existing typed Trigger/Action path, musical A-B Loop, generic MIDI OUT, bounded
+  nonblocking CC ramp, deterministic stop, and optional reset sequence defined in
+  `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`; do not add a bridge application.
 - [ ] Stable live camera/screen/NDI/Spout/Syphon/generator identity and availability,
   permission/fault/reconnect truth, and old-worker retirement.
 - [ ] Recording `Idle -> Preparing -> Recording -> Finalizing -> Complete|Fault`,
@@ -314,6 +330,9 @@ Exit: maximum-condition one-hour A/V/Lighting/recording proof meets fixed budget
   across Setup, Edit, Control, Touch, native windows, and compact/full layouts.
 - [ ] H3 Setup completion: Patch/GDTF/OFL, mapping, I/O, output/device configuration,
   validation, empty/error states, keyboard/pointer reachability, and native proof.
+- [ ] H3 Pedal/DJ transition setup: configurable global shortcut, conflict truth,
+  stable MIDI output selection, learned Note/CC mappings, ramp/reset controls,
+  persistence, disconnect recovery, and one shared adapter-independent action path.
 - [ ] H4 Edit completion: Media, Timeline, Phase/Guide/loop/group/follow, FX, Stage,
   history/Undo/Redo, import/relink, save/reload focus, and native proof.
 - [ ] H5 Control completion: live Lighting/Video/Audio, Cue/Clip/Take/Transition,
@@ -364,6 +383,10 @@ driver/device, raw logs, operator, date, and measurement source.
   frame period/failure; RDM/TOD discovery/correlation/timeout/cancel/removal.
 - [ ] Physical MIDI Note/CC/Clock/MTC/feedback/All Notes Off; OSC and TouchOSC/iPad/
   Android Remote over wired/Wi-Fi with p50/p95/p99/max latency.
+- [ ] Physical Stream Deck Pedal -> Syndocal -> virtual MIDI -> rekordbox acceptance
+  for repeated Loop Half, timed filter close, deterministic stop, Timeline release/
+  continuation, optional reset, unfocused input, disconnect/reconnect, and next-use
+  readiness, with exact device/software/mapping/timestamp evidence.
 - [ ] Dual display/HDMI/fullscreen/DPI/refresh/unplug/reorder/GPU reset; NDI/Spout/
   Syphon, camera, and screen-capture fault and one-hour matrices.
 - [ ] macOS and Linux real-machine display/media/audio/project save/reload; CI package

@@ -1215,6 +1215,9 @@ Loopback, mocks, SDK-free tests, and browser UI are prerequisites only. The matr
 
 - physical MIDI Note/CC/Clock/MTC input;
 - MIDI feedback and All Notes Off on the declared controllers;
+- Stream Deck Pedal keyboard input routed through Syndocal to repeated Loop Half, nonblocking rekordbox
+  filter CC ramp, deterministic DJ stop, Timeline Loop release/continuation, and optional reset, using the
+  exact virtual MIDI/rekordbox mapping recorded by `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`;
 - OSC over wired and Wi-Fi paths;
 - TouchOSC and iPad/Android Web Remote round trip;
 - Learn, conflict, disconnect/reconnect, stale reply, and project replacement;
@@ -1347,6 +1350,10 @@ physical multi-device routing acceptance remain part of the final L-TL7 boundary
 - Commands exist for Set A, Set B, Enable/Disable, Clear, `1/2`, and `x2`; all have configurable shortcuts
   and use the shared command/mapping system so keyboard, MIDI, OSC, DMX, Touch, and Remote can target the
   same typed action. Default keyboard bindings must not shadow text input or existing safety controls.
+- The required Stream Deck Pedal/rekordbox transition reuses this exact Loop `1/2` and Disable path; its
+  typed triggers, generic MIDI OUT, filter CC ramp, deterministic stop/reset, persistence, and physical
+  acceptance are normative in `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`. It must not create a second
+  loop runtime or a separate bridge application.
 
 ### L-TL3. Independent channel lanes and Media Library placement
 
