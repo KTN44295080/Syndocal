@@ -815,7 +815,6 @@ const ZERO_WARNING_PROMOTION_FIELDS = [
   "features",
   "timeoutMs",
   "firstPartyManifests",
-  "requiredEnvironment",
 ];
 
 export const ZERO_WARNING_PROMOTION_ALLOWED_FILES = Object.freeze([
@@ -925,6 +924,10 @@ export async function auditZeroWarningPromotion({
     if (current.status !== "enforced") throw new Error(`promotion status is invalid for ${id}`);
     if (!sameJson(selectedConfigurationShape(previous), selectedConfigurationShape(current))) {
       throw new Error(`zero-warning promotion changed immutable configuration fields: ${id}`);
+    }
+    if (previous.requiredEnvironment !== undefined
+      && !sameJson(previous.requiredEnvironment, current.requiredEnvironment)) {
+      throw new Error(`zero-warning promotion changed an existing requiredEnvironment: ${id}`);
     }
     if ((current.diagnostics?.length ?? 0) !== 0 || (current.externalWarningAllows?.length ?? 0) !== 0) {
       throw new Error(`zero-warning promotion requires empty diagnostics and external allows: ${id}`);

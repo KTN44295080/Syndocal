@@ -515,6 +515,9 @@ try {
       toolchain: promotionToolchain,
     };
   }
+  promotionHeadInventory.configurations.find(
+    (candidate) => candidate.id === "generic-promotion-fixture",
+  ).requiredEnvironment = ["PROMOTION_SDK"];
   writeFileSync(promotionInventoryFile, `${JSON.stringify(promotionHeadInventory, null, 2)}\n`);
   fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
   fixtureGit(["commit", "-m", "promote zero warning fixture with platform pair"]);
@@ -525,6 +528,7 @@ try {
     headRef: promotionHeadWithPair,
     configurationId: "generic-promotion-fixture",
     schema,
+    environment: { ...process.env, PROMOTION_SDK: "fixture-sdk" },
   });
   assert.deepEqual(promotionResult.promotedIds, ["generic-linux-promotion-fixture", "generic-promotion-fixture"]);
   await assert.rejects(
