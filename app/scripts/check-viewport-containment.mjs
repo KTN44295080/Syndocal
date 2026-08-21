@@ -16994,13 +16994,27 @@ async function measureSceneMatrixPane(client) {
     ]));
     const cardIdentityById = Object.fromEntries(cards.map((card) => {
       const band = card.querySelector('.sceneMatrixEditStripBand');
+      const column = card.closest('[data-scene-matrix-column]');
+      const label = card.querySelector('[data-scene-matrix-cue-name]');
+      const cardStyle = getComputedStyle(card);
+      const bankStyle = column ? getComputedStyle(column) : null;
+      const fill = card.style.getPropertyValue('--cue-identity');
       return [
         card.getAttribute('data-scene-matrix-cue-id') ?? '',
         {
-          fill: card.style.getPropertyValue('--cue-identity'),
+          bankId: column?.getAttribute('data-scene-matrix-column') ?? '',
+          fill,
           text: card.style.getPropertyValue('--cue-identity-text'),
+          bankFill: bankStyle?.getPropertyValue('--group-identity') ?? '',
+          bankText: bankStyle?.getPropertyValue('--group-identity-text') ?? '',
+          labelText: label ? getComputedStyle(label).getPropertyValue('--cue-identity-text') : '',
           strip: band ? getComputedStyle(band).backgroundColor : '',
-          border: getComputedStyle(card).borderLeftColor,
+          stripMatchesBank: Boolean(
+            band
+            && getComputedStyle(band).backgroundColor === resolveColor(bankStyle?.getPropertyValue('--group-identity') ?? ''),
+          ),
+          border: cardStyle.borderLeftColor,
+          borderMatchesBank: cardStyle.borderLeftColor === resolveColor(fill),
         },
       ];
     }));
@@ -17022,6 +17036,8 @@ async function measureSceneMatrixPane(client) {
     const scrollerStyle = scroller ? getComputedStyle(scroller) : null;
     const scrollerRect = scroller?.getBoundingClientRect() ?? null;
     const columnWidths = columns.map((column) => column.getBoundingClientRect().width);
+    const columnHeights = columns.map((column) => column.getBoundingClientRect().height);
+    const bankJumpWidths = bankJumpButtons.map((button) => button.getBoundingClientRect().width);
     const fullyVisibleColumnIds = scrollerRect
       ? columns
           .filter((column) => {
@@ -17087,6 +17103,8 @@ async function measureSceneMatrixPane(client) {
         : 0,
       columns: columns.map((column) => column.getAttribute('data-scene-matrix-column')),
       columnWidths,
+      columnHeights,
+      bankJumpWidths,
       fullyVisibleColumnIds,
       fullyVisibleColumnCount: fullyVisibleColumnIds.length,
       headerHues: headers.map((header) => header.getAttribute('data-scene-matrix-group-hue')),
@@ -17754,6 +17772,8 @@ async function exerciseSceneMatrixCueListBanksV2(client) {
     const banks = columns.map((column) => ({
       id: column.getAttribute('data-scene-matrix-column') ?? '',
       label: column.querySelector('.sceneMatrixColumnHeader strong')?.textContent?.trim() ?? '',
+      width: column.getBoundingClientRect().width,
+      height: column.getBoundingClientRect().height,
       cards: [...column.querySelectorAll('[data-scene-matrix-cue-id]')].map((card) => card.getAttribute('data-scene-matrix-cue-id') ?? ''),
       cardListIds: [...column.querySelectorAll('[data-scene-matrix-cue-id]')].map((card) => card.getAttribute('data-scene-matrix-cue-list-id') ?? ''),
       empty: Boolean(column.querySelector('[data-scene-matrix-empty-bank]')),
@@ -17785,6 +17805,27 @@ async function exerciseSceneMatrixCueListBanksV2(client) {
       surfaceHeaderOverflowX: surfaceHeader ? getComputedStyle(surfaceHeader).overflowX : '',
       lastControlReachable: Boolean(lastRect && lastRect.width > 0 && lastRect.height > 0 && lastRect.left >= -1 && lastRect.right <= innerWidth + 1),
       createSceneButtons: [...document.querySelectorAll('[data-scene-matrix-create-scene]')].map((button) => button.getAttribute('data-scene-matrix-create-scene') ?? ''),
+      emptyActionTexts: [...document.querySelectorAll('[data-scene-matrix-empty-bank]')]
+        .map((empty) => (empty.textContent ?? '').trim()),
+      emptyActionBodyTexts: [...document.querySelectorAll('[data-scene-matrix-empty-bank]')]
+        .map((empty) => [...empty.childNodes]
+          .filter((node) => !(node instanceof HTMLElement && node.matches('button')))
+          .map((node) => node.textContent ?? '')
+          .join('')
+          .trim()),
+      emptyRedundantTextCount: [...document.querySelectorAll('[data-scene-matrix-empty-bank]')]
+        .filter((empty) => {
+          const text = (empty.textContent ?? '').trim();
+          const bankName = empty.closest('[data-scene-matrix-column]')
+            ?.querySelector('.sceneMatrixColumnHeader strong')?.textContent?.trim() ?? '';
+          return /No scenes in this bank\.|このバンクにはシーンがありません/.test(text)
+            || (bankName.length > 0 && text.includes(bankName));
+        }).length,
+      emptyActionSceneTargets: [...document.querySelectorAll(
+        '[data-scene-matrix-empty-bank] [data-scene-matrix-create-scene]',
+      )].map((button) => button.getAttribute('data-scene-matrix-create-scene') ?? ''),
+      columnWidths: banks.map((bank) => bank.width),
+      columnHeights: banks.map((bank) => bank.height),
       contextMenuOpen: Boolean(document.querySelector('[data-scene-matrix-context-rename]')),
       deleteDialogOpen: Boolean(document.querySelector('[data-scene-matrix-delete-dialog]')),
       deleteDialogVisible: Boolean(document.querySelector('[data-scene-matrix-delete-dialog][open]')),
@@ -18022,6 +18063,15 @@ async function measureSceneMatrixInteractionState(client, cueId) {
         label: marker.getAttribute('aria-label') ?? '',
       }));
     const cueItem = document.querySelector('.cueItem[data-cue-id="${cueId}"]');
+    const card = document.querySelector('[data-scene-matrix-cue-id="${cueId}"]');
+    const column = card?.closest('[data-scene-matrix-column]');
+    const band = card?.querySelector('.sceneMatrixEditStripBand');
+    const label = card?.querySelector('[data-scene-matrix-cue-name]');
+    const cardStyle = card ? getComputedStyle(card) : null;
+    const bankStyle = column ? getComputedStyle(column) : null;
+    const bandStyle = band ? getComputedStyle(band) : null;
+    const cardAccent = cardStyle?.getPropertyValue('--cue-identity') ?? '';
+    const bankAccent = bankStyle?.getPropertyValue('--group-identity') ?? '';
     return {
       cueId: ${cueId},
       markerCount: markers.length,
@@ -18043,6 +18093,19 @@ async function measureSceneMatrixInteractionState(client, cueId) {
       selectedCardIds: [...document.querySelectorAll(
         '[data-scene-matrix-cue-id][data-scene-matrix-selected="true"]',
       )].map((card) => card.getAttribute('data-scene-matrix-cue-id')),
+      bankAccent,
+      cardAccent,
+      bankTextAccent: bankStyle?.getPropertyValue('--group-identity-text') ?? '',
+      cardTextAccent: cardStyle?.getPropertyValue('--cue-identity-text') ?? '',
+      labelTextAccent: label ? getComputedStyle(label).getPropertyValue('--cue-identity-text') : '',
+      renderedBorderColor: cardStyle?.borderLeftColor ?? '',
+      renderedBandColor: bandStyle?.backgroundColor ?? '',
+      renderedAccentMatches: Boolean(
+        cardAccent
+        && bankAccent
+        && cardAccent === bankAccent
+        && cardStyle?.borderLeftColor === bandStyle?.backgroundColor,
+      ),
       sceneSettingsCount: document.querySelectorAll('[data-scene-settings]').length,
       ghostPresent: Boolean(document.querySelector('[data-timeline-cue-drag-ghost]')),
     };
@@ -18254,12 +18317,21 @@ async function exerciseSceneMatrixCrossBankMoveAndUndo(client) {
   await sleep(120);
   const afterUndo = await measureSceneMatrixInteractionState(client, 302);
   const capture = await finishSceneMatrixBankMoveCapture(client);
+  await client.send("Page.reload", { ignoreCache: true });
+  await waitForApp(client);
+  await clickWorkspaceOption(client, "control");
+  await selectControlSurface(client, "live");
+  await setTimelineToolsDisclosureOpen(client, true);
+  await ensureTimelineShowSurface(client);
+  await sleep(120);
+  const afterReload = await measureSceneMatrixInteractionState(client, 302);
   return {
     captureInstalled,
     capture,
     move,
     undoControl: { ...undoControl, menuOpened },
     afterUndo,
+    afterReload,
   };
 }
 
@@ -19302,16 +19374,9 @@ async function runSceneMatrixPaneCheck(client, viewport) {
         && entry.visualHeight >= 48
         && entry.rightEdgeAligned)
       && before.editStrips
-        .filter((entry) => entry.active)
         .every((entry) =>
           entry.visualColor === entry.identityColor
-          && entry.borderColors.every((color) => color === entry.identityColor))
-      && before.editStrips
-        .filter((entry) => !entry.active)
-        .every((entry) =>
-          entry.visualColor === entry.neutralColor
-          && entry.visualColor !== entry.identityColor
-          && entry.borderColors.every((color) => color === entry.neutralColor))],
+          && entry.borderColors[3] === entry.identityColor)],
     ["matrixEditStripsReplaceLegacyHandleWithoutLosingDragSources", () =>
       before.dedicatedDragHandleCount === 0 &&
       before.dragSourceCount === expectedCardCount],
@@ -19434,16 +19499,26 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       && bankJump.visibleWidth > 2
       && JSON.stringify(bankJump.activeIds) === JSON.stringify([bankJump.targetId])
       && Math.abs(bankJump.resetScrollLeft) <= 1],
+    ["matrixBankColumnsAndJumpChipsUseExactFixedWidths", () => {
+      const columnWidths = before.columnWidths ?? [];
+      const jumpWidths = before.bankJumpWidths ?? [];
+      const columnHeights = before.columnHeights ?? [];
+      const exact = (values) => values.length > 0
+        && Math.max(...values) - Math.min(...values) <= 0.01;
+      return columnWidths.length === expectedColumns.length
+        && jumpWidths.length === expectedColumns.length
+        && exact(columnWidths)
+        && exact(jumpWidths)
+        && exact(columnHeights);
+    }],
     ["matrixDocumentAndAppScrollZero", () => before.documentAndAppScrollZero && after.documentAndAppScrollZero],
-    // Cue identity priority is explicit cue > owning bank > cue hash.
-    ["matrixExplicitCueColorStillWinsBankInheritance", () =>
-      (before.coloredCardIdentity || "").startsWith("hsl(345")
-      && before.cardIdentityById["301"].fill !== before.columnIdentityById["2"].fill],
-    ["matrixUncoloredCueCellKeepsBankIdentitySeparateFromGroupIdentity", () =>
-      before.cardIdentityById["302"].fill !== before.columnIdentityById["2"].fill
-      && before.cardIdentityById["302"].strip === before.cardIdentityById["302"].border
-      && before.cardIdentityById["303"].fill !== before.columnIdentityById["3"].fill
-      && before.cardIdentityById["303"].strip === before.cardIdentityById["303"].border],
+    ["matrixBankAccentOverridesCueIdentityInAllCells", () =>
+      Object.values(before.cardIdentityById).length > 0
+      && Object.values(before.cardIdentityById).every((identity) =>
+        identity.fill === identity.bankFill
+        && identity.text === identity.bankText
+        && identity.labelText === identity.bankText
+        && identity.strip === identity.border)],
     ["matrixBankIdentityUsesStableNonGroupHue", () =>
       (before.backHeaderIdentity || "").startsWith("hsl(")],
     ["matrixGroupColorPickerNotDuplicatedIntoBankHeader", () => before.groupColorInputCount === 0],
@@ -19471,6 +19546,30 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     ["matrixCueListBankAutoNameIsUnused", () =>
       cueListBanks.autoPrefilled.editorValue === "Bank 2"
       && cueListBanks.autoCreated.banks.some((bank) => bank.label === "Bank 2")],
+    ["matrixCueListBankColumnsKeepFixedWidthAndAlignedHeight", () => {
+      const states = [
+        cueListBanks.initial,
+        cueListBanks.customCreated,
+        cueListBanks.autoCreated,
+        cueListBanks.sceneCreated,
+      ];
+      const exact = (values) => values.length > 0
+        && Math.max(...values) - Math.min(...values) <= 0.01;
+      return states.every((state) =>
+        exact(state.columnWidths ?? [])
+        && exact(state.columnHeights ?? []));
+    }],
+    ["matrixCueListEmptyBankKeepsOnlyExplicitSceneAction", () => {
+      const state = cueListBanks.customCreated;
+      const emptyBank = state.banks.find((bank) => bank.label === "Night");
+      return Boolean(emptyBank)
+        && emptyBank.empty
+        && state.emptyActionTexts.length > 0
+        && state.emptyActionTexts.every((text) => text === "+ Scene")
+        && state.emptyActionBodyTexts.every((text) => text === "")
+        && state.emptyRedundantTextCount === 0
+        && state.emptyActionSceneTargets.includes(emptyBank.id);
+    }],
     ["matrixCueListBankCreateRejectsNormalizedDuplicate", () =>
       cueListBanks.duplicateCreateRejected.editorOpen
       && cueListBanks.duplicateCreateRejected.editorError.length > 0
@@ -19635,6 +19734,19 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       && JSON.stringify(crossBank.move?.after.selectedCardIds) === JSON.stringify([])
       && crossBank.move?.before.sceneSettingsCount === 0
       && crossBank.move?.after.sceneSettingsCount === 0],
+    ["crossBankMoveUndoReloadKeepCueAndAccentInOwningBank", () =>
+      crossBank.move?.after.renderedAccentMatches
+      && crossBank.move?.after.cardAccent === crossBank.move?.after.bankAccent
+      && crossBank.move?.after.cardTextAccent === crossBank.move?.after.bankTextAccent
+      && crossBank.move?.after.labelTextAccent === crossBank.move?.after.bankTextAccent
+      && crossBank.afterUndo?.renderedAccentMatches
+      && crossBank.afterUndo?.cardAccent === crossBank.afterUndo?.bankAccent
+      && crossBank.afterUndo?.cardTextAccent === crossBank.afterUndo?.bankTextAccent
+      && crossBank.afterUndo?.labelTextAccent === crossBank.afterUndo?.bankTextAccent
+      && crossBank.afterReload?.renderedAccentMatches
+      && crossBank.afterReload?.cardAccent === crossBank.afterReload?.bankAccent
+      && crossBank.afterReload?.cardTextAccent === crossBank.afterReload?.bankTextAccent
+      && crossBank.afterReload?.labelTextAccent === crossBank.afterReload?.bankTextAccent],
     ["crossBankGestureUsesOneCoalescedTransaction", () =>
       crossBank.captureInstalled
       && crossBank.capture.installedWithoutExistingInternals

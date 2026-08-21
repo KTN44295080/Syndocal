@@ -29594,7 +29594,9 @@ h3 {
 .sceneMatrixBankJumpStrip button {
   display: inline-flex;
   flex: 0 0 auto;
-  min-width: 54px;
+  width: 72px;
+  min-width: 72px;
+  max-width: 72px;
   min-height: 24px;
   align-items: center;
   justify-content: center;
@@ -29603,6 +29605,7 @@ h3 {
   border: 1px solid #343a3e;
   border-radius: 2px;
   background: #191d20;
+  box-sizing: border-box;
   padding: 1px 7px;
   color: var(--group-identity-text);
   font-size: 11px;
@@ -32311,6 +32314,7 @@ h3 {
   gap: 3px;
   height: 100%;
   min-height: 0;
+  align-items: stretch;
   /* No top padding: the bank-jump strip must hug the column headers within the
      matrixBankChipRowEndsWithinThirtySixPixelsOfColumnHeaders density budget. */
   padding: 0 3px 3px;
@@ -32318,8 +32322,15 @@ h3 {
 
 .sceneMatrixColumn {
   flex: 0 0 156px;
+  width: 156px;
+  min-width: 156px;
+  max-width: 156px;
+  height: 100%;
+  min-height: 0;
   position: relative;
   overflow: hidden;
+  align-self: stretch;
+  box-sizing: border-box;
   border-color: #343a3e;
   background: #181c1f;
 }
@@ -32351,7 +32362,9 @@ h3 {
 }
 
 .sceneMatrixCards {
+  flex: 1 1 auto;
   gap: 3px;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -32365,6 +32378,7 @@ h3 {
   grid-template-rows: minmax(48px, auto) auto auto;
   min-height: 48px;
   overflow: hidden;
+  border-left-color: var(--cue-identity);
   border-left-width: 3px;
   background: #202529;
 }
@@ -33288,7 +33302,7 @@ h3 {
   bottom: 0;
   display: block;
   width: 100%;
-  background: var(--ui-border);
+  background: var(--cue-identity);
   pointer-events: auto;
 }
 
@@ -33312,8 +33326,10 @@ h3 {
   place-content: center;
   justify-items: center;
   gap: 8px;
-  min-width: 180px;
+  width: 100%;
+  min-width: 0;
   min-height: 96px;
+  box-sizing: border-box;
   padding: 12px;
   color: var(--text-muted);
   text-align: center;

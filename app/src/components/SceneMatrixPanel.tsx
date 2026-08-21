@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { cueIdentityCss, groupIdentityCss, groupIdentityHue } from "../identityColor";
+import { groupIdentityCss, groupIdentityHue } from "../identityColor";
 import { handleHorizontalWheel } from "../horizontalWheel";
 import { displayNumber } from "../numberDisplay";
 import { sceneCueKind } from "../sceneCueKind";
@@ -778,8 +778,6 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                   >
                     <Show when={column.cues.length > 0} fallback={
                       <div class="sceneMatrixEmptyAction" data-scene-matrix-empty-bank={column.cueListId}>
-                        <strong>No scenes in this bank.</strong>
-                        <span data-no-localize>{column.label}</span>
                         <button
                           type="button"
                           data-scene-matrix-open-cue-editor={column.cueListId}
@@ -807,20 +805,13 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 selected: props.selectedCueId === cue.id,
                               }}
                               style={{
-                                "--cue-identity": cueIdentityCss(
-                                  cue.id,
-                                  cue.color,
-                                  "fill",
-                                  cue.group_id,
-                                  cue.group_id ? props.groupColors?.[cue.group_id] : null,
-                                ),
-                                "--cue-identity-text": cueIdentityCss(
-                                  cue.id,
-                                  cue.color,
-                                  "text",
-                                  cue.group_id,
-                                  cue.group_id ? props.groupColors?.[cue.group_id] : null,
-                                ),
+                                // Scene Matrix is bank-first: a cue's persisted
+                                // identity color belongs to the editor/detail
+                                // surface, while every card in this column must
+                                // share the owning Bank accent after DnD,
+                                // Undo/Redo, and reload.
+                                "--cue-identity": groupCss("fill"),
+                                "--cue-identity-text": groupCss("text"),
                               }}
                               data-scene-matrix-cue-id={cue.id}
                               data-scene-matrix-cue-list-id={cue.cue_list_id}

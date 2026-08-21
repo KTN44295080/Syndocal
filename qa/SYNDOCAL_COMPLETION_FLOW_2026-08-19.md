@@ -647,3 +647,29 @@ those hardware gates remain open without an alternate UI-automation bypass.
 The reviewed implementation is commit
 `262b8c0f43035ee44ff23cdfc195f4ac1a08b374`, pushed to
 `origin/codex/syndocal-v1.2`.
+
+## 18. 2026-08-21 Scene Matrix Bank visual-density acceptance
+
+The Windows Scene Matrix normal surface now uses one fixed 156px border-box width
+for every simultaneously visible Bank column and one fixed 72px border-box width
+for every Bank jump control. Long names truncate visually while preserving their
+full accessible label. The empty-column body contains no repeated Bank name and no
+`No scenes in this bank` copy; the Bank header and exact-target `+ Scene` actions
+remain. Scene cards inherit their visible identity treatment from the containing
+Bank, including after cross-Bank movement, Undo, and project reload.
+
+Acceptance evidence covers all five required Windows viewports for Scene Matrix
+containment and cue drag, localization 3541/3541, empty-state checks, and a zero
+frontend warning ratchet. Independent review returned P0 0 / P1 0 / P2 0. The
+native no-bundle build produced SHA-256
+`5C5FE3242DD2CBBCD2FD738F91497DEAD80D4ACD5761F26780340A6B36AAC3F6`.
+The sole exact-path PID 63996 was responsive and its 1920x1032 window was verified
+maximized before UI operations. Native QA created Bank 2 and Bank 3 from their
+preselected defaults and one Scene in each of Bank 1/2/3, confirming equal widths,
+absence of redundant empty copy, and purple/pink/green Bank-to-Scene colour
+agreement.
+
+This does not close the physical or output acceptance boundary. A human keyboard
+must still reach Raw Input Ready and one-shot consume, repeat consent for `Both`
+Arm, verify all five fullscreen output origins, and leave the three-screen editor
++ LED panel + projector operating state.

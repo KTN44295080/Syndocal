@@ -702,3 +702,40 @@ The reviewed implementation checkpoint is commit
 `262b8c0f43035ee44ff23cdfc195f4ac1a08b374`, pushed successfully to
 `origin/codex/syndocal-v1.2`. The branch and upstream were equal immediately after
 push.
+
+### 2026-08-21 Scene Matrix Bank visual-density checkpoint
+
+The follow-up Scene Matrix tranche fixes the remaining visual mismatch without
+reducing typography, controls, spacing, or hit targets. Every Bank column now has
+the same 156px border-box width, and every top jump button has the same 72px
+border-box width with an ellipsis plus the full accessible label for long names.
+An empty Bank retains its header and both exact-Bank `+ Scene` actions but no
+longer repeats the Bank name or displays the redundant `No scenes in this bank`
+message. Scene-card label, left edge, focus/progress treatment, and right edit
+strip derive from the containing Bank identity, so moving a Scene between Banks,
+Undo, and snapshot reload all follow the destination/source Bank colour.
+
+Measured frontend evidence: Scene Matrix containment and the one-gesture strip
+drag suite each passed all five viewports (1920x1080, 1920x1032, 2048x1152,
+1366x768, and 1280x720); localization passed 3541/3541; empty-state checks passed;
+the frontend TypeScript/Vite warning ratchet remained zero first-party and zero
+third-party; `git diff --check` passed apart from line-ending notices. The frozen
+independent review found P0 0, P1 0, and P2 0.
+
+The exact-path native release build succeeded after explicitly selecting the VS
+2022 MSVC linker and the installed FFmpeg 8.1.2 shared SDK. The resulting
+`target/release/syndocal.exe` is 52,851,712 bytes with SHA-256
+`5C5FE3242DD2CBBCD2FD738F91497DEAD80D4ACD5761F26780340A6B36AAC3F6`.
+It was launched as the sole exact-path process, PID 63996, with
+`Responding=True`, title `Syndocal`, and main-window handle 164434820. Computer
+Use bound that exact process-backed window, observed the system `Restore` action,
+and performed every operation while the 1920x1032 client was maximized. In the
+real release app it created `Bank 2` and `Bank 3` by accepting the preselected
+default names, then created one `New Scene` in each of Bank 1/2/3. The three Bank
+columns were visibly equal and the three Scene treatments matched their purple,
+pink, and green Bank colours; empty-Bank redundant copy was absent before scene
+creation.
+
+This closes the Bank visual-density tranche only. Human Raw Input Ready/consume,
+the separate `Both` Arm consent, five fullscreen output-origin checks, and the
+final editor + LED panel + projector state remain explicitly unverified.
