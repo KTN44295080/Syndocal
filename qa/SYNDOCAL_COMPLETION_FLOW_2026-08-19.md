@@ -673,3 +673,46 @@ This does not close the physical or output acceptance boundary. A human keyboard
 must still reach Raw Input Ready and one-shot consume, repeat consent for `Both`
 Arm, verify all five fullscreen output origins, and leave the three-screen editor
 + LED panel + projector operating state.
+
+## 19. 2026-08-21 Windows durable-output and release-evidence closure
+
+The Windows release gate now treats an `-rc.N` version as a release-candidate
+operation which requires the explicit candidate mode and a schema-validated
+evidence manifest. The manifest is bound to the exact tag, HEAD, prior version,
+clean worktree, artifacts, and updater identity. Executable metadata and the
+runtime updater identity are inspected from one uniquely materialized copy of the
+already hashed bytes, closing the artifact-path time-of-check/time-of-use gap.
+The updater signature proof uses a real Tauri signer fixture and verifies the
+Ed25519/minisign payload, key id, and trusted comment; payload, signature, and key
+tampering are negative-tested.
+
+Output Lease R4 terminal and pending results are now durably journaled across
+restart without restoring lease authority. Take Over performs terminal lookup or
+durable prepare before any physical stop/project publication, records the terminal
+receipt only after acknowledged publication, and blocks in-doubt replay before a
+physical callback. The journal is atomically written, bounded to 8 MiB, rejects
+unknown fields, and semantically validates nested receipt/origin/pending records.
+Corrupt, oversized, or unwritable state fails closed.
+
+Measured evidence: the complete no-default Windows Rust suite passed 806 tests
+with 5 intentionally ignored hardware/long-running tests and no failures; the
+subsequent no-default `cargo check` emitted zero first-party warnings. Release
+self-tests passed 65 assertion groups, normal release metadata passed, the
+frontend warning ratchet remained zero, and formatting, syntax, and diff checks
+passed. Independent read-only review returned P0 0, P1 0, and code P2 0.
+
+Immediately before the native build, exact-path inspection found zero running
+instances. `pnpm --dir app tauri build --no-bundle` completed in 1m53s. The exact
+release executable is 53,442,560 bytes with SHA-256
+`E28FF0260A9A2781BA6F072057C67DB18B53BA1139CD3065497BF3FB28D58ABF`,
+FileVersion/ProductVersion `1.2.0-alpha.1`, and a successful exact runtime updater
+diagnostic for the beta channel. It was launched as exact-path PID 83004; exactly
+one responsive `Syndocal` window was returned. Computer Use confirmed it was
+restored, selected Maximize through the native window menu, and recaptured the
+sole 1920x1032 maximized window before further UI work.
+
+This closes the Windows code/release-evidence tranche, not physical acceptance.
+The only remaining actions in this flow are a real keyboard six-digit Ready and
+one-shot consume, separate fresh consent for `Both` Arm, five fullscreen output
+origin checks, and the retained editor + LED panel + projector operating state.
+Synthetic or automated digits must not substitute for Raw Input proof.

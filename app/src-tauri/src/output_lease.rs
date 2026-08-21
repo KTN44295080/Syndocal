@@ -11,6 +11,7 @@ use std::{
     fmt,
 };
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub(crate) const MAX_OUTPUT_LEASE_TTL_MS: u64 = 60_000;
@@ -41,13 +42,14 @@ fn bounded_nonempty(value: &str, max_bytes: usize) -> bool {
     !value.trim().is_empty() && value.len() <= max_bytes
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum OutputLeaseResource {
     Lighting,
     Video,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OutputLeaseResources(Vec<OutputLeaseResource>);
 
 impl OutputLeaseResources {
@@ -74,7 +76,8 @@ impl OutputLeaseResources {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OutputLeaseOwner {
     principal: String,
     window_label: String,
@@ -84,7 +87,8 @@ pub(crate) struct OutputLeaseOwner {
 
 /// Opaque, backend-issued lease identity. The numeric representation never
 /// crosses this module's API; equality is the only operation callers need.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OutputLeaseId(u64);
 
 impl fmt::Debug for OutputLeaseId {
@@ -151,14 +155,15 @@ impl OutputLeaseOwner {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum OutputLeasePhase {
     Unclaimed,
     HeldActive,
     HeldOrphaned,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OutputLeaseSnapshot {
     pub(crate) phase: OutputLeasePhase,
     pub(crate) owner: Option<OutputLeaseOwner>,
@@ -167,7 +172,7 @@ pub(crate) struct OutputLeaseSnapshot {
     pub(crate) expires_at_monotonic_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum OutputLeaseError {
     InvalidOwner,
     InvalidResources,
@@ -421,7 +426,8 @@ fn checked_deadline(now_ms: u64, ttl_ms: u64) -> Result<u64, OutputLeaseError> {
         .ok_or(OutputLeaseError::ClockExhausted)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OutputLeaseRequestKey {
     pub(crate) principal: String,
     pub(crate) domain: String,
@@ -464,7 +470,8 @@ impl From<&OutputLeaseRequestKey> for OutputLeaseRequestOrigin {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OutputLeaseShapeHash([u8; 32]);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -814,7 +821,7 @@ fn append_optional_resources(
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum OutputLeaseOperationOutcome {
     Acquired,
     Renewed,
@@ -828,7 +835,8 @@ pub(crate) enum OutputLeaseOperationOutcome {
     Authorized,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OutputLeaseRequestReceipt {
     pub(crate) key: OutputLeaseRequestKey,
     pub(crate) shape_hash: OutputLeaseShapeHash,
@@ -844,11 +852,168 @@ pub(crate) struct OutputLeaseRequestReceipt {
     pub(crate) outcome: Result<OutputLeaseOperationOutcome, OutputLeaseError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OutputLeaseChange {
     pub(crate) lease_id: OutputLeaseId,
     pub(crate) before: Option<OutputLeaseSnapshot>,
     pub(crate) after: Option<OutputLeaseSnapshot>,
+}
+
+fn validate_persisted_owner(owner: &OutputLeaseOwner) -> Result<(), OutputLeaseError> {
+    if !bounded_nonempty(&owner.principal, MAX_OUTPUT_LEASE_OWNER_PRINCIPAL_BYTES)
+        || !bounded_nonempty(&owner.window_label, MAX_OUTPUT_LEASE_OWNER_WINDOW_BYTES)
+        || owner.process_session_incarnation == 0
+        || owner.owner_incarnation == 0
+    {
+        return Err(OutputLeaseError::InvalidOwner);
+    }
+    Ok(())
+}
+
+fn validate_persisted_resources(resources: &OutputLeaseResources) -> Result<(), OutputLeaseError> {
+    if resources.0.len() > 2 {
+        return Err(OutputLeaseError::InvalidResources);
+    }
+    OutputLeaseResources::new(&resources.0).map(|_| ())
+}
+
+fn validate_persisted_snapshot(snapshot: &OutputLeaseSnapshot) -> Result<(), OutputLeaseError> {
+    if snapshot.generation == 0 && snapshot.phase != OutputLeasePhase::Unclaimed {
+        return Err(OutputLeaseError::InvalidTransition);
+    }
+    if let Some(owner) = snapshot.owner.as_ref() {
+        validate_persisted_owner(owner)?;
+    }
+    if let Some(resources) = snapshot.resources.as_ref() {
+        validate_persisted_resources(resources)?;
+    }
+    match snapshot.phase {
+        OutputLeasePhase::Unclaimed => {
+            if snapshot.owner.is_some()
+                || snapshot.resources.is_some()
+                || snapshot.expires_at_monotonic_ms.is_some()
+            {
+                return Err(OutputLeaseError::InvalidTransition);
+            }
+        }
+        OutputLeasePhase::HeldActive => {
+            if snapshot.owner.is_none()
+                || snapshot.resources.is_none()
+                || snapshot.expires_at_monotonic_ms.is_none()
+            {
+                return Err(OutputLeaseError::InvalidTransition);
+            }
+        }
+        OutputLeasePhase::HeldOrphaned => {
+            if snapshot.owner.is_none()
+                || snapshot.resources.is_none()
+                || snapshot.expires_at_monotonic_ms.is_some()
+            {
+                return Err(OutputLeaseError::InvalidTransition);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_persisted_request_key(
+    key: &OutputLeaseRequestKey,
+) -> Result<(), OutputLeaseError> {
+    OutputLeaseRequestKey::new(key.principal.clone(), key.domain.clone(), key.request_id)
+        .map(|_| ())
+}
+
+pub(crate) fn validate_persisted_shape_hash(
+    shape_hash: &OutputLeaseShapeHash,
+) -> Result<(), OutputLeaseError> {
+    if shape_hash.0.iter().all(|byte| *byte == 0) {
+        Err(OutputLeaseError::InvalidRequest)
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_persisted_receipt(
+    receipt: &OutputLeaseRequestReceipt,
+) -> Result<(), OutputLeaseError> {
+    validate_persisted_request_key(&receipt.key)?;
+    validate_persisted_shape_hash(&receipt.shape_hash)?;
+    if receipt.process_session_incarnation == 0
+        || receipt.audit_sequence == 0
+        || receipt.affected_lease_ids.len() > MAX_OUTPUT_LEASE_SELECTED_IDS
+        || receipt.changes.len() > MAX_OUTPUT_LEASES
+    {
+        return Err(OutputLeaseError::InvalidRequest);
+    }
+    if let Some(lease_id) = receipt.lease_id {
+        if lease_id.0 == 0 {
+            return Err(OutputLeaseError::InvalidRequest);
+        }
+        if !receipt.affected_lease_ids.contains(&lease_id) {
+            return Err(OutputLeaseError::InvalidRequest);
+        }
+    }
+    if receipt
+        .affected_lease_ids
+        .iter()
+        .any(|lease_id| lease_id.0 == 0)
+        || receipt
+            .affected_lease_ids
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return Err(OutputLeaseError::InvalidRequest);
+    }
+    if let Some(owner) = receipt.owner.as_ref() {
+        validate_persisted_owner(owner)?;
+    }
+    if let Some(resources) = receipt.resources.as_ref() {
+        validate_persisted_resources(resources)?;
+    }
+    for (index, change) in receipt.changes.iter().enumerate() {
+        if change.lease_id.0 == 0
+            || change.before.is_none() && change.after.is_none()
+            || receipt
+                .changes
+                .iter()
+                .take(index)
+                .any(|previous| previous.lease_id == change.lease_id)
+        {
+            return Err(OutputLeaseError::InvalidRequest);
+        }
+        if let Some(before) = change.before.as_ref() {
+            validate_persisted_snapshot(before)?;
+        }
+        if let Some(after) = change.after.as_ref() {
+            validate_persisted_snapshot(after)?;
+        }
+    }
+    if let Some(first_change) = receipt.changes.first() {
+        if receipt.generation_before
+            != first_change
+                .before
+                .as_ref()
+                .map(|snapshot| snapshot.generation)
+            || receipt.generation_after
+                != first_change
+                    .after
+                    .as_ref()
+                    .map(|snapshot| snapshot.generation)
+        {
+            return Err(OutputLeaseError::InvalidRequest);
+        }
+    } else if receipt.generation_before.is_some() || receipt.generation_after.is_some() {
+        return Err(OutputLeaseError::InvalidRequest);
+    }
+    if receipt
+        .changes
+        .iter()
+        .any(|change| !receipt.affected_lease_ids.contains(&change.lease_id))
+    {
+        return Err(OutputLeaseError::InvalidRequest);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1792,6 +1957,24 @@ impl OutputLeaseRegistry {
         request: &OutputLeaseRequest,
         now_ms: u64,
     ) -> Result<OutputLeaseRequestReceipt, OutputLeaseError> {
+        self.submit_request_with_commit(request, now_ms, |_| Ok(()))
+    }
+
+    /// Submit one authority request while giving the caller a durable commit
+    /// seam.  The candidate registry reaches its terminal receipt before the
+    /// callback runs, but the live registry is not replaced until the callback
+    /// has durably recorded that receipt.  A failed journal write therefore
+    /// leaves both authority and receipt state uncommitted; a crash after this
+    /// seam cannot expose a committed request without its terminal evidence.
+    pub(crate) fn submit_request_with_commit<Commit>(
+        &mut self,
+        request: &OutputLeaseRequest,
+        now_ms: u64,
+        commit: Commit,
+    ) -> Result<OutputLeaseRequestReceipt, OutputLeaseError>
+    where
+        Commit: FnOnce(&OutputLeaseRequestReceipt) -> Result<(), OutputLeaseError>,
+    {
         let mut candidate = self.clone();
         let admission = candidate.begin_request_inner(request, now_ms)?;
         match admission {
@@ -1803,6 +1986,7 @@ impl OutputLeaseRegistry {
                 let applied = candidate.apply_action(action, now_ms);
                 let receipt = candidate.receipt_for_action(request, applied);
                 let receipt = candidate.complete_request_inner(permit, receipt, now_ms)?;
+                commit(&receipt)?;
                 *self = candidate;
                 Ok(receipt)
             }

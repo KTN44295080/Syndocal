@@ -2077,3 +2077,28 @@ state is `qa/CODEX_HANDOFF_2026-08-19.md`.
 - The immediate next gate is the exact-executable, one-window, maximized native VJ
   exercise across all five OS-visible displays, followed by the requested retained
   three-screen editor + LED panel + projector state.
+
+## 29. 2026-08-21 Windows release-integrity and durable-R4 closure
+
+- Release-candidate evidence is schema-bound and fail-closed. Executable metadata
+  and runtime updater identity are inspected only from a unique fixed copy of the
+  hashed bytes, and a genuine Tauri signer fixture proves actual signature
+  validation plus tamper rejection.
+- Output Lease terminal/origin/pending state is durable without restoring
+  authority. Take Over now uses the same prepare-before-physical and
+  record-after-ACK boundary, while terminal and in-doubt retries cannot repeat a
+  physical publication.
+- The journal is atomic, capped at 8 MiB, rejects unknown fields, and validates
+  nested semantics. Independent review found P0 0, P1 0, and code P2 0.
+- Full Windows no-default Rust evidence is 806 passed / 0 failed / 5 ignored,
+  followed by warning-zero check. Release self-tests are 65 groups and frontend
+  warnings remain zero.
+- The final no-bundle executable SHA-256 is
+  `E28FF0260A9A2781BA6F072057C67DB18B53BA1139CD3065497BF3FB28D58ABF`.
+  Exactly one responsive exact-path Syndocal window was launched and explicitly
+  maximized before UI operations.
+
+The remaining Windows acceptance sequence is now narrow and physical: real HID
+Raw Input Ready/consume, separate fresh `Both` Arm consent, five fullscreen origin
+checks, and the retained editor + LED panel + projector layout. Do not automate the
+six challenge digits; all surrounding UI actions should be automated.

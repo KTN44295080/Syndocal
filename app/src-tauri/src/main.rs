@@ -215,10 +215,14 @@ const CRASH_REPORT_DIRECTORY: &str = "crash-reports";
 const FIXTURE_PROFILE_CACHE_DIRECTORY: &str = "fixture-profile-cache";
 const OUTPUT_OWNERSHIP_STATE_VERSION: u32 = 1;
 const OUTPUT_OWNERSHIP_STATE_FILE: &str = "machine-output-ownership.json";
+const OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION: u32 = 1;
+const OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE: &str = "output-lease-receipts.json";
+const MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES: u64 = 8 * 1024 * 1024;
 const PROJECT_RECOVERY_AUTHORITY_STATE_VERSION: u32 = 1;
 const PROJECT_RECOVERY_AUTHORITY_STATE_FILE: &str = "project-recovery-authority.json";
 const MAX_SHOW_LAN_INTERFACES: usize = 32;
 const APPLICATION_UPDATE_PROGRESS_EVENT: &str = "syndocal://application-update-progress";
+const PRINT_UPDATER_RELEASE_IDENTITY_ARG: &str = "--print-updater-release-identity";
 const APPLICATION_UPDATE_ENDPOINT: Option<&str> = option_env!("SYNDOCAL_UPDATE_ENDPOINT");
 const APPLICATION_UPDATE_PUBKEY: Option<&str> = option_env!("SYNDOCAL_UPDATE_PUBKEY");
 const APPLICATION_UPDATE_CHANNEL: Option<&str> = option_env!("SYNDOCAL_UPDATE_CHANNEL");
@@ -318,6 +322,276 @@ struct ProjectOperatorSession {
     project_epoch: u64,
     policy: OperatorPolicy,
     unlocked: bool,
+}
+
+const MAX_DURABLE_OUTPUT_LEASE_RECEIPTS: usize = output_lease::MAX_OUTPUT_LEASE_REQUESTS;
+const MAX_DURABLE_OUTPUT_LEASE_ORIGINS: usize = output_lease::MAX_OUTPUT_LEASE_REQUEST_ORIGINS;
+
+/// The output-lease registry intentionally starts empty after every backend
+/// restart.  This journal retains only bounded terminal evidence so an exact
+/// reply-loss retry can be answered without reconstructing authority or
+/// replaying a physical operation.  The durable record is evidence of the
+/// previous process, not a lease grant in the new process.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedOutputLeaseReceiptOrigin {
+    principal: String,
+    domain: String,
+    high_water_request_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedOutputLeasePendingReceipt {
+    key: output_lease::OutputLeaseRequestKey,
+    shape_hash: output_lease::OutputLeaseShapeHash,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedOutputLeaseReceiptState {
+    version: u32,
+    receipts: Vec<output_lease::OutputLeaseRequestReceipt>,
+    origins: Vec<PersistedOutputLeaseReceiptOrigin>,
+    #[serde(default)]
+    pending: Vec<PersistedOutputLeasePendingReceipt>,
+}
+
+impl Default for PersistedOutputLeaseReceiptState {
+    fn default() -> Self {
+        Self {
+            version: OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION,
+            receipts: Vec::new(),
+            origins: Vec::new(),
+            pending: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct OutputLeaseDurableReceiptJournal {
+    path: Option<PathBuf>,
+    state: PersistedOutputLeaseReceiptState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputLeaseDurablePrepareResult {
+    Fresh,
+    Terminal,
+}
+
+impl OutputLeaseDurableReceiptJournal {
+    fn in_memory() -> Self {
+        Self {
+            path: None,
+            state: PersistedOutputLeaseReceiptState::default(),
+        }
+    }
+
+    fn install_path(&mut self, path: PathBuf) -> Result<(), String> {
+        let state = load_output_lease_receipt_state_from_path(&path)?;
+        self.path = Some(path);
+        self.state = state;
+        Ok(())
+    }
+
+    fn next_request_id(&self) -> Result<u64, String> {
+        self.state
+            .origins
+            .iter()
+            .map(|origin| origin.high_water_request_id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .filter(|value| *value != 0)
+            .ok_or_else(|| {
+                "Output-lease durable request identity space is exhausted; restart Syndocal"
+                    .to_string()
+            })
+    }
+
+    fn lookup(
+        &self,
+        request: &OutputLeaseRequest,
+    ) -> Result<Option<output_lease::OutputLeaseRequestReceipt>, output_lease::OutputLeaseError>
+    {
+        if request.shape.canonical_hash()? != request.shape_hash {
+            return Err(output_lease::OutputLeaseError::InvalidRequest);
+        }
+        if let Some(receipt) = self
+            .state
+            .receipts
+            .iter()
+            .find(|receipt| receipt.key == request.key)
+        {
+            if receipt.shape_hash == request.shape_hash {
+                return Ok(Some(receipt.clone()));
+            }
+            return Err(output_lease::OutputLeaseError::Conflict);
+        }
+        if let Some(pending) = self.state.pending.iter().find(|pending| {
+            pending.key.principal == request.key.principal
+                && pending.key.domain == request.key.domain
+        }) {
+            if pending.key == request.key && pending.shape_hash == request.shape_hash {
+                return Err(output_lease::OutputLeaseError::RequestCapacity);
+            }
+            return Err(output_lease::OutputLeaseError::RequestCapacity);
+        }
+        let high_water = self
+            .state
+            .origins
+            .iter()
+            .find(|origin| {
+                origin.principal == request.key.principal && origin.domain == request.key.domain
+            })
+            .map(|origin| origin.high_water_request_id);
+        if high_water.is_some_and(|value| request.key.request_id <= value) {
+            return Err(output_lease::OutputLeaseError::ReceiptNotRetained);
+        }
+        Ok(None)
+    }
+
+    /// Persist an in-doubt physical commit before entering its irreversible
+    /// callback.  Startup must refuse every request in this origin until the
+    /// operator can reconcile the physical target; replaying it would violate
+    /// exactly-once output semantics.
+    fn prepare(
+        &mut self,
+        request: &OutputLeaseRequest,
+    ) -> Result<OutputLeaseDurablePrepareResult, output_lease::OutputLeaseError> {
+        if request.shape.canonical_hash()? != request.shape_hash {
+            return Err(output_lease::OutputLeaseError::InvalidRequest);
+        }
+        if let Some(receipt) = self
+            .state
+            .receipts
+            .iter()
+            .find(|receipt| receipt.key == request.key)
+        {
+            if receipt.shape_hash != request.shape_hash {
+                return Err(output_lease::OutputLeaseError::Conflict);
+            }
+            return Ok(OutputLeaseDurablePrepareResult::Terminal);
+        }
+        if self.state.pending.iter().any(|pending| {
+            pending.key.principal == request.key.principal
+                && pending.key.domain == request.key.domain
+        }) {
+            return Err(output_lease::OutputLeaseError::RequestCapacity);
+        }
+        let mut candidate = self.state.clone();
+        let origin_index = candidate.origins.iter().position(|origin| {
+            origin.principal == request.key.principal && origin.domain == request.key.domain
+        });
+        match origin_index {
+            Some(index) => {
+                let origin = &mut candidate.origins[index];
+                if request.key.request_id <= origin.high_water_request_id {
+                    return Err(output_lease::OutputLeaseError::ReceiptNotRetained);
+                }
+                origin.high_water_request_id = request.key.request_id;
+            }
+            None => {
+                if candidate.origins.len() >= MAX_DURABLE_OUTPUT_LEASE_ORIGINS {
+                    return Err(output_lease::OutputLeaseError::RequestCapacity);
+                }
+                candidate.origins.push(PersistedOutputLeaseReceiptOrigin {
+                    principal: request.key.principal.clone(),
+                    domain: request.key.domain.clone(),
+                    high_water_request_id: request.key.request_id,
+                });
+            }
+        }
+        candidate.pending.push(PersistedOutputLeasePendingReceipt {
+            key: request.key.clone(),
+            shape_hash: request.shape_hash.clone(),
+        });
+        if let Some(path) = self.path.as_deref() {
+            persist_output_lease_receipt_state_to_path(path, &candidate)
+                .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?;
+        }
+        self.state = candidate;
+        Ok(OutputLeaseDurablePrepareResult::Fresh)
+    }
+
+    fn abort(
+        &mut self,
+        request: &OutputLeaseRequest,
+    ) -> Result<(), output_lease::OutputLeaseError> {
+        let mut candidate = self.state.clone();
+        candidate
+            .pending
+            .retain(|pending| pending.key != request.key);
+        if let Some(path) = self.path.as_deref() {
+            persist_output_lease_receipt_state_to_path(path, &candidate)
+                .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?;
+        }
+        self.state = candidate;
+        Ok(())
+    }
+
+    fn record(
+        &mut self,
+        receipt: &output_lease::OutputLeaseRequestReceipt,
+    ) -> Result<(), output_lease::OutputLeaseError> {
+        let mut candidate = self.state.clone();
+        if let Some(existing) = candidate
+            .receipts
+            .iter()
+            .find(|existing| existing.key == receipt.key)
+        {
+            if existing.shape_hash == receipt.shape_hash {
+                return Ok(());
+            }
+            return Err(output_lease::OutputLeaseError::Conflict);
+        }
+        let had_pending = candidate
+            .pending
+            .iter()
+            .any(|pending| pending.key == receipt.key && pending.shape_hash == receipt.shape_hash);
+        candidate
+            .pending
+            .retain(|pending| pending.key != receipt.key);
+        let origin_index = candidate.origins.iter().position(|origin| {
+            origin.principal == receipt.key.principal && origin.domain == receipt.key.domain
+        });
+        match origin_index {
+            Some(index) => {
+                let origin = &mut candidate.origins[index];
+                if !had_pending && receipt.key.request_id <= origin.high_water_request_id {
+                    return Err(output_lease::OutputLeaseError::ReceiptNotRetained);
+                }
+                origin.high_water_request_id = receipt.key.request_id;
+            }
+            None => {
+                if candidate.origins.len() >= MAX_DURABLE_OUTPUT_LEASE_ORIGINS {
+                    return Err(output_lease::OutputLeaseError::RequestCapacity);
+                }
+                candidate.origins.push(PersistedOutputLeaseReceiptOrigin {
+                    principal: receipt.key.principal.clone(),
+                    domain: receipt.key.domain.clone(),
+                    high_water_request_id: receipt.key.request_id,
+                });
+            }
+        }
+        candidate.receipts.push(receipt.clone());
+        if candidate.receipts.len() > MAX_DURABLE_OUTPUT_LEASE_RECEIPTS {
+            let remove_count = candidate.receipts.len() - MAX_DURABLE_OUTPUT_LEASE_RECEIPTS;
+            candidate.receipts.drain(..remove_count);
+        }
+        if let Some(path) = self.path.as_deref() {
+            persist_output_lease_receipt_state_to_path(path, &candidate)
+                .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?;
+        }
+        self.state = candidate;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn receipt_count(&self) -> usize {
+        self.state.receipts.len()
+    }
 }
 
 const DJ_LINK_DEDUPE_LIMIT: usize = 4_096;
@@ -904,6 +1178,9 @@ struct AppState {
     /// reconstructed from project/query state; every production mutation
     /// enters through `submit_request`.
     output_lease_registry: Mutex<OutputLeaseRegistry>,
+    /// Durable terminal evidence for output-lease requests.  This is not
+    /// authority and is never used to reconstruct a lease after restart.
+    output_lease_durable_receipts: Mutex<OutputLeaseDurableReceiptJournal>,
     output_lease_clock_origin: Instant,
     next_output_lease_request_id: AtomicU64,
     /// Process-local DJ Link credential.  `None` is a deliberate fail-closed
@@ -14665,6 +14942,14 @@ struct ApplicationUpdateSettings {
     endpoint: tauri::Url,
     pubkey: String,
     channel: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ApplicationUpdateReleaseIdentity {
+    endpoint: String,
+    channel: String,
+    #[serde(rename = "publicKeyFingerprint")]
+    public_key_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -37026,6 +37311,7 @@ fn ensure_output_lease_receipt_succeeded_or_commit_expiry(
 /// leaves live lease truth untouched. Deadline expiry is the sole intentional
 /// rejection that publishes its orphan transition before returning an error.
 fn submit_output_lease_candidate_with_commit<T, Commit>(
+    state: &AppState,
     live_registry: &mut OutputLeaseRegistry,
     request: &OutputLeaseRequest,
     now_ms: u64,
@@ -37041,11 +37327,49 @@ where
         .map_err(|error| format!("Output lease {context} admission failed: {error:?}"))?;
     match &receipt.outcome {
         Ok(_) => {
+            {
+                let mut durable = state.output_lease_durable_receipts.lock().map_err(|_| {
+                    "Output lease durable receipt journal lock was poisoned".to_string()
+                })?;
+                if matches!(
+                    durable.prepare(request).map_err(|error| {
+                        format!("Output lease {context} durable prepare failed: {error:?}")
+                    })?,
+                    OutputLeaseDurablePrepareResult::Terminal
+                ) {
+                    return Err(format!(
+                        "Output lease {context} terminal receipt already exists; physical replay refused"
+                    ));
+                }
+            }
             // Keep the candidate private until the physical/project commit
             // has returned success. Publishing the lease before the callback
             // would leave an Authorized lease behind when the engine or
             // project transaction rejects the requested resource.
-            let committed = commit()?;
+            let committed = match commit() {
+                Ok(committed) => committed,
+                Err(error) => {
+                    if let Ok(mut durable) = state.output_lease_durable_receipts.lock() {
+                        let _ = durable.abort(request);
+                    }
+                    return Err(error);
+                }
+            };
+            {
+                let mut durable = state.output_lease_durable_receipts.lock().map_err(|_| {
+                    "Output lease durable receipt journal lock was poisoned".to_string()
+                })?;
+                if let Err(error) = durable.record(&receipt) {
+                    // The physical callback already returned success. Keep
+                    // the candidate live so authority matches the device, but
+                    // retain the durable Pending marker and surface the
+                    // indeterminate receipt rather than inviting a retry.
+                    *live_registry = candidate;
+                    return Err(format!(
+                        "Output lease {context} was physically acknowledged but its durable terminal receipt is pending: {error:?}"
+                    ));
+                }
+            }
             *live_registry = candidate;
             Ok((committed, receipt))
         }
@@ -37154,6 +37478,17 @@ pub(crate) fn preflight_output_lease_for_control_action(
         request_id,
         action,
     )?;
+    {
+        let durable = state
+            .output_lease_durable_receipts
+            .lock()
+            .map_err(|_| "Output lease durable receipt journal lock was poisoned".to_string())?;
+        match durable.lookup(&request) {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) => {}
+            Err(error) => return Err(format!("Output lease durable preflight failed: {error:?}")),
+        }
+    }
     let registry = state
         .output_lease_registry
         .lock()
@@ -37184,7 +37519,22 @@ pub(crate) fn submit_output_lease_lifecycle_request(
     let final_now_ms = state
         .output_lease_now_ms()
         .map_err(|_| output_lease::OutputLeaseError::ClockRollback)?;
-    registry.submit_request(request, final_now_ms)
+    {
+        let durable = state
+            .output_lease_durable_receipts
+            .lock()
+            .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?;
+        if let Some(receipt) = durable.lookup(request)? {
+            return Ok(receipt);
+        }
+    }
+    let durable = &state.output_lease_durable_receipts;
+    registry.submit_request_with_commit(request, final_now_ms, |receipt| {
+        durable
+            .lock()
+            .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?
+            .record(receipt)
+    })
 }
 
 fn preflight_output_lease_owner_retirement(
@@ -37289,6 +37639,30 @@ fn commit_project_replacement_output_lease_after_ack(
     candidate: OutputLeaseRegistry,
 ) {
     *registry = candidate;
+}
+
+fn abort_output_lease_durable_prepare(
+    state: &AppState,
+    request: &OutputLeaseRequest,
+) -> Result<(), String> {
+    state
+        .output_lease_durable_receipts
+        .lock()
+        .map_err(|_| "Output lease durable receipt journal lock was poisoned".to_string())?
+        .abort(request)
+        .map_err(|error| format!("Output lease durable prepare abort failed: {error:?}"))
+}
+
+fn prepare_output_lease_durable_physical_commit(
+    state: &AppState,
+    request: &OutputLeaseRequest,
+) -> Result<OutputLeaseDurablePrepareResult, String> {
+    state
+        .output_lease_durable_receipts
+        .lock()
+        .map_err(|_| "Output lease durable receipt journal lock was poisoned".to_string())?
+        .prepare(request)
+        .map_err(|error| format!("Output lease durable physical prepare failed: {error:?}"))
 }
 
 /// Old media IPC has no owner argument. Derive it only from the concrete
@@ -38345,6 +38719,272 @@ fn output_ownership_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String
         .map_err(|error| format!("Unable to resolve Syndocal output ownership state path: {error}"))
 }
 
+fn output_lease_receipt_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|directory| directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE))
+        .map_err(|error| {
+            format!("Unable to resolve Syndocal output-lease receipt state path: {error}")
+        })
+}
+
+fn validate_output_lease_receipt_state(
+    state: &PersistedOutputLeaseReceiptState,
+) -> Result<(), String> {
+    if state.version != OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION {
+        return Err(format!(
+            "Unsupported output-lease receipt state version {}",
+            state.version
+        ));
+    }
+    if state.receipts.len() > MAX_DURABLE_OUTPUT_LEASE_RECEIPTS {
+        return Err(format!(
+            "Output-lease receipt state exceeds {} retained records",
+            MAX_DURABLE_OUTPUT_LEASE_RECEIPTS
+        ));
+    }
+    if state.origins.len() > MAX_DURABLE_OUTPUT_LEASE_ORIGINS {
+        return Err(format!(
+            "Output-lease receipt state exceeds {} request origins",
+            MAX_DURABLE_OUTPUT_LEASE_ORIGINS
+        ));
+    }
+    if state.pending.len() > MAX_DURABLE_OUTPUT_LEASE_RECEIPTS {
+        return Err(format!(
+            "Output-lease receipt state exceeds {} pending records",
+            MAX_DURABLE_OUTPUT_LEASE_RECEIPTS
+        ));
+    }
+    for (index, origin) in state.origins.iter().enumerate() {
+        let origin_key = output_lease::OutputLeaseRequestKey::new(
+            origin.principal.clone(),
+            origin.domain.clone(),
+            origin.high_water_request_id,
+        )
+        .map_err(|error| {
+            format!(
+                "Output-lease receipt state has invalid request origin at index {index}: {error:?}"
+            )
+        })?;
+        output_lease::validate_persisted_request_key(&origin_key).map_err(|error| {
+            format!(
+                "Output-lease receipt state has invalid request origin at index {index}: {error:?}"
+            )
+        })?;
+        if state.origins[index + 1..]
+            .iter()
+            .any(|other| other.principal == origin.principal && other.domain == origin.domain)
+        {
+            return Err("Output-lease receipt state has duplicate request origins".to_string());
+        }
+    }
+    for (index, receipt) in state.receipts.iter().enumerate() {
+        output_lease::validate_persisted_receipt(receipt).map_err(|error| {
+            format!("Output-lease receipt state has invalid receipt at index {index}: {error:?}")
+        })?;
+        if state.receipts[index + 1..]
+            .iter()
+            .any(|other| other.key == receipt.key)
+        {
+            return Err("Output-lease receipt state has duplicate request receipts".to_string());
+        }
+        let Some(origin) = state.origins.iter().find(|origin| {
+            origin.principal == receipt.key.principal && origin.domain == receipt.key.domain
+        }) else {
+            return Err(format!(
+                "Output-lease receipt state has receipt without origin for request {}",
+                receipt.key.request_id
+            ));
+        };
+        if receipt.key.request_id > origin.high_water_request_id {
+            return Err(format!(
+                "Output-lease receipt state high-water mark is behind request {}",
+                receipt.key.request_id
+            ));
+        }
+    }
+    for (index, pending) in state.pending.iter().enumerate() {
+        output_lease::validate_persisted_request_key(&pending.key).map_err(|error| {
+            format!(
+                "Output-lease receipt state has invalid pending request at index {index}: {error:?}"
+            )
+        })?;
+        output_lease::validate_persisted_shape_hash(&pending.shape_hash).map_err(|error| {
+            format!(
+                "Output-lease receipt state has invalid pending shape at index {index}: {error:?}"
+            )
+        })?;
+        if state.pending[index + 1..]
+            .iter()
+            .any(|other| other.key == pending.key)
+        {
+            return Err("Output-lease receipt state has duplicate pending requests".to_string());
+        }
+        if state
+            .receipts
+            .iter()
+            .any(|receipt| receipt.key == pending.key)
+        {
+            return Err(
+                "Output-lease receipt state has terminal and pending duplicate".to_string(),
+            );
+        }
+        let Some(origin) = state.origins.iter().find(|origin| {
+            origin.principal == pending.key.principal && origin.domain == pending.key.domain
+        }) else {
+            return Err(format!(
+                "Output-lease receipt state has pending request without origin {}",
+                pending.key.request_id
+            ));
+        };
+        if state.pending[index + 1..].iter().any(|other| {
+            other.key.principal == pending.key.principal && other.key.domain == pending.key.domain
+        }) {
+            return Err(
+                "Output-lease receipt state has multiple pending requests for one origin"
+                    .to_string(),
+            );
+        }
+        if pending.key.request_id > origin.high_water_request_id {
+            return Err(format!(
+                "Output-lease receipt state high-water mark is behind pending request {}",
+                pending.key.request_id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn load_output_lease_receipt_state_from_path(
+    path: &Path,
+) -> Result<PersistedOutputLeaseReceiptState, String> {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PersistedOutputLeaseReceiptState::default())
+        }
+        Err(error) => {
+            return Err(format!(
+                "Unable to read output-lease receipt state {}: {error}",
+                path.display()
+            ))
+        }
+    };
+    let declared_len = file
+        .metadata()
+        .map_err(|error| {
+            format!(
+                "Unable to inspect output-lease receipt state {}: {error}",
+                path.display()
+            )
+        })?
+        .len();
+    if declared_len > MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES {
+        return Err(format!(
+            "Output-lease receipt state {} exceeds the {} byte safety limit",
+            path.display(),
+            MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES
+        ));
+    }
+    let read_limit = MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES
+        .checked_add(1)
+        .ok_or_else(|| "Output-lease receipt state byte limit is exhausted".to_string())?;
+    let capacity = usize::try_from(declared_len.min(read_limit)).map_err(|_| {
+        "Output-lease receipt state size cannot be represented on this platform".to_string()
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            format!(
+                "Unable to read output-lease receipt state {}: {error}",
+                path.display()
+            )
+        })?;
+    if bytes.len() as u64 > MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES {
+        return Err(format!(
+            "Output-lease receipt state {} grew beyond the {} byte safety limit",
+            path.display(),
+            MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES
+        ));
+    }
+    let state: PersistedOutputLeaseReceiptState =
+        serde_json::from_slice(&bytes).map_err(|error| {
+            format!(
+                "Output-lease receipt state {} is corrupt: {error}",
+                path.display()
+            )
+        })?;
+    validate_output_lease_receipt_state(&state).map_err(|error| {
+        format!(
+            "Output-lease receipt state {} is invalid: {error}",
+            path.display()
+        )
+    })?;
+    Ok(state)
+}
+
+fn persist_output_lease_receipt_state_to_path(
+    path: &Path,
+    state: &PersistedOutputLeaseReceiptState,
+) -> Result<(), String> {
+    validate_output_lease_receipt_state(state)?;
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "Output-lease receipt state path has no parent: {}",
+            path.display()
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "Unable to create output-lease receipt state directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let bytes = serde_json::to_vec(state)
+        .map_err(|error| format!("Unable to encode output-lease receipt state: {error}"))?;
+    let file_name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+    let temp = parent.join(format!(
+        ".{file_name}.{}.{}.{}.tmp",
+        std::process::id(),
+        current_unix_ms(),
+        PROJECT_SAVE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+    ));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| {
+                format!(
+                    "Unable to create temporary output-lease receipt state {}: {error}",
+                    temp.display()
+                )
+            })?;
+        file.write_all(&bytes).map_err(|error| {
+            format!(
+                "Unable to write temporary output-lease receipt state {}: {error}",
+                temp.display()
+            )
+        })?;
+        file.sync_all().map_err(|error| {
+            format!(
+                "Unable to flush temporary output-lease receipt state {}: {error}",
+                temp.display()
+            )
+        })?;
+        drop(file);
+        replace_file_atomically(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
 fn project_recovery_authority_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_local_data_dir()
@@ -39131,10 +39771,11 @@ fn application_update_settings_from(
     if endpoint.host_str().is_none()
         || !endpoint.username().is_empty()
         || endpoint.password().is_some()
+        || endpoint.query().is_some()
         || endpoint.fragment().is_some()
     {
         return Err(
-            "Update endpoint must have a host and must not contain credentials or a fragment"
+            "Update endpoint must have a host and must not contain credentials, a query, or a fragment"
                 .to_string(),
         );
     }
@@ -39159,6 +39800,46 @@ fn application_update_settings() -> Result<Option<ApplicationUpdateSettings>, St
         APPLICATION_UPDATE_PUBKEY,
         APPLICATION_UPDATE_CHANNEL,
     )
+}
+
+fn application_update_release_identity_from(
+    endpoint: Option<&str>,
+    pubkey: Option<&str>,
+    channel: Option<&str>,
+) -> Result<ApplicationUpdateReleaseIdentity, String> {
+    let settings =
+        application_update_settings_from(endpoint, pubkey, channel)?.ok_or_else(|| {
+            "Signed application updates are not configured for this build".to_string()
+        })?;
+    Ok(ApplicationUpdateReleaseIdentity {
+        endpoint: settings.endpoint.to_string(),
+        channel: settings.channel,
+        public_key_fingerprint: sha256_hex(settings.pubkey.as_bytes()),
+    })
+}
+
+fn application_update_release_identity_json_from(
+    endpoint: Option<&str>,
+    pubkey: Option<&str>,
+    channel: Option<&str>,
+) -> Result<String, String> {
+    serde_json::to_string(&application_update_release_identity_from(
+        endpoint, pubkey, channel,
+    )?)
+    .map_err(|error| format!("Unable to serialize updater release identity: {error}"))
+}
+
+fn application_update_release_identity_json() -> Result<String, String> {
+    application_update_release_identity_json_from(
+        APPLICATION_UPDATE_ENDPOINT,
+        APPLICATION_UPDATE_PUBKEY,
+        APPLICATION_UPDATE_CHANNEL,
+    )
+}
+
+fn updater_release_identity_cli_requested(mut args: impl Iterator<Item = OsString>) -> bool {
+    matches!(args.next().as_deref(), Some(value) if value == OsStr::new(PRINT_UPDATER_RELEASE_IDENTITY_ARG))
+        && args.next().is_none()
 }
 
 fn application_update_configuration_for_version(
@@ -41992,7 +42673,7 @@ fn replace_prepared_project_snapshot_after_standby_stop(
 
 fn replace_prepared_project_snapshot_with_expected_output_fence(
     state: &AppState,
-    prepared: PreparedProjectLoad,
+    mut prepared: PreparedProjectLoad,
     scope: ProjectSnapshotReplacementScope,
     expected_output_fence: &OutputControlFenceV1,
     standby_stop: &Arc<AtomicBool>,
@@ -42019,6 +42700,26 @@ fn replace_prepared_project_snapshot_with_expected_output_fence(
     // order external admission -> coordinator -> output transition.
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
+    if let Some((lease_request, _)) = lease_authorization {
+        let terminal = state
+            .output_lease_durable_receipts
+            .lock()
+            .map_err(|_| "Output lease durable receipt journal lock was poisoned".to_string())?
+            .lookup(lease_request)
+            .map_err(|error| format!("Output lease Take Over durable lookup failed: {error:?}"))?;
+        if let Some(receipt) = terminal {
+            synchronize_project_load_result_authority_metadata(&mut prepared.result, &coordinator);
+            prepared.result.authority = Some(project_authority_bundle_from_coordinator(
+                state,
+                &coordinator,
+            ));
+            return Ok((
+                prepared.result,
+                expected_output_fence.clone(),
+                Some(receipt),
+            ));
+        }
+    }
     let (output_epoch_after, output_generation_after) =
         control_plane_runtime::preflight_output_control_successor(expected_output_fence)?;
     replace_prepared_project_snapshot_with_coordinator(
@@ -42153,7 +42854,19 @@ where
         validate_before_publication(state, coordinator, &_transition_guard)?;
     // Preflight the process-local project orphan transition before any
     // callback/recovery/engine commit. The registry clone is held until the
-    // engine ACK; only the ACK path swaps it into live authority.
+    // engine ACK; only the ACK path swaps it into live authority. A Take Over
+    // request additionally reserves durable in-doubt evidence before entering
+    // any physical fence so a crash/reply loss can never replay the callback.
+    let mut lease_registry_guard = if lease_authorization.is_some() {
+        Some(
+            state
+                .output_lease_registry
+                .lock()
+                .map_err(|_| "Output lease registry lock was poisoned".to_string())?,
+        )
+    } else {
+        None
+    };
     let mut output_lease_candidate = if coordinator_effect
         == ProjectReplacementCoordinatorEffect::IdentitySwap
         && lease_authorization.is_none()
@@ -42170,104 +42883,122 @@ where
     } else {
         None
     };
-    if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
-        // Identity and HistoryNavigation invalidate any prior browser
-        // recovery image. Persist the new machine-local serial before input
-        // retirement/engine publication; a later failure intentionally
-        // leaves recovery invalidated rather than risking cross-project data.
-        let transition = match coordinator_effect {
-            ProjectReplacementCoordinatorEffect::IdentitySwap
-                if prepared.authority_disposition
-                    == ProjectAuthorityDisposition::RecoveryPendingAck =>
-            {
-                recovery_transition.clone().ok_or_else(|| {
-                    "Recovery publication request was lost before preflight".to_string()
-                })?
-            }
-            ProjectReplacementCoordinatorEffect::IdentitySwap => {
-                ProjectRecoveryAuthorityTransition::ProjectPublication
-            }
-            ProjectReplacementCoordinatorEffect::RevisionMutation => {
-                ProjectRecoveryAuthorityTransition::HistoryNavigation
-            }
-            ProjectReplacementCoordinatorEffect::RuntimeSanitize => {
-                return Err("Runtime sanitize cannot advance project recovery authority".to_string())
-            }
-        };
-        advance_project_recovery_authority_serial_before_publication(
-            state,
-            coordinator,
-            transition,
-        )?;
-    }
-    // Fence callbacks before taking any input slot. A constructor can receive
-    // data immediately, so every callback compares this generation again just
-    // before it sends an engine command. On a later retirement failure the
-    // old inputs remain fail-closed rather than addressing the replacement.
-    reserve_project_callback_epoch(&state.project_callback_epoch)?;
-    reserve_project_callback_epoch(&state.project_mapping_callback_epoch)?;
-    retire_project_control_inputs_before_project_publish(state)?;
-    // Read desired only after serializing against Arm/role changes. The guard
-    // above also prevents a stale R4 or cancelled polling publication from
-    // touching recovery/callback/input state before this physical boundary.
-    let desired_role = state.engine.output_ownership_status().desired_role;
-    let mut transition = Some(
-        state
-            .engine
-            .begin_output_ownership_transition(desired_role)
-            .map_err(|error| {
-                format!("Project replacement could not enter output fence: {error}")
-            })?,
-    );
-
-    let mut lease_registry_guard = if lease_authorization.is_some() {
-        Some(
-            state
-                .output_lease_registry
-                .lock()
-                .map_err(|_| "Output lease registry lock was poisoned".to_string())?,
-        )
-    } else {
-        None
-    };
-    let lease_receipt = if let Some((lease_request, _preflight_lease_now_ms)) = lease_authorization
-    {
+    let mut durable_takeover_request = None;
+    let mut durable_takeover_pending = false;
+    let mut lease_receipt = None;
+    if let Some((lease_request, _preflight_lease_now_ms)) = lease_authorization {
         let registry = lease_registry_guard
             .as_mut()
             .ok_or_else(|| "Output lease guard was not acquired".to_string())?;
         let mut candidate = (**registry).clone();
         let final_lease_now_ms = state.output_lease_now_ms()?;
-        let receipt = candidate
+        let authorization_receipt = candidate
             .submit_request(lease_request, final_lease_now_ms)
             .map_err(|error| format!("Output lease authorization failed: {error:?}"))?;
         ensure_output_lease_receipt_succeeded_or_commit_expiry(
             &mut **registry,
             candidate.clone(),
-            &receipt,
-            "ordinary Take Over",
+            &authorization_receipt,
+            "ordinary Take Over authorization",
         )?;
-        if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
-            let (orphaned_candidate, orphan_receipt) =
-                preflight_output_lease_project_orphan_with_receipt(
-                    state,
-                    &candidate,
-                    coordinator.epoch,
-                )?;
-            candidate = orphaned_candidate;
-            let authorized_lease_id = match lease_request.action.as_ref() {
-                Some(OutputLeaseRequestAction::AuthorizeOrdinary { lease_id, .. }) => *lease_id,
-                _ => return Err("Take Over lease authorization action is invalid".to_string()),
+        let terminal_receipt =
+            if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
+                let (orphaned_candidate, orphan_receipt) =
+                    preflight_output_lease_project_orphan_with_receipt(
+                        state,
+                        &candidate,
+                        coordinator.epoch,
+                    )?;
+                candidate = orphaned_candidate;
+                let authorized_lease_id = match lease_request.action.as_ref() {
+                    Some(OutputLeaseRequestAction::AuthorizeOrdinary { lease_id, .. }) => *lease_id,
+                    _ => return Err("Take Over lease authorization action is invalid".to_string()),
+                };
+                let mut orphan_receipt =
+                    select_output_lease_receipt_change(&orphan_receipt, authorized_lease_id)?;
+                orphan_receipt.key = lease_request.key.clone();
+                orphan_receipt.shape_hash = lease_request.shape_hash.clone();
+                orphan_receipt
+            } else {
+                authorization_receipt
             };
-            let orphan_receipt =
-                select_output_lease_receipt_change(&orphan_receipt, authorized_lease_id)?;
-            output_lease_candidate = Some(candidate);
-            Some(orphan_receipt)
-        } else {
-            output_lease_candidate = Some(candidate);
-            Some(receipt)
+        let durable_prepare = prepare_output_lease_durable_physical_commit(state, lease_request)?;
+        if matches!(durable_prepare, OutputLeaseDurablePrepareResult::Terminal) {
+            return Err(
+                "Output lease Take Over became terminal after preflight; retry to recover its durable receipt"
+                    .to_string(),
+            );
         }
-    } else {
-        None
+        durable_takeover_request = Some(lease_request.clone());
+        durable_takeover_pending = true;
+        output_lease_candidate = Some(candidate);
+        lease_receipt = Some(terminal_receipt);
+    }
+    // Keep every fallible pre-ACK step inside one boundary. If durable
+    // Take Over preparation already exists, any failure here removes it (or
+    // leaves it pending fail-closed if the abort itself cannot be persisted).
+    let desired_role = state.engine.output_ownership_status().desired_role;
+    let pre_ack_transition: Result<engine::OutputOwnershipTransition, String> = (|| {
+        if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
+            // Identity and HistoryNavigation invalidate any prior browser
+            // recovery image. Persist the new machine-local serial before
+            // input retirement/engine publication; a later failure
+            // intentionally leaves recovery invalidated rather than risking
+            // cross-project data.
+            let transition = match coordinator_effect {
+                ProjectReplacementCoordinatorEffect::IdentitySwap
+                    if prepared.authority_disposition
+                        == ProjectAuthorityDisposition::RecoveryPendingAck =>
+                {
+                    recovery_transition.clone().ok_or_else(|| {
+                        "Recovery publication request was lost before preflight".to_string()
+                    })?
+                }
+                ProjectReplacementCoordinatorEffect::IdentitySwap => {
+                    ProjectRecoveryAuthorityTransition::ProjectPublication
+                }
+                ProjectReplacementCoordinatorEffect::RevisionMutation => {
+                    ProjectRecoveryAuthorityTransition::HistoryNavigation
+                }
+                ProjectReplacementCoordinatorEffect::RuntimeSanitize => {
+                    return Err(
+                        "Runtime sanitize cannot advance project recovery authority".to_string()
+                    )
+                }
+            };
+            advance_project_recovery_authority_serial_before_publication(
+                state,
+                coordinator,
+                transition,
+            )?;
+        }
+        // Fence callbacks before taking any input slot. A constructor can
+        // receive data immediately, so every callback compares this
+        // generation again just before it sends an engine command. On a later
+        // retirement failure the old inputs remain fail-closed rather than
+        // addressing the replacement.
+        reserve_project_callback_epoch(&state.project_callback_epoch)?;
+        reserve_project_callback_epoch(&state.project_mapping_callback_epoch)?;
+        retire_project_control_inputs_before_project_publish(state)?;
+        // Read desired only after serializing against Arm/role changes. The
+        // guard above also prevents a stale R4 or cancelled polling
+        // publication from touching recovery/callback/input state before this
+        // physical boundary.
+        state
+            .engine
+            .begin_output_ownership_transition(desired_role)
+            .map_err(|error| format!("Project replacement could not enter output fence: {error}"))
+    })();
+    let mut transition = match pre_ack_transition {
+        Ok(transition) => Some(transition),
+        Err(error) => {
+            if durable_takeover_pending {
+                let _ = durable_takeover_request
+                    .as_ref()
+                    .map(|request| abort_output_lease_durable_prepare(state, request));
+            }
+            return Err(error);
+        }
     };
 
     let replacement = (|| {
@@ -42281,7 +43012,28 @@ where
             // failure.  Keep desired/persisted role untouched.
             transition.fail(error.clone());
         }
-        return Err(format!("Project replacement could not publish: {error}"));
+        let durable_abort_error = if durable_takeover_pending {
+            durable_takeover_request.as_ref().and_then(|request| {
+                state
+                    .output_lease_durable_receipts
+                    .lock()
+                    .map_err(|_| {
+                        "Output lease durable receipt journal lock was poisoned".to_string()
+                    })
+                    .and_then(|mut durable| {
+                        durable.abort(request).map_err(|error| format!("{error:?}"))
+                    })
+                    .err()
+            })
+        } else {
+            None
+        };
+        return Err(match durable_abort_error {
+            Some(abort_error) => format!(
+                "Project replacement could not publish: {error}; durable Take Over prepare remains pending: {abort_error}"
+            ),
+            None => format!("Project replacement could not publish: {error}"),
+        });
     }
 
     // The engine acknowledgement is the commit point.  Everything below was
@@ -42299,6 +43051,25 @@ where
             commit_project_replacement_output_lease_after_ack(&mut registry, candidate);
         }
     }
+    let durable_record_error = if durable_takeover_pending {
+        match (durable_takeover_request.as_ref(), lease_receipt.as_ref()) {
+            (Some(request), Some(receipt)) => state
+                .output_lease_durable_receipts
+                .lock()
+                .map_err(|_| "Output lease durable receipt journal lock was poisoned".to_string())
+                .and_then(|mut durable| durable.record(receipt).map_err(|error| format!("{error:?}")))
+                .err()
+                .map(|error| {
+                    format!(
+                        "Output lease Take Over was physically acknowledged but its durable terminal receipt for {} remains pending: {error}",
+                        request.key.request_id
+                    )
+                }),
+            _ => Some("Output lease Take Over durable receipt inputs were lost after ACK".to_string()),
+        }
+    } else {
+        None
+    };
     let coordinator_mirrors_committed =
         if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
             coordinator.finish_identity_swap_after_preflight(
@@ -42384,6 +43155,9 @@ where
     }
     let captured = capture_after_commit(state, coordinator, &_transition_guard);
     drop(_publication_validation);
+    if let Some(error) = durable_record_error {
+        return Err(error);
+    }
     Ok((prepared.result, captured, lease_receipt))
 }
 
@@ -48895,6 +49669,7 @@ fn add_display_output_with_output_control_fence(
         })?;
         let final_lease_now_ms = state.output_lease_now_ms()?;
         let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
+            state,
             &mut lease_registry,
             lease_request,
             final_lease_now_ms,
@@ -49092,6 +49867,7 @@ fn apply_output_ownership_role_with_output_control_fence(
             })?;
             let final_lease_now_ms = state.output_lease_now_ms()?;
             let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
+                state,
                 &mut lease_registry,
                 lease_request,
                 final_lease_now_ms,
@@ -49212,6 +49988,7 @@ fn release_safety_blackout_with_output_control_fence(
             })?;
             let final_lease_now_ms = state.output_lease_now_ms()?;
             let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
+                state,
                 &mut lease_registry,
                 lease_request,
                 final_lease_now_ms,
@@ -57526,6 +58303,9 @@ pub(crate) mod tests {
                 control_plane_security: control_plane_security::ControlPlaneSecurityState::default(
                 ),
                 output_lease_registry: Mutex::new(output_lease_registry),
+                output_lease_durable_receipts: Mutex::new(
+                    OutputLeaseDurableReceiptJournal::in_memory(),
+                ),
                 output_lease_clock_origin: Instant::now(),
                 next_output_lease_request_id: AtomicU64::new(1),
                 dj_link_token: Mutex::new(generate_dj_link_token().ok()),
@@ -57908,6 +58688,425 @@ pub(crate) mod tests {
         }
     }
 
+    fn durable_output_lease_acquire_request(request_id: u64) -> OutputLeaseRequest {
+        let owner = OutputLeaseOwner::new("local-ui", "main", 41, 7)
+            .expect("durable output-lease test owner");
+        OutputLeaseRequest::from_action(
+            "local-ui",
+            "output-control",
+            request_id,
+            OutputLeaseRequestAction::Acquire {
+                owner,
+                resources: OutputLeaseResources::new(&[
+                    OutputLeaseResource::Lighting,
+                    OutputLeaseResource::Video,
+                ])
+                .expect("durable output-lease test resources"),
+                project_identity: output_lease_project_identity(0),
+                ttl_ms: 30_000,
+            },
+        )
+        .expect("durable output-lease test request")
+    }
+
+    #[test]
+    fn durable_output_lease_receipt_survives_restart_without_reclaiming_authority() {
+        let directory = unique_test_directory("output-lease-durable-reply-loss");
+        fs::create_dir_all(&directory).expect("create durable output-lease directory");
+        let path = directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        let mut journal = OutputLeaseDurableReceiptJournal::in_memory();
+        journal
+            .install_path(path.clone())
+            .expect("install durable output-lease journal");
+        let request = durable_output_lease_acquire_request(1);
+        let mut registry = OutputLeaseRegistry::fresh_process(41).unwrap();
+        let receipt = registry
+            .submit_request_with_commit(&request, 10, |receipt| journal.record(receipt))
+            .expect("durable output-lease request");
+        assert!(receipt.outcome.is_ok());
+        assert_eq!(registry.active_lease_count(), 1);
+        assert_eq!(journal.receipt_count(), 1);
+
+        // A new backend starts with no lease authority, but the exact terminal
+        // evidence remains recoverable from disk after the reply was lost.
+        let mut restarted_journal = OutputLeaseDurableReceiptJournal::in_memory();
+        restarted_journal
+            .install_path(path.clone())
+            .expect("reload durable output-lease journal");
+        assert_eq!(restarted_journal.next_request_id().unwrap(), 2);
+        let restarted = OutputLeaseRegistry::fresh_process(42).unwrap();
+        assert_eq!(restarted.active_lease_count(), 0);
+        assert_eq!(
+            restarted_journal.lookup(&request).unwrap(),
+            Some(receipt.clone())
+        );
+
+        // The old receipt cannot be laundered into a different command shape.
+        let conflicting = OutputLeaseRequest::from_action(
+            "local-ui",
+            "output-control",
+            1,
+            OutputLeaseRequestAction::ProjectOrphan {
+                project_identity: output_lease_project_identity(0),
+                selected_lease_ids: Vec::new(),
+                resource_scope: None,
+            },
+        )
+        .expect("conflicting durable output-lease request");
+        assert_eq!(
+            restarted_journal.lookup(&conflicting),
+            Err(output_lease::OutputLeaseError::Conflict)
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn durable_output_lease_corrupt_or_unwritable_journal_fails_closed_before_commit() {
+        let directory = unique_test_directory("output-lease-durable-corrupt");
+        fs::create_dir_all(&directory).expect("create durable output-lease directory");
+        let path = directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        fs::write(&path, b"not-json").expect("write corrupt durable output-lease journal");
+        assert!(load_output_lease_receipt_state_from_path(&path).is_err());
+
+        let blocker = directory.join("parent-file");
+        fs::write(&blocker, b"cannot be a parent directory").expect("write journal blocker");
+        let blocked_path = blocker.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        let mut journal = OutputLeaseDurableReceiptJournal::in_memory();
+        journal
+            .install_path(blocked_path)
+            .expect("load missing journal behind blocked parent");
+        let mut registry = OutputLeaseRegistry::fresh_process(41).unwrap();
+        let request = durable_output_lease_acquire_request(1);
+        let error = registry
+            .submit_request_with_commit(&request, 10, |receipt| journal.record(receipt))
+            .expect_err("unwritable durable journal must reject the commit");
+        assert_eq!(error, output_lease::OutputLeaseError::RequestCapacity);
+        assert_eq!(registry.active_lease_count(), 0);
+        assert_eq!(journal.receipt_count(), 0);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn durable_output_lease_disk_state_rejects_oversize_unknown_and_invalid_nested_semantics() {
+        let directory = unique_test_directory("output-lease-durable-validation");
+        fs::create_dir_all(&directory).expect("create durable validation directory");
+        let path = directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        let request = durable_output_lease_acquire_request(1);
+        let mut registry = OutputLeaseRegistry::fresh_process(41).unwrap();
+        let receipt = registry
+            .submit_request(&request, 10)
+            .expect("create valid durable receipt");
+        let mut journal = OutputLeaseDurableReceiptJournal::in_memory();
+        assert_eq!(
+            journal.prepare(&request).unwrap(),
+            OutputLeaseDurablePrepareResult::Fresh
+        );
+        journal
+            .record(&receipt)
+            .expect("record valid durable receipt");
+        let valid = serde_json::to_value(&journal.state).expect("encode valid durable state");
+
+        let mut unknown = valid.clone();
+        unknown
+            .as_object_mut()
+            .expect("durable state object")
+            .insert("unreviewed".to_string(), Value::Bool(true));
+        fs::write(&path, serde_json::to_vec(&unknown).unwrap()).unwrap();
+        assert!(load_output_lease_receipt_state_from_path(&path).is_err());
+
+        let mut invalid_key = valid.clone();
+        invalid_key["receipts"][0]["key"]["principal"] = Value::String(String::new());
+        fs::write(&path, serde_json::to_vec(&invalid_key).unwrap()).unwrap();
+        assert!(load_output_lease_receipt_state_from_path(&path).is_err());
+
+        let mut invalid_owner = valid.clone();
+        invalid_owner["receipts"][0]["owner"]["principal"] = Value::String(String::new());
+        fs::write(&path, serde_json::to_vec(&invalid_owner).unwrap()).unwrap();
+        assert!(load_output_lease_receipt_state_from_path(&path).is_err());
+
+        let mut invalid_resources = valid.clone();
+        invalid_resources["receipts"][0]["resources"] = serde_json::json!(["Lighting", "Lighting"]);
+        fs::write(&path, serde_json::to_vec(&invalid_resources).unwrap()).unwrap();
+        assert!(load_output_lease_receipt_state_from_path(&path).is_err());
+
+        let mut invalid_change = valid;
+        invalid_change["receipts"][0]["changes"][0]["before"] = Value::Null;
+        invalid_change["receipts"][0]["changes"][0]["after"] = Value::Null;
+        fs::write(&path, serde_json::to_vec(&invalid_change).unwrap()).unwrap();
+        assert!(load_output_lease_receipt_state_from_path(&path).is_err());
+
+        let oversized_len = MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES + 1;
+        let oversized = fs::File::create(&path).expect("create oversized durable state");
+        oversized
+            .set_len(oversized_len)
+            .expect("sparsely size oversized durable state");
+        drop(oversized);
+        assert!(load_output_lease_receipt_state_from_path(&path).is_err());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn takeover_durable_terminal_and_pending_retries_bypass_every_physical_publish() {
+        fn authorize_request_and_receipt(
+            process_incarnation: u64,
+        ) -> (OutputLeaseRequest, output_lease::OutputLeaseRequestReceipt) {
+            let owner =
+                OutputLeaseOwner::new("takeover-owner", "takeover-window", process_incarnation, 1)
+                    .unwrap();
+            let resources = OutputLeaseResources::new(&[
+                OutputLeaseResource::Lighting,
+                OutputLeaseResource::Video,
+            ])
+            .unwrap();
+            let acquire = OutputLeaseRequest::from_action(
+                "takeover-owner",
+                "takeover-output",
+                1,
+                OutputLeaseRequestAction::Acquire {
+                    owner: owner.clone(),
+                    resources: resources.clone(),
+                    project_identity: output_lease_project_identity(0),
+                    ttl_ms: 30_000,
+                },
+            )
+            .unwrap();
+            let mut registry = OutputLeaseRegistry::fresh_process(process_incarnation).unwrap();
+            let acquired = registry.submit_request(&acquire, 0).unwrap();
+            let authorize = OutputLeaseRequest::from_action(
+                "takeover-owner",
+                "takeover-output",
+                2,
+                OutputLeaseRequestAction::AuthorizeOrdinary {
+                    lease_id: acquired.lease_id.unwrap(),
+                    owner,
+                    expected_generation: acquired.generation_after.unwrap(),
+                    exact_resources: resources,
+                },
+            )
+            .unwrap();
+            let receipt = registry.submit_request(&authorize, 1).unwrap();
+            (authorize, receipt)
+        }
+
+        fn current_takeover_fence(state: &AppState) -> OutputControlFenceV1 {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            let output = state.engine.output_ownership_status();
+            let safety = state.engine.safety_blackout_authority();
+            OutputControlFenceV1 {
+                process_incarnation: 1,
+                session_incarnation: 1,
+                project_epoch: coordinator.epoch,
+                project_revision: coordinator.revision,
+                project_checkpoint_hash: coordinator.checkpoint_hash.clone(),
+                project_publication_generation: coordinator.publication_generation,
+                output_epoch: output.epoch.checked_add(1).unwrap(),
+                output_generation: output.generation.checked_add(1).unwrap(),
+                safety_blackout_epoch: safety.epoch,
+                safety_blackout_generation: safety.generation,
+            }
+        }
+
+        let selector = StandbyTakeoverCheckpointSelector::Exact(StandbyCheckpointIdentity {
+            session_id: "takeover-primary".to_string(),
+            generation: 1,
+        });
+        let standby_status = Arc::new(Mutex::new(StandbySyncStatus::default()));
+
+        let terminal_harness = MediaAssetA6CommandHarness::new();
+        let (terminal_request, terminal_receipt) = authorize_request_and_receipt(41);
+        {
+            let mut journal = terminal_harness
+                .state
+                .output_lease_durable_receipts
+                .lock()
+                .unwrap();
+            assert_eq!(
+                journal.prepare(&terminal_request).unwrap(),
+                OutputLeaseDurablePrepareResult::Fresh
+            );
+            journal.record(&terminal_receipt).unwrap();
+        }
+        let terminal_before = terminal_harness.state.engine.snapshot();
+        let terminal_stop = Arc::new(AtomicBool::new(false));
+        let terminal_fence = current_takeover_fence(&terminal_harness.state);
+        let terminal = replace_prepared_project_snapshot_with_expected_output_fence(
+            &terminal_harness.state,
+            prepare_project_load(
+                empty_project_file(),
+                ProjectControlMappings::default(),
+                "durable terminal Take Over".to_string(),
+                None,
+            )
+            .unwrap(),
+            ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
+            &terminal_fence,
+            &terminal_stop,
+            &standby_status,
+            &selector,
+            false,
+            Some((&terminal_request, 2)),
+        )
+        .expect("terminal Take Over retry returns durable evidence");
+        assert_eq!(terminal.1, terminal_fence);
+        assert_eq!(terminal.2, Some(terminal_receipt));
+        assert!(!terminal_stop.load(Ordering::Acquire));
+        assert_eq!(terminal_harness.state.engine.snapshot(), terminal_before);
+        assert_eq!(
+            terminal_harness
+                .state
+                .output_lease_registry
+                .lock()
+                .unwrap()
+                .active_lease_count(),
+            0,
+            "durable receipt cannot reconstruct old-process authority"
+        );
+
+        let pending_harness = MediaAssetA6CommandHarness::new();
+        let (pending_request, _) = authorize_request_and_receipt(41);
+        pending_harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .unwrap()
+            .prepare(&pending_request)
+            .unwrap();
+        let pending_before = pending_harness.state.engine.snapshot();
+        let pending_stop = Arc::new(AtomicBool::new(false));
+        let pending_fence = current_takeover_fence(&pending_harness.state);
+        let pending = replace_prepared_project_snapshot_with_expected_output_fence(
+            &pending_harness.state,
+            prepare_project_load(
+                empty_project_file(),
+                ProjectControlMappings::default(),
+                "durable pending Take Over".to_string(),
+                None,
+            )
+            .unwrap(),
+            ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
+            &pending_fence,
+            &pending_stop,
+            &standby_status,
+            &selector,
+            false,
+            Some((&pending_request, 2)),
+        );
+        assert!(pending.is_err());
+        assert!(pending.unwrap_err().contains("RequestCapacity"));
+        assert!(!pending_stop.load(Ordering::Acquire));
+        assert_eq!(pending_harness.state.engine.snapshot(), pending_before);
+    }
+
+    #[test]
+    fn takeover_unwritable_durable_prepare_rejects_before_physical_callback() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("takeover-unwritable-durable-prepare");
+        fs::create_dir_all(&directory).unwrap();
+        let blocker = directory.join("parent-file");
+        fs::write(&blocker, b"not a directory").unwrap();
+        harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .unwrap()
+            .install_path(blocker.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE))
+            .unwrap();
+        let request = durable_output_lease_acquire_request(1);
+        let physical_calls = AtomicU64::new(0);
+        let prepared = prepare_output_lease_durable_physical_commit(&harness.state, &request);
+        if prepared.is_ok() {
+            physical_calls.fetch_add(1, Ordering::AcqRel);
+        }
+        assert!(prepared.is_err());
+        assert_eq!(physical_calls.load(Ordering::Acquire), 0);
+        assert_eq!(
+            harness
+                .state
+                .output_lease_durable_receipts
+                .lock()
+                .unwrap()
+                .receipt_count(),
+            0
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn output_lease_in_doubt_physical_commit_blocks_replay_before_callback() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let owner = OutputLeaseOwner::new("in-doubt-owner", "in-doubt-window", 41, 1)
+            .expect("in-doubt owner");
+        let resources = OutputLeaseResources::new(&[OutputLeaseResource::Lighting])
+            .expect("in-doubt resources");
+        let acquire = OutputLeaseRequest::from_action(
+            "in-doubt-owner",
+            "in-doubt-output",
+            1,
+            OutputLeaseRequestAction::Acquire {
+                owner: owner.clone(),
+                resources: resources.clone(),
+                project_identity: output_lease_project_identity(0),
+                ttl_ms: 30_000,
+            },
+        )
+        .expect("in-doubt acquire request");
+        let mut registry = OutputLeaseRegistry::fresh_process(41).expect("in-doubt registry");
+        let acquired = registry
+            .submit_request(&acquire, 0)
+            .expect("in-doubt acquire");
+        let authorize = OutputLeaseRequest::from_action(
+            "in-doubt-owner",
+            "in-doubt-output",
+            2,
+            OutputLeaseRequestAction::AuthorizeOrdinary {
+                lease_id: acquired.lease_id.expect("in-doubt lease id"),
+                owner,
+                expected_generation: 1,
+                exact_resources: resources,
+            },
+        )
+        .expect("in-doubt authorize request");
+        {
+            let mut journal = harness
+                .state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("in-doubt journal lock");
+            assert_eq!(
+                journal
+                    .prepare(&authorize)
+                    .expect("prepare in-doubt request"),
+                OutputLeaseDurablePrepareResult::Fresh
+            );
+        }
+        let before = registry.clone();
+        let physical_calls = Arc::new(AtomicU64::new(0));
+        let calls = Arc::clone(&physical_calls);
+        assert!(submit_output_lease_candidate_with_commit(
+            &harness.state,
+            &mut registry,
+            &authorize,
+            1,
+            "in-doubt physical replay",
+            move || {
+                calls.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        )
+        .is_err());
+        assert_eq!(physical_calls.load(Ordering::Acquire), 0);
+        assert_eq!(registry, before);
+        assert_eq!(
+            harness
+                .state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("in-doubt journal final lock")
+                .receipt_count(),
+            0
+        );
+    }
+
     #[test]
     fn output_lease_app_state_initializes_process_identity_and_snapshot_metadata() {
         let harness = MediaAssetA6CommandHarness::new();
@@ -58138,6 +59337,7 @@ pub(crate) mod tests {
 
     #[test]
     fn output_lease_candidate_commit_helper_keeps_physical_and_authority_boundaries() {
+        let harness = MediaAssetA6CommandHarness::new();
         let owner = OutputLeaseOwner::new("candidate-owner", "candidate-window", 41, 1)
             .expect("candidate owner");
         let lighting = OutputLeaseResources::new(&[OutputLeaseResource::Lighting])
@@ -58180,6 +59380,7 @@ pub(crate) mod tests {
         let physical_calls = Arc::new(AtomicU64::new(0));
         let success_calls = Arc::clone(&physical_calls);
         let (_, success_receipt) = submit_output_lease_candidate_with_commit(
+            &harness.state,
             &mut registry,
             &authorize(2, lease_id),
             1,
@@ -58194,9 +59395,29 @@ pub(crate) mod tests {
         assert_eq!(physical_calls.load(Ordering::Acquire), 1);
         assert_eq!(registry.audit().len(), before_failure.audit().len() + 1);
 
+        let replay_calls = Arc::clone(&physical_calls);
+        assert!(submit_output_lease_candidate_with_commit(
+            &harness.state,
+            &mut registry,
+            &authorize(2, lease_id),
+            1,
+            "candidate durable terminal replay",
+            move || {
+                replay_calls.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        )
+        .is_err());
+        assert_eq!(
+            physical_calls.load(Ordering::Acquire),
+            1,
+            "a durable terminal receipt must never replay the physical callback"
+        );
+
         let before_physical_failure = registry.clone();
         let failure_calls = Arc::clone(&physical_calls);
         assert!(submit_output_lease_candidate_with_commit(
+            &harness.state,
             &mut registry,
             &authorize(3, lease_id),
             2,
@@ -58218,6 +59439,7 @@ pub(crate) mod tests {
         let expiry_calls = Arc::new(AtomicU64::new(0));
         let expiry_calls_for_commit = Arc::clone(&expiry_calls);
         assert!(submit_output_lease_candidate_with_commit(
+            &harness.state,
             &mut expired_registry,
             &authorize(11, expired_lease_id),
             10,
@@ -65197,6 +66419,13 @@ pub(crate) mod tests {
         .unwrap_err()
         .contains("credentials"));
         assert!(application_update_settings_from(
+            Some("https://updates.example.test/latest.json?channel=beta"),
+            Some(TEST_UPDATE_PUBLIC_KEY),
+            None,
+        )
+        .unwrap_err()
+        .contains("query"));
+        assert!(application_update_settings_from(
             Some("https://updates.example.test/latest.json"),
             Some("not-base64"),
             None,
@@ -65224,6 +66453,55 @@ pub(crate) mod tests {
             "https://updates.example.test/stable/%7B%7Btarget%7D%7D/%7B%7Barch%7D%7D/%7B%7Bcurrent_version%7D%7D"
         );
         assert_eq!(settings.pubkey, TEST_UPDATE_PUBLIC_KEY);
+    }
+
+    #[test]
+    fn updater_release_identity_uses_updater_source_and_never_serializes_the_public_key() {
+        let endpoint = "https://updates.example.test/syndocal/beta/latest.json";
+        let json = application_update_release_identity_json_from(
+            Some(endpoint),
+            Some(TEST_UPDATE_PUBLIC_KEY),
+            Some(" Beta "),
+        )
+        .unwrap();
+        let value: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["endpoint"], endpoint);
+        assert_eq!(value["channel"], "beta");
+        assert_eq!(
+            value["publicKeyFingerprint"],
+            sha256_hex(TEST_UPDATE_PUBLIC_KEY.as_bytes())
+        );
+        assert!(!json.contains(TEST_UPDATE_PUBLIC_KEY));
+        assert!(!json.contains("private"));
+        assert!(!json.contains("token"));
+    }
+
+    #[test]
+    fn updater_release_identity_cli_requires_the_exact_single_argument() {
+        assert!(updater_release_identity_cli_requested(
+            [OsString::from(PRINT_UPDATER_RELEASE_IDENTITY_ARG)].into_iter()
+        ));
+        assert!(!updater_release_identity_cli_requested(
+            [
+                OsString::from("--print-updater-release-identity"),
+                OsString::from("extra")
+            ]
+            .into_iter()
+        ));
+        assert!(!updater_release_identity_cli_requested(
+            [OsString::from("--print-updater-release-identit")].into_iter()
+        ));
+        assert!(!updater_release_identity_cli_requested(
+            [OsString::from("--unknown")].into_iter()
+        ));
+    }
+
+    #[test]
+    fn updater_release_identity_rejects_unconfigured_source_without_emitting_json() {
+        let error =
+            application_update_release_identity_json_from(None, None, Some("stable")).unwrap_err();
+        assert!(error.contains("not configured"));
+        assert!(!error.contains("public key"));
     }
 
     fn empty_project_file() -> ProjectFile {
@@ -90088,6 +91366,18 @@ mod video_recording_runtime_tests {
 }
 
 fn main() {
+    if updater_release_identity_cli_requested(env::args_os().skip(1)) {
+        match application_update_release_identity_json() {
+            Ok(identity) => {
+                println!("{identity}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("Unable to print updater release identity: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     let crash_directory = Arc::new(Mutex::new(None));
     install_crash_report_hook(Arc::clone(&crash_directory));
     let engine = EngineHandle::start(DmxOutputConfig::default());
@@ -90288,6 +91578,22 @@ fn main() {
             }
             let recovery_authority_path =
                 project_recovery_authority_state_path(app.handle())?;
+            let output_lease_receipt_path =
+                output_lease_receipt_state_path(app.handle())?;
+            let next_output_lease_request_id = {
+                let mut journal = state
+                    .output_lease_durable_receipts
+                    .lock()
+                    .map_err(|_| {
+                        "Output lease durable receipt journal lock was poisoned during setup"
+                            .to_string()
+                    })?;
+                journal.install_path(output_lease_receipt_path)?;
+                journal.next_request_id()?
+            };
+            state
+                .next_output_lease_request_id
+                .store(next_output_lease_request_id, Ordering::Release);
             // Reconcile any CleanSave a crash left pending: hashing the exact
             // target bytes decides whether the interrupted Save landed (commit
             // S+1 CleanSave) or not (retain S so the prior browser recovery image
@@ -90324,6 +91630,7 @@ fn main() {
             runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState::default(),
             control_plane_security: control_plane_security::ControlPlaneSecurityState::default(),
             output_lease_registry: Mutex::new(output_lease_registry),
+            output_lease_durable_receipts: Mutex::new(OutputLeaseDurableReceiptJournal::in_memory()),
             output_lease_clock_origin: Instant::now(),
             next_output_lease_request_id: AtomicU64::new(1),
             dj_link_token: Mutex::new(generate_dj_link_token().ok()),

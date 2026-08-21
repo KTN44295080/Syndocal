@@ -739,3 +739,45 @@ creation.
 This closes the Bank visual-density tranche only. Human Raw Input Ready/consume,
 the separate `Both` Arm consent, five fullscreen output-origin checks, and the
 final editor + LED panel + projector state remain explicitly unverified.
+
+### 2026-08-21 durable output and release-evidence checkpoint
+
+Branch `codex/syndocal-v1.2` began this tranche at clean/upstream-equal HEAD
+`46f8692a64e4fd2f9d8cc2d7c2e7fd0248a45335`. The release checker now requires
+explicit manifest-backed candidate mode for RC versions, validates the exact
+tag/HEAD/prior-version/clean-tree/artifact set, inspects a fixed copy of hashed
+executable bytes, and performs real Tauri signer verification. Its self-test is
+65 assertion groups; normal alpha release metadata also passes.
+
+The Output Lease durable journal now covers Take Over and ordinary R4 physical
+commit boundaries. Terminal retry bypasses physical/project publication and does
+not restore authority; pending retry fails closed before the callback; corrupt,
+unknown, invalid, oversized (>8 MiB), and unwritable journal states fail closed.
+The journal uses atomic replacement and validates all nested records. The final
+independent read-only verdict is P0 0 / P1 0 / code P2 0.
+
+Exact verification:
+
+- full Windows no-default Rust tests: 806 passed, 0 failed, 5 ignored;
+- subsequent no-default `cargo check`: zero first-party warnings;
+- Take Over focused 9/9, durable focused 3/3, in-doubt focused 1/1;
+- release self-test 65 groups, release metadata, node syntax, formatting, and
+  `git diff --check`: PASS;
+- frontend TypeScript/Vite warning ratchet: 0 first-party / 0 third-party.
+
+Before the final native build, exact-path process inspection stopped zero
+instances. The no-bundle build completed in 1m53s. The 53,442,560-byte executable
+has SHA-256
+`E28FF0260A9A2781BA6F072057C67DB18B53BA1139CD3065497BF3FB28D58ABF`,
+FileVersion/ProductVersion `1.2.0-alpha.1`, and its compiled runtime diagnostic
+returned beta endpoint/channel identity with exit 0. It was launched as exact-path
+PID 83004, `Responding=True`, title `Syndocal`, with exactly one main window.
+Computer Use found the window restored, invoked Maximize from the native system
+menu, and then captured the sole 1920x1032 maximized Syndocal window.
+
+Resume at the remaining physical boundary only: issue a fresh six-digit Raw Input
+challenge while the operator is ready, confirm Ready and one-shot consume, issue
+fresh consent for `Both` Arm, automatically create/verify the five display outputs,
+then leave the editor + LED panel + projector state. All other UI entry can be
+automated; the six physical digits cannot, because synthesized input would
+invalidate the security proof.

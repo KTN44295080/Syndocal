@@ -1,89 +1,636 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import Ajv from "ajv";
 
-const expectedVersion = "1.2.0-alpha.1";
+export const expectedVersion = "1.2.0-alpha.1";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
 const read = (path) => readFileSync(resolve(workspaceRoot, path), "utf8");
-const appPackage = JSON.parse(read("app/package.json"));
-const tauri = JSON.parse(read("app/src-tauri/tauri.conf.json"));
-const updaterOverlay = JSON.parse(read("app/src-tauri/tauri.updater.conf.json"));
 
-if (appPackage.name !== "syndocal" || appPackage.version !== expectedVersion) {
-  throw new Error(`Frontend package metadata is not Syndocal ${expectedVersion}.`);
-}
-if (tauri.productName !== "Syndocal" || tauri.version !== expectedVersion || !tauri.bundle?.active) {
-  throw new Error("Tauri product/version/bundle metadata is inconsistent.");
-}
-if (tauri.bundle.publisher !== "Seraf()のKTN") {
-  throw new Error("Tauri publisher metadata changed unexpectedly.");
-}
-if (!tauri.bundle.fileAssociations?.some((association) => association.ext?.includes("sdc"))) {
-  throw new Error("The .sdc project association is missing.");
-}
-for (const icon of tauri.bundle.icon ?? []) {
-  if (!existsSync(resolve(appRoot, "src-tauri", icon))) {
-    throw new Error(`Configured bundle icon is missing: ${icon}`);
+function assertStaticReleaseMetadata() {
+  const appPackage = JSON.parse(read("app/package.json"));
+  const tauri = JSON.parse(read("app/src-tauri/tauri.conf.json"));
+  const updaterOverlay = JSON.parse(read("app/src-tauri/tauri.updater.conf.json"));
+
+  if (appPackage.name !== "syndocal" || appPackage.version !== expectedVersion) {
+    throw new Error(`Frontend package metadata is not Syndocal ${expectedVersion}.`);
+  }
+  if (tauri.productName !== "Syndocal" || tauri.version !== expectedVersion || !tauri.bundle?.active) {
+    throw new Error("Tauri product/version/bundle metadata is inconsistent.");
+  }
+  if (tauri.bundle.publisher !== "Seraf()のKTN") {
+    throw new Error("Tauri publisher metadata changed unexpectedly.");
+  }
+  if (!tauri.bundle.fileAssociations?.some((association) => association.ext?.includes("sdc"))) {
+    throw new Error("The .sdc project association is missing.");
+  }
+  for (const icon of tauri.bundle.icon ?? []) {
+    if (!existsSync(resolve(appRoot, "src-tauri", icon))) {
+      throw new Error(`Configured bundle icon is missing: ${icon}`);
+    }
+  }
+
+  const updaterDefaults = tauri.plugins?.updater;
+  if (
+    typeof updaterDefaults !== "object" ||
+    updaterDefaults === null ||
+    updaterDefaults.pubkey !== "" ||
+    !Array.isArray(updaterDefaults.endpoints) ||
+    updaterDefaults.endpoints.length !== 0
+  ) {
+    throw new Error("Default updater metadata must remain disabled and contain no signing key or endpoint.");
+  }
+  if (updaterOverlay.bundle?.createUpdaterArtifacts !== true) {
+    throw new Error("Updater release overlay must enable signed updater artifacts.");
+  }
+
+  const bcdecLicenseSource = "../../licenses/bcdec_rs-MIT.txt";
+  if (tauri.bundle.resources?.[bcdecLicenseSource] !== "licenses/bcdec_rs-MIT.txt") {
+    throw new Error("The bcdec_rs license is not configured as a bundle resource.");
+  }
+  if (!existsSync(resolve(appRoot, "src-tauri", bcdecLicenseSource))) {
+    throw new Error("The configured bcdec_rs license file is missing.");
+  }
+  if (!existsSync(resolve(workspaceRoot, "qa", "UPDATE_RELEASE_RUNBOOK.md"))) {
+    throw new Error("The signed updater release runbook is missing.");
+  }
+
+  const rootManifest = read("Cargo.toml");
+  if (!rootManifest.includes(`version = "${expectedVersion}"`)) {
+    throw new Error(`Cargo workspace version is not ${expectedVersion}.`);
+  }
+  for (const manifest of [
+    "app/src-tauri/Cargo.toml",
+    "crates/audio/Cargo.toml",
+    "crates/engine/Cargo.toml",
+    "crates/gdtf/Cargo.toml",
+    "crates/io/Cargo.toml",
+    "crates/protocol/Cargo.toml",
+    "crates/video/Cargo.toml",
+    "crates/visualizer/Cargo.toml",
+  ]) {
+    if (!read(manifest).includes("version.workspace = true")) {
+      throw new Error(`${manifest} does not inherit the workspace version.`);
+    }
+  }
+
+  const macBundleScript = read("app/scripts/bundle-macos-runtime.sh");
+  if (!macBundleScript.includes(`Syndocal_${expectedVersion}_$(uname -m).dmg`)) {
+    throw new Error("macOS DMG filename does not match the product version.");
+  }
+  if (!macBundleScript.includes(`-volname 'Syndocal ${expectedVersion}'`)) {
+    throw new Error("macOS DMG volume name does not match the product version.");
+  }
+
+  const crossPlatformWorkflow = read(".github/workflows/cross-platform.yml");
+  if (!crossPlatformWorkflow.includes(`name: syndocal-${expectedVersion}-\${{ matrix.os }}`)) {
+    throw new Error("Cross-platform artifact name does not match the product version.");
   }
 }
 
-const updaterDefaults = tauri.plugins?.updater;
-if (
-  typeof updaterDefaults !== "object" ||
-  updaterDefaults === null ||
-  updaterDefaults.pubkey !== "" ||
-  !Array.isArray(updaterDefaults.endpoints) ||
-  updaterDefaults.endpoints.length !== 0
-) {
-  throw new Error("Default updater metadata must remain disabled and contain no signing key or endpoint.");
-}
-if (updaterOverlay.bundle?.createUpdaterArtifacts !== true) {
-  throw new Error("Updater release overlay must enable signed updater artifacts.");
-}
-
-const bcdecLicenseSource = "../../licenses/bcdec_rs-MIT.txt";
-if (tauri.bundle.resources?.[bcdecLicenseSource] !== "licenses/bcdec_rs-MIT.txt") {
-  throw new Error("The bcdec_rs license is not configured as a bundle resource.");
-}
-if (!existsSync(resolve(appRoot, "src-tauri", bcdecLicenseSource))) {
-  throw new Error("The configured bcdec_rs license file is missing.");
-}
-if (!existsSync(resolve(workspaceRoot, "qa", "UPDATE_RELEASE_RUNBOOK.md"))) {
-  throw new Error("The signed updater release runbook is missing.");
+export function parseSemver(version) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(version);
+  if (!match) return null;
+  const prerelease = match[4]?.split(".") ?? [];
+  if (prerelease.some((identifier) => /^\d+$/u.test(identifier) && identifier.length > 1 && identifier.startsWith("0"))) {
+    return null;
+  }
+  return {
+    major: BigInt(match[1]),
+    minor: BigInt(match[2]),
+    patch: BigInt(match[3]),
+    prerelease,
+    build: match[5]?.split(".") ?? [],
+  };
 }
 
-const rootManifest = read("Cargo.toml");
-if (!rootManifest.includes(`version = "${expectedVersion}"`)) {
-  throw new Error(`Cargo workspace version is not ${expectedVersion}.`);
+export function compareSemver(left, right) {
+  const a = parseSemver(left);
+  const b = parseSemver(right);
+  if (!a || !b) throw new Error("Cannot compare invalid SemVer values.");
+  for (const key of ["major", "minor", "patch"]) {
+    if (a[key] !== b[key]) return a[key] < b[key] ? -1 : 1;
+  }
+  if (a.prerelease.length === 0 || b.prerelease.length === 0) {
+    return a.prerelease.length === b.prerelease.length ? 0 : a.prerelease.length === 0 ? 1 : -1;
+  }
+  for (let index = 0; index < Math.max(a.prerelease.length, b.prerelease.length); index += 1) {
+    const x = a.prerelease[index];
+    const y = b.prerelease[index];
+    if (x === undefined || y === undefined) return x === undefined ? -1 : 1;
+    if (x === y) continue;
+    const xNumeric = /^\d+$/.test(x);
+    const yNumeric = /^\d+$/.test(y);
+    if (xNumeric && yNumeric) return BigInt(x) < BigInt(y) ? -1 : 1;
+    if (xNumeric !== yNumeric) return xNumeric ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
 }
-for (const manifest of [
-  "app/src-tauri/Cargo.toml",
-  "crates/audio/Cargo.toml",
-  "crates/engine/Cargo.toml",
-  "crates/gdtf/Cargo.toml",
-  "crates/io/Cargo.toml",
-  "crates/protocol/Cargo.toml",
-  "crates/video/Cargo.toml",
-  "crates/visualizer/Cargo.toml",
-]) {
-  if (!read(manifest).includes("version.workspace = true")) {
-    throw new Error(`${manifest} does not inherit the workspace version.`);
+
+function semverPrecedenceKey(version) {
+  const parsed = parseSemver(version);
+  if (!parsed) throw new Error(`Cannot key invalid SemVer value: ${version}`);
+  const core = `${parsed.major}.${parsed.minor}.${parsed.patch}`;
+  return parsed.prerelease.length > 0 ? `${core}-${parsed.prerelease.join(".")}` : core;
+}
+
+function git(args, cwd = workspaceRoot) {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+function fileIdentity(stats) {
+  return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}`;
+}
+
+function canonicalPathKey(path) {
+  return process.platform === "win32" ? path.toLocaleLowerCase("en-US") : path;
+}
+
+export function readVerifiedEvidenceFile(evidenceRoot, relativePath, label = "evidence file") {
+  if (typeof relativePath !== "string" || isAbsolute(relativePath) || relativePath.split(/[\\/]/u).includes("..")) {
+    throw new Error(`${label} path must stay below the evidence directory: ${relativePath}`);
+  }
+  const realRoot = realpathSync(evidenceRoot);
+  const candidate = resolve(realRoot, relativePath);
+  if (!existsSync(candidate)) throw new Error(`${label} is missing: ${relativePath}`);
+  const linkStats = lstatSync(candidate, { bigint: true });
+  if (linkStats.isSymbolicLink()) throw new Error(`${label} must not be a symbolic link: ${relativePath}`);
+  const realCandidate = realpathSync(candidate);
+  const outside = relative(realRoot, realCandidate);
+  if (outside === "" || outside.startsWith("..") || isAbsolute(outside)) {
+    throw new Error(`${label} path escapes the evidence directory: ${relativePath}`);
+  }
+
+  const noFollow = constants.O_NOFOLLOW ?? 0;
+  const descriptor = openSync(realCandidate, constants.O_RDONLY | noFollow);
+  try {
+    const before = fstatSync(descriptor, { bigint: true });
+    if (!before.isFile()) throw new Error(`${label} is not a regular file: ${relativePath}`);
+    const bytes = readFileSync(descriptor);
+    const after = fstatSync(descriptor, { bigint: true });
+    if (fileIdentity(before) !== fileIdentity(after)) {
+      throw new Error(`${label} changed while it was being read: ${relativePath}`);
+    }
+    if (realpathSync(candidate) !== realCandidate || lstatSync(candidate).isSymbolicLink()) {
+      throw new Error(`${label} path changed while it was being read: ${relativePath}`);
+    }
+    return {
+      bytes,
+      realPath: realCandidate,
+      identity: canonicalPathKey(realCandidate),
+      storageIdentity: `${before.dev}:${before.ino}`,
+    };
+  } finally {
+    closeSync(descriptor);
   }
 }
 
-const macBundleScript = read("app/scripts/bundle-macos-runtime.sh");
-if (!macBundleScript.includes(`Syndocal_${expectedVersion}_$(uname -m).dmg`)) {
-  throw new Error("macOS DMG filename does not match the product version.");
-}
-if (!macBundleScript.includes(`-volname 'Syndocal ${expectedVersion}'`)) {
-  throw new Error("macOS DMG volume name does not match the product version.");
-}
-
-const crossPlatformWorkflow = read(".github/workflows/cross-platform.yml");
-if (!crossPlatformWorkflow.includes(`name: syndocal-${expectedVersion}-\${{ matrix.os }}`)) {
-  throw new Error("Cross-platform artifact name does not match the product version.");
+export function collectGitCandidateState(repoRoot, currentTag, previousTag) {
+  return {
+    headCommit: git(["rev-parse", "HEAD"], repoRoot),
+    clean: git(["status", "--porcelain=v1"], repoRoot) === "",
+    currentTagCommit: git(["rev-parse", `refs/tags/${currentTag}^{commit}`], repoRoot),
+    previousTagCommit: git(["rev-parse", `refs/tags/${previousTag}^{commit}`], repoRoot),
+    productTags: git(["tag", "--list", "v*"], repoRoot).split(/\r?\n/u).filter(Boolean),
+  };
 }
 
-console.log(`release metadata ok: Syndocal ${expectedVersion} / .sdc / signed updater overlay / Seraf()のKTN`);
+function includesUtf8OrUtf16(bytes, text) {
+  return bytes.includes(Buffer.from(text, "utf8")) || bytes.includes(Buffer.from(text, "utf16le"));
+}
+
+export function parseRuntimeUpdaterIdentity(output) {
+  const trimmed = String(output).trim();
+  if (!trimmed || /[\r\n]/u.test(trimmed)) {
+    throw new Error("Windows executable updater diagnostic must be exactly one JSON line.");
+  }
+  let identity;
+  try {
+    identity = JSON.parse(trimmed);
+  } catch {
+    throw new Error("Windows executable updater diagnostic is not valid JSON.");
+  }
+  if (typeof identity !== "object" || identity === null || Array.isArray(identity)) {
+    throw new Error("Windows executable updater diagnostic is not an object.");
+  }
+  const keys = Object.keys(identity).sort();
+  if (JSON.stringify(keys) !== JSON.stringify(["channel", "endpoint", "publicKeyFingerprint"])) {
+    throw new Error("Windows executable updater diagnostic fields are not exact.");
+  }
+  if (
+    typeof identity.endpoint !== "string" ||
+    typeof identity.channel !== "string" ||
+    typeof identity.publicKeyFingerprint !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(identity.publicKeyFingerprint)
+  ) {
+    throw new Error("Windows executable updater diagnostic field values are invalid.");
+  }
+  return identity;
+}
+
+export function withMaterializedVerifiedExecutable(bytes, inspect) {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
+    throw new Error("Windows executable evidence bytes are empty.");
+  }
+  const directory = mkdtempSync(join(tmpdir(), "syndocal-release-inspect-"));
+  const executablePath = join(directory, "syndocal-inspect.exe");
+  try {
+    writeFileSync(executablePath, bytes, { flag: "wx", mode: 0o700 });
+    const materialized = readFileSync(executablePath);
+    if (!materialized.equals(bytes)) {
+      throw new Error("Materialized Windows executable differs from verified evidence bytes.");
+    }
+    return inspect(executablePath);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function inspectWindowsExecutable(_path, bytes, updater) {
+  if (process.platform !== "win32") {
+    throw new Error("Windows executable evidence must be inspected on Windows.");
+  }
+  if (!includesUtf8OrUtf16(bytes, updater.endpoint)) {
+    throw new Error("Windows executable does not contain the exact updater endpoint.");
+  }
+  if (!includesUtf8OrUtf16(bytes, updater.publicKey)) {
+    throw new Error("Windows executable does not contain the exact updater public key.");
+  }
+  const { productVersion, runtimeIdentity } = withMaterializedVerifiedExecutable(bytes, (executablePath) => {
+    const productVersion = execFileSync(
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$v=(Get-Item -LiteralPath $env:SYNDOCAL_RELEASE_INSPECT_PATH).VersionInfo.ProductVersion;[Console]::Out.Write($v)",
+      ],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, SYNDOCAL_RELEASE_INSPECT_PATH: executablePath },
+      },
+    ).trim();
+    const runtimeIdentity = parseRuntimeUpdaterIdentity(execFileSync(
+      executablePath,
+      ["--print-updater-release-identity"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 10_000,
+        windowsHide: true,
+      },
+    ));
+    return { productVersion, runtimeIdentity };
+  });
+  if (
+    runtimeIdentity.endpoint !== updater.endpoint ||
+    runtimeIdentity.channel !== updater.channel ||
+    runtimeIdentity.publicKeyFingerprint !== updater.publicKeyFingerprint
+  ) {
+    throw new Error("Windows executable runtime updater identity does not match release evidence.");
+  }
+  return { productVersion, runtimeIdentity };
+}
+
+export function validateCandidateEvidence(manifest, options) {
+  const {
+    manifestPath,
+    manifestRecord,
+    productVersion,
+    headCommit,
+    clean,
+    resolveTag,
+    productTags,
+    currentTagCommit = resolveTag(manifest.tag),
+    previousTagCommit = resolveTag(manifest.previousTag),
+    readEvidenceFile = readVerifiedEvidenceFile,
+    inspectExecutable = inspectWindowsExecutable,
+  } = options;
+
+  if (!/^\d+\.\d+\.\d+-rc\.[1-9]\d*$/.test(productVersion)) {
+    throw new Error("Release-candidate mode requires a product version ending in -rc.N.");
+  }
+  if (manifest.productVersion !== productVersion || manifest.tag !== `v${productVersion}`) {
+    throw new Error("Evidence manifest version/tag does not match product metadata.");
+  }
+  if (!clean) throw new Error("Release-candidate evidence requires a clean worktree.");
+  if (manifest.commit !== headCommit) throw new Error("Evidence manifest commit does not match HEAD.");
+  if (currentTagCommit !== headCommit) {
+    throw new Error("Release tag does not resolve to the exact HEAD commit.");
+  }
+  if (manifest.previousTag !== `v${manifest.previousVersion}`) {
+    throw new Error("Previous version/tag pair is inconsistent.");
+  }
+  if (compareSemver(manifest.previousVersion, productVersion) >= 0) {
+    throw new Error("Product version must increase monotonically from the previous release.");
+  }
+
+  const previousCandidates = productTags
+    .filter((tag) => tag.startsWith("v") && parseSemver(tag.slice(1)))
+    .map((tag) => tag.slice(1))
+    .filter((version) => compareSemver(version, productVersion) < 0);
+  const previousGroups = new Map();
+  for (const version of previousCandidates) {
+    const key = semverPrecedenceKey(version);
+    const group = previousGroups.get(key) ?? [];
+    group.push(version);
+    previousGroups.set(key, group);
+  }
+  const ambiguousPrevious = [...previousGroups.values()].find((group) => group.length > 1);
+  if (ambiguousPrevious) {
+    throw new Error(`Ambiguous equivalent previous product tags: ${ambiguousPrevious.join(", ")}`);
+  }
+  previousCandidates.sort(compareSemver);
+  const latestPrevious = previousCandidates.at(-1);
+  if (!latestPrevious || latestPrevious !== manifest.previousVersion) {
+    throw new Error("Evidence manifest does not name the latest previous product tag.");
+  }
+  if (manifest.previousTag === manifest.tag || previousTagCommit === headCommit) {
+    throw new Error("Previous release tag must resolve to a different commit.");
+  }
+
+  const endpoint = new URL(manifest.updater.endpoint);
+  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+    throw new Error("Updater endpoint must be credential-free HTTPS.");
+  }
+  const endpointSegments = endpoint.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  if (!endpointSegments.includes(manifest.updater.channel)) {
+    throw new Error("Updater endpoint path does not contain its exact channel segment.");
+  }
+  if (/PRIVATE KEY|TAURI_SIGNING_PRIVATE_KEY|BEGIN [A-Z ]*PRIVATE/iu.test(JSON.stringify(manifest))) {
+    throw new Error("Release evidence must never contain a private signing key.");
+  }
+
+  const evidenceRoot = realpathSync(dirname(manifestPath));
+  const occupiedFiles = new Set(
+    manifestRecord ? [manifestRecord.identity, manifestRecord.storageIdentity].filter(Boolean) : [],
+  );
+  const addEvidenceFile = (path, label) => {
+    const record = readEvidenceFile(evidenceRoot, path, label);
+    const recordIdentities = [record.identity, record.storageIdentity].filter(Boolean);
+    if (recordIdentities.some((identity) => occupiedFiles.has(identity))) {
+      throw new Error(`${label} duplicates another evidence file: ${path}`);
+    }
+    for (const identity of recordIdentities) occupiedFiles.add(identity);
+    return record;
+  };
+  const updaterManifestRecord = addEvidenceFile(manifest.updater.manifestPath, "updater manifest");
+  const updaterManifestHash = createHash("sha256").update(updaterManifestRecord.bytes).digest("hex");
+  if (updaterManifestHash !== manifest.updater.manifestSha256.toLowerCase()) {
+    throw new Error("Updater manifest SHA-256 mismatch.");
+  }
+  let updaterManifest;
+  try {
+    updaterManifest = JSON.parse(updaterManifestRecord.bytes.toString("utf8"));
+  } catch {
+    throw new Error("Updater manifest is not valid JSON.");
+  }
+  if (updaterManifest.version !== productVersion || typeof updaterManifest.platforms !== "object" || updaterManifest.platforms === null) {
+    throw new Error("Updater manifest version/platforms do not match the release candidate.");
+  }
+
+  const publicKeyRecord = addEvidenceFile(manifest.updater.publicKeyPath, "updater public key");
+  const publicKey = publicKeyRecord.bytes.toString("utf8").trim();
+  const privateKeyPattern = /PRIVATE KEY|SECRET KEY|TAURI_SIGNING_PRIVATE_KEY|BEGIN [A-Z ]*PRIVATE/iu;
+  if (publicKey.length < 32 || privateKeyPattern.test(publicKey)) {
+    throw new Error("Updater public-key evidence is empty or contains private-key material.");
+  }
+  const strictBase64 = (text, label) => {
+    if (
+      text.length === 0 ||
+      text.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(text)
+    ) {
+      throw new Error(`${label} is not strict base64.`);
+    }
+    const decoded = Buffer.from(text, "base64");
+    if (decoded.toString("base64") !== text) throw new Error(`${label} is not canonical base64.`);
+    return decoded;
+  };
+  const decodedPublicKey = strictBase64(publicKey, "Updater public-key evidence");
+  const publicKeyText = decodedPublicKey.toString("utf8");
+  if (!Buffer.from(publicKeyText, "utf8").equals(decodedPublicKey) || privateKeyPattern.test(publicKeyText)) {
+    throw new Error("Updater public-key evidence contains private-key material or invalid UTF-8.");
+  }
+  const publicKeyLines = publicKeyText.replace(/\r\n/gu, "\n").replace(/\n$/u, "").split("\n");
+  const commentMatch = /^untrusted comment: minisign public key: ([0-9A-F]{16})$/u.exec(publicKeyLines[0] ?? "");
+  if (!commentMatch || publicKeyLines.length !== 2) {
+    throw new Error("Updater public-key evidence is not an exact Tauri minisign public key.");
+  }
+  const minisignPacket = strictBase64(publicKeyLines[1], "Updater minisign public-key packet");
+  if (minisignPacket.length !== 42 || minisignPacket.subarray(0, 2).toString("ascii") !== "Ed") {
+    throw new Error("Updater public-key evidence is not an exact Tauri minisign public key.");
+  }
+  const packetKeyId = Buffer.from(minisignPacket.subarray(2, 10)).reverse().toString("hex").toUpperCase();
+  if (packetKeyId !== commentMatch[1]) {
+    throw new Error("Updater public-key evidence key identifier does not match its minisign packet.");
+  }
+  const minisignPublicKey = createPublicKey({
+    key: Buffer.concat([
+      Buffer.from("302a300506032b6570032100", "hex"),
+      minisignPacket.subarray(10),
+    ]),
+    format: "der",
+    type: "spki",
+  });
+  const publicKeyFingerprint = createHash("sha256").update(publicKey, "utf8").digest("hex");
+  if (publicKeyFingerprint !== manifest.updater.publicKeyFingerprint.toLowerCase()) {
+    throw new Error("Updater public-key fingerprint mismatch.");
+  }
+
+  const identities = new Set();
+  const updaterPayloadTargets = new Set();
+  const executableTargets = new Set();
+  for (const artifact of manifest.artifacts) {
+    const identity = `${artifact.role}\0${artifact.target}\0${artifact.filename}`;
+    if (identities.has(identity)) throw new Error(`Duplicate release artifact identity: ${artifact.filename}`);
+    identities.add(identity);
+    if (basename(artifact.path) !== artifact.filename) {
+      throw new Error(`Artifact filename/path mismatch: ${artifact.filename}`);
+    }
+    if (artifact.role !== "windows-executable" && !artifact.filename.includes(productVersion)) {
+      throw new Error(`Artifact filename does not contain product version: ${artifact.filename}`);
+    }
+    const artifactRecord = addEvidenceFile(artifact.path, "release artifact");
+    const actualHash = createHash("sha256").update(artifactRecord.bytes).digest("hex");
+    if (actualHash !== artifact.sha256.toLowerCase()) {
+      throw new Error(`Artifact SHA-256 mismatch: ${artifact.filename}`);
+    }
+
+    if (artifact.role === "updater-payload") {
+      updaterPayloadTargets.add(artifact.target);
+      if (!artifact.signaturePath || !artifact.signatureSha256) {
+        throw new Error(`Updater payload lacks signature evidence: ${artifact.filename}`);
+      }
+      const signatureRecord = addEvidenceFile(artifact.signaturePath, "updater signature");
+      const signatureHash = createHash("sha256").update(signatureRecord.bytes).digest("hex");
+      if (signatureHash !== artifact.signatureSha256.toLowerCase()) {
+        throw new Error(`Updater signature SHA-256 mismatch: ${artifact.filename}`);
+      }
+      const signature = signatureRecord.bytes.toString("utf8").trim();
+      const platform = updaterManifest.platforms[artifact.target];
+      if (!platform || platform.signature !== signature || signature.length < 32) {
+        throw new Error(`Updater manifest signature does not match the exact signature file: ${artifact.target}`);
+      }
+      const decodedSignature = strictBase64(signature, "Updater signature evidence");
+      const signatureText = decodedSignature.toString("utf8");
+      if (!Buffer.from(signatureText, "utf8").equals(decodedSignature)) {
+        throw new Error(`Updater signature evidence is not valid UTF-8: ${artifact.target}`);
+      }
+      const signatureLines = signatureText.replace(/\r\n/gu, "\n").replace(/\n$/u, "").split("\n");
+      if (
+        signatureLines.length !== 4 ||
+        signatureLines[0] !== "untrusted comment: signature from tauri secret key" ||
+        !signatureLines[2].startsWith("trusted comment: ")
+      ) {
+        throw new Error(`Updater signature evidence is not an exact Tauri minisign signature: ${artifact.target}`);
+      }
+      const signaturePacket = strictBase64(signatureLines[1], "Updater minisign signature packet");
+      const signatureAlgorithm = signaturePacket.subarray(0, 2).toString("ascii");
+      if (
+        signaturePacket.length !== 74 ||
+        !["ED", "Ed"].includes(signatureAlgorithm) ||
+        !signaturePacket.subarray(2, 10).equals(minisignPacket.subarray(2, 10))
+      ) {
+        throw new Error(`Updater signature key identifier/packet is invalid: ${artifact.target}`);
+      }
+      const trustedComment = signatureLines[2].slice("trusted comment: ".length);
+      const trustedCommentMatch = /^timestamp:[1-9]\d*\tfile:(.+)$/u.exec(trustedComment);
+      if (!trustedCommentMatch || trustedCommentMatch[1] !== artifact.filename) {
+        throw new Error(`Updater signature trusted filename does not match the artifact: ${artifact.target}`);
+      }
+      const trustedCommentSignature = strictBase64(
+        signatureLines[3],
+        "Updater minisign trusted-comment signature",
+      );
+      if (trustedCommentSignature.length !== 64) {
+        throw new Error(`Updater trusted-comment signature packet is invalid: ${artifact.target}`);
+      }
+      const payloadMessage = signatureAlgorithm === "ED"
+        ? createHash("blake2b512").update(artifactRecord.bytes).digest()
+        : artifactRecord.bytes;
+      if (
+        !verifySignature(null, payloadMessage, minisignPublicKey, signaturePacket.subarray(10)) ||
+        !verifySignature(
+          null,
+          Buffer.concat([signaturePacket.subarray(10), Buffer.from(trustedComment, "utf8")]),
+          minisignPublicKey,
+          trustedCommentSignature,
+        )
+      ) {
+        throw new Error(`Updater payload cryptographic signature verification failed: ${artifact.target}`);
+      }
+      const artifactUrl = new URL(platform.url);
+      if (artifactUrl.protocol !== "https:" || artifactUrl.username || artifactUrl.password || artifactUrl.search || artifactUrl.hash) {
+        throw new Error(`Updater artifact URL must be credential-free HTTPS: ${artifact.target}`);
+      }
+      const urlSegments = artifactUrl.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+      if (!urlSegments.includes(manifest.updater.channel) || urlSegments.at(-1) !== artifact.filename) {
+        throw new Error(`Updater artifact URL channel/filename mismatch: ${artifact.target}`);
+      }
+    } else if (artifact.signaturePath !== undefined || artifact.signatureSha256 !== undefined) {
+      throw new Error(`Only updater payloads may declare updater signature evidence: ${artifact.filename}`);
+    }
+
+    if (artifact.role === "windows-executable") {
+      executableTargets.add(artifact.target);
+      const inspected = inspectExecutable(artifactRecord.realPath, artifactRecord.bytes, {
+        endpoint: manifest.updater.endpoint,
+        publicKey,
+        channel: manifest.updater.channel,
+        publicKeyFingerprint,
+      });
+      if (inspected.productVersion !== productVersion) {
+        throw new Error(`Windows executable ProductVersion mismatch: ${artifact.filename}`);
+      }
+    }
+  }
+
+  const platformTargets = Object.keys(updaterManifest.platforms).sort();
+  const payloadTargets = [...updaterPayloadTargets].sort();
+  if (JSON.stringify(platformTargets) !== JSON.stringify(payloadTargets)) {
+    throw new Error("Updater manifest platforms and updater-payload evidence are not an exact set.");
+  }
+  for (const target of updaterPayloadTargets) {
+    if (target.startsWith("windows-") && !executableTargets.has(target)) {
+      throw new Error(`Windows updater target lacks an inspected application executable: ${target}`);
+    }
+  }
+}
+
+export function parseCli(argv, productVersion = expectedVersion) {
+  if (argv.length === 0) {
+    if (/^\d+\.\d+\.\d+-rc\.[1-9]\d*$/u.test(productVersion)) {
+      throw new Error("Release-candidate product versions require --release-candidate --manifest evidence.");
+    }
+    return { candidate: false };
+  }
+  if (argv.length === 3 && argv[0] === "--release-candidate" && argv[1] === "--manifest") {
+    return { candidate: true, manifestPath: isAbsolute(argv[2]) ? resolve(argv[2]) : resolve(workspaceRoot, argv[2]) };
+  }
+  throw new Error("Usage: check-release-metadata.mjs [--release-candidate --manifest <path>]");
+}
+
+function validateCandidateFromCli(manifestPath) {
+  if (!existsSync(manifestPath)) throw new Error(`Release evidence manifest is missing: ${manifestPath}`);
+  const manifestRecord = readVerifiedEvidenceFile(dirname(manifestPath), basename(manifestPath), "release evidence manifest");
+  const manifest = JSON.parse(manifestRecord.bytes.toString("utf8"));
+  const schema = JSON.parse(read("qa/release/release-evidence-manifest.schema.json"));
+  const ajv = new Ajv({ allErrors: true, strict: true });
+  const validate = ajv.compile(schema);
+  if (!validate(manifest)) {
+    throw new Error(`Release evidence schema validation failed: ${ajv.errorsText(validate.errors)}`);
+  }
+  if (!/^\d+\.\d+\.\d+-rc\.[1-9]\d*$/u.test(expectedVersion)) {
+    throw new Error("Release-candidate mode requires a product version ending in -rc.N.");
+  }
+  const gitState = collectGitCandidateState(workspaceRoot, manifest.tag, manifest.previousTag);
+  validateCandidateEvidence(manifest, {
+    manifestPath,
+    manifestRecord,
+    productVersion: expectedVersion,
+    headCommit: gitState.headCommit,
+    clean: gitState.clean,
+    currentTagCommit: gitState.currentTagCommit,
+    previousTagCommit: gitState.previousTagCommit,
+    resolveTag: (tag) => git(["rev-parse", `refs/tags/${tag}^{commit}`]),
+    productTags: gitState.productTags,
+  });
+}
+
+export function main(argv = process.argv.slice(2)) {
+  assertStaticReleaseMetadata();
+  const cli = parseCli(argv);
+  if (cli.candidate) {
+    validateCandidateFromCli(cli.manifestPath);
+    console.log(`release candidate evidence ok: Syndocal ${expectedVersion}`);
+  } else {
+    console.log(`release metadata ok: Syndocal ${expectedVersion} / .sdc / signed updater overlay / Seraf()のKTN`);
+  }
+}
+
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) main();

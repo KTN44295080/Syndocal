@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://syndocal.invalid/schemas/release-evidence-manifest-v1.json",
+  "title": "Syndocal release evidence manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "productVersion", "tag", "commit", "previousVersion", "previousTag", "updater", "artifacts"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "productVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[1-9][0-9]*$" },
+    "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[1-9][0-9]*$" },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "previousVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+    "previousTag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+    "updater": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel", "endpoint", "manifestPath", "manifestSha256", "publicKeyPath", "publicKeyFingerprint"],
+      "properties": {
+        "channel": { "enum": ["stable", "beta", "nightly"] },
+        "endpoint": { "type": "string", "pattern": "^https://[^\\s]+$", "minLength": 12 },
+        "manifestPath": { "type": "string", "pattern": "^[^:\\u0000]{1,240}$" },
+        "manifestSha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+        "publicKeyPath": { "type": "string", "pattern": "^[^:\\u0000]{1,240}$" },
+        "publicKeyFingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "target", "filename", "path", "sha256"],
+        "properties": {
+          "role": { "enum": ["windows-executable", "updater-payload", "installer", "disk-image", "appimage"] },
+          "target": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$" },
+          "filename": { "type": "string", "pattern": "^[^/\\\\]{1,180}$" },
+          "path": { "type": "string", "pattern": "^[^:\\u0000]{1,240}$" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+          "signaturePath": { "type": "string", "pattern": "^[^:\\u0000]{1,240}$" },
+          "signatureSha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "role": { "const": "updater-payload" } } },
+            "then": {
+              "properties": {
+                "signaturePath": {},
+                "signatureSha256": {}
+              },
+              "required": ["signaturePath", "signatureSha256"]
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  { "required": ["signaturePath"] },
+                  { "required": ["signatureSha256"] }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
