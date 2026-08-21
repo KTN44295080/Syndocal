@@ -2811,12 +2811,20 @@ define_engine_command! {
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     RemoveVideoOutput(VideoOutputId),
+    /// Definitive cleanup for a Display candidate that opened a native
+    /// resource but could not complete the enclosing project transaction.
+    RemoveVideoOutputPublished {
+        output_id: VideoOutputId,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetVideoOutputConfig {
         output_id: VideoOutputId,
         label: String,
         kind: VideoOutputKind,
         fullscreen: bool,
         monitor_id: Option<u32>,
+        monitor_identity: Option<String>,
         width: u32,
         height: u32,
         endpoint_name: Option<String>,
@@ -4649,6 +4657,22 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Display output acknowledgement failed: {error}"))?
+    }
+
+    /// Definitively remove a Display candidate after native resource setup
+    /// fails. The acknowledgement is required before the caller reports the
+    /// enclosing transaction as rolled back.
+    pub fn remove_video_output_published(&self, output_id: VideoOutputId) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::RemoveVideoOutputPublished {
+            output_id,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Display output cleanup acknowledgement failed: {error}"))?
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6993,6 +7017,7 @@ impl EngineHandle {
             | EngineCommand::RemoveVideoComposition(_)
             | EngineCommand::SetVideoCompositionLayers { .. }
             | EngineCommand::RemoveVideoOutput(_)
+            | EngineCommand::RemoveVideoOutputPublished { .. }
             | EngineCommand::SetVideoOutputConfig { .. }
             | EngineCommand::SetVideoOutputEnabled { .. }
             | EngineCommand::SetVideoOutputRouting { .. }
@@ -16522,6 +16547,7 @@ impl EngineRuntime {
                     | EngineCommand::AbortTimelineFollow { .. }
                     | EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
                     | EngineCommand::AddVideoOutputPublished { .. }
+                    | EngineCommand::RemoveVideoOutputPublished { .. }
             );
             if queued_command.command.requests_low_latency_dmx_tick() {
                 self.low_latency_dmx_tick_request_count =
@@ -22537,12 +22563,35 @@ impl EngineRuntime {
                 self.remove_video_output_references(output_id);
                 self.last_error = None;
             }
+            EngineCommand::RemoveVideoOutputPublished {
+                output_id,
+                expires_at,
+                ack,
+            } => {
+                let result = if Instant::now() > expires_at {
+                    Err("Display output cleanup expired before engine execution".to_string())
+                } else {
+                    self.video_outputs
+                        .retain(|output| output.summary.id != output_id);
+                    self.remove_video_output_references(output_id);
+                    Ok(())
+                };
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error:
+                        "Display output cleanup could not publish an acknowledged engine snapshot",
+                });
+            }
             EngineCommand::SetVideoOutputConfig {
                 output_id,
                 label,
                 kind,
                 fullscreen,
                 monitor_id,
+                monitor_identity,
                 width,
                 height,
                 endpoint_name,
@@ -22553,6 +22602,7 @@ impl EngineRuntime {
                     output.kind = kind;
                     output.fullscreen = is_display && fullscreen;
                     output.monitor_id = if is_display { monitor_id } else { None };
+                    output.monitor_identity = if is_display { monitor_identity } else { None };
                     output.width = width;
                     output.height = height;
                     output.endpoint_name = if is_display { None } else { endpoint_name };
@@ -36584,6 +36634,13 @@ impl EngineRuntime {
         }
         if output.monitor_id.is_none() {
             return Err("Display output requires a monitor identity".to_string());
+        }
+        if output
+            .monitor_identity
+            .as_deref()
+            .map_or(true, |identity| identity.trim().is_empty())
+        {
+            return Err("Display output requires a stable monitor identity".to_string());
         }
         if output.composition_id == 0 || !self.video_composition_exists(output.composition_id) {
             return Err(format!(
@@ -51953,6 +52010,14 @@ fn sanitize_video_output(mut output: VideoOutputSummary) -> VideoOutputSummary {
         let trimmed = name.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
     });
+    output.monitor_identity = output.monitor_identity.and_then(|identity| {
+        let trimmed = identity.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    });
+    if output.kind != VideoOutputKind::Display {
+        output.monitor_id = None;
+        output.monitor_identity = None;
+    }
     output.mapping = sanitize_video_output_mapping(output.mapping);
     output
 }
@@ -57035,6 +57100,7 @@ mod tests {
                     composition_id: 45,
                     fullscreen: false,
                     monitor_id: Some(0),
+                    monitor_identity: None,
                     width: 640,
                     height: 480,
                     endpoint_name: None,
@@ -58189,6 +58255,7 @@ mod tests {
             composition_id,
             fullscreen: false,
             monitor_id: Some(0),
+            monitor_identity: None,
             width,
             height,
             endpoint_name: None,
@@ -58547,6 +58614,7 @@ mod tests {
                     composition_id: 1,
                     fullscreen: false,
                     monitor_id: Some(0),
+                    monitor_identity: None,
                     width: 1280,
                     height: 720,
                     endpoint_name: None,
@@ -59805,6 +59873,7 @@ mod tests {
             composition_id: id,
             fullscreen: false,
             monitor_id: None,
+            monitor_identity: None,
             width: 640,
             height: 480,
             endpoint_name: None,
@@ -60092,6 +60161,7 @@ mod tests {
                     composition_id: 1,
                     fullscreen: false,
                     monitor_id: None,
+                    monitor_identity: None,
                     width: 640,
                     height: 480,
                     endpoint_name: None,
@@ -60587,6 +60657,7 @@ mod tests {
             composition_id: 1,
             fullscreen: false,
             monitor_id: None,
+            monitor_identity: None,
             width: 640,
             height: 480,
             endpoint_name: None,
@@ -61462,6 +61533,7 @@ mod tests {
                             composition_id: 1,
                             fullscreen: false,
                             monitor_id: None,
+                            monitor_identity: None,
                             width: 640,
                             height: 480,
                             endpoint_name: None,
@@ -66341,6 +66413,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: true,
                 monitor_id: Some(1),
+                monitor_identity: None,
                 width: 1920,
                 height: 1080,
                 endpoint_name: None,
@@ -66953,6 +67026,7 @@ mod tests {
             composition_id: 1,
             fullscreen: false,
             monitor_id: Some(7),
+            monitor_identity: Some("a".repeat(64)),
             width: 1_920,
             height: 1_080,
             endpoint_name: None,
@@ -67033,6 +67107,7 @@ mod tests {
         runtime.apply_command(EngineCommand::AddVideoOutputPublished {
             output: VideoOutputSummary {
                 monitor_id: None,
+                monitor_identity: None,
                 ..published_display_output(43)
             },
             expires_at: Instant::now() + Duration::from_secs(1),
@@ -67049,6 +67124,33 @@ mod tests {
             before_runtime
         );
         assert_eq!(published.read().unwrap().video.outputs, before_published);
+    }
+
+    #[test]
+    fn display_output_monitor_identity_survives_project_snapshot_reload() {
+        let output = published_display_output(51);
+        let snapshot = VideoSnapshot {
+            outputs: vec![output.clone()],
+            ..VideoSnapshot::default()
+        };
+        let encoded = serde_json::to_value(&snapshot).expect("encode display output snapshot");
+        let reloaded: VideoSnapshot =
+            serde_json::from_value(encoded.clone()).expect("reload display output snapshot");
+        assert_eq!(reloaded.outputs[0].monitor_id, output.monitor_id);
+        assert_eq!(
+            reloaded.outputs[0].monitor_identity,
+            output.monitor_identity
+        );
+
+        let mut legacy = encoded;
+        legacy["outputs"][0]
+            .as_object_mut()
+            .expect("legacy output object")
+            .remove("monitor_identity");
+        let legacy_reload: VideoSnapshot =
+            serde_json::from_value(legacy).expect("reload legacy display output snapshot");
+        assert_eq!(legacy_reload.outputs[0].monitor_id, output.monitor_id);
+        assert_eq!(legacy_reload.outputs[0].monitor_identity, None);
     }
 
     #[test]
@@ -72988,6 +73090,7 @@ mod tests {
                 composition_id: 2,
                 fullscreen: false,
                 monitor_id: None,
+                monitor_identity: None,
                 width: 640,
                 height: 480,
                 endpoint_name: None,
@@ -75241,6 +75344,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: false,
                 monitor_id: Some(0),
+                monitor_identity: None,
                 width: 1280,
                 height: 720,
                 endpoint_name: None,
@@ -75963,6 +76067,7 @@ mod tests {
             composition_id: 1,
             fullscreen: false,
             monitor_id: Some(0),
+            monitor_identity: None,
             width: 1920,
             height: 1080,
             endpoint_name: None,
@@ -76016,6 +76121,7 @@ mod tests {
             composition_id: 1,
             fullscreen: false,
             monitor_id: Some(0),
+            monitor_identity: None,
             width: 1920,
             height: 1080,
             endpoint_name: None,
@@ -76074,6 +76180,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: false,
                 monitor_id: Some(0),
+                monitor_identity: None,
                 width: 1920,
                 height: 1080,
                 endpoint_name: None,
@@ -77727,6 +77834,7 @@ mod tests {
             composition_id: 1,
             fullscreen: false,
             monitor_id: Some(0),
+            monitor_identity: None,
             width: 1_280,
             height: 720,
             endpoint_name: None,
@@ -77936,6 +78044,7 @@ mod tests {
                     composition_id: 1,
                     fullscreen: false,
                     monitor_id: Some(0),
+                    monitor_identity: None,
                     width: 1_280,
                     height: 720,
                     endpoint_name: None,
@@ -78627,6 +78736,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: true,
                 monitor_id: Some(2),
+                monitor_identity: None,
                 width: 1920,
                 height: 1080,
                 endpoint_name: None,
@@ -78698,6 +78808,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: false,
                 monitor_id: Some(0),
+                monitor_identity: None,
                 width: 1920,
                 height: 1080,
                 endpoint_name: None,
@@ -78803,6 +78914,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: false,
                 monitor_id: Some(0),
+                monitor_identity: None,
                 width: 1920,
                 height: 1080,
                 endpoint_name: None,
@@ -78932,6 +79044,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: true,
                 monitor_id: Some(0),
+                monitor_identity: None,
                 width: 1920,
                 height: 1080,
                 endpoint_name: None,
@@ -79005,6 +79118,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: true,
                 monitor_id: Some(0),
+                monitor_identity: None,
                 width: 1920,
                 height: 1080,
                 endpoint_name: None,
@@ -79180,6 +79294,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: true,
                 monitor_id: Some(0),
+                monitor_identity: None,
                 width: 1920,
                 height: 1080,
                 endpoint_name: None,
@@ -79248,6 +79363,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: true,
                 monitor_id: Some(2),
+                monitor_identity: None,
                 width: 1920,
                 height: 1080,
                 endpoint_name: None,
@@ -79279,6 +79395,7 @@ mod tests {
                 kind: VideoOutputKind::NdiSender,
                 fullscreen: true,
                 monitor_id: Some(5),
+                monitor_identity: None,
                 width: 1280,
                 height: 720,
                 endpoint_name: Some("  Stage Feed  ".to_string()),
@@ -79357,6 +79474,7 @@ mod tests {
                 composition_id,
                 fullscreen: true,
                 monitor_id: Some(1),
+                monitor_identity: None,
                 width: 1280,
                 height: 720,
                 endpoint_name: None,
@@ -79596,6 +79714,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: true,
                 monitor_id: Some(0),
+                monitor_identity: None,
                 width: 1920,
                 height: 1080,
                 endpoint_name: None,
@@ -100841,6 +100960,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: false,
                 monitor_id: None,
+                monitor_identity: None,
                 width: 640,
                 height: 360,
                 endpoint_name: None,
@@ -100858,6 +100978,7 @@ mod tests {
                 composition_id: 1,
                 fullscreen: false,
                 monitor_id: None,
+                monitor_identity: None,
                 width: 640,
                 height: 360,
                 endpoint_name: None,
@@ -101001,6 +101122,7 @@ mod tests {
                     composition_id: 1,
                     fullscreen: false,
                     monitor_id: None,
+                    monitor_identity: None,
                     width: 640,
                     height: 360,
                     endpoint_name: None,
@@ -101577,6 +101699,7 @@ mod tests {
                     composition_id: 1,
                     fullscreen: false,
                     monitor_id: None,
+                    monitor_identity: None,
                     width: 640,
                     height: 360,
                     endpoint_name: None,

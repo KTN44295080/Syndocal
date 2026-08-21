@@ -7,7 +7,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    sync::Mutex,
+    sync::{Mutex, TryLockError},
     time::{Duration, Instant},
 };
 
@@ -30,7 +30,7 @@ use protocol::{
     TimelineLoopRuntimeStatus,
 };
 use sha2::{Digest, Sha256};
-use tauri::{State, WebviewWindow};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 use super::output_lease::{OutputLeaseOwner, OutputLeasePhase};
 use super::{AppState, ProjectCoordinator};
@@ -226,10 +226,26 @@ impl ControlPlaneQueryState {
         // Owner retirement/registration linearizes under this lock. Keep the
         // same guard through query capture, owner incarnation lookup, and the
         // registry read so an ABA re-register cannot expose old lease IDs.
-        let _owner_rotation = app
-            .project_transaction_owner_rotation
-            .lock()
-            .map_err(|_| query_error(QueryErrorCode::Internal))?;
+        let _owner_rotation = match app.project_transaction_owner_rotation.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => return Err(query_error(QueryErrorCode::Overloaded)),
+            Err(TryLockError::Poisoned(_)) => return Err(query_error(QueryErrorCode::Internal)),
+        };
+        // A lease transition holds this registry while it performs its
+        // authoritative candidate/commit lane. Do not queue a renderer
+        // authority query behind that lane: the query is read-only and can
+        // fail closed immediately, keeping the UI event loop responsive.
+        {
+            match app.output_lease_registry.try_lock() {
+                Ok(_registry) => {}
+                Err(TryLockError::WouldBlock) => {
+                    return Err(query_error(QueryErrorCode::Overloaded))
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    return Err(query_error(QueryErrorCode::Internal))
+                }
+            }
+        }
         // Bind the query session to this registered window before exposing any
         // lease identity. The browser never supplies a principal or lease id.
         self.capture_for_window(window_label, app, false)?;
@@ -241,10 +257,11 @@ impl ControlPlaneQueryState {
             .get(window_label)
             .cloned()
             .ok_or_else(|| query_error(QueryErrorCode::Forbidden))?;
-        let registry = app
-            .output_lease_registry
-            .lock()
-            .map_err(|_| query_error(QueryErrorCode::Internal))?;
+        let registry = match app.output_lease_registry.try_lock() {
+            Ok(registry) => registry,
+            Err(TryLockError::WouldBlock) => return Err(query_error(QueryErrorCode::Overloaded)),
+            Err(TryLockError::Poisoned(_)) => return Err(query_error(QueryErrorCode::Internal)),
+        };
         if registry.process_session_incarnation() != self.process_incarnation {
             return Err(query_error(QueryErrorCode::Unavailable));
         }
@@ -995,10 +1012,11 @@ fn capture_source(app: &AppState) -> Result<SourceCapture, QueryError> {
 
 fn capture_source_once(app: &AppState) -> Result<SourceCapture, QueryError> {
     let project = {
-        let coordinator = app
-            .project_coordinator
-            .lock()
-            .map_err(|_| query_error(QueryErrorCode::Internal))?;
+        let coordinator = match app.project_coordinator.try_lock() {
+            Ok(coordinator) => coordinator,
+            Err(TryLockError::WouldBlock) => return Err(query_error(QueryErrorCode::Overloaded)),
+            Err(TryLockError::Poisoned(_)) => return Err(query_error(QueryErrorCode::Internal)),
+        };
         project_projection(&coordinator)
     };
     let snapshot = app.engine.snapshot();
@@ -1631,13 +1649,19 @@ pub(crate) fn get_control_plane_query_capabilities(
 }
 
 #[tauri::command]
-pub(crate) fn query_control_plane_project_authority(
+pub(crate) async fn query_control_plane_project_authority(
     window: WebviewWindow,
-    state: State<'_, ControlPlaneQueryState>,
-    app: State<'_, AppState>,
+    app: AppHandle,
     request: PageRequest,
 ) -> Result<Page<ProjectAuthorityQueryPayload>, QueryError> {
-    query_project_authority_for_window(window.label(), &state, &app, request)
+    let window_label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ControlPlaneQueryState>();
+        let app_state = app.state::<AppState>();
+        query_project_authority_for_window(&window_label, &state, &app_state, request)
+    })
+    .await
+    .map_err(|_| query_error(QueryErrorCode::Internal))?
 }
 
 fn query_project_authority_for_window(
@@ -1658,59 +1682,83 @@ fn query_project_authority_for_window(
 }
 
 #[tauri::command]
-pub(crate) fn query_control_plane_runtime_generations(
+pub(crate) async fn query_control_plane_runtime_generations(
     window: WebviewWindow,
-    state: State<'_, ControlPlaneQueryState>,
-    app: State<'_, AppState>,
+    app: AppHandle,
     request: PageRequest,
 ) -> Result<Page<RuntimeGenerationPayload>, QueryError> {
-    let view = state.capture_for_window(window.label(), &app, true)?;
-    page_from_items(
-        &state,
-        &view,
-        request,
-        RESOURCE_RUNTIME,
-        SCHEMA_RUNTIME_PAGE,
-        &view.runtime,
-    )
+    let window_label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ControlPlaneQueryState>();
+        let app_state = app.state::<AppState>();
+        let view = state.capture_for_window(&window_label, &app_state, true)?;
+        page_from_items(
+            &state,
+            &view,
+            request,
+            RESOURCE_RUNTIME,
+            SCHEMA_RUNTIME_PAGE,
+            &view.runtime,
+        )
+    })
+    .await
+    .map_err(|_| query_error(QueryErrorCode::Internal))?
 }
 
 #[tauri::command]
-pub(crate) fn query_control_plane_output_ownership(
+pub(crate) async fn query_control_plane_output_ownership(
     window: WebviewWindow,
-    state: State<'_, ControlPlaneQueryState>,
-    app: State<'_, AppState>,
+    app: AppHandle,
     request: PageRequest,
 ) -> Result<Page<OutputOwnershipQueryPayload>, QueryError> {
-    let view = state.capture_for_window(window.label(), &app, true)?;
-    page_from_items(
-        &state,
-        &view,
-        request,
-        RESOURCE_OUTPUT,
-        SCHEMA_OUTPUT_PAGE,
-        std::slice::from_ref(&view.output),
-    )
+    let window_label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ControlPlaneQueryState>();
+        let app_state = app.state::<AppState>();
+        let view = state.capture_for_window(&window_label, &app_state, true)?;
+        page_from_items(
+            &state,
+            &view,
+            request,
+            RESOURCE_OUTPUT,
+            SCHEMA_OUTPUT_PAGE,
+            std::slice::from_ref(&view.output),
+        )
+    })
+    .await
+    .map_err(|_| query_error(QueryErrorCode::Internal))?
 }
 
 #[tauri::command]
-pub(crate) fn query_output_lease_authority_v1(
+pub(crate) async fn query_output_lease_authority_v1(
+    app: AppHandle,
     window: WebviewWindow,
-    state: State<'_, ControlPlaneQueryState>,
-    app: State<'_, AppState>,
 ) -> Result<OutputLeaseAuthorityQueryV1, QueryError> {
-    state.query_output_lease_authority_for_window(window.label(), &app)
+    let window_label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ControlPlaneQueryState>();
+        let app_state = app.state::<AppState>();
+        state.query_output_lease_authority_for_window(&window_label, &app_state)
+    })
+    .await
+    .map_err(|_| query_error(QueryErrorCode::Internal))?
 }
 
 #[tauri::command]
-pub(crate) fn poll_control_plane_observation_events(
+pub(crate) async fn poll_control_plane_observation_events(
     window: WebviewWindow,
-    state: State<'_, ControlPlaneQueryState>,
-    app: State<'_, AppState>,
+    app: AppHandle,
     request: EventPageRequest,
 ) -> Result<EventPage<CanonicalObservationEventPayload>, QueryError> {
-    let view = state.capture_for_window(window.label(), &app, false)?;
-    observation_page(&state, &view, request)
+    let window_label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ControlPlaneQueryState>();
+        let app_state = app.state::<AppState>();
+        let view = state.capture_for_window(&window_label, &app_state, false)?;
+        observation_page(&state, &view, request)
+    })
+    .await
+    .map_err(|_| query_error(QueryErrorCode::Internal))?
 }
 
 #[cfg(test)]

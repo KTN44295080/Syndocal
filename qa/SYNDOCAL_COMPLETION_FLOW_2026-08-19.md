@@ -4,6 +4,29 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-08-21 superseding OutputControl decision
+
+The physical-input consent design is retired in full. Any older section or
+roadmap item that requires a six-digit code, Raw Input keyboard challenge,
+physical Enter, a 15-second challenge, or prepare/status/consume consent IPC is
+historical and must not be reimplemented. The replacement contract is:
+
+- normal local Output Enable is one explicit click and atomically acquires plus
+  arms exact Lighting and Video authority;
+- Release, advanced Arm, Take Over, Add Display, and Force Transfer require a
+  parented OS-native Warning/Yes-No dialog, with Yes as the only accepting result;
+- cancel/close is a retained terminal rejection, and retries do not reprompt or
+  mutate output;
+- all mutating OutputControl operations are local-only v2 commands with command
+  schema 2 and registry wire schema 4; v1, unknown future versions, Remote,
+  MIDI, OSC, DMX, Web Remote, shortcuts, and global hotkeys fail closed;
+- DJ-PC Pedal/global-hotkey ownership remains solely in the DJ Agent topology and
+  is not recreated inside Syndocal.
+
+This decision is a product simplification and a compatibility boundary, not a
+safety bypass. Owner incarnation, project/output/safety fences, durable terminal
+receipts, exact replay, final revalidation, and S0 Blackout remain mandatory.
+
 ## 1. Purpose and authority
 
 This is the current dependency-ordered execution and handoff authority from the
@@ -92,7 +115,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active development train advances from the long-lived `1.1.0` metadata to
-`1.2.0-alpha.1`. The branch name may remain historical; artifact metadata and tags
+`1.2.0-alpha.2`. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from the branch name.
 
 The synchronized product-version surfaces are:
@@ -269,8 +292,9 @@ Exit: no project/file mutation bypasses one recoverable authority/publication pa
   acknowledged physical output state.
 - [x] Prove code-side stale owner/ABA, restart non-reclamation, transfer races,
   bounded 10,000-call saturation, and candidate/teardown ACK behavior.
-- [ ] Prove durable reply-loss/crash recovery, real Raw Input, physical creation/
-  teardown ACK, and the five-display hardware behavior.
+- [ ] Prove durable reply-loss/crash recovery, native dangerous-action
+  Yes/No/close behavior, physical creation/teardown ACK, and the five-display
+  hardware behavior. The retired Raw Input challenge is not an acceptance item.
 
 Exit: all five AI3 roadmap categories accepted. Do not begin AI4 before this exit.
 
@@ -279,8 +303,9 @@ Exit: all five AI3 roadmap categories accepted. Do not begin AI4 before this exi
 - [ ] AI0 complete source inventory/coverage gate; unclassified mutations fail.
 - [ ] AI1 query/event schemas, snapshots, generations, gap/resnapshot, bounds.
 - [ ] AI2 authored command bridge with E/R/H, owner incarnation, receipts, Undo.
-- [ ] AI4 principals, pairing, grants, revocation, kill switch, Raw Input presence,
-  one-shot consent, challenge/token expiry, and release-build bypass absence.
+- [ ] AI4 principals, pairing, grants, revocation, kill switch, exact reviewed
+  local/native consent policies, and release-build bypass absence. This does not
+  restore the retired Raw Input/six-digit/Enter challenge.
 - [ ] AI5 authenticated localhost sidecar, MCP, JSON-RPC/REST, WebSocket, discovery,
   bounded queues, process lifecycle, and no cached authority replay.
 - [ ] AI6 administration UI for principals/grants/revocation/audit/health.
@@ -473,11 +498,9 @@ Resume from the current Windows-first checkpoint in this order:
 
 1. preserve the zero-warning Windows/Linux rows and W1 ratchet; measure the two
    macOS rows before claiming W0, beta, or RC warning acceptance;
-2. resolve and independently review the production Raw Input registration/lifecycle
-   failure observed by the real HID pass; do not weaken the SendInput/PostMessage/
-   DOM fail-closed boundary;
-3. obtain one exact physical lease receipt and the separate `Both` Arm receipt,
-   verify all five fullscreen origins, then leave editor + LED panel + projector;
+2. do not restore the retired Raw Input/six-digit/Enter/15-second feature;
+3. verify one-click local exact-`Both` Enable, create all five detected displays
+   with exact persisted identities, then leave editor + LED panel + projector;
 4. finish AI3 durable crash/reply-loss recovery and acknowledged project-lifecycle/
    physical-output tests before starting AI4;
 5. keep distributed ShowClock, complete ASIO, signing/updater, beta/RC, and public
@@ -500,11 +523,10 @@ The seven locally measurable rows were subsequently promoted; the inventory is n
 acceptance.
 
 The exact rebuilt executable was launched as one responsive maximized Syndocal and
-five Display targets were enumerated. Real keyboard attempts then exposed an
-unresolved production Raw Input registration/lifecycle failure before lease receipt.
-Synthetic input remains rejected and must not be used as a bypass. Repair and
-re-review that production path, then repeat the five-display exercise and leave the
-final editor + LED panel + projector state.
+five Display targets were enumerated. The Raw Input failure recorded at that time
+is historical because the feature was later removed. Repeat only the current
+one-click OutputControl v2 five-display exercise and leave the final editor + LED
+panel + projector state.
 
 ## 14. 2026-08-21 warning-P2 promotion result
 
@@ -543,7 +565,7 @@ opening all five output windows, verifying their screen origins, and leaving the
 operator state as editor plus LED panel plus projector. Until that pass is recorded,
 the five-display and final three-display acceptance boxes remain unchecked.
 
-## 16. 2026-08-21 OutputControl Raw Input and route-inventory checkpoint
+## 16. Historical OutputControl Raw Input checkpoint (superseded)
 
 Windows-first OutputControl integration now closes the code-side Ready handoff
 race that previously converted a physical six-digit input near the original
@@ -624,12 +646,11 @@ failed`. An independent Win32 probe established the normal count/fill shapes as
 `0/1/0` then `1/1/1/0`, which the current classifier already accepts. The classifier
 therefore remains unchanged. The current diagnostic-only change returns a bounded,
 secret-free numeric phase record for count/fill/stabilization failures; its focused
-result is 16 passed, 0 failed, 1 separately ignored interactive SendInput test, with
-zero first-party warnings. A new native build must capture the exact production
-phase, then the exact documented shape may be repaired without broadening synthetic
-input acceptance. Until a human keyboard reaches Ready and one-shot consume, Raw
-Input, five fullscreen origins, and the final editor + LED panel + projector state
-remain incomplete.
+result was 16 passed, 0 failed, 1 separately ignored interactive SendInput test,
+with zero first-party warnings. This is historical evidence only: OutputControl v2
+subsequently removed Raw Input, six-digit, Enter, and 15-second challenges. Current
+acceptance requires the one-click local Enable path, five stable-identity fullscreen
+targets, and the final editor + LED panel + projector state.
 
 The Bank implementation subsequently closed its frozen review at P0 0 / P1 0 /
 P2 0. The final model has no privileged lighting `Main`: ID 1 is ordinary, only
@@ -642,8 +663,9 @@ zero passed. The native no-bundle build completed in 2m20s; executable SHA-256 i
 `620EA06C9696EBD6B45E53D42840CD5806EC16D627D2ED3B89BFB0A05A6B1017`.
 The sole exact-path process was responsive, but Computer Use could not bind its
 window (`foreground window did not report a process id`) on two attempts. This is
-an automation blocker, not evidence of maximize, Raw Input, or display acceptance;
-those hardware gates remain open without an alternate UI-automation bypass.
+an automation blocker, not evidence of maximize or display acceptance. Raw Input
+was later removed and must not be resumed; only current OutputControl v2 native
+window and display-placement acceptance remains open.
 The reviewed implementation is commit
 `262b8c0f43035ee44ff23cdfc195f4ac1a08b374`, pushed to
 `origin/codex/syndocal-v1.2`.
@@ -669,10 +691,10 @@ preselected defaults and one Scene in each of Bank 1/2/3, confirming equal width
 absence of redundant empty copy, and purple/pink/green Bank-to-Scene colour
 agreement.
 
-This does not close the physical or output acceptance boundary. A human keyboard
-must still reach Raw Input Ready and one-shot consume, repeat consent for `Both`
-Arm, verify all five fullscreen output origins, and leave the three-screen editor
-+ LED panel + projector operating state.
+This does not close output acceptance. The later OutputControl v2 checkpoint
+removed the human-keyboard challenge and separate `Both` Arm consent. Verify the
+one-click local Enable path, all five stable-identity fullscreen targets, and the
+three-screen editor + LED panel + projector operating state.
 
 ## 19. 2026-08-21 Windows durable-output and release-evidence closure
 
@@ -711,8 +733,122 @@ one responsive `Syndocal` window was returned. Computer Use confirmed it was
 restored, selected Maximize through the native window menu, and recaptured the
 sole 1920x1032 maximized window before further UI work.
 
-This closes the Windows code/release-evidence tranche, not physical acceptance.
-The only remaining actions in this flow are a real keyboard six-digit Ready and
-one-shot consume, separate fresh consent for `Both` Arm, five fullscreen output
-origin checks, and the retained editor + LED panel + projector operating state.
-Synthetic or automated digits must not substitute for Raw Input proof.
+This closes that historical Windows code/release-evidence tranche, not current
+output acceptance. Do not run the retired Raw Input/six-digit/Enter challenge.
+The current remaining actions are one-click exact-`Both` Enable, five detected
+display windows with exact stable identities, and the retained editor + LED panel
++ projector operating state. Dangerous advanced operations use a parented Windows
+warning dialog; normal Enable does not.
+
+## 20. 2026-08-22 Windows expired-lease Add Display checkpoint
+
+The normal Add Display route no longer depends on the public lease query that
+truthfully hides naturally expired authority. A separate local-window-bound,
+read-only query exposes one exact authority as active, naturally expired but
+recoverable, or already orphaned. It fails closed for zero, multiple, foreign,
+wrong-incarnation, wrong-project, split, subset, or otherwise ambiguous overlap,
+and does not mutate lease generation, audit, or durable state. Add then issues one
+canonical `add_display_output_v2` request; the private durable candidate either
+authorizes the active exact-Both authority or recovers the exact expired/orphaned
+authority and publishes the display output atomically. It does not run Enable as
+a separate preliminary request and does not broaden public Acquire/Recover.
+
+The former UI symptom was a false freeze: the inspected native process remained
+responsive while the active lease had passed its 60-second TTL and the Add error
+was rendered only in the global status area. Pending, success, and failure are now
+adjacent to Add, and the monitor selector plus Add action are single-flight while
+the request is pending.
+
+Frozen pre-native evidence is control-plane 61/61, output-lease 46/46, dedicated
+natural-expiry query-to-Add recovery 1/1, canonical four-display backend driver
+1/1, frontend invoke inventory 407, localization 3538/3538, frontend build and
+focused contracts PASS, no-default Rust warnings zero, frontend first/third-party
+warnings zero, and formatting/syntax/diff checks PASS. The driver uses the same
+canonical Tauri request schema and production durable/lease/engine/project path;
+native shell creation alone is injected. Repeated validation must use this path,
+with Computer Use reserved for one final maximized release-app acceptance.
+
+This is not a completion claim. The authoritative checklist is still 13/79
+(16.5%). A fresh `tauri build --no-bundle`, exactly one responsive maximized
+editor window, default avoidance of that editor display, and four real sub-display
+windows are unverified (0/4) and remain the next stop condition.
+
+## 21. 2026-08-22 current-source native Add Display hang
+
+The former false-freeze conclusion is superseded for the current source. Exact
+pre-build process inspection found zero instances of this checkout's executable;
+`pnpm --dir app tauri build --no-bundle` passed in 1m59s. The resulting
+54,498,816-byte release executable has SHA-256
+`30DD06DBD3642B6CE3D31E403FCDB6AA9A35D9D419929B4D744A837D3509C06E`.
+It launched as the sole exact-path process, was responsive, and was maximized
+before QA.
+
+Enable succeeded. After the exact-Both lease passed its 60-second TTL, Add used
+the default non-editor `\\.\DISPLAY5` 1920x1080 target and the parented Japanese
+warning returned Yes. No output window appeared; Add remained pending; PID 81160
+became Not Responding. Durable evidence contains terminal request 1 (`Acquired`)
+and request 2 `Pending` with no terminal for the current renderer. The exact-path
+process was stopped after evidence capture.
+
+The blocking boundary is now a release stop. After durable prepare, Add holds
+lifecycle, external-admission, project-coordinator, ownership-transition, and
+lease-registry guards through native/GPU/first-frame work. At approximately ten
+seconds the recovery timer invokes synchronous `get_project_checkpoint_bundle`
+on the Tauri event loop and waits for the held coordinator. Completion requires:
+
+- durable Pending before external effects;
+- all unpublished window/GPU/first-frame preparation outside long-lived project,
+  transition, lease, lifecycle, and owner guards;
+- a short final boundary that revalidates owner, project, monitor identity,
+  output/safety fence, lease owner/resources/generation, and S0 before publication;
+- async/off-event-loop checkpoint capture with bounded contention behavior;
+- SafeAbort only after acknowledged full cleanup, otherwise retained in-doubt
+  Pending and zero replay;
+- a production-path stalled-phase regression proving checkpoint/authority/UI
+  liveness and stale-candidate rejection;
+- a new exact-path release build and one maximized native session producing four
+  real sub-display windows while the editor target remains avoided by default.
+
+Repeated proof must use the canonical backend transaction path; Computer Use is
+limited to the final physical placement/modal acceptance. Native display progress
+is 0/4. The authoritative product checklist remains 13/79 (16.5%); no completion,
+commit, or push is permitted at this stop.
+
+## 22. 2026-08-22 phased Add Display Windows acceptance
+
+The stop in section 21 is closed for the frozen phased implementation. The
+production Tauri wrapper and deterministic tests use one full canonical Add
+core, including durable Pending, monitor and authority capture, deadline-bounded
+unpublished native/GPU preparation, exact final revalidation, engine ACK,
+project/lease/worker/metrics publication, terminal record, and classified
+cleanup. Independent read-only review reports P0 0 / P1 0.
+
+The final no-bundle release build passed after exact-path process count zero.
+Executable SHA-256 is
+`C88A1DE53812DD773FE4AE28079977202104F33F63B67054119DD338C1EF2BAA`.
+PID 56460 provided exactly one maximized responsive 1920x1032 editor window.
+Enable remained responsive beyond the ten-second recovery interval. Canonical
+v2 Add then created four real responsive native windows on the four non-editor
+targets DISPLAY5, DISPLAY6, DISPLAY1, and DISPLAY3. The final process window set
+is one editor plus four output windows, with no output on the editor target.
+
+The current renderer's durable requests 1 through 5 are all terminal, its
+origin has `replay_guard=false`, and it has no Pending. Historical Pending rows
+from two older renderer origins remain fail-closed evidence only. The remaining
+post-commit message P2 is now closed: terminal Add success is fixed before the
+refresh, the two exact transient transaction/publication messages clear only
+after refresh settles, unknown refresh failure reports `added; refresh pending`,
+and mutation failure remains an adjacent Add error. The executable checker runs
+the production classifier and the success/stale/unknown/mutation-failure matrix.
+
+The final P2 rebuild used the same production code with unminified Vite assets
+after Windows Defender falsely quarantined Tauri's generated minified JS; no
+Defender exclusion or protection change was made. The successful no-bundle
+release executable is 54,587,904 bytes with SHA-256
+`977D3D63A60E77ACE9E6A6E1CA91652EC0356E8389367921DAB7032894DA0DCB`.
+PID 87060 was the only exact-path process and supplied exactly one responsive,
+maximized 1920x1032 `Syndocal` window after a greater-than-ten-second wait.
+
+The Windows native display acceptance is 4/4 and this bounded tranche is 100%.
+The product checklist remains 13/79 (16.5%). Continue the roadmap dependency
+order; do not convert this acceptance into a whole-product completion claim.

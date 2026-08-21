@@ -6,7 +6,7 @@ Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
-> Current continuation note: the active `1.2.0-alpha.1` train is not represented by the old v1.0 completion statement alone. Use the [current completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md), [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md), [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) as the current authorities. Do not mark AI3 complete, advance to AI4, or close the current Windows product release until their unchecked gates are closed.
+> Current continuation note: the active `1.2.0-alpha.2` train is not represented by the old v1.0 completion statement alone. Use the [current completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md), [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md), [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) as the current authorities. Do not mark AI3 complete, advance to AI4, or close the current Windows product release until their unchecked gates are closed.
 
 ## 結論
 

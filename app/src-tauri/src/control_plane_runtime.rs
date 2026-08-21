@@ -13,33 +13,29 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use engine::{SafetyBlackoutEngageDisposition, TimelineTransportSetPlayingDisposition};
 use protocol::control_plane_command::{
-    OutputConsentChallengeV1, OutputConsentPhysicalStateV1, OutputConsentPrepareRequestV1,
-    OutputConsentStatusRequestV1, OutputConsentStatusV1, OutputControlActionV1,
-    OutputControlAuthorityBundleV1, OutputControlCommandRequestV1, OutputControlErrorCodeV1,
-    OutputControlFenceV1, OutputControlLeaseResultV1, OutputControlReceiptOutcomeV1,
-    OutputControlReceiptV1, OutputControlRejectionV1, OutputControlResponseV1,
-    OutputLeaseReceiptChangeV1, OutputLeaseReceiptOutcomeV1, OutputLeaseReceiptPhaseV1,
-    RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorCodeV1, RuntimeCommandErrorV1,
-    RuntimeCommandReceiptOutcomeV1, RuntimeCommandReceiptV1, RuntimeCommandRejectionV1,
-    RuntimeCommandRequestV1, RuntimeCommandResponseV1, SafetyBlackoutEngageOutcomeV1,
-    SafetyBlackoutEngageReceiptV1, SafetyBlackoutEngageRejectionV1, SafetyBlackoutEngageRequestV1,
-    SafetyBlackoutEngageResponseV1, TimelineFollowAbortAuthorityBundleV1,
-    TimelineFollowAbortRuntimeFenceV1, TimelineFollowAbortRuntimeReceiptV1,
-    TimelineFollowAbortRuntimeRejectionV1, TimelineFollowAbortRuntimeRequestV1,
-    TimelineFollowAbortRuntimeResponseV1, TimelineTransportRuntimeFenceV1,
-    MAX_SAFE_JAVASCRIPT_INTEGER, OUTPUT_CONSENT_PREPARE_OPERATION_ID,
-    OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_SHAPE_DOMAIN_V1,
-    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1,
-    TIMELINE_FOLLOW_ABORT_SHAPE_DOMAIN_V1, TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1,
-    TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_SHAPE_DOMAIN_V1,
+    OutputControlActionV2, OutputControlAuthorityBundleV1, OutputControlCommandRequestV2,
+    OutputControlErrorCodeV2, OutputControlFenceV1, OutputControlLeaseResultV2,
+    OutputControlReceiptOutcomeV2, OutputControlReceiptV2, OutputControlRejectionV2,
+    OutputControlResponseV2, OutputLeaseReceiptChangeV2, OutputLeaseReceiptOutcomeV2,
+    OutputLeaseReceiptPhaseV2, RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorCodeV1,
+    RuntimeCommandErrorV1, RuntimeCommandReceiptOutcomeV1, RuntimeCommandReceiptV1,
+    RuntimeCommandRejectionV1, RuntimeCommandRequestV1, RuntimeCommandResponseV1,
+    SafetyBlackoutEngageOutcomeV1, SafetyBlackoutEngageReceiptV1, SafetyBlackoutEngageRejectionV1,
+    SafetyBlackoutEngageRequestV1, SafetyBlackoutEngageResponseV1,
+    TimelineFollowAbortAuthorityBundleV1, TimelineFollowAbortRuntimeFenceV1,
+    TimelineFollowAbortRuntimeReceiptV1, TimelineFollowAbortRuntimeRejectionV1,
+    TimelineFollowAbortRuntimeRequestV1, TimelineFollowAbortRuntimeResponseV1,
+    TimelineTransportRuntimeFenceV1, MAX_SAFE_JAVASCRIPT_INTEGER,
+    OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
+    SAFETY_BLACKOUT_ENGAGE_SHAPE_DOMAIN_V1, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
+    TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1, TIMELINE_FOLLOW_ABORT_SHAPE_DOMAIN_V1,
+    TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+    TIMELINE_TRANSPORT_SET_PLAYING_SHAPE_DOMAIN_V1,
 };
+use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use sha2::{Digest, Sha256};
 use tauri::WebviewWindow;
 
-use super::control_plane_security::{
-    ConsentAuthorityBinding, ConsentCallerBinding, ConsentConsumeError, PreparedConsentState,
-};
 use super::output_lease::{
     OutputLeaseId, OutputLeaseOperationOutcome, OutputLeaseOwner, OutputLeasePhase,
     OutputLeaseRequest, OutputLeaseRequestAction, OutputLeaseRequestReceipt, OutputLeaseResource,
@@ -70,121 +66,132 @@ const SAFETY_BLACKOUT_DOMAIN: &str = "safety.blackout.engage";
 /// sidecar tranche; this bound prevents an in-process memory sink.
 const MAX_SAFETY_AUDIT_RECORDS: usize = 65_536;
 
-pub(crate) fn issue_output_control_authority(
+/// Advanced output transitions require an OS-owned confirmation that is
+/// parented to the exact local Tauri window.  The ordinary Enable action is a
+/// deliberate one-click local action and must never open this dialog.
+pub(crate) fn output_action_requires_native_danger_confirmation(
+    action: &OutputControlActionV2,
+) -> bool {
+    matches!(
+        action,
+        OutputControlActionV2::ReleaseBlackout { .. }
+            | OutputControlActionV2::Arm { .. }
+            | OutputControlActionV2::TakeOverStandby { .. }
+            | OutputControlActionV2::AddDisplay { .. }
+            | OutputControlActionV2::ForceTransferLease { .. }
+    )
+}
+
+fn native_output_confirmation_copy_for_locale(locale: &str) -> (&'static str, &'static str) {
+    if locale.eq_ignore_ascii_case("ja") || locale.to_ascii_lowercase().starts_with("ja-") {
+        (
+            "出力制御の確認",
+            "この詳細操作は、ライブ出力の所有権または出力状態を変更します。続行しますか？",
+        )
+    } else {
+        (
+            "Confirm output control",
+            "This advanced output operation changes live ownership or output state. Continue?",
+        )
+    }
+}
+
+fn native_output_confirmation_copy_for_editor_target(
+    editor_target: bool,
+) -> (&'static str, &'static str) {
+    let (title, description) = native_output_confirmation_copy();
+    if !editor_target {
+        return (title, description);
+    }
+    if title == "出力制御の確認" {
+        (
+            "エディタ画面への出力確認",
+            "現在の操作画面と同じディスプレイへ映像を出力します。操作画面を覆う可能性があります。続行しますか？",
+        )
+    } else {
+        (
+            "Confirm editor display output",
+            "This output targets the same display as the editor and may cover the control surface. Continue?",
+        )
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn native_output_confirmation_copy() -> (&'static str, &'static str) {
+    use windows::Win32::Globalization::GetUserDefaultLocaleName;
+
+    let mut locale = [0u16; 85];
+    let length = unsafe { GetUserDefaultLocaleName(&mut locale) };
+    if length > 1 {
+        if let Ok(locale) = String::from_utf16(&locale[..length as usize - 1]) {
+            return native_output_confirmation_copy_for_locale(&locale);
+        }
+    }
+    native_output_confirmation_copy_for_locale("en")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn native_output_confirmation_copy() -> (&'static str, &'static str) {
+    native_output_confirmation_copy_for_locale(std::env::var("LANG").as_deref().unwrap_or("en"))
+}
+
+fn confirm_native_dangerous_output_action(
     window: &WebviewWindow,
+    action: &OutputControlActionV2,
+) -> bool {
+    if !output_action_requires_native_danger_confirmation(action) {
+        return true;
+    }
+    let editor_target = match action {
+        OutputControlActionV2::AddDisplay { spec, .. } => {
+            super::validate_editor_monitor_for_window(window)
+                .ok()
+                .is_some_and(|index| index == spec.monitor_index)
+        }
+        _ => false,
+    };
+    let (title, description) = native_output_confirmation_copy_for_editor_target(editor_target);
+    matches!(
+        MessageDialog::new()
+            .set_level(MessageLevel::Warning)
+            .set_title(title)
+            .set_description(description)
+            .set_buttons(MessageButtons::YesNo)
+            .set_parent(window)
+            .show(),
+        MessageDialogResult::Yes
+    )
+}
+
+fn output_confirmation_gate<F>(
+    action: &OutputControlActionV2,
+    confirmation: &F,
+) -> Result<(), OutputControlErrorCodeV2>
+where
+    F: Fn(&OutputControlActionV2) -> bool,
+{
+    if output_action_requires_native_danger_confirmation(action) && !confirmation(action) {
+        Err(OutputControlErrorCodeV2::Forbidden)
+    } else {
+        Ok(())
+    }
+}
+
+/// Label-only variant used by the asynchronous Tauri query wrapper. The
+/// wrapper captures the renderer label on the event-loop thread, then runs
+/// the bounded authority capture off that thread; no WebviewWindow getter is
+/// needed while the query holds backend locks.
+pub(crate) fn issue_output_control_authority_for_window_label(
+    window_label: &str,
     state: &AppState,
     query_state: &ControlPlaneQueryState,
 ) -> Result<OutputControlAuthorityBundleV1, String> {
     let fence = query_state
-        .issue_output_control_fence_for_window(window.label(), state)
+        .issue_output_control_fence_for_window(window_label, state)
         .map_err(|error| format!("Output control authority is unavailable: {error:?}"))?;
     Ok(OutputControlAuthorityBundleV1 {
         operation_id: OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID.to_string(),
         fence,
-    })
-}
-
-pub(crate) fn prepare_output_consent(
-    window: &WebviewWindow,
-    state: &AppState,
-    query_state: &ControlPlaneQueryState,
-    request: OutputConsentPrepareRequestV1,
-) -> Result<OutputConsentChallengeV1, String> {
-    request
-        .validate()
-        .map_err(|_| "Output consent request is invalid".to_string())?;
-    let binding = capture_binding(state, window.label())
-        .map_err(|_| "Output consent caller is not registered".to_string())?;
-    query_state
-        .validate_output_control_fence_window(
-            window.label(),
-            &request.expected_fence,
-            binding.owner_incarnation,
-        )
-        .map_err(|_| "Output consent authority was not issued to this renderer".to_string())?;
-
-    {
-        let _external_admission = lock_project_external_command_admission(state)?;
-        let mut coordinator = lock_project_coordinator(state)?;
-        reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
-        if !exact_output_control_fence_matches(state, &coordinator, &request.expected_fence) {
-            return Err("Output consent authority is stale".to_string());
-        }
-        ensure_no_pending_project_transaction(&coordinator)?;
-        ensure_project_operator_video_clip_slot_runtime_allowed(
-            state,
-            &coordinator,
-            &binding.principal,
-        )?;
-        validate_output_action_current(state, &request.action)?;
-        validate_display_output_monitor(window, &request.action)?;
-    }
-
-    let argument_fingerprint = hex_sha256(
-        &request
-            .argument_fingerprint_bytes()
-            .map_err(|_| "Output consent request shape is invalid".to_string())?,
-    );
-    let authority = ConsentAuthorityBinding {
-        caller: ConsentCallerBinding {
-            principal: binding.principal,
-            window_label: binding.window_label,
-            owner_incarnation: binding.owner_incarnation,
-        },
-        operation_id: request.action.operation_id().to_string(),
-        argument_fingerprint: argument_fingerprint.clone(),
-        project_epoch: request.expected_fence.project_epoch,
-        project_revision: request.expected_fence.project_revision,
-        project_checkpoint_hash: request.expected_fence.project_checkpoint_hash.clone(),
-        project_publication_generation: request.expected_fence.project_publication_generation,
-        output_epoch: request.expected_fence.output_epoch,
-        output_generation: request.expected_fence.output_generation,
-        safety_blackout_epoch: request.expected_fence.safety_blackout_epoch,
-        safety_blackout_generation: request.expected_fence.safety_blackout_generation,
-    };
-    let prepared = state.control_plane_security.prepare_consent(authority)?;
-    Ok(OutputConsentChallengeV1 {
-        operation_id: OUTPUT_CONSENT_PREPARE_OPERATION_ID.to_string(),
-        request_id: request.request_id,
-        target_operation_id: request.action.operation_id().to_string(),
-        challenge_id: prepared.challenge_id,
-        consent_token: prepared.consent_token,
-        display_code: prepared.display_code,
-        argument_fingerprint,
-        expires_at_unix_ms: prepared.expires_at_unix_ms,
-    })
-}
-
-pub(crate) fn output_consent_status(
-    window: &WebviewWindow,
-    state: &AppState,
-    request: OutputConsentStatusRequestV1,
-) -> Result<OutputConsentStatusV1, String> {
-    request
-        .validate()
-        .map_err(|_| "Output consent status request is invalid".to_string())?;
-    let binding = capture_binding(state, window.label())
-        .map_err(|_| "Output consent caller is not registered".to_string())?;
-    let caller = ConsentCallerBinding {
-        principal: binding.principal,
-        window_label: binding.window_label,
-        owner_incarnation: binding.owner_incarnation,
-    };
-    let status = state
-        .control_plane_security
-        .consent_status(&caller, &request.challenge_id)
-        .map_err(output_consent_error_message)?;
-    Ok(OutputConsentStatusV1 {
-        operation_id: OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID.to_string(),
-        request_id: request.request_id,
-        challenge_id: request.challenge_id,
-        state: match status.state {
-            PreparedConsentState::PendingPhysicalInput => {
-                OutputConsentPhysicalStateV1::PendingPhysicalInput
-            }
-            PreparedConsentState::Ready => OutputConsentPhysicalStateV1::Ready,
-        },
-        expires_at_unix_ms: status.expires_at_unix_ms,
     })
 }
 
@@ -193,31 +200,47 @@ pub(crate) fn execute_output_control(
     window: &WebviewWindow,
     state: &AppState,
     query_state: &ControlPlaneQueryState,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_with_confirmation(app, window, state, query_state, request, |action| {
+        confirm_native_dangerous_output_action(window, action)
+    })
+}
+
+fn execute_output_control_with_confirmation<F>(
+    app: &tauri::AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    request: OutputControlCommandRequestV2,
+    confirmation: F,
+) -> OutputControlResponseV2
+where
+    F: Fn(&OutputControlActionV2) -> bool,
+{
     if request.validate().is_err() {
-        return output_control_rejection(&request, OutputControlErrorCodeV1::InvalidRequest);
+        return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest);
     }
     let shape_sha256 = match request.canonical_shape_bytes() {
         Ok(bytes) => hex_sha256(&bytes),
         Err(_) => {
-            return output_control_rejection(&request, OutputControlErrorCodeV1::InvalidRequest)
+            return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest)
         }
     };
     let argument_fingerprint = match request.argument_fingerprint_bytes() {
         Ok(bytes) => hex_sha256(&bytes),
         Err(_) => {
-            return output_control_rejection(&request, OutputControlErrorCodeV1::InvalidRequest)
+            return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest)
         }
     };
     let now = Instant::now();
-    let _owner_rotation = match state.project_transaction_owner_rotation.lock() {
+    let owner_rotation = match state.project_transaction_owner_rotation.lock() {
         Ok(guard) => guard,
-        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV1::Internal),
+        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV2::Internal),
     };
     let binding = match capture_binding(state, window.label()) {
         Ok(binding) => binding,
-        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
+        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
     };
     if let Err(code) = state
         .runtime_control_plane
@@ -249,7 +272,7 @@ pub(crate) fn execute_output_control(
             state
                 .runtime_control_plane
                 .release_output_control_lane(&key);
-            return output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
+            return output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
         }
     };
     if let Some(reservation) = state.runtime_control_plane.recheck_output_control_terminal(
@@ -263,10 +286,14 @@ pub(crate) fn execute_output_control(
                 output_control_rejection(&request, code)
             }
             OutputControlLaneReservation::Lane(_) => {
-                output_control_rejection(&request, OutputControlErrorCodeV1::Internal)
+                output_control_rejection(&request, OutputControlErrorCodeV2::Internal)
             }
         };
     }
+    // Reject stale fences, vanished/duplicate display targets, and invalid or
+    // expired lease authority before showing a native danger dialog. These
+    // checks are repeated after the dialog because the owner, project, target,
+    // and lease can still change while the blocking OS prompt is open.
     if query_state
         .validate_output_control_fence_window(
             window.label(),
@@ -274,12 +301,158 @@ pub(crate) fn execute_output_control(
             binding.owner_incarnation,
         )
         .is_err()
+        || validate_output_action_current(state, &request.action).is_err()
+        || validate_display_output_monitor(window, &request.action).is_err()
     {
         return retain_output_control_rejection(
             state,
             key,
             shape_sha256,
-            output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
+            output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
+        );
+    }
+    if super::preflight_output_lease_for_control_action(
+        state,
+        &binding.principal,
+        &binding.window_label,
+        binding.owner_incarnation,
+        request.request_id,
+        &request.action,
+        request.expected_fence.project_epoch,
+    )
+    .is_err()
+    {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest),
+        );
+    }
+    {
+        let _preconfirmation_external_admission =
+            match lock_project_external_command_admission(state) {
+                Ok(guard) => guard,
+                Err(_) => {
+                    return retain_output_control_rejection(
+                        state,
+                        key,
+                        shape_sha256,
+                        output_control_rejection(&request, OutputControlErrorCodeV2::Busy),
+                    );
+                }
+            };
+        let mut preconfirmation_coordinator = match lock_project_coordinator(state) {
+            Ok(coordinator) => coordinator,
+            Err(_) => {
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, OutputControlErrorCodeV2::Busy),
+                );
+            }
+        };
+        if reconcile_project_checkpoint_for_coordinator(state, &mut preconfirmation_coordinator)
+            .is_err()
+            || !exact_output_control_fence_matches(
+                state,
+                &preconfirmation_coordinator,
+                &request.expected_fence,
+            )
+            || ensure_no_pending_project_transaction(&preconfirmation_coordinator).is_err()
+        {
+            return retain_output_control_rejection(
+                state,
+                key,
+                shape_sha256,
+                output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
+            );
+        }
+        if ensure_project_operator_video_clip_slot_runtime_allowed(
+            state,
+            &preconfirmation_coordinator,
+            &binding.principal,
+        )
+        .is_err()
+        {
+            return retain_output_control_rejection(
+                state,
+                key,
+                shape_sha256,
+                output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
+            );
+        }
+    }
+    // Replay is resolved before prompting so a lost-reply retry returns the
+    // durable terminal receipt without showing the native dialog again.  A
+    // cancelled/closed dialog exits before admission, lease work, or engine
+    // publication; the fence and window are revalidated immediately after it.
+    drop(owner_rotation);
+    if let Err(code) = output_confirmation_gate(&request.action, &confirmation) {
+        let response = output_control_rejection(&request, code);
+        state.runtime_control_plane.store_output_control_terminal(
+            key,
+            shape_sha256,
+            response.clone(),
+            Instant::now(),
+        );
+        return response;
+    }
+    // Owner rotation is an ABA guard for capture/revalidation, not a mutex
+    // around native shell creation, GPU setup, engine ACK, or durable commit.
+    // Holding it across that physical lane makes the synchronous authority
+    // query wait behind an event-loop-affine operation. The lifecycle and
+    // external-admission guards acquired below still serialize an actual
+    // owner handoff with this commit.
+    {
+        let _owner_rotation = match state.project_transaction_owner_rotation.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                state
+                    .runtime_control_plane
+                    .release_output_control_lane(&key);
+                return output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
+            }
+        };
+        if capture_binding(state, window.label()).ok().as_ref() != Some(&binding) {
+            let response = output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden);
+            state.runtime_control_plane.store_output_control_terminal(
+                key,
+                shape_sha256,
+                response.clone(),
+                Instant::now(),
+            );
+            return response;
+        }
+        if query_state
+            .validate_output_control_fence_window(
+                window.label(),
+                &request.expected_fence,
+                binding.owner_incarnation,
+            )
+            .is_err()
+        {
+            return retain_output_control_rejection(
+                state,
+                key,
+                shape_sha256,
+                output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
+            );
+        }
+    }
+
+    // Re-resolve the physical target after the native prompt, but before any
+    // project/coordinator guard is acquired. WebviewWindow monitor getters
+    // are event-loop RPCs; keeping one inside the coordinator scope creates
+    // a circular wait with the synchronous authority poll. AddDisplay repeats
+    // the final topology check using the captured, lock-free descriptor.
+    if validate_display_output_monitor(window, &request.action).is_err() {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
         );
     }
 
@@ -289,7 +462,7 @@ pub(crate) fn execute_output_control(
             state
                 .runtime_control_plane
                 .release_output_control_lane(&key);
-            return output_control_rejection(&request, OutputControlErrorCodeV1::Busy);
+            return output_control_rejection(&request, OutputControlErrorCodeV2::Busy);
         }
     };
     let mut coordinator = match lock_project_coordinator(state) {
@@ -298,7 +471,7 @@ pub(crate) fn execute_output_control(
             state
                 .runtime_control_plane
                 .release_output_control_lane(&key);
-            return output_control_rejection(&request, OutputControlErrorCodeV1::Busy);
+            return output_control_rejection(&request, OutputControlErrorCodeV2::Busy);
         }
     };
     if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
@@ -309,7 +482,7 @@ pub(crate) fn execute_output_control(
             state,
             key,
             shape_sha256,
-            output_control_rejection(&request, OutputControlErrorCodeV1::StaleFence),
+            output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
         );
     }
     if ensure_project_operator_video_clip_slot_runtime_allowed(
@@ -323,23 +496,21 @@ pub(crate) fn execute_output_control(
             state,
             key,
             shape_sha256,
-            output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
+            output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
         );
     }
-    if validate_output_action_current(state, &request.action).is_err()
-        || validate_display_output_monitor(window, &request.action).is_err()
-    {
+    if validate_output_action_current(state, &request.action).is_err() {
         return retain_output_control_rejection(
             state,
             key,
             shape_sha256,
-            output_control_rejection(&request, OutputControlErrorCodeV1::StaleFence),
+            output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
         );
     }
 
-    // Probe the shared lease request identity before consent consumption. A
-    // same request ID with a different operation/shape must be rejected by
-    // the process-local registry before rate, consent, or physical work.
+    // Probe the shared lease request identity before the authoritative
+    // candidate commit. A same request ID with a different operation/shape
+    // must be rejected before any external output work.
     if super::preflight_output_lease_for_control_action(
         state,
         &binding.principal,
@@ -347,6 +518,7 @@ pub(crate) fn execute_output_control(
         binding.owner_incarnation,
         request.request_id,
         &request.action,
+        request.expected_fence.project_epoch,
     )
     .is_err()
     {
@@ -354,7 +526,7 @@ pub(crate) fn execute_output_control(
             state,
             key,
             shape_sha256,
-            output_control_rejection(&request, OutputControlErrorCodeV1::InvalidRequest),
+            output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest),
         );
     }
     let (lease_request, lease_now_ms) = match super::build_output_lease_authorization_request(
@@ -364,6 +536,7 @@ pub(crate) fn execute_output_control(
         binding.owner_incarnation,
         request.request_id,
         &request.action,
+        request.expected_fence.project_epoch,
     ) {
         Ok(request) => request,
         Err(_) => {
@@ -371,7 +544,7 @@ pub(crate) fn execute_output_control(
                 state,
                 key,
                 shape_sha256,
-                output_control_rejection(&request, OutputControlErrorCodeV1::InvalidRequest),
+                output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest),
             );
         }
     };
@@ -395,48 +568,21 @@ pub(crate) fn execute_output_control(
             }
         };
 
-    let consent_binding = ConsentAuthorityBinding {
-        caller: ConsentCallerBinding {
-            principal: binding.principal.clone(),
-            window_label: binding.window_label.clone(),
-            owner_incarnation: binding.owner_incarnation,
-        },
-        operation_id: request.operation_id.clone(),
-        argument_fingerprint: argument_fingerprint.clone(),
-        project_epoch: request.expected_fence.project_epoch,
-        project_revision: request.expected_fence.project_revision,
-        project_checkpoint_hash: request.expected_fence.project_checkpoint_hash.clone(),
-        project_publication_generation: request.expected_fence.project_publication_generation,
-        output_epoch: request.expected_fence.output_epoch,
-        output_generation: request.expected_fence.output_generation,
-        safety_blackout_epoch: request.expected_fence.safety_blackout_epoch,
-        safety_blackout_generation: request.expected_fence.safety_blackout_generation,
-    };
-    if let Err(error) = state
-        .control_plane_security
-        .consume_consent(&consent_binding, &request.consent_token)
-    {
-        state
-            .runtime_control_plane
-            .finish_output_control_inflight(&inflight);
-        let response = output_control_rejection(&request, output_consent_error_code(error));
-        state.runtime_control_plane.store_output_control_terminal(
-            key,
-            shape_sha256,
-            response.clone(),
-            Instant::now(),
-        );
-        return response;
-    }
-
-    // The exact fence and consent have now been consumed. Each mutating
+    // The exact local-window fence has now been admitted. Each mutating
     // action re-enters the lifecycle/project admission boundary through its
     // actual transition or publication commit.
     drop(coordinator);
     drop(external_admission);
 
     let operation_result = match &request.action {
-        OutputControlActionV1::ReleaseBlackout { .. } => {
+        OutputControlActionV2::EnableOutput => super::enable_output_with_output_control_fence(
+            app,
+            state,
+            &request.expected_fence,
+            &lease_request,
+            lease_now_ms,
+        ),
+        OutputControlActionV2::ReleaseBlackout { .. } => {
             super::release_safety_blackout_with_output_control_fence(
                 state,
                 &request.expected_fence,
@@ -444,7 +590,7 @@ pub(crate) fn execute_output_control(
                 lease_now_ms,
             )
         }
-        OutputControlActionV1::Arm { role, .. } => {
+        OutputControlActionV2::Arm { role, .. } => {
             let target = match role {
                 protocol::control_plane_command::OutputControlTargetRoleV1::Lighting => {
                     protocol::MachineOutputRole::Lighting
@@ -465,7 +611,7 @@ pub(crate) fn execute_output_control(
                 lease_now_ms,
             )
         }
-        OutputControlActionV1::TakeOverStandby {
+        OutputControlActionV2::TakeOverStandby {
             force,
             standby_session_id,
             standby_generation,
@@ -485,33 +631,42 @@ pub(crate) fn execute_output_control(
             )
             .map(|(_load_result, fence_after, receipt)| (true, fence_after, receipt))
         }
-        OutputControlActionV1::AddDisplay { spec, .. } => {
+        OutputControlActionV2::AddDisplay { spec, .. } => {
             super::add_display_output_with_output_control_fence(
                 app,
+                window,
                 state,
                 spec,
                 &request.expected_fence,
                 &lease_request,
                 lease_now_ms,
+                &binding.principal,
+                &binding.window_label,
+                binding.owner_incarnation,
             )
         }
-        OutputControlActionV1::AcquireLease { .. }
-        | OutputControlActionV1::RenewLease { .. }
-        | OutputControlActionV1::RecoverLease { .. }
-        | OutputControlActionV1::RelinquishOutputLease { .. }
-        | OutputControlActionV1::ForceTransferLease { .. } => {
+        OutputControlActionV2::AcquireLease { .. }
+        | OutputControlActionV2::RenewLease { .. }
+        | OutputControlActionV2::RecoverLease { .. }
+        | OutputControlActionV2::RelinquishOutputLease { .. }
+        | OutputControlActionV2::ForceTransferLease { .. } => {
             Err("Output lease lifecycle is not wired in this operation path".to_string())
         }
     };
 
     let (applied, fence_after, lease_receipt) = match operation_result {
         Ok(result) => result,
-        Err(_) => {
+        Err(error) => {
+            eprintln!(
+                "OutputControl operation {} failed before publication: {}",
+                request.action.operation_id(),
+                error
+            );
             state
                 .runtime_control_plane
                 .finish_output_control_inflight(&inflight);
             let response =
-                output_control_rejection(&request, OutputControlErrorCodeV1::PublicationFailed);
+                output_control_rejection(&request, OutputControlErrorCodeV2::PublicationFailed);
             state.runtime_control_plane.store_output_control_terminal(
                 key,
                 shape_sha256,
@@ -529,7 +684,7 @@ pub(crate) fn execute_output_control(
                     .runtime_control_plane
                     .finish_output_control_inflight(&inflight);
                 let response =
-                    output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
+                    output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
                 state.runtime_control_plane.store_output_control_terminal(
                     key,
                     shape_sha256,
@@ -540,7 +695,7 @@ pub(crate) fn execute_output_control(
             }
         };
 
-    let response = OutputControlResponseV1::Receipt(OutputControlReceiptV1 {
+    let response = OutputControlResponseV2::Receipt(OutputControlReceiptV2 {
         operation_id: request.operation_id.clone(),
         request_id: request.request_id,
         shape_sha256: shape_sha256.clone(),
@@ -549,13 +704,19 @@ pub(crate) fn execute_output_control(
         fence_before: request.expected_fence.clone(),
         fence_after,
         outcome: if applied {
-            OutputControlReceiptOutcomeV1::Applied
+            OutputControlReceiptOutcomeV2::Applied
         } else {
-            OutputControlReceiptOutcomeV1::NoOp
+            OutputControlReceiptOutcomeV2::NoOp
         },
         lease_result: Some(lease_result),
     });
-    debug_assert!(response.validate().is_ok());
+    if let Err(error) = response.validate() {
+        eprintln!(
+            "OutputControl operation {} produced an invalid terminal response: {}",
+            request.action.operation_id(),
+            error
+        );
+    }
     state
         .runtime_control_plane
         .finish_output_control_inflight(&inflight);
@@ -583,6 +744,21 @@ pub(crate) fn exact_output_control_fence_matches(
         && output.generation.checked_add(1) == Some(fence.output_generation)
         && safety.epoch == fence.safety_blackout_epoch
         && safety.generation == fence.safety_blackout_generation
+}
+
+/// Final AddDisplay owner ABA check. Callers hold the owner-rotation guard, so
+/// the two registry reads form one exact binding observation.
+pub(crate) fn exact_output_control_owner_matches(
+    state: &AppState,
+    expected_principal: &str,
+    expected_window_label: &str,
+    expected_owner_incarnation: u64,
+) -> bool {
+    capture_binding(state, expected_window_label).is_ok_and(|binding| {
+        binding.principal == expected_principal
+            && binding.window_label == expected_window_label
+            && binding.owner_incarnation == expected_owner_incarnation
+    })
 }
 
 /// Reserve the externally projected output counters that a successful Arm or
@@ -637,11 +813,12 @@ pub(crate) fn committed_output_control_fence(
 
 fn validate_output_action_current(
     state: &AppState,
-    action: &OutputControlActionV1,
+    action: &OutputControlActionV2,
 ) -> Result<(), String> {
     match action {
-        OutputControlActionV1::Arm { .. } | OutputControlActionV1::ReleaseBlackout { .. } => Ok(()),
-        OutputControlActionV1::AddDisplay { spec, .. } => {
+        OutputControlActionV2::EnableOutput => Ok(()),
+        OutputControlActionV2::Arm { .. } | OutputControlActionV2::ReleaseBlackout { .. } => Ok(()),
+        OutputControlActionV2::AddDisplay { spec, .. } => {
             let snapshot = state.engine.snapshot();
             if snapshot.video.outputs.iter().any(|output| {
                 output.kind == protocol::VideoOutputKind::Display
@@ -651,7 +828,7 @@ fn validate_output_action_current(
             }
             Ok(())
         }
-        OutputControlActionV1::TakeOverStandby {
+        OutputControlActionV2::TakeOverStandby {
             force,
             standby_session_id,
             standby_generation,
@@ -677,19 +854,19 @@ fn validate_output_action_current(
             }
             Ok(())
         }
-        OutputControlActionV1::AcquireLease { .. }
-        | OutputControlActionV1::RenewLease { .. }
-        | OutputControlActionV1::RecoverLease { .. }
-        | OutputControlActionV1::RelinquishOutputLease { .. }
-        | OutputControlActionV1::ForceTransferLease { .. } => Ok(()),
+        OutputControlActionV2::AcquireLease { .. }
+        | OutputControlActionV2::RenewLease { .. }
+        | OutputControlActionV2::RecoverLease { .. }
+        | OutputControlActionV2::RelinquishOutputLease { .. }
+        | OutputControlActionV2::ForceTransferLease { .. } => Ok(()),
     }
 }
 
 fn validate_display_output_monitor(
     window: &WebviewWindow,
-    action: &OutputControlActionV1,
+    action: &OutputControlActionV2,
 ) -> Result<(), String> {
-    let OutputControlActionV1::AddDisplay { spec, .. } = action else {
+    let OutputControlActionV2::AddDisplay { spec, .. } = action else {
         return Ok(());
     };
     spec.validate()
@@ -697,35 +874,26 @@ fn validate_display_output_monitor(
     let monitors = window
         .available_monitors()
         .map_err(|error| format!("Display enumeration failed: {error}"))?;
-    let Some(monitor) = monitors.get(spec.monitor_index as usize) else {
+    let monitors = super::video_display_monitors_from_available(monitors)?;
+    // The command is authorized by the exact current editor target as well
+    // as by the selected output target. Re-resolve it on every preflight so
+    // an index-only match cannot survive a monitor move/reorder/ambiguity.
+    super::validate_editor_monitor_for_window(window)?;
+    let Some(monitor) = monitors
+        .iter()
+        .find(|monitor| monitor.index == spec.monitor_index)
+    else {
         return Err("Display output monitor index is not available".to_string());
     };
-    let size = monitor.size();
-    if size.width == 0 || size.height == 0 {
-        return Err("Display output monitor reported an empty physical size".to_string());
-    }
-    let name = monitor
-        .name()
-        .cloned()
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| format!("Display {}", spec.monitor_index + 1));
-    let identity_material = format!(
-        "syndocal.display-monitor.v1\0{name}\0{}\0{}\0{}\0{}\0{}",
-        monitor.position().x,
-        monitor.position().y,
-        size.width,
-        size.height,
-        monitor.scale_factor().to_bits(),
-    );
-    if spec.monitor_identity != hex_sha256(identity_material.as_bytes()) {
+    if spec.monitor_identity != monitor.identity {
         return Err("Display output monitor identity is stale".to_string());
     }
-    if spec.width != size.width || spec.height != size.height {
-        return Err(
-            "Display output dimensions must match the selected monitor exactly".to_string(),
-        );
-    }
-    Ok(())
+    super::validate_display_monitor_dimensions(
+        spec.width,
+        spec.height,
+        monitor.physical_width,
+        monitor.physical_height,
+    )
 }
 
 /// Dispatch one operation-specific Tauri ingress into the shared local
@@ -738,15 +906,15 @@ pub(crate) fn execute_output_control_for_operation(
     state: &AppState,
     query_state: &ControlPlaneQueryState,
     expected_operation_id: &'static str,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
     if request.operation_id != expected_operation_id
         || request.action.operation_id() != expected_operation_id
     {
         return output_control_rejection_for_operation(
             &request,
             expected_operation_id,
-            OutputControlErrorCodeV1::InvalidRequest,
+            OutputControlErrorCodeV2::InvalidRequest,
         );
     }
     execute_output_control(app, window, state, query_state, request)
@@ -754,15 +922,15 @@ pub(crate) fn execute_output_control_for_operation(
 
 fn output_lease_error_code(
     error: super::output_lease::OutputLeaseError,
-) -> OutputControlErrorCodeV1 {
+) -> OutputControlErrorCodeV2 {
     match error {
-        super::output_lease::OutputLeaseError::Busy => OutputControlErrorCodeV1::Busy,
+        super::output_lease::OutputLeaseError::Busy => OutputControlErrorCodeV2::Busy,
         super::output_lease::OutputLeaseError::RateLimited
         | super::output_lease::OutputLeaseError::RequestCapacity
         | super::output_lease::OutputLeaseError::LeaseCapacity
         | super::output_lease::OutputLeaseError::LaneCapacity
         | super::output_lease::OutputLeaseError::AuditCapacity => {
-            OutputControlErrorCodeV1::Overloaded
+            OutputControlErrorCodeV2::Overloaded
         }
         super::output_lease::OutputLeaseError::Conflict
         | super::output_lease::OutputLeaseError::ReceiptNotRetained
@@ -770,7 +938,7 @@ fn output_lease_error_code(
         | super::output_lease::OutputLeaseError::InvalidOwner
         | super::output_lease::OutputLeaseError::InvalidResources
         | super::output_lease::OutputLeaseError::InvalidProject => {
-            OutputControlErrorCodeV1::InvalidRequest
+            OutputControlErrorCodeV2::InvalidRequest
         }
         super::output_lease::OutputLeaseError::Expired
         | super::output_lease::OutputLeaseError::UnknownLease
@@ -784,7 +952,7 @@ fn output_lease_error_code(
         | super::output_lease::OutputLeaseError::ClockRollback
         | super::output_lease::OutputLeaseError::GenerationExhausted
         | super::output_lease::OutputLeaseError::ClockExhausted => {
-            OutputControlErrorCodeV1::Forbidden
+            OutputControlErrorCodeV2::Forbidden
         }
     }
 }
@@ -792,7 +960,7 @@ fn output_lease_error_code(
 fn build_output_lease_lifecycle_request(
     state: &AppState,
     binding: &CallerBinding,
-    request: &OutputControlCommandRequestV1,
+    request: &OutputControlCommandRequestV2,
 ) -> Result<(OutputLeaseRequest, u64), String> {
     let now_ms = state.output_lease_now_ms()?;
     let process_incarnation = state
@@ -808,7 +976,7 @@ fn build_output_lease_lifecycle_request(
     )
     .map_err(|error| format!("Output lease owner is invalid: {error:?}"))?;
     let action = match &request.action {
-        OutputControlActionV1::AcquireLease { role } => {
+        OutputControlActionV2::AcquireLease { role } => {
             let resources = match role {
                 protocol::control_plane_command::OutputControlTargetRoleV1::Lighting => {
                     OutputLeaseResources::new(&[OutputLeaseResource::Lighting])
@@ -831,21 +999,21 @@ fn build_output_lease_lifecycle_request(
                 ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
             }
         }
-        OutputControlActionV1::RenewLease { lease } => OutputLeaseRequestAction::Renew {
+        OutputControlActionV2::RenewLease { lease } => OutputLeaseRequestAction::Renew {
             lease_id: OutputLeaseId::decode(&lease.lease_id)
                 .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?,
             owner,
             expected_generation: lease.generation,
             ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
         },
-        OutputControlActionV1::RecoverLease { lease } => OutputLeaseRequestAction::Recover {
+        OutputControlActionV2::RecoverLease { lease } => OutputLeaseRequestAction::Recover {
             lease_id: OutputLeaseId::decode(&lease.lease_id)
                 .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?,
             owner,
             expected_generation: lease.generation,
             ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
         },
-        OutputControlActionV1::RelinquishOutputLease { lease } => {
+        OutputControlActionV2::RelinquishOutputLease { lease } => {
             OutputLeaseRequestAction::Relinquish {
                 lease_id: OutputLeaseId::decode(&lease.lease_id)
                     .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?,
@@ -853,7 +1021,7 @@ fn build_output_lease_lifecycle_request(
                 expected_generation: lease.generation,
             }
         }
-        OutputControlActionV1::ForceTransferLease { lease } => {
+        OutputControlActionV2::ForceTransferLease { lease } => {
             OutputLeaseRequestAction::ForceTransfer {
                 lease_id: OutputLeaseId::decode(&lease.lease_id)
                     .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?,
@@ -879,8 +1047,29 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
     state: &AppState,
     query_state: &ControlPlaneQueryState,
     expected_operation_id: &'static str,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_lease_lifecycle_with_confirmation(
+        window,
+        state,
+        query_state,
+        expected_operation_id,
+        request,
+        |action| confirm_native_dangerous_output_action(window, action),
+    )
+}
+
+fn execute_output_lease_lifecycle_with_confirmation<F>(
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    expected_operation_id: &'static str,
+    request: OutputControlCommandRequestV2,
+    confirmation: F,
+) -> OutputControlResponseV2
+where
+    F: Fn(&OutputControlActionV2) -> bool,
+{
     if request.operation_id != expected_operation_id
         || request.action.operation_id() != expected_operation_id
         || request.validate().is_err()
@@ -888,7 +1077,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
         return output_control_rejection_for_operation(
             &request,
             expected_operation_id,
-            OutputControlErrorCodeV1::InvalidRequest,
+            OutputControlErrorCodeV2::InvalidRequest,
         );
     }
     let shape_sha256 = match request.canonical_shape_bytes() {
@@ -897,7 +1086,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
             return output_control_rejection_for_operation(
                 &request,
                 expected_operation_id,
-                OutputControlErrorCodeV1::InvalidRequest,
+                OutputControlErrorCodeV2::InvalidRequest,
             )
         }
     };
@@ -907,17 +1096,17 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
             return output_control_rejection_for_operation(
                 &request,
                 expected_operation_id,
-                OutputControlErrorCodeV1::InvalidRequest,
+                OutputControlErrorCodeV2::InvalidRequest,
             )
         }
     };
-    let _owner_rotation = match state.project_transaction_owner_rotation.lock() {
+    let owner_rotation = match state.project_transaction_owner_rotation.lock() {
         Ok(guard) => guard,
-        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV1::Internal),
+        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV2::Internal),
     };
     let binding = match capture_binding(state, window.label()) {
         Ok(binding) => binding,
-        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
+        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
     };
     if let Err(code) = state
         .runtime_control_plane
@@ -949,7 +1138,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
             state
                 .runtime_control_plane
                 .release_output_control_lane(&key);
-            return output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
+            return output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
         }
     };
     if let Some(reservation) = state.runtime_control_plane.recheck_output_control_terminal(
@@ -963,9 +1152,139 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
                 output_control_rejection(&request, code)
             }
             OutputControlLaneReservation::Lane(_) => {
-                output_control_rejection(&request, OutputControlErrorCodeV1::Internal)
+                output_control_rejection(&request, OutputControlErrorCodeV2::Internal)
             }
         };
+    }
+    // The dangerous Force Transfer path must not prompt for a request which
+    // is already stale or whose lease transition cannot be admitted. Repeat
+    // the same checks after the dialog before the authoritative commit.
+    if query_state
+        .validate_output_control_fence_window(
+            window.label(),
+            &request.expected_fence,
+            binding.owner_incarnation,
+        )
+        .is_err()
+    {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
+        );
+    }
+    let (confirmation_lease_request, confirmation_lease_now_ms) =
+        match build_output_lease_lifecycle_request(state, &binding, &request) {
+            Ok(request) => request,
+            Err(_) => {
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest),
+                );
+            }
+        };
+    {
+        let registry = match state.output_lease_registry.lock() {
+            Ok(registry) => registry,
+            Err(_) => {
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, OutputControlErrorCodeV2::Internal),
+                );
+            }
+        };
+        if let Err(error) =
+            registry.preflight_request(&confirmation_lease_request, confirmation_lease_now_ms)
+        {
+            return retain_output_control_rejection(
+                state,
+                key,
+                shape_sha256,
+                output_control_rejection(&request, output_lease_error_code(error)),
+            );
+        }
+    }
+    {
+        let _preconfirmation_external_admission =
+            match lock_project_external_command_admission(state) {
+                Ok(guard) => guard,
+                Err(_) => {
+                    return retain_output_control_rejection(
+                        state,
+                        key,
+                        shape_sha256,
+                        output_control_rejection(&request, OutputControlErrorCodeV2::Busy),
+                    );
+                }
+            };
+        let mut preconfirmation_coordinator = match lock_project_coordinator(state) {
+            Ok(coordinator) => coordinator,
+            Err(_) => {
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, OutputControlErrorCodeV2::Busy),
+                );
+            }
+        };
+        if reconcile_project_checkpoint_for_coordinator(state, &mut preconfirmation_coordinator)
+            .is_err()
+            || !exact_output_control_fence_matches(
+                state,
+                &preconfirmation_coordinator,
+                &request.expected_fence,
+            )
+            || ensure_no_pending_project_transaction(&preconfirmation_coordinator).is_err()
+            || ensure_project_operator_video_clip_slot_runtime_allowed(
+                state,
+                &preconfirmation_coordinator,
+                &binding.principal,
+            )
+            .is_err()
+        {
+            return retain_output_control_rejection(
+                state,
+                key,
+                shape_sha256,
+                output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
+            );
+        }
+    }
+    drop(owner_rotation);
+    if let Err(code) = output_confirmation_gate(&request.action, &confirmation) {
+        let response = output_control_rejection(&request, code);
+        state.runtime_control_plane.store_output_control_terminal(
+            key,
+            shape_sha256,
+            response.clone(),
+            Instant::now(),
+        );
+        return response;
+    }
+    let _owner_rotation = match state.project_transaction_owner_rotation.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            state
+                .runtime_control_plane
+                .release_output_control_lane(&key);
+            return output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
+        }
+    };
+    if capture_binding(state, window.label()).ok().as_ref() != Some(&binding) {
+        let response = output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden);
+        state.runtime_control_plane.store_output_control_terminal(
+            key,
+            shape_sha256,
+            response.clone(),
+            Instant::now(),
+        );
+        return response;
     }
     if query_state
         .validate_output_control_fence_window(
@@ -979,7 +1298,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
             state,
             key,
             shape_sha256,
-            output_control_rejection(&request, OutputControlErrorCodeV1::StaleFence),
+            output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
         );
     }
     let _lifecycle_guard = match state.standby_sync_lifecycle.lock() {
@@ -988,7 +1307,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
             state
                 .runtime_control_plane
                 .release_output_control_lane(&key);
-            return output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
+            return output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
         }
     };
     let external_admission = match lock_project_external_command_admission(state) {
@@ -997,7 +1316,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
             state
                 .runtime_control_plane
                 .release_output_control_lane(&key);
-            return output_control_rejection(&request, OutputControlErrorCodeV1::Busy);
+            return output_control_rejection(&request, OutputControlErrorCodeV2::Busy);
         }
     };
     let mut coordinator = match lock_project_coordinator(state) {
@@ -1006,7 +1325,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
             state
                 .runtime_control_plane
                 .release_output_control_lane(&key);
-            return output_control_rejection(&request, OutputControlErrorCodeV1::Busy);
+            return output_control_rejection(&request, OutputControlErrorCodeV2::Busy);
         }
     };
     if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
@@ -1023,7 +1342,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
             state,
             key,
             shape_sha256,
-            output_control_rejection(&request, OutputControlErrorCodeV1::StaleFence),
+            output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
         );
     }
     let (lease_request, lease_now_ms) =
@@ -1034,7 +1353,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
                     state,
                     key,
                     shape_sha256,
-                    output_control_rejection(&request, OutputControlErrorCodeV1::InvalidRequest),
+                    output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest),
                 );
             }
         };
@@ -1046,7 +1365,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
                     state,
                     key,
                     shape_sha256,
-                    output_control_rejection(&request, OutputControlErrorCodeV1::Internal),
+                    output_control_rejection(&request, OutputControlErrorCodeV2::Internal),
                 );
             }
         };
@@ -1077,42 +1396,9 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
                 );
             }
         };
-    let consent_binding = ConsentAuthorityBinding {
-        caller: ConsentCallerBinding {
-            principal: binding.principal.clone(),
-            window_label: binding.window_label.clone(),
-            owner_incarnation: binding.owner_incarnation,
-        },
-        operation_id: request.operation_id.clone(),
-        argument_fingerprint: argument_fingerprint.clone(),
-        project_epoch: request.expected_fence.project_epoch,
-        project_revision: request.expected_fence.project_revision,
-        project_checkpoint_hash: request.expected_fence.project_checkpoint_hash.clone(),
-        project_publication_generation: request.expected_fence.project_publication_generation,
-        output_epoch: request.expected_fence.output_epoch,
-        output_generation: request.expected_fence.output_generation,
-        safety_blackout_epoch: request.expected_fence.safety_blackout_epoch,
-        safety_blackout_generation: request.expected_fence.safety_blackout_generation,
-    };
-    if let Err(error) = state
-        .control_plane_security
-        .consume_consent(&consent_binding, &request.consent_token)
-    {
-        state
-            .runtime_control_plane
-            .finish_output_control_inflight(&inflight);
-        let response = output_control_rejection(&request, output_consent_error_code(error));
-        state.runtime_control_plane.store_output_control_terminal(
-            key,
-            shape_sha256,
-            response.clone(),
-            Instant::now(),
-        );
-        return response;
-    }
     let require_transition = matches!(
         request.action,
-        OutputControlActionV1::ForceTransferLease { .. }
+        OutputControlActionV2::ForceTransferLease { .. }
     );
     let receipt = match super::submit_output_lease_lifecycle_request(
         state,
@@ -1158,7 +1444,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
                     .runtime_control_plane
                     .finish_output_control_inflight(&inflight);
                 let response =
-                    output_control_rejection(&request, OutputControlErrorCodeV1::Internal);
+                    output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
                 state.runtime_control_plane.store_output_control_terminal(
                     key,
                     shape_sha256,
@@ -1168,7 +1454,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
                 return response;
             }
         };
-    let response = OutputControlResponseV1::Receipt(OutputControlReceiptV1 {
+    let response = OutputControlResponseV2::Receipt(OutputControlReceiptV2 {
         operation_id: request.operation_id.clone(),
         request_id: request.request_id,
         shape_sha256: shape_sha256.clone(),
@@ -1176,7 +1462,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
         audit_sequence,
         fence_before: request.expected_fence.clone(),
         fence_after: request.expected_fence,
-        outcome: OutputControlReceiptOutcomeV1::NoOp,
+        outcome: OutputControlReceiptOutcomeV2::NoOp,
         lease_result: Some(lease_result),
     });
     state
@@ -1193,10 +1479,10 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
 
 #[cfg(test)]
 fn standby_takeover_selector(
-    action: &OutputControlActionV1,
+    action: &OutputControlActionV2,
 ) -> Result<StandbyTakeoverCheckpointSelector, String> {
     match action {
-        OutputControlActionV1::TakeOverStandby {
+        OutputControlActionV2::TakeOverStandby {
             standby_session_id,
             standby_generation,
             ..
@@ -1212,7 +1498,7 @@ fn standby_takeover_selector(
 
 #[cfg(test)]
 fn execute_standby_takeover_action<F, T>(
-    action: &OutputControlActionV1,
+    action: &OutputControlActionV2,
     expected_fence: &OutputControlFenceV1,
     execute_core: F,
 ) -> Result<(bool, OutputControlFenceV1), String>
@@ -1223,7 +1509,7 @@ where
         &OutputControlFenceV1,
     ) -> Result<(T, OutputControlFenceV1), String>,
 {
-    let OutputControlActionV1::TakeOverStandby { force, .. } = action else {
+    let OutputControlActionV2::TakeOverStandby { force, .. } = action else {
         return Err("Output control action is not Standby Take Over".to_string());
     };
     let selector = standby_takeover_selector(action)?;
@@ -1231,44 +1517,25 @@ where
         .map(|(_load_result, fence_after)| (true, fence_after))
 }
 
-fn output_consent_error_message(error: ConsentConsumeError) -> String {
-    match error {
-        ConsentConsumeError::Missing => "Output consent challenge was not found",
-        ConsentConsumeError::Expired => "Output consent challenge expired",
-        ConsentConsumeError::WrongBinding => "Output consent challenge belongs to another caller",
-        ConsentConsumeError::PhysicalInputPending => "Physical confirmation is still pending",
-        ConsentConsumeError::DeviceRemoved => "Physical confirmation device was removed",
-        ConsentConsumeError::Replayed => "Output consent token was already consumed",
-        ConsentConsumeError::Internal => "Output consent state is unavailable",
-    }
-    .to_string()
-}
-
-fn output_consent_error_code(error: ConsentConsumeError) -> OutputControlErrorCodeV1 {
-    match error {
-        ConsentConsumeError::Missing => OutputControlErrorCodeV1::ConsentMissing,
-        ConsentConsumeError::Expired => OutputControlErrorCodeV1::ConsentExpired,
-        ConsentConsumeError::WrongBinding => OutputControlErrorCodeV1::ConsentWrongBinding,
-        ConsentConsumeError::PhysicalInputPending => OutputControlErrorCodeV1::ConsentPending,
-        ConsentConsumeError::DeviceRemoved => OutputControlErrorCodeV1::ConsentDeviceRemoved,
-        ConsentConsumeError::Replayed => OutputControlErrorCodeV1::ConsentReplayed,
-        ConsentConsumeError::Internal => OutputControlErrorCodeV1::Internal,
-    }
+pub(crate) fn output_control_executor_failure(
+    request: &OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    output_control_rejection(request, OutputControlErrorCodeV2::Internal)
 }
 
 fn output_control_rejection(
-    request: &OutputControlCommandRequestV1,
-    error: OutputControlErrorCodeV1,
-) -> OutputControlResponseV1 {
+    request: &OutputControlCommandRequestV2,
+    error: OutputControlErrorCodeV2,
+) -> OutputControlResponseV2 {
     output_control_rejection_for_operation(request, request.action.operation_id(), error)
 }
 
 fn output_control_rejection_for_operation(
-    request: &OutputControlCommandRequestV1,
+    request: &OutputControlCommandRequestV2,
     operation_id: &str,
-    error: OutputControlErrorCodeV1,
-) -> OutputControlResponseV1 {
-    OutputControlResponseV1::Rejected(OutputControlRejectionV1 {
+    error: OutputControlErrorCodeV2,
+) -> OutputControlResponseV2 {
+    OutputControlResponseV2::Rejected(OutputControlRejectionV2 {
         operation_id: operation_id.to_string(),
         request_id: request.request_id.clamp(1, MAX_SAFE_JAVASCRIPT_INTEGER),
         error,
@@ -1279,8 +1546,8 @@ fn retain_output_control_rejection(
     state: &AppState,
     key: OutputControlReceiptKey,
     shape_sha256: String,
-    response: OutputControlResponseV1,
-) -> OutputControlResponseV1 {
+    response: OutputControlResponseV2,
+) -> OutputControlResponseV2 {
     state.runtime_control_plane.store_output_control_terminal(
         key,
         shape_sha256,
@@ -1290,48 +1557,54 @@ fn retain_output_control_rejection(
     response
 }
 
-fn output_control_lease_result_from_registry_receipt(
-    action: &OutputControlActionV1,
+pub(crate) fn output_control_lease_result_from_registry_receipt(
+    action: &OutputControlActionV2,
     receipt: &OutputLeaseRequestReceipt,
-) -> Result<OutputControlLeaseResultV1, String> {
+) -> Result<OutputControlLeaseResultV2, String> {
     let outcome = receipt
         .outcome
         .as_ref()
         .map(|outcome| match outcome {
-            OutputLeaseOperationOutcome::Acquired => OutputLeaseReceiptOutcomeV1::Acquired,
-            OutputLeaseOperationOutcome::Renewed => OutputLeaseReceiptOutcomeV1::Renewed,
+            OutputLeaseOperationOutcome::Acquired => OutputLeaseReceiptOutcomeV2::Acquired,
+            OutputLeaseOperationOutcome::Renewed => OutputLeaseReceiptOutcomeV2::Renewed,
             #[cfg(test)]
             OutputLeaseOperationOutcome::ExpiryObserved => {
-                OutputLeaseReceiptOutcomeV1::ExpiryObserved
+                OutputLeaseReceiptOutcomeV2::ExpiryObserved
             }
-            OutputLeaseOperationOutcome::Recovered => OutputLeaseReceiptOutcomeV1::Recovered,
-            OutputLeaseOperationOutcome::Relinquished => OutputLeaseReceiptOutcomeV1::Relinquished,
-            OutputLeaseOperationOutcome::Transferred => OutputLeaseReceiptOutcomeV1::Transferred,
-            OutputLeaseOperationOutcome::OwnerRetired => OutputLeaseReceiptOutcomeV1::OwnerRetired,
+            OutputLeaseOperationOutcome::Recovered => OutputLeaseReceiptOutcomeV2::Recovered,
+            OutputLeaseOperationOutcome::Relinquished => OutputLeaseReceiptOutcomeV2::Relinquished,
+            OutputLeaseOperationOutcome::Transferred => OutputLeaseReceiptOutcomeV2::Transferred,
+            OutputLeaseOperationOutcome::OwnerRetired => OutputLeaseReceiptOutcomeV2::OwnerRetired,
             OutputLeaseOperationOutcome::ProjectOrphaned => {
-                OutputLeaseReceiptOutcomeV1::ProjectOrphaned
+                OutputLeaseReceiptOutcomeV2::ProjectOrphaned
             }
-            OutputLeaseOperationOutcome::Authorized => OutputLeaseReceiptOutcomeV1::Authorized,
+            OutputLeaseOperationOutcome::Authorized => OutputLeaseReceiptOutcomeV2::Authorized,
         })
         .map_err(|error| format!("output lease operation did not succeed: {error:?}"))?;
     let expected_outcome = match action {
-        OutputControlActionV1::Arm { .. }
-        | OutputControlActionV1::ReleaseBlackout { .. }
-        | OutputControlActionV1::TakeOverStandby { .. }
-        | OutputControlActionV1::AddDisplay { .. } => OutputLeaseReceiptOutcomeV1::Authorized,
-        OutputControlActionV1::AcquireLease { .. } => OutputLeaseReceiptOutcomeV1::Acquired,
-        OutputControlActionV1::RenewLease { .. } => OutputLeaseReceiptOutcomeV1::Renewed,
-        OutputControlActionV1::RecoverLease { .. } => OutputLeaseReceiptOutcomeV1::Recovered,
-        OutputControlActionV1::RelinquishOutputLease { .. } => {
-            OutputLeaseReceiptOutcomeV1::Relinquished
+        OutputControlActionV2::EnableOutput => OutputLeaseReceiptOutcomeV2::Acquired,
+        OutputControlActionV2::Arm { .. }
+        | OutputControlActionV2::ReleaseBlackout { .. }
+        | OutputControlActionV2::TakeOverStandby { .. }
+        | OutputControlActionV2::AddDisplay { .. } => OutputLeaseReceiptOutcomeV2::Authorized,
+        OutputControlActionV2::AcquireLease { .. } => OutputLeaseReceiptOutcomeV2::Acquired,
+        OutputControlActionV2::RenewLease { .. } => OutputLeaseReceiptOutcomeV2::Renewed,
+        OutputControlActionV2::RecoverLease { .. } => OutputLeaseReceiptOutcomeV2::Recovered,
+        OutputControlActionV2::RelinquishOutputLease { .. } => {
+            OutputLeaseReceiptOutcomeV2::Relinquished
         }
-        OutputControlActionV1::ForceTransferLease { .. } => {
-            OutputLeaseReceiptOutcomeV1::Transferred
+        OutputControlActionV2::ForceTransferLease { .. } => {
+            OutputLeaseReceiptOutcomeV2::Transferred
         }
     };
-    let takeover_project_orphan = matches!(action, OutputControlActionV1::TakeOverStandby { .. })
-        && outcome == OutputLeaseReceiptOutcomeV1::ProjectOrphaned;
-    if outcome != expected_outcome && !takeover_project_orphan {
+    let enable_outcome = matches!(action, OutputControlActionV2::EnableOutput)
+        && matches!(
+            outcome,
+            OutputLeaseReceiptOutcomeV2::Acquired | OutputLeaseReceiptOutcomeV2::Recovered
+        );
+    let takeover_project_orphan = matches!(action, OutputControlActionV2::TakeOverStandby { .. })
+        && outcome == OutputLeaseReceiptOutcomeV2::ProjectOrphaned;
+    if outcome != expected_outcome && !enable_outcome && !takeover_project_orphan {
         return Err("output lease receipt outcome does not match operation".to_string());
     }
     let lease_id = receipt
@@ -1358,9 +1631,9 @@ fn output_control_lease_result_from_registry_receipt(
         .collect::<Vec<_>>();
     let phase_for_snapshot =
         |snapshot: &super::output_lease::OutputLeaseSnapshot| match snapshot.phase {
-            OutputLeasePhase::Unclaimed => OutputLeaseReceiptPhaseV1::Unclaimed,
-            OutputLeasePhase::HeldActive => OutputLeaseReceiptPhaseV1::HeldActive,
-            OutputLeasePhase::HeldOrphaned => OutputLeaseReceiptPhaseV1::HeldOrphaned,
+            OutputLeasePhase::Unclaimed => OutputLeaseReceiptPhaseV2::Unclaimed,
+            OutputLeasePhase::HeldActive => OutputLeaseReceiptPhaseV2::HeldActive,
+            OutputLeasePhase::HeldOrphaned => OutputLeaseReceiptPhaseV2::HeldOrphaned,
         };
     let resources_for_snapshot = |snapshot: &super::output_lease::OutputLeaseSnapshot| -> Vec<_> {
         snapshot
@@ -1388,7 +1661,7 @@ fn output_control_lease_result_from_registry_receipt(
     let changes = receipt
         .changes
         .iter()
-        .map(|change| OutputLeaseReceiptChangeV1 {
+        .map(|change| OutputLeaseReceiptChangeV2 {
             lease_id: change.lease_id.encode(),
             before_generation: change.before.as_ref().map(|snapshot| snapshot.generation),
             after_generation: change.after.as_ref().map(|snapshot| snapshot.generation),
@@ -1416,7 +1689,7 @@ fn output_control_lease_result_from_registry_receipt(
         .or(last_change.before.as_ref())
         .map(phase_for_snapshot)
         .ok_or_else(|| "output lease receipt omitted its final phase".to_string())?;
-    let result = OutputControlLeaseResultV1 {
+    let result = OutputControlLeaseResultV2 {
         authority: protocol::control_plane_command::OutputLeaseAuthorityV1 {
             lease_id: lease_id.encode(),
             generation,
@@ -1434,7 +1707,7 @@ fn output_control_lease_result_from_registry_receipt(
 }
 
 fn output_control_receipt_key(
-    request: &OutputControlCommandRequestV1,
+    request: &OutputControlCommandRequestV2,
     binding: &CallerBinding,
 ) -> OutputControlReceiptKey {
     OutputControlReceiptKey {
@@ -1446,7 +1719,7 @@ fn output_control_receipt_key(
     }
 }
 
-fn hex_sha256(bytes: &[u8]) -> String {
+pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -1563,7 +1836,7 @@ struct OutputControlRequestIdentityRecord {
 #[derive(Debug, Clone)]
 struct OutputControlTerminalRecord {
     shape_sha256: String,
-    response: OutputControlResponseV1,
+    response: OutputControlResponseV2,
     expires_at: Instant,
     last_used: u64,
 }
@@ -1722,8 +1995,8 @@ enum SafetyBlackoutLaneReservation {
 }
 
 enum OutputControlLaneReservation {
-    Terminal(OutputControlResponseV1),
-    Rejected(OutputControlErrorCodeV1),
+    Terminal(OutputControlResponseV2),
+    Rejected(OutputControlErrorCodeV2),
     Lane(Arc<Mutex<()>>),
 }
 
@@ -1771,7 +2044,7 @@ impl RuntimeControlPlaneState {
     }
 
     /// Reserve the operation-independent caller/incarnation/request identity
-    /// before any fence, consent, rate, audit, registry, or physical work.
+    /// before any fence, local-confirmation, rate, audit, registry, or physical work.
     /// The operation-specific lane remains responsible for exact terminal
     /// replay; this bounded identity map prevents a different operation from
     /// laundering the same request id after a terminal is evicted.
@@ -1782,7 +2055,7 @@ impl RuntimeControlPlaneState {
         request_id: u64,
         shape_sha256: &str,
         now: Instant,
-    ) -> Result<(), OutputControlErrorCodeV1> {
+    ) -> Result<(), OutputControlErrorCodeV2> {
         let mut inner = match self.output_control.lock() {
             Ok(inner) => inner,
             Err(poisoned) => {
@@ -1805,18 +2078,18 @@ impl RuntimeControlPlaneState {
                     request_id,
                 };
                 let Some(identity) = inner.common_request_identities.get(&identity_key) else {
-                    return Err(OutputControlErrorCodeV1::Internal);
+                    return Err(OutputControlErrorCodeV2::Internal);
                 };
                 if identity.operation_id != operation_id || identity.shape_sha256 != shape_sha256 {
-                    return Err(OutputControlErrorCodeV1::InvalidRequest);
+                    return Err(OutputControlErrorCodeV2::InvalidRequest);
                 }
                 let Some(receipt) = inner.receipts.get(&operation_key) else {
-                    return Err(OutputControlErrorCodeV1::Internal);
+                    return Err(OutputControlErrorCodeV2::Internal);
                 };
                 if receipt.shape_sha256 == shape_sha256 {
                     return Ok(());
                 }
-                return Err(OutputControlErrorCodeV1::InvalidRequest);
+                return Err(OutputControlErrorCodeV2::InvalidRequest);
             }
         };
         purge_output_control_expired(&mut inner, now);
@@ -1835,17 +2108,17 @@ impl RuntimeControlPlaneState {
         };
         if let Some(record) = inner.common_request_identities.get_mut(&identity_key) {
             if record.operation_id != operation_id || record.shape_sha256 != shape_sha256 {
-                return Err(OutputControlErrorCodeV1::InvalidRequest);
+                return Err(OutputControlErrorCodeV2::InvalidRequest);
             }
             if inner.receipts.contains_key(&operation_key) {
                 return Ok(());
             }
             if inner.lanes.contains_key(&operation_key) {
-                return Err(OutputControlErrorCodeV1::Busy);
+                return Err(OutputControlErrorCodeV2::Busy);
             }
             // The identity survived terminal eviction but its receipt did
             // not. Do not re-execute an old request id.
-            return Err(OutputControlErrorCodeV1::InvalidRequest);
+            return Err(OutputControlErrorCodeV2::InvalidRequest);
         }
         let origin_key = OutputControlRequestOriginKey {
             principal: binding.principal.clone(),
@@ -1857,15 +2130,15 @@ impl RuntimeControlPlaneState {
             .get(&origin_key)
             .is_some_and(|high_water| request_id <= *high_water)
         {
-            return Err(OutputControlErrorCodeV1::InvalidRequest);
+            return Err(OutputControlErrorCodeV2::InvalidRequest);
         }
         if inner.common_request_identities.len() >= MAX_TOTAL_OUTPUT_CONTROL_IDENTITIES {
-            return Err(OutputControlErrorCodeV1::Overloaded);
+            return Err(OutputControlErrorCodeV2::Overloaded);
         }
         if !inner.request_id_high_water.contains_key(&origin_key)
             && inner.request_id_high_water.len() >= MAX_TOTAL_OUTPUT_CONTROL_IDENTITIES
         {
-            return Err(OutputControlErrorCodeV1::Overloaded);
+            return Err(OutputControlErrorCodeV2::Overloaded);
         }
         inner.request_id_high_water.insert(origin_key, request_id);
         inner.common_request_identities.insert(
@@ -2378,11 +2651,11 @@ impl RuntimeControlPlaneState {
                         OutputControlLaneReservation::Terminal(record.response.clone())
                     } else {
                         OutputControlLaneReservation::Rejected(
-                            OutputControlErrorCodeV1::InvalidRequest,
+                            OutputControlErrorCodeV2::InvalidRequest,
                         )
                     };
                 }
-                return OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::Internal);
+                return OutputControlLaneReservation::Rejected(OutputControlErrorCodeV2::Internal);
             }
         };
         purge_output_control_expired(&mut inner, now);
@@ -2392,20 +2665,20 @@ impl RuntimeControlPlaneState {
             return if record.shape_sha256 == shape_sha256 {
                 OutputControlLaneReservation::Terminal(record.response.clone())
             } else {
-                OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+                OutputControlLaneReservation::Rejected(OutputControlErrorCodeV2::InvalidRequest)
             };
         }
         if let Some(tombstone) = inner.tombstones.get_mut(key) {
             tombstone.last_used = last_used;
             return OutputControlLaneReservation::Rejected(
-                OutputControlErrorCodeV1::InvalidRequest,
+                OutputControlErrorCodeV2::InvalidRequest,
             );
         }
         if let Some(lane) = inner.lanes.get(key) {
             return OutputControlLaneReservation::Lane(Arc::clone(lane));
         }
         if inner.lanes.len() >= MAX_LANES {
-            return OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::Overloaded);
+            return OutputControlLaneReservation::Rejected(OutputControlErrorCodeV2::Overloaded);
         }
         let lane = Arc::new(Mutex::new(()));
         inner.lanes.insert(key.clone(), Arc::clone(&lane));
@@ -2427,12 +2700,12 @@ impl RuntimeControlPlaneState {
                         OutputControlLaneReservation::Terminal(record.response.clone())
                     } else {
                         OutputControlLaneReservation::Rejected(
-                            OutputControlErrorCodeV1::InvalidRequest,
+                            OutputControlErrorCodeV2::InvalidRequest,
                         )
                     });
                 }
                 return Some(OutputControlLaneReservation::Rejected(
-                    OutputControlErrorCodeV1::Internal,
+                    OutputControlErrorCodeV2::Internal,
                 ));
             }
         };
@@ -2443,13 +2716,13 @@ impl RuntimeControlPlaneState {
             return Some(if record.shape_sha256 == shape_sha256 {
                 OutputControlLaneReservation::Terminal(record.response.clone())
             } else {
-                OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+                OutputControlLaneReservation::Rejected(OutputControlErrorCodeV2::InvalidRequest)
             });
         }
         if let Some(tombstone) = inner.tombstones.get_mut(key) {
             tombstone.last_used = last_used;
             return Some(OutputControlLaneReservation::Rejected(
-                OutputControlErrorCodeV1::InvalidRequest,
+                OutputControlErrorCodeV2::InvalidRequest,
             ));
         }
         None
@@ -2462,34 +2735,34 @@ impl RuntimeControlPlaneState {
         shape_sha256: &str,
         argument_fingerprint: &str,
         now: Instant,
-    ) -> Result<(PrincipalDomainKey, u64), OutputControlErrorCodeV1> {
+    ) -> Result<(PrincipalDomainKey, u64), OutputControlErrorCodeV2> {
         let mut inner = self
             .output_control
             .lock()
-            .map_err(|_| OutputControlErrorCodeV1::Internal)?;
+            .map_err(|_| OutputControlErrorCodeV2::Internal)?;
         purge_output_control_expired(&mut inner, now);
         if inner.audit.len() >= MAX_SAFETY_AUDIT_RECORDS {
-            return Err(OutputControlErrorCodeV1::Overloaded);
+            return Err(OutputControlErrorCodeV2::Overloaded);
         }
         let domain_key = PrincipalDomainKey {
             principal: binding.principal.clone(),
             domain: key.operation_id.clone(),
         };
         if inner.inflight.contains(&domain_key) {
-            return Err(OutputControlErrorCodeV1::Busy);
+            return Err(OutputControlErrorCodeV2::Busy);
         }
         let bucket = inner
             .token_buckets
             .entry(domain_key.clone())
             .or_insert_with(|| TokenBucket::fresh(now));
         if !bucket.try_take(now) {
-            return Err(OutputControlErrorCodeV1::Overloaded);
+            return Err(OutputControlErrorCodeV2::Overloaded);
         }
         let audit_sequence = inner
             .audit_sequence
             .checked_add(1)
             .filter(|sequence| *sequence <= MAX_SAFE_JAVASCRIPT_INTEGER)
-            .ok_or(OutputControlErrorCodeV1::Overloaded)?;
+            .ok_or(OutputControlErrorCodeV2::Overloaded)?;
         inner.audit_sequence = audit_sequence;
         inner.audit.push(OutputControlAuditRecord {
             sequence: audit_sequence,
@@ -2515,7 +2788,7 @@ impl RuntimeControlPlaneState {
         &self,
         key: OutputControlReceiptKey,
         shape_sha256: String,
-        response: OutputControlResponseV1,
+        response: OutputControlResponseV2,
         now: Instant,
     ) {
         let Ok(mut inner) = self.output_control.lock() else {
@@ -3905,9 +4178,9 @@ mod tests {
     use super::*;
     use crate::output_lease::OutputLeaseRegistry;
     use protocol::control_plane_command::{
-        OutputControlActionV1, ProjectMutationFenceV1, SetTimelinePlayingRuntimePayloadV1,
-        OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
-        OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+        OutputControlActionV2, OutputLeaseAuthorityV1, ProjectMutationFenceV1,
+        SetTimelinePlayingRuntimePayloadV1, OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+        OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
     };
 
     fn test_binding(principal: &str, window_label: &str, owner_incarnation: u64) -> CallerBinding {
@@ -4034,9 +4307,9 @@ mod tests {
 
     fn test_output_rejection(
         key: &OutputControlReceiptKey,
-        error: OutputControlErrorCodeV1,
-    ) -> OutputControlResponseV1 {
-        OutputControlResponseV1::Rejected(OutputControlRejectionV1 {
+        error: OutputControlErrorCodeV2,
+    ) -> OutputControlResponseV2 {
+        OutputControlResponseV2::Rejected(OutputControlRejectionV2 {
             operation_id: key.operation_id.clone(),
             request_id: key.request_id,
             error,
@@ -4056,6 +4329,118 @@ mod tests {
             safety_blackout_epoch: 8,
             safety_blackout_generation: 9,
         }
+    }
+
+    #[test]
+    fn native_danger_confirmation_copy_follows_the_os_locale() {
+        assert_eq!(
+            native_output_confirmation_copy_for_locale("ja-JP"),
+            (
+                "出力制御の確認",
+                "この詳細操作は、ライブ出力の所有権または出力状態を変更します。続行しますか？",
+            )
+        );
+        assert_eq!(
+            native_output_confirmation_copy_for_locale("en-US"),
+            (
+                "Confirm output control",
+                "This advanced output operation changes live ownership or output state. Continue?",
+            )
+        );
+    }
+
+    #[test]
+    fn editor_display_confirmation_copy_is_distinct_from_ordinary_output_copy() {
+        let ordinary = native_output_confirmation_copy_for_editor_target(false);
+        let editor = native_output_confirmation_copy_for_editor_target(true);
+        assert_ne!(ordinary, editor);
+        assert!(editor.0.contains("editor") || editor.0.contains("エディタ"));
+        assert!(editor.1.contains("display") || editor.1.contains("ディスプレイ"));
+    }
+
+    #[test]
+    fn native_danger_confirmation_gate_is_exact_and_terminal_replay_is_dialog_free() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let deny = |_: &OutputControlActionV2| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            false
+        };
+        assert!(output_confirmation_gate(&OutputControlActionV2::EnableOutput, &deny).is_ok());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let dangerous = OutputControlActionV2::ReleaseBlackout {
+            lease: OutputLeaseAuthorityV1 {
+                lease_id: "lease-0000000000000001".to_string(),
+                generation: 1,
+            },
+        };
+        assert_eq!(
+            output_confirmation_gate(&dangerous, &deny),
+            Err(OutputControlErrorCodeV2::Forbidden)
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let accept_calls = std::sync::atomic::AtomicUsize::new(0);
+        let accept = |_: &OutputControlActionV2| {
+            accept_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            true
+        };
+        assert!(output_confirmation_gate(&dangerous, &accept).is_ok());
+        assert_eq!(accept_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // A cancelled operation is retained as a terminal Forbidden result;
+        // an exact retry therefore returns without invoking confirmation or
+        // entering any engine/lease mutation path.
+        let state = RuntimeControlPlaneState::default();
+        let binding = test_binding("dialog-replay", "main", 3);
+        let key = test_output_key(
+            &binding.principal,
+            OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            91,
+            binding.owner_incarnation,
+        );
+        let shape = "a".repeat(64);
+        let now = Instant::now();
+        state
+            .reserve_output_control_request_identity(
+                &binding,
+                &key.operation_id,
+                key.request_id,
+                &shape,
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            state.reserve_output_control_lane(&key, &shape, now),
+            OutputControlLaneReservation::Lane(_)
+        ));
+        let cancelled = test_output_rejection(&key, OutputControlErrorCodeV2::Forbidden);
+        state.store_output_control_terminal(key.clone(), shape.clone(), cancelled.clone(), now);
+
+        let retry_calls = std::sync::atomic::AtomicUsize::new(0);
+        let retry_confirmation = |_: &OutputControlActionV2| {
+            retry_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            panic!("terminal retry must not prompt");
+        };
+        state
+            .reserve_output_control_request_identity(
+                &binding,
+                &key.operation_id,
+                key.request_id,
+                &shape,
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            state.reserve_output_control_lane(&key, &shape, now),
+            OutputControlLaneReservation::Terminal(response) if response == cancelled
+        ));
+        assert!(output_confirmation_gate(
+            &OutputControlActionV2::EnableOutput,
+            &retry_confirmation
+        )
+        .is_ok());
+        assert_eq!(retry_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -4095,7 +4480,7 @@ mod tests {
             6,
         );
         let shape = "f".repeat(64);
-        let response = test_output_rejection(&key, OutputControlErrorCodeV1::PublicationFailed);
+        let response = test_output_rejection(&key, OutputControlErrorCodeV2::PublicationFailed);
         let binding = test_binding(&key.principal, &key.window_label, key.owner_incarnation);
         assert!(state
             .reserve_output_control_request_identity(
@@ -4169,10 +4554,10 @@ mod tests {
                 &arm_shape,
                 now,
             ),
-            Err(OutputControlErrorCodeV1::Busy)
+            Err(OutputControlErrorCodeV2::Busy)
         );
 
-        let response = test_output_rejection(&arm_key, OutputControlErrorCodeV1::PublicationFailed);
+        let response = test_output_rejection(&arm_key, OutputControlErrorCodeV2::PublicationFailed);
         state.store_output_control_terminal(
             arm_key.clone(),
             arm_shape.clone(),
@@ -4209,7 +4594,7 @@ mod tests {
                 &release_shape,
                 now,
             ),
-            Err(OutputControlErrorCodeV1::InvalidRequest)
+            Err(OutputControlErrorCodeV2::InvalidRequest)
         );
         assert_eq!(
             state.reserve_output_control_request_identity(
@@ -4219,7 +4604,7 @@ mod tests {
                 &release_shape,
                 now,
             ),
-            Err(OutputControlErrorCodeV1::InvalidRequest)
+            Err(OutputControlErrorCodeV2::InvalidRequest)
         );
         let inner = state.output_control.lock().unwrap();
         assert_eq!(
@@ -4264,7 +4649,7 @@ mod tests {
         state.store_output_control_terminal(
             arm_key.clone(),
             arm_shape,
-            test_output_rejection(&arm_key, OutputControlErrorCodeV1::StaleFence),
+            test_output_rejection(&arm_key, OutputControlErrorCodeV2::StaleFence),
             now,
         );
 
@@ -4294,7 +4679,7 @@ mod tests {
                     &"d".repeat(64),
                     expired_now,
                 ),
-                Err(OutputControlErrorCodeV1::InvalidRequest),
+                Err(OutputControlErrorCodeV2::InvalidRequest),
                 "an expired terminal cannot reopen its request id through another operation"
             );
         }
@@ -4375,7 +4760,7 @@ mod tests {
             .expect("orphan transition");
         let selected = crate::select_output_lease_receipt_change(&orphan_receipt, lease_id)
             .expect("selected orphan truth");
-        let action = OutputControlActionV1::TakeOverStandby {
+        let action = OutputControlActionV2::TakeOverStandby {
             force: true,
             standby_session_id: "standby-a".to_string(),
             standby_generation: 7,
@@ -4386,20 +4771,101 @@ mod tests {
         };
         let result = output_control_lease_result_from_registry_receipt(&action, &selected)
             .expect("Take Over response uses final orphan truth");
-        assert_eq!(result.outcome, OutputLeaseReceiptOutcomeV1::ProjectOrphaned);
-        assert_eq!(result.phase, OutputLeaseReceiptPhaseV1::HeldOrphaned);
+        assert_eq!(result.outcome, OutputLeaseReceiptOutcomeV2::ProjectOrphaned);
+        assert_eq!(result.phase, OutputLeaseReceiptPhaseV2::HeldOrphaned);
         assert_eq!(result.authority.generation, 2);
         assert_eq!(result.changes.len(), 1);
         assert_eq!(result.changes[0].after_generation, Some(2));
         assert_eq!(
             result.changes[0].after_phase,
-            Some(OutputLeaseReceiptPhaseV1::HeldOrphaned)
+            Some(OutputLeaseReceiptPhaseV2::HeldOrphaned)
         );
     }
 
     #[test]
+    fn output_control_add_display_authorization_serializes_as_a_valid_terminal_receipt() {
+        let mut registry = OutputLeaseRegistry::fresh_process(52).expect("display test registry");
+        let owner =
+            OutputLeaseOwner::new("display-owner", "main", 52, 1).expect("display test owner");
+        let resources =
+            OutputLeaseResources::new(&[OutputLeaseResource::Lighting, OutputLeaseResource::Video])
+                .expect("display Both resources");
+        let acquired = registry
+            .submit_request(
+                &OutputLeaseRequest::from_action(
+                    "display-owner",
+                    "display-test",
+                    1,
+                    OutputLeaseRequestAction::Acquire {
+                        owner: owner.clone(),
+                        resources: resources.clone(),
+                        project_identity: "project_epoch:3".to_string(),
+                        ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
+                    },
+                )
+                .expect("display acquire request"),
+                0,
+            )
+            .expect("display acquire");
+        let lease_id = acquired.lease_id.expect("display lease id");
+        let generation = acquired.generation_after.expect("display lease generation");
+        let authorized = registry
+            .submit_request(
+                &OutputLeaseRequest::from_action(
+                    "display-owner",
+                    "display-test",
+                    2,
+                    OutputLeaseRequestAction::AuthorizeOrdinary {
+                        lease_id,
+                        owner,
+                        expected_generation: generation,
+                        exact_resources: resources,
+                    },
+                )
+                .expect("display authorization request"),
+                1,
+            )
+            .expect("display authorization");
+        let action = OutputControlActionV2::AddDisplay {
+            spec: protocol::control_plane_command::DisplayOutputSpecV2 {
+                label: "DISPLAY5".to_string(),
+                monitor_identity: "d".repeat(64),
+                monitor_index: 3,
+                width: 1920,
+                height: 1080,
+                fullscreen: true,
+            },
+            lease: OutputLeaseAuthorityV1 {
+                lease_id: lease_id.encode(),
+                generation,
+            },
+        };
+        let lease_result = output_control_lease_result_from_registry_receipt(&action, &authorized)
+            .expect("Display authorization converts to protocol truth");
+        let fence_before = test_output_fence();
+        let mut fence_after = fence_before.clone();
+        fence_after.project_revision += 1;
+        fence_after.project_checkpoint_hash = "b".repeat(64);
+        fence_after.project_publication_generation += 1;
+        fence_after.output_epoch += 1;
+        fence_after.output_generation += 1;
+        let receipt = OutputControlResponseV2::Receipt(OutputControlReceiptV2 {
+            operation_id: action.operation_id().to_string(),
+            request_id: 2,
+            shape_sha256: "c".repeat(64),
+            argument_fingerprint: "e".repeat(64),
+            audit_sequence: 1,
+            fence_before,
+            fence_after,
+            outcome: OutputControlReceiptOutcomeV2::Applied,
+            lease_result: Some(lease_result),
+        });
+        serde_json::to_value(&receipt).expect("Display terminal receipt must serialize");
+    }
+
+    #[test]
     fn output_control_takeover_passes_exact_standby_identity_to_core() {
-        let action = OutputControlActionV1::TakeOverStandby {
+        let action = OutputControlActionV2::TakeOverStandby {
             force: true,
             standby_session_id: "primary-a".to_string(),
             standby_generation: 42,
@@ -4451,7 +4917,7 @@ mod tests {
             binding.owner_incarnation,
         );
         let shape = "a".repeat(64);
-        let response = test_output_rejection(&key, OutputControlErrorCodeV1::PublicationFailed);
+        let response = test_output_rejection(&key, OutputControlErrorCodeV2::PublicationFailed);
 
         assert!(matches!(
             state.reserve_output_control_lane(&key, &shape, now),
@@ -4469,18 +4935,18 @@ mod tests {
         ));
         assert!(matches!(
             state.reserve_output_control_lane(&key, &"b".repeat(64), now),
-            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV2::InvalidRequest)
         ));
 
         // Expiry removes the terminal response but leaves a tombstone so the
         // exact key cannot be reused with either the old or a new shape.
         assert!(matches!(
             state.reserve_output_control_lane(&key, &shape, now + RECEIPT_TTL),
-            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV2::InvalidRequest)
         ));
         assert!(matches!(
             state.reserve_output_control_lane(&key, &"c".repeat(64), now + RECEIPT_TTL),
-            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+            OutputControlLaneReservation::Rejected(OutputControlErrorCodeV2::InvalidRequest)
         ));
     }
 
@@ -4508,7 +4974,7 @@ mod tests {
         state.store_output_control_terminal(
             terminal_key.clone(),
             shape.clone(),
-            test_output_rejection(&terminal_key, OutputControlErrorCodeV1::Busy),
+            test_output_rejection(&terminal_key, OutputControlErrorCodeV2::Busy),
             now,
         );
 
@@ -4528,7 +4994,7 @@ mod tests {
         for key in [&terminal_key, &pending_key] {
             assert!(matches!(
                 state.reserve_output_control_lane(key, &shape, now),
-                OutputControlLaneReservation::Rejected(OutputControlErrorCodeV1::InvalidRequest)
+                OutputControlLaneReservation::Rejected(OutputControlErrorCodeV2::InvalidRequest)
             ));
         }
         let inner = state.output_control.lock().unwrap();
@@ -4593,7 +5059,7 @@ mod tests {
                     now,
                 )
                 .unwrap_err(),
-            OutputControlErrorCodeV1::Overloaded
+            OutputControlErrorCodeV2::Overloaded
         );
         let inner = state.output_control.lock().unwrap();
         assert_eq!(
@@ -4651,7 +5117,7 @@ mod tests {
                     now,
                 )
                 .unwrap_err(),
-            OutputControlErrorCodeV1::Busy
+            OutputControlErrorCodeV2::Busy
         );
         {
             let inner = state.output_control.lock().unwrap();

@@ -22,10 +22,10 @@ use crate::control_plane::{
 ///
 /// The `_V2` name is retained for source compatibility with the module and
 /// public API introduced by the original canonical registry. The wire version
-/// is deliberately 3 because the additive public enum variants in this
-/// contract changed the meaning of serialized registry values; a v2 consumer
-/// must reject this payload instead of interpreting it under the old schema.
-pub const CONTROL_PLANE_REGISTRY_V2_SCHEMA_VERSION: u16 = 3;
+/// is deliberately 4 because the output-control confirmation policy and
+/// command shape changed; an older consumer must reject this payload instead
+/// of interpreting it under the old schema.
+pub const CONTROL_PLANE_REGISTRY_V2_SCHEMA_VERSION: u16 = 4;
 pub const CANONICAL_OPERATION_DESCRIPTOR_SCHEMA_NAME: &str =
     "syndocal.control-plane.canonical-operation-descriptor";
 pub const SOURCE_INVENTORY_DESCRIPTOR_SCHEMA_NAME: &str =
@@ -221,9 +221,14 @@ pub enum AdapterPolicy {
     /// value, requires immutable audit, and is never a release capability.
     LocalWindowEmergencySafetyMutation,
     /// A local-only R4 output mutation. The adapter is bound to the current
-    /// Tauri window and requires an exact physical-confirmation token plus a
-    /// terminal receipt. No external adapter is implied.
+    /// Tauri window and requires an exact terminal receipt. Dangerous operator
+    /// actions may add a native confirmation dialog; no external adapter is
+    /// implied.
     LocalWindowOutputControl,
+    /// A local-only R4 output mutation for dangerous operator actions. It is
+    /// distinct from the one-click normal enable path so the registry cannot
+    /// silently treat both authority levels as equivalent.
+    LocalWindowDangerousOutputControl,
     /// No adapter is exposed.  This is the only policy available before a
     /// separately reviewed adapter is introduced.
     FailClosed,
@@ -255,8 +260,8 @@ pub enum PayloadPolicy {
     FailClosed,
 }
 
-/// Consent handling deliberately has no enabled implementation in the
-/// canonical registry.
+/// Confirmation handling is explicit and local to the trusted Tauri window.
+/// It never represents an external device or input proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConsentPolicy {
@@ -264,10 +269,10 @@ pub enum ConsentPolicy {
     /// S0 does not consume an R4/R5 confirmation token; authority is the
     /// narrow named capability plus strict rate and immutable audit.
     NotRequiredForSafetyOnly,
-    /// R4 output control must consume a fresh, single-use backend challenge
-    /// confirmed by the physical-input boundary. This does not implement
-    /// AI4 grants or an external consent service.
-    PreparedPhysicalConfirmation,
+    /// The normal output-enable action is one explicit local-renderer request.
+    LocalExplicitAction,
+    /// Dangerous output actions require an explicit native confirmation dialog.
+    NativeDangerConfirmation,
 }
 
 /// The only reviewed schema projection at this stage is exact identity.
@@ -302,8 +307,8 @@ pub enum SourceDisposition {
     StructuralRoute {
         target: SourceKey,
     },
-    /// A local support phase whose output is not itself a physical-action
-    /// receipt. Support phases remain inventory-only and never derive an
+    /// A local support phase whose output is not itself an execution receipt.
+    /// Support phases remain inventory-only and never derive an
     /// execution adapter.
     SupportPhase {
         support_id: String,
@@ -652,7 +657,8 @@ impl CanonicalOperationDescriptor {
                     }
                 }
             }
-            AdapterPolicy::LocalWindowOutputControl => {
+            AdapterPolicy::LocalWindowOutputControl
+            | AdapterPolicy::LocalWindowDangerousOutputControl => {
                 if self.class != OperationClass::Mutation
                     || self.risk != OperationRisk::R4
                     || self.idempotency != OperationIdempotency::Mutating
@@ -665,7 +671,12 @@ impl CanonicalOperationDescriptor {
                     || self.receipt_policy != ReceiptPolicy::ExactTerminalReceipt
                     || self.rate_policy != RatePolicy::TokenBucket4PerSecondBurst8
                     || self.payload_policy != PayloadPolicy::FailClosed
-                    || self.consent_policy != ConsentPolicy::PreparedPhysicalConfirmation
+                    || self.consent_policy
+                        != if self.adapter_policy == AdapterPolicy::LocalWindowOutputControl {
+                            ConsentPolicy::LocalExplicitAction
+                        } else {
+                            ConsentPolicy::NativeDangerConfirmation
+                        }
                 {
                     return Err(
                         CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(
@@ -707,14 +718,18 @@ impl CanonicalOperationDescriptor {
                 | AdapterPolicy::LocalWindowRuntimeSafetyMutation
                 | AdapterPolicy::LocalWindowEmergencySafetyMutation
                 | AdapterPolicy::LocalWindowOutputControl
+                | AdapterPolicy::LocalWindowDangerousOutputControl
         ) {
             if self.derived_adapters.is_empty() {
                 return Err(CanonicalRegistryValidationError::MissingDerivedAdapter(
                     self.operation_id.clone(),
                 ));
             }
-            if self.adapter_policy == AdapterPolicy::LocalWindowOutputControl
-                && self.derived_adapters.len() != 1
+            if matches!(
+                self.adapter_policy,
+                AdapterPolicy::LocalWindowOutputControl
+                    | AdapterPolicy::LocalWindowDangerousOutputControl
+            ) && self.derived_adapters.len() != 1
             {
                 return Err(
                     CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(
@@ -1140,6 +1155,7 @@ impl CanonicalControlPlaneRegistry {
                     | AdapterPolicy::LocalWindowRuntimeSafetyMutation
                     | AdapterPolicy::LocalWindowEmergencySafetyMutation
                     | AdapterPolicy::LocalWindowOutputControl
+                    | AdapterPolicy::LocalWindowDangerousOutputControl
             ) && expected.is_empty()
             {
                 return Err(
@@ -1263,6 +1279,7 @@ impl CanonicalControlPlaneRegistry {
                                 | AdapterPolicy::LocalWindowRuntimeSafetyMutation
                                 | AdapterPolicy::LocalWindowEmergencySafetyMutation
                                 | AdapterPolicy::LocalWindowOutputControl
+                                | AdapterPolicy::LocalWindowDangerousOutputControl
                         )
                     {
                         return Err(CanonicalRegistryValidationError::FamilyAdapterMismatch(
@@ -1928,26 +1945,26 @@ mod tests {
     }
 
     #[test]
-    fn registry_wire_schema_version_three_rejects_previous_version_two() {
-        assert_eq!(CONTROL_PLANE_REGISTRY_V2_SCHEMA_VERSION, 3);
-        assert_eq!(CanonicalOperationDescriptor::schema_identity().version, 3);
-        assert_eq!(SourceInventoryDescriptor::schema_identity().version, 3);
-        assert_eq!(CanonicalControlPlaneRegistry::schema_identity().version, 3);
+    fn registry_wire_schema_version_four_rejects_previous_version_three() {
+        assert_eq!(CONTROL_PLANE_REGISTRY_V2_SCHEMA_VERSION, 4);
+        assert_eq!(CanonicalOperationDescriptor::schema_identity().version, 4);
+        assert_eq!(SourceInventoryDescriptor::schema_identity().version, 4);
+        assert_eq!(CanonicalControlPlaneRegistry::schema_identity().version, 4);
 
         let registry = valid_registry();
         let encoded = serde_json::to_value(&registry).unwrap();
-        assert_eq!(encoded["schema"]["version"], json!(3));
+        assert_eq!(encoded["schema"]["version"], json!(4));
         assert_eq!(
             encoded["canonical_operations"][0]["schema"]["version"],
-            json!(3)
+            json!(4)
         );
         assert_eq!(
             encoded["source_inventory"][0]["schema"]["version"],
-            json!(3)
+            json!(4)
         );
 
         let mut old_registry = encoded.clone();
-        old_registry["schema"]["version"] = json!(2);
+        old_registry["schema"]["version"] = json!(3);
         assert!(serde_json::from_value::<CanonicalControlPlaneRegistry>(old_registry).is_err());
 
         let mut old_operation = encoded.clone();
@@ -2447,7 +2464,7 @@ mod tests {
     }
 
     #[test]
-    fn local_r4_output_control_requires_physical_consent_and_local_adapter() {
+    fn local_r4_output_control_policy_is_exact_and_local() {
         let operation_id = "syndocal.output.blackout.release.v1";
         let mut output = authoritative_mutation_operation();
         output.operation_id = operation_id.to_string();
@@ -2468,10 +2485,10 @@ mod tests {
         output.adapter_policy = AdapterPolicy::LocalWindowOutputControl;
         output.receipt_policy = ReceiptPolicy::ExactTerminalReceipt;
         output.rate_policy = RatePolicy::TokenBucket4PerSecondBurst8;
-        output.consent_policy = ConsentPolicy::PreparedPhysicalConfirmation;
+        output.consent_policy = ConsentPolicy::LocalExplicitAction;
         let source_key = SourceKey::new(
             CanonicalSourceFamily::TauriCommand,
-            "release_blackout_output_control_v1",
+            "release_blackout_output_control_v2",
         );
         output.derived_adapters.push(DerivedAdapterBinding {
             adapter: AdapterKind::LocalTauriWindow,
@@ -2499,7 +2516,7 @@ mod tests {
 
         let mut direct = source(
             CanonicalSourceFamily::TauriCommand,
-            "release_blackout_output_control_v1",
+            "release_blackout_output_control_v2",
             SourceDisposition::Operation {
                 canonical_operation_id: operation_id.to_string(),
                 projection: TypedSchemaProjection::Exact,
@@ -2507,29 +2524,15 @@ mod tests {
         );
         direct.raw_request_schema = output.request_schema.clone();
         direct.raw_response_schema = output.response_schema.clone();
-        let support = source(
-            CanonicalSourceFamily::TauriCommand,
-            "prepare_output_consent_v1",
-            SourceDisposition::SupportPhase {
-                support_id: "syndocal.output.consent.prepare.v1".to_string(),
-            },
-        );
         let mut registry = CanonicalControlPlaneRegistry {
             schema: CanonicalControlPlaneRegistry::schema_identity(),
             canonical_operations: vec![output],
-            source_inventory: vec![direct, support],
+            source_inventory: vec![direct],
         };
         registry
             .source_inventory
             .sort_by(|left, right| left.source_key.cmp(&right.source_key));
         registry.populate_derived_adapters().unwrap();
-        assert!(registry
-            .canonical_operation_for_source(&SourceKey::new(
-                CanonicalSourceFamily::TauriCommand,
-                "prepare_output_consent_v1",
-            ))
-            .unwrap()
-            .is_none());
 
         let mut wrong_risk = registry.canonical_operations[0].clone();
         wrong_risk.risk = OperationRisk::R0;

@@ -3,7 +3,7 @@
 ## Current checkpoint
 
 - Branch: `codex/syndocal-v1.2`
-- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.1`.
+- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.2`.
 - Baseline HEAD at takeover: `df7e335c14fe82bb534fbd8867dcd431777e1522`
 - Verified local OutputControl R4 implementation checkpoint: `105c522e795ad021776649bff07d2ecf77bb0d0f` (`feat: route local output controls through R4`). The verified documentation follow-up is `94f4259eb982b4ecfa7b6ea3c645bbf8bd0c64ac`; both were pushed successfully to `origin/codex/syndocal-v1.0`.
 - The owner-incarnation output-lease acceptance contract was fixed in docs-only checkpoint `7b411c4e5a7b26ddf9ae91cea4fa8181daedfa24` (`docs: define AI3 output lease contract`). The later pure transition-core checkpoint is `2b889a753a6f55fc308ff5d82509138cfffd41a0` (`feat: add pure output lease transition core`); it is intentionally not AppState/runtime integration.
@@ -15,6 +15,7 @@
 - The replacement Syndocal × rekordbox × Stream Deck Pedal requirement is normative in `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`. `Seraf0-org/rekordbox-DJ-Link-ForPCDJ` is the sole DJ-PC Agent and owns Pedal/global-hotkey input plus all rekordbox MIDI, Filter, Stop, and reset behavior. Syndocal only receives authenticated `DJ_*` semantic events over the reused Web Remote listener, owns `.sdc` Track-to-Timeline mappings, and applies absolute Loop/Release show actions. The peer implementation and wired physical acceptance remain separate evidence and are not yet complete.
 - The 2026-08-20 P2/warning implementation checkpoint is `a228ba5e492841618ce0262038c965b5519d1ddd` (`fix: close takeover proof and reduce native warnings`). It closes the bounded Take Over proof gaps and removes honest production warning debt without suppression. It does not complete W0, AI3, physical video-output acceptance, or the new rekordbox/Pedal requirement.
 - The Windows-first CI checkpoint is `85d6eb2b6d7877cd49801c288357d3c72a36046f` (`ci: enforce complete Windows warning matrix`). It wires all nine Windows-enforced warning configurations, including SDK validation and exact-checkout process retirement before native builds. Independent read-only review of workflow SHA-256 `B94512DB87C7990F4505635FE78760620F8BFFEE189E55B4688CE39DAC2A90AA` returned P0 0, P1 0, and P2 0. macOS dev/release remain the only two pending warning rows.
+- **2026-08-21 OutputControl superseding checkpoint:** the physical-input consent feature is removed, not deferred. OutputControl no longer exposes or runs the six-digit/Raw Input/physical Enter challenge, its 15-second timer, prepare/status/consume IPC, or `control_plane_security.rs`. The normal operator action is one local `enable_output_control_v2` click that atomically acquires and arms exact `{lighting, video}` authority. Release, advanced Arm, Take Over, Add Display, and Force Transfer use a parented OS-native Warning/Yes-No dialog; only Yes proceeds, while No/close is retained as a terminal Forbidden result. All ten mutations use v2 operation IDs and command schema 2; registry wire schema is 4, retired v1 and future v3 operations fail closed, and no Remote/MIDI/OSC/DMX/Web/shortcut route can invoke them. Independent frozen review reported code P0 0/P1 0. Focused Rust counts are control-plane 59/59 after OS-locale coverage, protocol 47/47, OutputControl 19/19, and OutputLease 37/37; frontend invoke inventory is 406, localization is 3536/3536, and Windows default/all-targets, release, tests, and frontend warning ratchets are first-party 0. The first native `1.2.0-alpha.2` release build completed after the exact checkout process count was verified as zero. Executable SHA-256 was `BD10CB4E382883913C52390A4F63094BE5A9402E20AE32DB567D4F1DA81D0C83`, FileVersion/ProductVersion were both `1.2.0-alpha.2`, and PID `96124` provided exactly one responsive `Syndocal` window. The verified window was maximized before automation. One click on `照明と映像の出力を有効化` reached the accessible `出力が有効です` state without a physical-input prompt, Enter, six digits, or a modal. That first display pass confirmed Tauri's physical pixel modes matched `EnumDisplaySettings`; the actual integration defects were Add Display selecting a video-only lease instead of the active exact-Both lease, missing stable monitor identity persistence, and record-only creation that did not publish a native output window. The current tranche fixes those defects and must be rebuilt and exercised before commit.
 
 ## W0/W1 warning-ratchet checkpoint
 
@@ -121,7 +122,11 @@ force bit, exact session/generation selector, and unchanged fence. Independent
 adversarial review of the frozen follow-up returned P0 0, P1 0, and P2 0 for this
 bounded repair.
 
-## Local OutputControl R4 checkpoint
+## Historical Local OutputControl R4 checkpoint (superseded)
+
+This historical section records the earlier implementation state only. The
+2026-08-21 OutputControl superseding checkpoint at the top of this handoff is the
+current contract: the six-digit/Raw Input challenge and its IPC are removed.
 
 The checkpoint containing this section completes the next bounded AI3 slice, not
 AI3 as a whole:
@@ -584,7 +589,7 @@ fallback. The next 256-frame trial stopped returning, so the run was cancelled
 and the remaining matrix was not attempted. This is recorded hardware/driver
 failure evidence; rate/buffer/channel and fault-recovery acceptance remain open.
 
-## 2026-08-21 OutputControl Raw Input and generated-route checkpoint
+## Historical 2026-08-21 OutputControl Raw Input checkpoint (superseded)
 
 Work continues on `codex/syndocal-v1.2` from clean upstream base
 `d70eaf207930a17900785992ad70cc14e9edab7a`. The previous physical-keyboard
@@ -624,13 +629,10 @@ main window. Computer Use selected that exact process-backed app, observed a
 1920x1032 client capture and the system `Restore` action, and kept the window
 maximized for every native action.
 
-A fresh six-digit challenge was issued, but no Ready/lease result was observed
-before expiry. The run did not synthesize Raw Input and therefore does not claim
-the physical positive. Resume only when the operator is at the keyboard: issue one
-new code, verify lease acquisition, issue the separate `Both` Arm confirmation,
-then measure all five fullscreen window origins and leave the requested editor +
-LED panel + projector state. The code-side checkpoint is committed and pushed
-independently of that explicitly unverified hardware boundary.
+That historical six-digit attempt did not reach Ready before expiry. The feature
+was subsequently removed and must not be resumed. Current acceptance uses one
+local Enable click for exact `Both`, then measures all five stable-identity native
+output windows and leaves the requested editor + LED panel + projector state.
 
 ## 2026-08-21 simple-operation and Scene Matrix continuation
 
@@ -653,19 +655,16 @@ native gates close:
   through a new canonical OutputControl R4 action; legacy output creation stays
   rejected. I/O defaults show state and the real connect/start/stop action while
   raw configuration remains reachable in closed disclosures;
-- the real HID failure was confirmed as a production Raw Input registration query
-  failure, not operator input error. The current diagnostic-only change leaves the
-  accepted-input classifier unchanged and exposes safe numeric count/fill/stabilize
-  fields. Focused evidence is 16 pass / 0 fail / 1 interactive SendInput ignored,
-  `cargo check` warning zero, formatting and diff checks green. The next native
-  build must collect that numeric phase before any exact classifier repair.
+- the former Raw Input/six-digit/physical-Enter confirmation design was removed by
+  the later OutputControl v2 superseding checkpoint. It is historical evidence,
+  not a resume action. Normal Enable is one explicit local click; dangerous
+  advanced operations use a parented Windows warning dialog.
 
-This is an in-progress checkpoint, not a completion claim. Remaining work is the
-frozen UI/backend review, five-viewport and persistence/Undo proof, full frontend
-and workspace gates, exact-process native rebuild, one maximized responsive window,
-human Raw Input Ready/consume, five fullscreen origin checks, final three-screen
-operator state, documentation refresh, descriptive commit, and push. No synthetic
-input may substitute for the hardware proof.
+This paragraph records the state before the OutputControl v2 supersession. The
+current remaining Windows output work is an exact-process native rebuild, one
+maximized responsive editor, five detected-display window/identity checks, the
+final editor + LED panel + projector state, documentation refresh, descriptive
+commit, and push. No Raw Input, six-digit, Enter, or 15-second challenge remains.
 
 ### 2026-08-21 Bank semantics and native checkpoint
 
@@ -694,9 +693,9 @@ SHA-256 `620EA06C9696EBD6B45E53D42840CD5806EC16D627D2ED3B89BFB0A05A6B1017` and
 was launched as PID 53816 with `Responding=True`, title `Syndocal`, and one main
 window. Computer Use then failed twice to bind that window with `foreground window
 did not report a process id`; no PowerShell/UIAutomation or synthetic-input bypass
-was used. Maximize, Raw Input, five fullscreen origins, and the final three-screen
-state therefore remain unverified and must be resumed through Computer Use or one
-explicit human handoff.
+was used. Maximize and output placement were unverified at that historical
+checkpoint; Raw Input is no longer a product requirement. Resume only the current
+OutputControl v2 display checks through the verified maximized native window.
 
 The reviewed implementation checkpoint is commit
 `262b8c0f43035ee44ff23cdfc195f4ac1a08b374`, pushed successfully to
@@ -736,9 +735,10 @@ columns were visibly equal and the three Scene treatments matched their purple,
 pink, and green Bank colours; empty-Bank redundant copy was absent before scene
 creation.
 
-This closes the Bank visual-density tranche only. Human Raw Input Ready/consume,
-the separate `Both` Arm consent, five fullscreen output-origin checks, and the
-final editor + LED panel + projector state remain explicitly unverified.
+This closes the Bank visual-density tranche only. The later OutputControl v2
+checkpoint removed Raw Input and separate `Both` Arm consent. Five fullscreen
+output-target checks and the final editor + LED panel + projector state remain
+explicitly unverified here.
 
 ### 2026-08-21 durable output and release-evidence checkpoint
 
@@ -775,9 +775,170 @@ PID 83004, `Responding=True`, title `Syndocal`, with exactly one main window.
 Computer Use found the window restored, invoked Maximize from the native system
 menu, and then captured the sole 1920x1032 maximized Syndocal window.
 
-Resume at the remaining physical boundary only: issue a fresh six-digit Raw Input
-challenge while the operator is ready, confirm Ready and one-shot consume, issue
-fresh consent for `Both` Arm, automatically create/verify the five display outputs,
-then leave the editor + LED panel + projector state. All other UI entry can be
-automated; the six physical digits cannot, because synthesized input would
-invalidate the security proof.
+Do not resume the retired Raw Input/six-digit/Enter flow. The current OutputControl
+v2 path is one local click to acquire and arm exact `Both`, followed immediately by
+Add Display using a detected target's index plus stable identity. Verify all five
+native output windows, then leave the editor + LED panel + projector state. The
+advanced dangerous operations alone require the parented Windows warning dialog.
+
+### 2026-08-22 expired-lease Add Display false-freeze checkpoint
+
+Branch `codex/syndocal-v1.2` remains at upstream-equal HEAD
+`eb4a70c8796f5fdd300d4a8cea23a0e16b0f4f1a`; this checkpoint is still an
+uncommitted integration candidate. The reported Add Display "freeze" was not an
+OS hang in the inspected process: the exact Syndocal/WebView process answered a
+window message in 54 ms and no native dialog was open. The visible failure was
+`Exactly one active output lease ... is required` after the exact-Both authority
+naturally passed its 60-second TTL. The old public authority query intentionally
+hid that expired record, so the frontend rejected Add before IPC and displayed
+the error far from the Add control.
+
+The normal Add path now uses the dedicated read-only
+`query_display_add_lease_authority_v1` endpoint. It truthfully distinguishes
+`held_active`, `expired_recoverable`, `held_orphaned`, and `unavailable`, and
+returns authority only for exactly one globally overlapping lease with the exact
+renderer/window/process/owner incarnation, current project identity, and
+canonical `{lighting, video}` resources. The query is async/offloaded, bounded by
+try-lock failure, and changes no generation, audit, or durable state. The single
+subsequent `add_display_output_v2` request can authorize an active exact lease or
+privately recover the exact naturally expired/orphaned lease in the same durable
+candidate. Public Acquire/Recover semantics are unchanged. The Add surface now
+shows pending/success/failure adjacent to the button and prevents duplicate
+submission.
+
+Backend-first verification is the default repeatable path. The production-faithful
+driver constructs the same canonical v2 request and executes the same durable,
+lease, engine, and project publication boundaries as the frontend; only the native
+shell/worker is injected. Computer Use is reserved for the final maximized native
+placement and hardware-visible acceptance.
+
+Measured evidence on the frozen candidate: control-plane 61/61; output-lease
+46/46; exact natural-expiry query-to-Add recovery 1/1; four-display canonical
+driver 1/1; frontend invoke inventory 407; localization 3538/3538; TypeScript/Vite
+build; focused display and output runtime contracts; no-default Rust check with
+zero first-party warnings; frontend ratchet zero first-party/third-party; format,
+Node syntax, and diff checks all pass. Final independent review and a fresh native
+no-bundle build are still pending. No current native placement is claimed: editor
++ four sub-displays remains 0/4 verified. Product-roadmap progress remains 13 of
+79 checked items (16.5%); this bounded output tranche is not product completion.
+
+### 2026-08-22 current-source native Add Display hang correction
+
+The preceding false-freeze diagnosis described the earlier executable only. A
+fresh current-source native build disproved completion of the new Add path.
+Immediately before the build, exact-path inspection found no running instance of
+this checkout's executable. `pnpm --dir app tauri build --no-bundle` completed in
+1m59s. The resulting 54,498,816-byte
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` has SHA-256
+`30DD06DBD3642B6CE3D31E403FCDB6AA9A35D9D419929B4D744A837D3509C06E`.
+It launched as the sole exact-path process, PID 81160, with one responsive
+`Syndocal` window, and that exact window was maximized before any UI operation.
+
+One-click Enable reached the authoritative `Output enabled` state. After waiting
+beyond the 60-second lease TTL, Add selected the default non-editor target
+`\\.\DISPLAY5` at 1920x1080 and displayed the parented Japanese native warning.
+After Yes, no output window appeared, the adjacent Add state remained pending,
+and the exact process became unresponsive. The durable journal proves that the
+current renderer's request 1 reached terminal `Acquired`, while request 2 reached
+durable `Pending` with no terminal receipt. The process was then terminated by
+its already-verified exact executable path; no unrelated process was touched.
+
+Static tracing matches the measured approximately 10-second transition to Not
+Responding. Add retained lifecycle, external-admission, project-coordinator,
+ownership-transition, and lease-registry guards after durable prepare while it
+performed native window, engine, synchronous GPU-device, and first-frame work.
+The frontend recovery timer then invoked synchronous
+`get_project_checkpoint_bundle` on the Tauri event loop and blocked on the same
+project coordinator. The repair stop condition is therefore a phased transaction:
+durable Pending first, unpublished native/GPU preparation with no long-lived
+project/transition/lease guards, then a short final exact-fence revalidation and
+publication. The checkpoint query must also run off the event loop and fail
+boundedly under contention. Safe rollback may clear Pending only after complete
+native/engine cleanup is positively acknowledged; ambiguous cleanup remains
+in-doubt and blocks replay.
+
+Do not repeat this path through UI while implementing. Use the production
+backend transaction seam for the stalled-phase, expiry, stale-generation,
+replay, and four-display matrix. Computer Use is reserved for one final rebuilt,
+maximized native session because physical Windows placement and native modal
+parenting cannot be proven headlessly. Current native display acceptance remains
+0/4 and the product checklist remains 13/79 (16.5%). No commit or push is allowed
+until the phased fix, independent review, full focused gates, warning-zero checks,
+and a new native acceptance pass are green.
+
+### 2026-08-22 phased Add Display final Windows acceptance
+
+The phased Add correction is accepted on branch `codex/syndocal-v1.2` at the
+still-upstream-equal pre-commit HEAD
+`eb4a70c8796f5fdd300d4a8cea23a0e16b0f4f1a`. The frozen implementation hashes
+are `main.rs` SHA-256
+`2B78C6FF639125AB87E0B03ACE51B00D5DCFC992436DB17C93CC4323E9CD7CA4` and
+`control_plane_runtime.rs` SHA-256
+`2AD1BCFFC64EB5E9A54C1112E53BAEC6FC30E77DF4516430A23A7B51F68F3D61`.
+Independent read-only review reports P0 0 / P1 0 for this tranche.
+
+The production Add wrapper, the four-display driver, the stalled-phase test,
+and the terminal-record-fault test now enter the same full
+`add_display_output_with_output_control_fence_core`. Native preparation is
+unpublished and deadline-bounded outside long-lived authority/project guards;
+final publication revalidates the exact owner, project, monitor, output/safety
+fence, and exact-Both lease. Worker/metrics insertion and start-gate release use
+one shared state machine for the Tauri and injected implementations. Ambiguous
+timeout or cleanup retains durable Pending and blocks replay; acknowledged total
+cleanup alone may SafeAbort. The checkpoint query is async/off-event-loop and
+returns bounded Busy under contention.
+
+Immediately before the final build, exact-path inspection found zero running
+instances of this checkout's executable. `pnpm --dir app tauri build
+--no-bundle` passed. The resulting 54,403,072-byte executable is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, SHA-256
+`C88A1DE53812DD773FE4AE28079977202104F33F63B67054119DD338C1EF2BAA`.
+It launched as the sole exact-path process, PID 56460. The verified main
+`Syndocal` window was maximized at 1920x1032 before every final UI action.
+
+One-click Enable reached `Output enabled` and remained responsive across a
+greater-than-ten-second recovery interval. Four sequential canonical v2 Add
+requests used the four non-editor targets DISPLAY5, DISPLAY6, DISPLAY1, and
+DISPLAY3. Each displayed the parented Japanese Windows Warning/Yes-No dialog;
+each Yes terminalized and produced one live native window. Final enumeration is
+exactly one 1920x1032 editor plus four responsive black output windows titled
+`Syndocal Output - Display 1`, `Display 2`, `Display 3`, and `Display 5`.
+Captured output surfaces were 1280x720, 1536x864, 2560x720, and 1707x960 after
+Windows DPI scaling, while the authored physical modes remained 1920x1080,
+2560x720, 2560x1440, and 3840x2160. The editor monitor was not used.
+
+The current renderer origin `renderer:0ab58f46-0e39-4537-bafe-0e25eeb1dae0`
+has request 1 `Acquired` and requests 2 through 5 terminal `Authorized`, with
+`replay_guard=false` and no current-origin Pending. Two older origins retain
+historical fail-closed Pending evidence and are not current authority.
+
+The post-commit stale-message P2 is closed in `App.tsx` blob
+`44a1f7c25fa668e4f105ea12e7ac8076caee7dcc` and
+`check-video-display-target.mjs` blob
+`506fc9834f129835375c5839f6f0477317e67a4f`. Add mutation success is now fixed
+before refresh convergence: the two exact transaction/publication messages are
+cleared only after refresh settles, an unrelated refresh failure is reported as
+`Display output added; refresh pending`, and a real Add mutation failure still
+rejects beside the Add control. The checker executes the extracted production
+classifier and proves mutation failure, known-stale refresh rejection,
+controller-caught stale status, and unrelated refresh failure separately.
+
+The final P2 native rebuild first encountered a Windows Defender ML false
+positive (`Trojan:Script/ObfusScript.A!ml`) against Tauri's generated minified JS
+asset. No antivirus protection or exclusion was changed. The same production
+code was rebuilt successfully with an unminified Vite asset and a temporary
+no-before-build Tauri overlay, which was deleted immediately afterward.
+`pnpm --dir app tauri build --no-bundle` then produced a 54,587,904-byte release
+executable with SHA-256
+`977D3D63A60E77ACE9E6A6E1CA91652EC0356E8389367921DAB7032894DA0DCB`.
+The sole exact-path process, PID 87060, exposed exactly one responsive `Syndocal`
+window; it was verified maximized at 1920x1032 and remained responsive after a
+greater-than-ten-second wait. Repeated four-display proof remains the canonical
+backend driver plus the immediately preceding physical 4/4 acceptance; the P2
+rebuild intentionally did not repeat four manual Add clicks.
+
+This closes the Windows phased-Add/five-screen tranche only. The authoritative
+product roadmap remains 13/79 (16.5%); it is not a whole-product completion
+claim. Repeated regression validation must continue through the canonical
+backend driver. Computer Use remains limited to the final physical placement,
+native modal, and visible-window acceptance pass.

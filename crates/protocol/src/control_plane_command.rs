@@ -1636,36 +1636,40 @@ pub const SAFETY_BLACKOUT_ENGAGE_SHAPE_DOMAIN_V1: &[u8] =
     b"syndocal.safety.blackout.engage.shape.v1\0";
 pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
     "syndocal.query.output.control.authority.v1";
-pub const OUTPUT_CONSENT_PREPARE_OPERATION_ID: &str = "syndocal.output.consent.prepare.v1";
-pub const OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID: &str =
-    "syndocal.query.output.consent.status.v1";
-pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v1";
-pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v1";
-pub const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID: &str = "syndocal.output.standby.takeover.v1";
-pub const OUTPUT_LEASE_ACQUIRE_OPERATION_ID: &str = "syndocal.output.lease.acquire.v1";
-pub const OUTPUT_LEASE_RENEW_OPERATION_ID: &str = "syndocal.output.lease.renew.v1";
-pub const OUTPUT_LEASE_RECOVER_OPERATION_ID: &str = "syndocal.output.lease.recover.v1";
-pub const OUTPUT_LEASE_RELINQUISH_OPERATION_ID: &str = "syndocal.output.lease.relinquish.v1";
+/// OutputControl v2 changed the command shape and confirmation boundary. Its
+/// request/response schema identity is therefore distinct from the v1
+/// inventory schema and the Rust mutation DTO names now match that boundary.
+pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 2;
+pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
+pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
+pub const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID: &str = "syndocal.output.standby.takeover.v2";
+pub const OUTPUT_LEASE_ACQUIRE_OPERATION_ID: &str = "syndocal.output.lease.acquire.v2";
+pub const OUTPUT_LEASE_RENEW_OPERATION_ID: &str = "syndocal.output.lease.renew.v2";
+pub const OUTPUT_LEASE_RECOVER_OPERATION_ID: &str = "syndocal.output.lease.recover.v2";
+pub const OUTPUT_LEASE_RELINQUISH_OPERATION_ID: &str = "syndocal.output.lease.relinquish.v2";
 pub const OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID: &str =
-    "syndocal.output.lease.force_transfer.v1";
-pub const OUTPUT_DISPLAY_ADD_OPERATION_ID: &str = "syndocal.output.display.add.v1";
+    "syndocal.output.lease.force_transfer.v2";
+pub const OUTPUT_DISPLAY_ADD_OPERATION_ID: &str = "syndocal.output.display.add.v2";
+/// Normal operator path: one explicit local-renderer enable request. This is
+/// deliberately distinct from the public lease lifecycle.
+pub const OUTPUT_ENABLE_OPERATION_ID: &str = "syndocal.output.enable.v2";
 pub const OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID: &str =
     "syndocal.output.lease.authority.query.v1";
 pub const OUTPUT_LEASE_TTL_MS: u64 = 60_000;
 pub const MAX_OUTPUT_LEASE_QUERY_STATUSES: usize = 64;
-pub const OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V1: &[u8] =
-    b"syndocal.output-control.argument-fingerprint.v1\0";
-pub const OUTPUT_CONTROL_SHAPE_DOMAIN_V1: &[u8] = b"syndocal.output-control.command-shape.v1\0";
+pub const OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V2: &[u8] =
+    b"syndocal.output-control.argument-fingerprint.v2\0";
+pub const OUTPUT_CONTROL_SHAPE_DOMAIN_V2: &[u8] = b"syndocal.output-control.command-shape.v2\0";
 
 /// Minimal, display-only payload for the local R4 output-creation lane.
 ///
 /// The monitor index is resolved against the current native monitor snapshot
-/// at both consent preparation and final commit.  Width/height stay on the
-/// wire so the consent fingerprint covers every output-affecting choice, but
-/// the UI may simply populate them from the detected display descriptor.
+/// at both admission and final commit. Width/height stay on the wire so the
+/// request fingerprint covers every output-affecting choice, but the UI may
+/// simply populate them from the detected display descriptor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DisplayOutputSpecV1 {
+pub struct DisplayOutputSpecV2 {
     pub label: String,
     pub monitor_identity: String,
     pub monitor_index: u32,
@@ -1674,7 +1678,7 @@ pub struct DisplayOutputSpecV1 {
     pub fullscreen: bool,
 }
 
-impl DisplayOutputSpecV1 {
+impl DisplayOutputSpecV2 {
     pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
         let label = self.label.trim();
         if label.is_empty()
@@ -2263,7 +2267,8 @@ impl<'de> Deserialize<'de> for OutputLeaseAuthorityV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OutputControlActionV1 {
+pub enum OutputControlActionV2 {
+    EnableOutput,
     Arm {
         role: OutputControlTargetRoleV1,
         lease: OutputLeaseAuthorityV1,
@@ -2293,14 +2298,15 @@ pub enum OutputControlActionV1 {
         lease: OutputLeaseAuthorityV1,
     },
     AddDisplay {
-        spec: DisplayOutputSpecV1,
+        spec: DisplayOutputSpecV2,
         lease: OutputLeaseAuthorityV1,
     },
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum OutputControlActionV1Wire {
+enum OutputControlActionV2Wire {
+    EnableOutput {},
     Arm {
         role: OutputControlTargetRoleV1,
         lease: OutputLeaseAuthorityV1,
@@ -2330,14 +2336,15 @@ enum OutputControlActionV1Wire {
         lease: OutputLeaseAuthorityV1,
     },
     AddDisplay {
-        spec: DisplayOutputSpecV1,
+        spec: DisplayOutputSpecV2,
         lease: OutputLeaseAuthorityV1,
     },
 }
 
-impl OutputControlActionV1 {
+impl OutputControlActionV2 {
     pub const fn operation_id(&self) -> &'static str {
         match self {
+            Self::EnableOutput => OUTPUT_ENABLE_OPERATION_ID,
             Self::Arm { .. } => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
             Self::ReleaseBlackout { .. } => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
             Self::TakeOverStandby { .. } => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
@@ -2372,6 +2379,7 @@ impl OutputControlActionV1 {
             lease.validate()?;
         }
         match self {
+            Self::EnableOutput => {}
             Self::Arm { lease, .. }
             | Self::ReleaseBlackout { lease }
             | Self::RenewLease { lease }
@@ -2387,13 +2395,14 @@ impl OutputControlActionV1 {
         Ok(())
     }
 
-    fn wire(&self) -> OutputControlActionV1Wire {
+    fn wire(&self) -> OutputControlActionV2Wire {
         match self {
-            Self::Arm { role, lease } => OutputControlActionV1Wire::Arm {
+            Self::EnableOutput => OutputControlActionV2Wire::EnableOutput {},
+            Self::Arm { role, lease } => OutputControlActionV2Wire::Arm {
                 role: *role,
                 lease: lease.clone(),
             },
-            Self::ReleaseBlackout { lease } => OutputControlActionV1Wire::ReleaseBlackout {
+            Self::ReleaseBlackout { lease } => OutputControlActionV2Wire::ReleaseBlackout {
                 lease: lease.clone(),
             },
             Self::TakeOverStandby {
@@ -2401,28 +2410,28 @@ impl OutputControlActionV1 {
                 standby_session_id,
                 standby_generation,
                 lease,
-            } => OutputControlActionV1Wire::TakeOverStandby {
+            } => OutputControlActionV2Wire::TakeOverStandby {
                 force: *force,
                 standby_session_id: standby_session_id.clone(),
                 standby_generation: *standby_generation,
                 lease: lease.clone(),
             },
-            Self::AcquireLease { role } => OutputControlActionV1Wire::AcquireLease { role: *role },
-            Self::RenewLease { lease } => OutputControlActionV1Wire::RenewLease {
+            Self::AcquireLease { role } => OutputControlActionV2Wire::AcquireLease { role: *role },
+            Self::RenewLease { lease } => OutputControlActionV2Wire::RenewLease {
                 lease: lease.clone(),
             },
-            Self::RecoverLease { lease } => OutputControlActionV1Wire::RecoverLease {
+            Self::RecoverLease { lease } => OutputControlActionV2Wire::RecoverLease {
                 lease: lease.clone(),
             },
             Self::RelinquishOutputLease { lease } => {
-                OutputControlActionV1Wire::RelinquishOutputLease {
+                OutputControlActionV2Wire::RelinquishOutputLease {
                     lease: lease.clone(),
                 }
             }
-            Self::ForceTransferLease { lease } => OutputControlActionV1Wire::ForceTransferLease {
+            Self::ForceTransferLease { lease } => OutputControlActionV2Wire::ForceTransferLease {
                 lease: lease.clone(),
             },
-            Self::AddDisplay { spec, lease } => OutputControlActionV1Wire::AddDisplay {
+            Self::AddDisplay { spec, lease } => OutputControlActionV2Wire::AddDisplay {
                 spec: spec.clone(),
                 lease: lease.clone(),
             },
@@ -2435,6 +2444,9 @@ impl OutputControlActionV1 {
     ) -> Result<(), OutputControlValidationErrorV1> {
         self.validate()?;
         match self {
+            Self::EnableOutput => {
+                output.push(9);
+            }
             Self::Arm { role, lease } => {
                 output.push(0);
                 output.push(match role {
@@ -2503,7 +2515,7 @@ impl OutputControlActionV1 {
     }
 }
 
-impl Serialize for OutputControlActionV1 {
+impl Serialize for OutputControlActionV2 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -2513,16 +2525,17 @@ impl Serialize for OutputControlActionV1 {
     }
 }
 
-impl<'de> Deserialize<'de> for OutputControlActionV1 {
+impl<'de> Deserialize<'de> for OutputControlActionV2 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let wire = OutputControlActionV1Wire::deserialize(deserializer)?;
+        let wire = OutputControlActionV2Wire::deserialize(deserializer)?;
         let value = match wire {
-            OutputControlActionV1Wire::Arm { role, lease } => Self::Arm { role, lease },
-            OutputControlActionV1Wire::ReleaseBlackout { lease } => Self::ReleaseBlackout { lease },
-            OutputControlActionV1Wire::TakeOverStandby {
+            OutputControlActionV2Wire::EnableOutput {} => Self::EnableOutput,
+            OutputControlActionV2Wire::Arm { role, lease } => Self::Arm { role, lease },
+            OutputControlActionV2Wire::ReleaseBlackout { lease } => Self::ReleaseBlackout { lease },
+            OutputControlActionV2Wire::TakeOverStandby {
                 force,
                 standby_session_id,
                 standby_generation,
@@ -2533,16 +2546,16 @@ impl<'de> Deserialize<'de> for OutputControlActionV1 {
                 standby_generation,
                 lease,
             },
-            OutputControlActionV1Wire::AcquireLease { role } => Self::AcquireLease { role },
-            OutputControlActionV1Wire::RenewLease { lease } => Self::RenewLease { lease },
-            OutputControlActionV1Wire::RecoverLease { lease } => Self::RecoverLease { lease },
-            OutputControlActionV1Wire::RelinquishOutputLease { lease } => {
+            OutputControlActionV2Wire::AcquireLease { role } => Self::AcquireLease { role },
+            OutputControlActionV2Wire::RenewLease { lease } => Self::RenewLease { lease },
+            OutputControlActionV2Wire::RecoverLease { lease } => Self::RecoverLease { lease },
+            OutputControlActionV2Wire::RelinquishOutputLease { lease } => {
                 Self::RelinquishOutputLease { lease }
             }
-            OutputControlActionV1Wire::ForceTransferLease { lease } => {
+            OutputControlActionV2Wire::ForceTransferLease { lease } => {
                 Self::ForceTransferLease { lease }
             }
-            OutputControlActionV1Wire::AddDisplay { spec, lease } => {
+            OutputControlActionV2Wire::AddDisplay { spec, lease } => {
                 Self::AddDisplay { spec, lease }
             }
         };
@@ -2713,338 +2726,35 @@ impl<'de> Deserialize<'de> for OutputControlAuthorityBundleV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputConsentPrepareRequestV1 {
+pub struct OutputControlCommandRequestV2 {
     pub operation_id: String,
     pub request_id: u64,
     pub expected_fence: OutputControlFenceV1,
-    pub action: OutputControlActionV1,
+    pub action: OutputControlActionV2,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OutputConsentPrepareRequestV1Wire {
+struct OutputControlCommandRequestV2Wire {
     operation_id: String,
     request_id: u64,
     expected_fence: OutputControlFenceV1,
-    action: OutputControlActionV1,
+    action: OutputControlActionV2,
 }
 
-impl OutputConsentPrepareRequestV1 {
-    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
-        if self.operation_id != OUTPUT_CONSENT_PREPARE_OPERATION_ID {
-            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
-        }
-        validate_output_request_id(self.request_id)?;
-        self.expected_fence.validate()?;
-        self.action.validate()
-    }
-
-    pub fn argument_fingerprint_bytes(&self) -> Result<Vec<u8>, OutputControlValidationErrorV1> {
-        self.validate()?;
-        let mut bytes = OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V1.to_vec();
-        append_ascii(&mut bytes, self.action.operation_id())
-            .map_err(|_| OutputControlValidationErrorV1::UnexpectedOperationId)?;
-        self.action.append_canonical_bytes(&mut bytes)?;
-        Ok(bytes)
-    }
-}
-
-impl Serialize for OutputConsentPrepareRequestV1 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.validate().map_err(serde::ser::Error::custom)?;
-        OutputConsentPrepareRequestV1Wire {
-            operation_id: self.operation_id.clone(),
-            request_id: self.request_id,
-            expected_fence: self.expected_fence.clone(),
-            action: self.action.clone(),
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for OutputConsentPrepareRequestV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = OutputConsentPrepareRequestV1Wire::deserialize(deserializer)?;
-        let value = Self {
-            operation_id: wire.operation_id,
-            request_id: wire.request_id,
-            expected_fence: wire.expected_fence,
-            action: wire.action,
-        };
-        value.validate().map_err(D::Error::custom)?;
-        Ok(value)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputConsentChallengeV1 {
-    pub operation_id: String,
-    pub request_id: u64,
-    pub target_operation_id: String,
-    pub challenge_id: String,
-    pub consent_token: String,
-    pub display_code: String,
-    pub argument_fingerprint: String,
-    pub expires_at_unix_ms: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OutputConsentChallengeV1Wire {
-    operation_id: String,
-    request_id: u64,
-    target_operation_id: String,
-    challenge_id: String,
-    consent_token: String,
-    display_code: String,
-    argument_fingerprint: String,
-    expires_at_unix_ms: u64,
-}
-
-impl OutputConsentChallengeV1 {
-    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
-        if self.operation_id != OUTPUT_CONSENT_PREPARE_OPERATION_ID
-            || !matches!(
-                self.target_operation_id.as_str(),
-                OUTPUT_OWNERSHIP_ARM_OPERATION_ID
-                    | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
-                    | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
-                    | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
-                    | OUTPUT_LEASE_RENEW_OPERATION_ID
-                    | OUTPUT_LEASE_RECOVER_OPERATION_ID
-                    | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
-                    | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
-                    | OUTPUT_DISPLAY_ADD_OPERATION_ID
-            )
-        {
-            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
-        }
-        validate_output_request_id(self.request_id)?;
-        validate_opaque_output_id(&self.challenge_id)?;
-        validate_opaque_output_id(&self.consent_token)?;
-        validate_lower_hex_fingerprint(&self.argument_fingerprint)?;
-        if self.display_code.len() != 6
-            || !self.display_code.bytes().all(|byte| byte.is_ascii_digit())
-            || self.expires_at_unix_ms == 0
-            || self.expires_at_unix_ms > MAX_SAFE_JAVASCRIPT_INTEGER
-        {
-            return Err(OutputControlValidationErrorV1::InvalidOpaqueId);
-        }
-        Ok(())
-    }
-}
-
-impl Serialize for OutputConsentChallengeV1 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.validate().map_err(serde::ser::Error::custom)?;
-        OutputConsentChallengeV1Wire {
-            operation_id: self.operation_id.clone(),
-            request_id: self.request_id,
-            target_operation_id: self.target_operation_id.clone(),
-            challenge_id: self.challenge_id.clone(),
-            consent_token: self.consent_token.clone(),
-            display_code: self.display_code.clone(),
-            argument_fingerprint: self.argument_fingerprint.clone(),
-            expires_at_unix_ms: self.expires_at_unix_ms,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for OutputConsentChallengeV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = OutputConsentChallengeV1Wire::deserialize(deserializer)?;
-        let value = Self {
-            operation_id: wire.operation_id,
-            request_id: wire.request_id,
-            target_operation_id: wire.target_operation_id,
-            challenge_id: wire.challenge_id,
-            consent_token: wire.consent_token,
-            display_code: wire.display_code,
-            argument_fingerprint: wire.argument_fingerprint,
-            expires_at_unix_ms: wire.expires_at_unix_ms,
-        };
-        value.validate().map_err(D::Error::custom)?;
-        Ok(value)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputConsentStatusRequestV1 {
-    pub operation_id: String,
-    pub request_id: u64,
-    pub challenge_id: String,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OutputConsentStatusRequestV1Wire {
-    operation_id: String,
-    request_id: u64,
-    challenge_id: String,
-}
-
-impl OutputConsentStatusRequestV1 {
-    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
-        if self.operation_id != OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID {
-            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
-        }
-        validate_output_request_id(self.request_id)?;
-        validate_opaque_output_id(&self.challenge_id)
-    }
-}
-
-impl Serialize for OutputConsentStatusRequestV1 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.validate().map_err(serde::ser::Error::custom)?;
-        OutputConsentStatusRequestV1Wire {
-            operation_id: self.operation_id.clone(),
-            request_id: self.request_id,
-            challenge_id: self.challenge_id.clone(),
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for OutputConsentStatusRequestV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = OutputConsentStatusRequestV1Wire::deserialize(deserializer)?;
-        let value = Self {
-            operation_id: wire.operation_id,
-            request_id: wire.request_id,
-            challenge_id: wire.challenge_id,
-        };
-        value.validate().map_err(D::Error::custom)?;
-        Ok(value)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OutputConsentPhysicalStateV1 {
-    PendingPhysicalInput,
-    Ready,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputConsentStatusV1 {
-    pub operation_id: String,
-    pub request_id: u64,
-    pub challenge_id: String,
-    pub state: OutputConsentPhysicalStateV1,
-    pub expires_at_unix_ms: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OutputConsentStatusV1Wire {
-    operation_id: String,
-    request_id: u64,
-    challenge_id: String,
-    state: OutputConsentPhysicalStateV1,
-    expires_at_unix_ms: u64,
-}
-
-impl OutputConsentStatusV1 {
-    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
-        if self.operation_id != OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID {
-            return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
-        }
-        validate_output_request_id(self.request_id)?;
-        validate_opaque_output_id(&self.challenge_id)?;
-        if self.expires_at_unix_ms == 0 || self.expires_at_unix_ms > MAX_SAFE_JAVASCRIPT_INTEGER {
-            return Err(OutputControlValidationErrorV1::InvalidFence);
-        }
-        Ok(())
-    }
-}
-
-impl Serialize for OutputConsentStatusV1 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.validate().map_err(serde::ser::Error::custom)?;
-        OutputConsentStatusV1Wire {
-            operation_id: self.operation_id.clone(),
-            request_id: self.request_id,
-            challenge_id: self.challenge_id.clone(),
-            state: self.state,
-            expires_at_unix_ms: self.expires_at_unix_ms,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for OutputConsentStatusV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = OutputConsentStatusV1Wire::deserialize(deserializer)?;
-        let value = Self {
-            operation_id: wire.operation_id,
-            request_id: wire.request_id,
-            challenge_id: wire.challenge_id,
-            state: wire.state,
-            expires_at_unix_ms: wire.expires_at_unix_ms,
-        };
-        value.validate().map_err(D::Error::custom)?;
-        Ok(value)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputControlCommandRequestV1 {
-    pub operation_id: String,
-    pub request_id: u64,
-    pub expected_fence: OutputControlFenceV1,
-    pub consent_token: String,
-    pub action: OutputControlActionV1,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OutputControlCommandRequestV1Wire {
-    operation_id: String,
-    request_id: u64,
-    expected_fence: OutputControlFenceV1,
-    consent_token: String,
-    action: OutputControlActionV1,
-}
-
-impl OutputControlCommandRequestV1 {
+impl OutputControlCommandRequestV2 {
     pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
         if self.operation_id != self.action.operation_id() {
             return Err(OutputControlValidationErrorV1::OperationActionMismatch);
         }
         validate_output_request_id(self.request_id)?;
         self.expected_fence.validate()?;
-        validate_opaque_output_id(&self.consent_token)?;
         self.action.validate()
     }
 
     pub fn canonical_shape_bytes(&self) -> Result<Vec<u8>, OutputControlValidationErrorV1> {
         self.validate()?;
-        let mut bytes = OUTPUT_CONTROL_SHAPE_DOMAIN_V1.to_vec();
+        let mut bytes = OUTPUT_CONTROL_SHAPE_DOMAIN_V2.to_vec();
         append_ascii(&mut bytes, &self.operation_id)
             .map_err(|_| OutputControlValidationErrorV1::UnexpectedOperationId)?;
         self.expected_fence.append_canonical_bytes(&mut bytes)?;
@@ -3054,7 +2764,7 @@ impl OutputControlCommandRequestV1 {
 
     pub fn argument_fingerprint_bytes(&self) -> Result<Vec<u8>, OutputControlValidationErrorV1> {
         self.validate()?;
-        let mut bytes = OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V1.to_vec();
+        let mut bytes = OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V2.to_vec();
         append_ascii(&mut bytes, &self.operation_id)
             .map_err(|_| OutputControlValidationErrorV1::UnexpectedOperationId)?;
         self.action.append_canonical_bytes(&mut bytes)?;
@@ -3062,34 +2772,32 @@ impl OutputControlCommandRequestV1 {
     }
 }
 
-impl Serialize for OutputControlCommandRequestV1 {
+impl Serialize for OutputControlCommandRequestV2 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         self.validate().map_err(serde::ser::Error::custom)?;
-        OutputControlCommandRequestV1Wire {
+        OutputControlCommandRequestV2Wire {
             operation_id: self.operation_id.clone(),
             request_id: self.request_id,
             expected_fence: self.expected_fence.clone(),
-            consent_token: self.consent_token.clone(),
             action: self.action.clone(),
         }
         .serialize(serializer)
     }
 }
 
-impl<'de> Deserialize<'de> for OutputControlCommandRequestV1 {
+impl<'de> Deserialize<'de> for OutputControlCommandRequestV2 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let wire = OutputControlCommandRequestV1Wire::deserialize(deserializer)?;
+        let wire = OutputControlCommandRequestV2Wire::deserialize(deserializer)?;
         let value = Self {
             operation_id: wire.operation_id,
             request_id: wire.request_id,
             expected_fence: wire.expected_fence,
-            consent_token: wire.consent_token,
             action: wire.action,
         };
         value.validate().map_err(D::Error::custom)?;
@@ -3099,23 +2807,17 @@ impl<'de> Deserialize<'de> for OutputControlCommandRequestV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum OutputControlReceiptOutcomeV1 {
+pub enum OutputControlReceiptOutcomeV2 {
     Applied,
     NoOp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum OutputControlErrorCodeV1 {
+pub enum OutputControlErrorCodeV2 {
     InvalidRequest,
     Forbidden,
     StaleFence,
-    ConsentMissing,
-    ConsentExpired,
-    ConsentPending,
-    ConsentReplayed,
-    ConsentWrongBinding,
-    ConsentDeviceRemoved,
     Busy,
     Overloaded,
     PublicationFailed,
@@ -3124,7 +2826,7 @@ pub enum OutputControlErrorCodeV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum OutputLeaseReceiptPhaseV1 {
+pub enum OutputLeaseReceiptPhaseV2 {
     Unclaimed,
     HeldActive,
     HeldOrphaned,
@@ -3132,7 +2834,7 @@ pub enum OutputLeaseReceiptPhaseV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum OutputLeaseReceiptOutcomeV1 {
+pub enum OutputLeaseReceiptOutcomeV2 {
     Acquired,
     Renewed,
     ExpiryObserved,
@@ -3146,28 +2848,28 @@ pub enum OutputLeaseReceiptOutcomeV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OutputLeaseReceiptChangeV1 {
+pub struct OutputLeaseReceiptChangeV2 {
     pub lease_id: String,
     pub before_generation: Option<u64>,
     pub after_generation: Option<u64>,
     pub before_resources: Vec<OutputControlTargetRoleV1>,
     pub after_resources: Vec<OutputControlTargetRoleV1>,
-    pub before_phase: Option<OutputLeaseReceiptPhaseV1>,
-    pub after_phase: Option<OutputLeaseReceiptPhaseV1>,
+    pub before_phase: Option<OutputLeaseReceiptPhaseV2>,
+    pub after_phase: Option<OutputLeaseReceiptPhaseV2>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OutputControlLeaseResultV1 {
+pub struct OutputControlLeaseResultV2 {
     pub authority: OutputLeaseAuthorityV1,
     pub resources: Vec<OutputControlTargetRoleV1>,
-    pub phase: OutputLeaseReceiptPhaseV1,
-    pub outcome: OutputLeaseReceiptOutcomeV1,
+    pub phase: OutputLeaseReceiptPhaseV2,
+    pub outcome: OutputLeaseReceiptOutcomeV2,
     pub audit_sequence: u64,
-    pub changes: Vec<OutputLeaseReceiptChangeV1>,
+    pub changes: Vec<OutputLeaseReceiptChangeV2>,
 }
 
-impl OutputControlLeaseResultV1 {
+impl OutputControlLeaseResultV2 {
     pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
         self.authority.validate()?;
         if self.audit_sequence == 0 || self.audit_sequence > MAX_SAFE_JAVASCRIPT_INTEGER {
@@ -3200,7 +2902,7 @@ impl OutputControlLeaseResultV1 {
         if terminal_phase != self.phase {
             return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
         }
-        let terminal_resources = if self.outcome == OutputLeaseReceiptOutcomeV1::Relinquished {
+        let terminal_resources = if self.outcome == OutputLeaseReceiptOutcomeV2::Relinquished {
             &change.before_resources
         } else {
             &change.after_resources
@@ -3254,18 +2956,27 @@ impl OutputControlLeaseResultV1 {
         let expected_outcome = match operation_id {
             OUTPUT_OWNERSHIP_ARM_OPERATION_ID
             | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
-            | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Authorized,
-            OUTPUT_LEASE_ACQUIRE_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Acquired,
-            OUTPUT_LEASE_RENEW_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Renewed,
-            OUTPUT_LEASE_RECOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Recovered,
-            OUTPUT_LEASE_RELINQUISH_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Relinquished,
-            OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Transferred,
-            OUTPUT_DISPLAY_ADD_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Authorized,
+            | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
+            OUTPUT_LEASE_ACQUIRE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
+            OUTPUT_LEASE_RENEW_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Renewed,
+            OUTPUT_LEASE_RECOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Recovered,
+            OUTPUT_LEASE_RELINQUISH_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Relinquished,
+            OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Transferred,
+            OUTPUT_DISPLAY_ADD_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
+            OUTPUT_ENABLE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
             _ => return Err(OutputControlValidationErrorV1::UnexpectedOperationId),
         };
+        let enable_outcome = operation_id == OUTPUT_ENABLE_OPERATION_ID
+            && matches!(
+                self.outcome,
+                OutputLeaseReceiptOutcomeV2::Acquired | OutputLeaseReceiptOutcomeV2::Recovered
+            );
         let takeover_project_orphan = operation_id == OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
-            && self.outcome == OutputLeaseReceiptOutcomeV1::ProjectOrphaned;
-        if (!takeover_project_orphan && self.outcome != expected_outcome) || self.changes.len() != 1
+            && self.outcome == OutputLeaseReceiptOutcomeV2::ProjectOrphaned;
+        if (!takeover_project_orphan
+            && !enable_outcome
+            && self.outcome != expected_outcome)
+            || self.changes.len() != 1
         {
             return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
         }
@@ -3276,50 +2987,52 @@ impl OutputControlLeaseResultV1 {
         let before_generation = change.before_generation;
         let after_generation = change.after_generation;
         let transition_outcome = if takeover_project_orphan {
-            OutputLeaseReceiptOutcomeV1::ProjectOrphaned
+            OutputLeaseReceiptOutcomeV2::ProjectOrphaned
+        } else if enable_outcome {
+            self.outcome
         } else {
             expected_outcome
         };
         match transition_outcome {
-            OutputLeaseReceiptOutcomeV1::Authorized => {
+            OutputLeaseReceiptOutcomeV2::Authorized => {
                 if before_generation != after_generation
-                    || change.before_phase != Some(OutputLeaseReceiptPhaseV1::HeldActive)
-                    || change.after_phase != Some(OutputLeaseReceiptPhaseV1::HeldActive)
+                    || change.before_phase != Some(OutputLeaseReceiptPhaseV2::HeldActive)
+                    || change.after_phase != Some(OutputLeaseReceiptPhaseV2::HeldActive)
                     || change.before_resources != self.resources
                     || change.after_resources != self.resources
                 {
                     return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
                 }
             }
-            OutputLeaseReceiptOutcomeV1::Acquired => {
+            OutputLeaseReceiptOutcomeV2::Acquired => {
                 if change.before_generation.is_some()
                     || change.before_phase.is_some()
                     || !change.before_resources.is_empty()
                     || change.after_generation != Some(self.authority.generation)
-                    || change.after_phase != Some(OutputLeaseReceiptPhaseV1::HeldActive)
+                    || change.after_phase != Some(OutputLeaseReceiptPhaseV2::HeldActive)
                     || change.after_resources != self.resources
                 {
                     return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
                 }
             }
-            OutputLeaseReceiptOutcomeV1::Renewed
-            | OutputLeaseReceiptOutcomeV1::Recovered
-            | OutputLeaseReceiptOutcomeV1::Transferred => {
+            OutputLeaseReceiptOutcomeV2::Renewed
+            | OutputLeaseReceiptOutcomeV2::Recovered
+            | OutputLeaseReceiptOutcomeV2::Transferred => {
                 if before_generation.is_none()
                     || after_generation.is_none()
                     || after_generation <= before_generation
                     || change.after_generation != Some(self.authority.generation)
-                    || change.after_phase != Some(OutputLeaseReceiptPhaseV1::HeldActive)
+                    || change.after_phase != Some(OutputLeaseReceiptPhaseV2::HeldActive)
                     || change.after_resources != self.resources
                     || change.before_resources.is_empty()
                 {
                     return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
                 }
                 let expected_before_phase = match transition_outcome {
-                    OutputLeaseReceiptOutcomeV1::Recovered => {
-                        OutputLeaseReceiptPhaseV1::HeldOrphaned
+                    OutputLeaseReceiptOutcomeV2::Recovered => {
+                        OutputLeaseReceiptPhaseV2::HeldOrphaned
                     }
-                    _ => OutputLeaseReceiptPhaseV1::HeldActive,
+                    _ => OutputLeaseReceiptPhaseV2::HeldActive,
                 };
                 if change.before_phase != Some(expected_before_phase)
                     || change.before_resources != self.resources
@@ -3327,39 +3040,39 @@ impl OutputControlLeaseResultV1 {
                     return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
                 }
             }
-            OutputLeaseReceiptOutcomeV1::Relinquished => {
+            OutputLeaseReceiptOutcomeV2::Relinquished => {
                 if before_generation.is_none()
                     || after_generation.is_none()
                     || after_generation <= before_generation
                     || change.after_generation != Some(self.authority.generation)
-                    || change.after_phase != Some(OutputLeaseReceiptPhaseV1::Unclaimed)
+                    || change.after_phase != Some(OutputLeaseReceiptPhaseV2::Unclaimed)
                     || !change.after_resources.is_empty()
                     || change.before_resources != self.resources
                     || !matches!(
                         change.before_phase,
-                        Some(OutputLeaseReceiptPhaseV1::HeldActive)
-                            | Some(OutputLeaseReceiptPhaseV1::HeldOrphaned)
+                        Some(OutputLeaseReceiptPhaseV2::HeldActive)
+                            | Some(OutputLeaseReceiptPhaseV2::HeldOrphaned)
                     )
                 {
                     return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
                 }
             }
-            OutputLeaseReceiptOutcomeV1::ProjectOrphaned if takeover_project_orphan => {
+            OutputLeaseReceiptOutcomeV2::ProjectOrphaned if takeover_project_orphan => {
                 if before_generation.is_none()
                     || after_generation.is_none()
                     || after_generation <= before_generation
                     || change.after_generation != Some(self.authority.generation)
-                    || change.before_phase != Some(OutputLeaseReceiptPhaseV1::HeldActive)
-                    || change.after_phase != Some(OutputLeaseReceiptPhaseV1::HeldOrphaned)
+                    || change.before_phase != Some(OutputLeaseReceiptPhaseV2::HeldActive)
+                    || change.after_phase != Some(OutputLeaseReceiptPhaseV2::HeldOrphaned)
                     || change.before_resources != self.resources
                     || change.after_resources != self.resources
                 {
                     return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
                 }
             }
-            OutputLeaseReceiptOutcomeV1::ExpiryObserved
-            | OutputLeaseReceiptOutcomeV1::OwnerRetired
-            | OutputLeaseReceiptOutcomeV1::ProjectOrphaned => {
+            OutputLeaseReceiptOutcomeV2::ExpiryObserved
+            | OutputLeaseReceiptOutcomeV2::OwnerRetired
+            | OutputLeaseReceiptOutcomeV2::ProjectOrphaned => {
                 return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
         }
@@ -3368,7 +3081,7 @@ impl OutputControlLeaseResultV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputControlReceiptV1 {
+pub struct OutputControlReceiptV2 {
     pub operation_id: String,
     pub request_id: u64,
     pub shape_sha256: String,
@@ -3376,13 +3089,13 @@ pub struct OutputControlReceiptV1 {
     pub audit_sequence: u64,
     pub fence_before: OutputControlFenceV1,
     pub fence_after: OutputControlFenceV1,
-    pub outcome: OutputControlReceiptOutcomeV1,
-    pub lease_result: Option<OutputControlLeaseResultV1>,
+    pub outcome: OutputControlReceiptOutcomeV2,
+    pub lease_result: Option<OutputControlLeaseResultV2>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OutputControlReceiptV1Wire {
+struct OutputControlReceiptV2Wire {
     operation_id: String,
     request_id: u64,
     shape_sha256: String,
@@ -3390,11 +3103,11 @@ struct OutputControlReceiptV1Wire {
     audit_sequence: u64,
     fence_before: OutputControlFenceV1,
     fence_after: OutputControlFenceV1,
-    outcome: OutputControlReceiptOutcomeV1,
-    lease_result: Option<OutputControlLeaseResultV1>,
+    outcome: OutputControlReceiptOutcomeV2,
+    lease_result: Option<OutputControlLeaseResultV2>,
 }
 
-impl OutputControlReceiptV1 {
+impl OutputControlReceiptV2 {
     pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
         if !matches!(
             self.operation_id.as_str(),
@@ -3407,6 +3120,7 @@ impl OutputControlReceiptV1 {
                 | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
         }
@@ -3424,10 +3138,10 @@ impl OutputControlReceiptV1 {
             return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
         }
         match self.outcome {
-            OutputControlReceiptOutcomeV1::NoOp if self.fence_before != self.fence_after => {
+            OutputControlReceiptOutcomeV2::NoOp if self.fence_before != self.fence_after => {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
-            OutputControlReceiptOutcomeV1::Applied if self.fence_before == self.fence_after => {
+            OutputControlReceiptOutcomeV2::Applied if self.fence_before == self.fence_after => {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
             _ => Ok(()),
@@ -3435,13 +3149,13 @@ impl OutputControlReceiptV1 {
     }
 }
 
-impl Serialize for OutputControlReceiptV1 {
+impl Serialize for OutputControlReceiptV2 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         self.validate().map_err(serde::ser::Error::custom)?;
-        OutputControlReceiptV1Wire {
+        OutputControlReceiptV2Wire {
             operation_id: self.operation_id.clone(),
             request_id: self.request_id,
             shape_sha256: self.shape_sha256.clone(),
@@ -3456,12 +3170,12 @@ impl Serialize for OutputControlReceiptV1 {
     }
 }
 
-impl<'de> Deserialize<'de> for OutputControlReceiptV1 {
+impl<'de> Deserialize<'de> for OutputControlReceiptV2 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let wire = OutputControlReceiptV1Wire::deserialize(deserializer)?;
+        let wire = OutputControlReceiptV2Wire::deserialize(deserializer)?;
         let value = Self {
             operation_id: wire.operation_id,
             request_id: wire.request_id,
@@ -3479,21 +3193,21 @@ impl<'de> Deserialize<'de> for OutputControlReceiptV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputControlRejectionV1 {
+pub struct OutputControlRejectionV2 {
     pub operation_id: String,
     pub request_id: u64,
-    pub error: OutputControlErrorCodeV1,
+    pub error: OutputControlErrorCodeV2,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OutputControlRejectionV1Wire {
+struct OutputControlRejectionV2Wire {
     operation_id: String,
     request_id: u64,
-    error: OutputControlErrorCodeV1,
+    error: OutputControlErrorCodeV2,
 }
 
-impl OutputControlRejectionV1 {
+impl OutputControlRejectionV2 {
     pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
         if !matches!(
             self.operation_id.as_str(),
@@ -3506,6 +3220,7 @@ impl OutputControlRejectionV1 {
                 | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
         }
@@ -3513,13 +3228,13 @@ impl OutputControlRejectionV1 {
     }
 }
 
-impl Serialize for OutputControlRejectionV1 {
+impl Serialize for OutputControlRejectionV2 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         self.validate().map_err(serde::ser::Error::custom)?;
-        OutputControlRejectionV1Wire {
+        OutputControlRejectionV2Wire {
             operation_id: self.operation_id.clone(),
             request_id: self.request_id,
             error: self.error,
@@ -3528,12 +3243,12 @@ impl Serialize for OutputControlRejectionV1 {
     }
 }
 
-impl<'de> Deserialize<'de> for OutputControlRejectionV1 {
+impl<'de> Deserialize<'de> for OutputControlRejectionV2 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let wire = OutputControlRejectionV1Wire::deserialize(deserializer)?;
+        let wire = OutputControlRejectionV2Wire::deserialize(deserializer)?;
         let value = Self {
             operation_id: wire.operation_id,
             request_id: wire.request_id,
@@ -3545,19 +3260,19 @@ impl<'de> Deserialize<'de> for OutputControlRejectionV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OutputControlResponseV1 {
-    Receipt(OutputControlReceiptV1),
-    Rejected(OutputControlRejectionV1),
+pub enum OutputControlResponseV2 {
+    Receipt(OutputControlReceiptV2),
+    Rejected(OutputControlRejectionV2),
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-enum OutputControlResponseV1Wire {
-    Receipt { receipt: OutputControlReceiptV1 },
-    Rejected { rejection: OutputControlRejectionV1 },
+enum OutputControlResponseV2Wire {
+    Receipt { receipt: OutputControlReceiptV2 },
+    Rejected { rejection: OutputControlRejectionV2 },
 }
 
-impl OutputControlResponseV1 {
+impl OutputControlResponseV2 {
     pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
         match self {
             Self::Receipt(receipt) => receipt.validate(),
@@ -3566,17 +3281,17 @@ impl OutputControlResponseV1 {
     }
 }
 
-impl Serialize for OutputControlResponseV1 {
+impl Serialize for OutputControlResponseV2 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         self.validate().map_err(serde::ser::Error::custom)?;
         match self {
-            Self::Receipt(receipt) => OutputControlResponseV1Wire::Receipt {
+            Self::Receipt(receipt) => OutputControlResponseV2Wire::Receipt {
                 receipt: receipt.clone(),
             },
-            Self::Rejected(rejection) => OutputControlResponseV1Wire::Rejected {
+            Self::Rejected(rejection) => OutputControlResponseV2Wire::Rejected {
                 rejection: rejection.clone(),
             },
         }
@@ -3584,15 +3299,15 @@ impl Serialize for OutputControlResponseV1 {
     }
 }
 
-impl<'de> Deserialize<'de> for OutputControlResponseV1 {
+impl<'de> Deserialize<'de> for OutputControlResponseV2 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let wire = OutputControlResponseV1Wire::deserialize(deserializer)?;
+        let wire = OutputControlResponseV2Wire::deserialize(deserializer)?;
         let value = match wire {
-            OutputControlResponseV1Wire::Receipt { receipt } => Self::Receipt(receipt),
-            OutputControlResponseV1Wire::Rejected { rejection } => Self::Rejected(rejection),
+            OutputControlResponseV2Wire::Receipt { receipt } => Self::Receipt(receipt),
+            OutputControlResponseV2Wire::Rejected { rejection } => Self::Rejected(rejection),
         };
         value.validate().map_err(D::Error::custom)?;
         Ok(value)
@@ -3605,11 +3320,6 @@ fn validate_output_request_id(request_id: u64) -> Result<(), OutputControlValida
     } else {
         Ok(())
     }
-}
-
-fn validate_opaque_output_id(value: &str) -> Result<(), OutputControlValidationErrorV1> {
-    validate_runtime_authority_id(value)
-        .map_err(|_| OutputControlValidationErrorV1::InvalidOpaqueId)
 }
 
 fn validate_lower_hex_fingerprint(value: &str) -> Result<(), OutputControlValidationErrorV1> {
@@ -4232,42 +3942,82 @@ mod tests {
     }
 
     #[test]
-    fn output_consent_and_r4_command_wire_are_strict_and_exactly_bound() {
-        let action = OutputControlActionV1::TakeOverStandby {
+    fn enable_output_lease_result_accepts_only_exact_acquire_or_recover_transitions() {
+        let resources = vec![
+            OutputControlTargetRoleV1::Lighting,
+            OutputControlTargetRoleV1::Video,
+        ];
+        let acquired = OutputControlLeaseResultV2 {
+            authority: lease_authority(),
+            resources: resources.clone(),
+            phase: OutputLeaseReceiptPhaseV2::HeldActive,
+            outcome: OutputLeaseReceiptOutcomeV2::Acquired,
+            audit_sequence: 1,
+            changes: vec![OutputLeaseReceiptChangeV2 {
+                lease_id: lease_authority().lease_id,
+                before_generation: None,
+                after_generation: Some(1),
+                before_resources: Vec::new(),
+                after_resources: resources.clone(),
+                before_phase: None,
+                after_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
+            }],
+        };
+        acquired
+            .validate_for_operation(OUTPUT_ENABLE_OPERATION_ID)
+            .unwrap();
+
+        let mut recovered = acquired.clone();
+        recovered.authority.generation = 3;
+        recovered.outcome = OutputLeaseReceiptOutcomeV2::Recovered;
+        recovered.changes[0].before_generation = Some(2);
+        recovered.changes[0].after_generation = Some(3);
+        recovered.changes[0].before_resources = resources.clone();
+        recovered.changes[0].before_phase = Some(OutputLeaseReceiptPhaseV2::HeldOrphaned);
+        recovered
+            .validate_for_operation(OUTPUT_ENABLE_OPERATION_ID)
+            .unwrap();
+
+        assert!(recovered
+            .validate_for_operation(OUTPUT_LEASE_ACQUIRE_OPERATION_ID)
+            .is_err());
+        assert!(acquired
+            .validate_for_operation(OUTPUT_LEASE_RECOVER_OPERATION_ID)
+            .is_err());
+
+        let mut forged_recovery = recovered.clone();
+        forged_recovery.changes[0].before_phase =
+            Some(OutputLeaseReceiptPhaseV2::HeldActive);
+        assert!(forged_recovery
+            .validate_for_operation(OUTPUT_ENABLE_OPERATION_ID)
+            .is_err());
+        let mut forged_acquire = acquired;
+        forged_acquire.changes[0].before_generation = Some(1);
+        forged_acquire.changes[0].before_resources = resources;
+        forged_acquire.changes[0].before_phase = Some(OutputLeaseReceiptPhaseV2::HeldOrphaned);
+        assert!(forged_acquire
+            .validate_for_operation(OUTPUT_ENABLE_OPERATION_ID)
+            .is_err());
+    }
+
+    #[test]
+    fn r4_command_wire_is_strict_and_exactly_bound() {
+        let action = OutputControlActionV2::TakeOverStandby {
             force: true,
             standby_session_id: "primary-session-1".to_string(),
             standby_generation: 91,
             lease: lease_authority(),
         };
-        let prepared = OutputConsentPrepareRequestV1 {
-            operation_id: OUTPUT_CONSENT_PREPARE_OPERATION_ID.to_string(),
-            request_id: 22,
-            expected_fence: output_fence(),
-            action: action.clone(),
-        };
-        let encoded = serde_json::to_value(&prepared).unwrap();
-        assert_eq!(
-            serde_json::from_value::<OutputConsentPrepareRequestV1>(encoded.clone()).unwrap(),
-            prepared
-        );
-        let mut unknown = encoded.clone();
-        unknown["approved"] = serde_json::json!(true);
-        assert!(serde_json::from_value::<OutputConsentPrepareRequestV1>(unknown).is_err());
-        let mut unknown_action = encoded;
-        unknown_action["action"]["target_path"] = serde_json::json!("C:\\secret");
-        assert!(serde_json::from_value::<OutputConsentPrepareRequestV1>(unknown_action).is_err());
-
-        let command = OutputControlCommandRequestV1 {
+        let command = OutputControlCommandRequestV2 {
             operation_id: OUTPUT_STANDBY_TAKEOVER_OPERATION_ID.to_string(),
             request_id: 23,
             expected_fence: output_fence(),
-            consent_token: "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
             action,
         };
         command.validate().unwrap();
         let command_json = serde_json::to_value(&command).unwrap();
         assert_eq!(
-            serde_json::from_value::<OutputControlCommandRequestV1>(command_json.clone()).unwrap(),
+            serde_json::from_value::<OutputControlCommandRequestV2>(command_json.clone()).unwrap(),
             command
         );
         let mut wrong_operation = command.clone();
@@ -4276,30 +4026,14 @@ mod tests {
         let mut wrong_generation = command.clone();
         wrong_generation.expected_fence.output_generation = 0;
         assert!(serde_json::to_value(wrong_generation).is_err());
-        let mut wrong_token = command;
-        wrong_token.consent_token = "not-base64".to_string();
-        assert!(serde_json::to_value(wrong_token).is_err());
-
-        let challenge = OutputConsentChallengeV1 {
-            operation_id: OUTPUT_CONSENT_PREPARE_OPERATION_ID.to_string(),
-            request_id: 22,
-            target_operation_id: OUTPUT_STANDBY_TAKEOVER_OPERATION_ID.to_string(),
-            challenge_id: "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
-            consent_token: "BBBBBBBBBBBBBBBBBBBBBA".to_string(),
-            display_code: "123456".to_string(),
-            argument_fingerprint: hash('c'),
-            expires_at_unix_ms: 100,
-        };
-        let challenge_json = serde_json::to_value(&challenge).unwrap();
-        assert_eq!(
-            serde_json::from_value::<OutputConsentChallengeV1>(challenge_json).unwrap(),
-            challenge
-        );
+        let mut legacy_shape = command_json.clone();
+        legacy_shape["consent_token"] = serde_json::json!("AAAAAAAAAAAAAAAAAAAAAA");
+        assert!(serde_json::from_value::<OutputControlCommandRequestV2>(legacy_shape).is_err());
 
         let fence_before = output_fence();
         let mut fence_after = fence_before.clone();
         fence_after.safety_blackout_generation += 1;
-        let response = OutputControlResponseV1::Receipt(OutputControlReceiptV1 {
+        let response = OutputControlResponseV2::Receipt(OutputControlReceiptV2 {
             operation_id: OUTPUT_BLACKOUT_RELEASE_OPERATION_ID.to_string(),
             request_id: 24,
             shape_sha256: hash('d'),
@@ -4307,17 +4041,17 @@ mod tests {
             audit_sequence: 1,
             fence_before,
             fence_after,
-            outcome: OutputControlReceiptOutcomeV1::Applied,
-            lease_result: Some(OutputControlLeaseResultV1 {
+            outcome: OutputControlReceiptOutcomeV2::Applied,
+            lease_result: Some(OutputControlLeaseResultV2 {
                 authority: lease_authority(),
                 resources: vec![
                     OutputControlTargetRoleV1::Lighting,
                     OutputControlTargetRoleV1::Video,
                 ],
-                phase: OutputLeaseReceiptPhaseV1::HeldActive,
-                outcome: OutputLeaseReceiptOutcomeV1::Authorized,
+                phase: OutputLeaseReceiptPhaseV2::HeldActive,
+                outcome: OutputLeaseReceiptOutcomeV2::Authorized,
                 audit_sequence: 1,
-                changes: vec![OutputLeaseReceiptChangeV1 {
+                changes: vec![OutputLeaseReceiptChangeV2 {
                     lease_id: lease_authority().lease_id,
                     before_generation: Some(1),
                     after_generation: Some(1),
@@ -4329,40 +4063,40 @@ mod tests {
                         OutputControlTargetRoleV1::Lighting,
                         OutputControlTargetRoleV1::Video,
                     ],
-                    before_phase: Some(OutputLeaseReceiptPhaseV1::HeldActive),
-                    after_phase: Some(OutputLeaseReceiptPhaseV1::HeldActive),
+                    before_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
+                    after_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
                 }],
             }),
         });
         let response_json = serde_json::to_value(&response).unwrap();
         assert_eq!(
-            serde_json::from_value::<OutputControlResponseV1>(response_json.clone()).unwrap(),
+            serde_json::from_value::<OutputControlResponseV2>(response_json.clone()).unwrap(),
             response
         );
         let mut takeover_orphan = match response.clone() {
-            OutputControlResponseV1::Receipt(receipt) => receipt,
-            OutputControlResponseV1::Rejected(_) => unreachable!(),
+            OutputControlResponseV2::Receipt(receipt) => receipt,
+            OutputControlResponseV2::Rejected(_) => unreachable!(),
         };
         takeover_orphan.operation_id = OUTPUT_STANDBY_TAKEOVER_OPERATION_ID.to_string();
         let takeover_lease = takeover_orphan.lease_result.as_mut().unwrap();
         takeover_lease.authority.generation = 2;
-        takeover_lease.phase = OutputLeaseReceiptPhaseV1::HeldOrphaned;
-        takeover_lease.outcome = OutputLeaseReceiptOutcomeV1::ProjectOrphaned;
+        takeover_lease.phase = OutputLeaseReceiptPhaseV2::HeldOrphaned;
+        takeover_lease.outcome = OutputLeaseReceiptOutcomeV2::ProjectOrphaned;
         takeover_lease.changes[0].after_generation = Some(2);
-        takeover_lease.changes[0].after_phase = Some(OutputLeaseReceiptPhaseV1::HeldOrphaned);
+        takeover_lease.changes[0].after_phase = Some(OutputLeaseReceiptPhaseV2::HeldOrphaned);
         assert!(serde_json::to_value(takeover_orphan).is_ok());
         let mut mismatched_authority = response_json.clone();
         mismatched_authority["receipt"]["lease_result"]["authority"]["generation"] =
             serde_json::json!(2);
-        assert!(serde_json::from_value::<OutputControlResponseV1>(mismatched_authority).is_err());
+        assert!(serde_json::from_value::<OutputControlResponseV2>(mismatched_authority).is_err());
         let mut mismatched_change = response_json.clone();
         mismatched_change["receipt"]["lease_result"]["changes"][0]["lease_id"] =
             serde_json::json!("lease-0000000000000002");
-        assert!(serde_json::from_value::<OutputControlResponseV1>(mismatched_change).is_err());
+        assert!(serde_json::from_value::<OutputControlResponseV2>(mismatched_change).is_err());
         let mut mismatched_resources = response_json.clone();
         mismatched_resources["receipt"]["lease_result"]["resources"] =
             serde_json::json!(["lighting"]);
-        assert!(serde_json::from_value::<OutputControlResponseV1>(mismatched_resources).is_err());
+        assert!(serde_json::from_value::<OutputControlResponseV2>(mismatched_resources).is_err());
         let mut extra_change = response_json.clone();
         extra_change["receipt"]["lease_result"]["changes"] = serde_json::json!([
             {
@@ -4384,31 +4118,31 @@ mod tests {
                 "after_phase": "held_active"
             }
         ]);
-        assert!(serde_json::from_value::<OutputControlResponseV1>(extra_change).is_err());
+        assert!(serde_json::from_value::<OutputControlResponseV2>(extra_change).is_err());
         let mut unknown_terminal = response_json;
         unknown_terminal["type"] = serde_json::json!("future_terminal");
-        assert!(serde_json::from_value::<OutputControlResponseV1>(unknown_terminal).is_err());
+        assert!(serde_json::from_value::<OutputControlResponseV2>(unknown_terminal).is_err());
 
         let mut invalid_noop = match response {
-            OutputControlResponseV1::Receipt(receipt) => receipt,
-            OutputControlResponseV1::Rejected(_) => unreachable!(),
+            OutputControlResponseV2::Receipt(receipt) => receipt,
+            OutputControlResponseV2::Rejected(_) => unreachable!(),
         };
-        invalid_noop.outcome = OutputControlReceiptOutcomeV1::NoOp;
+        invalid_noop.outcome = OutputControlReceiptOutcomeV2::NoOp;
         assert!(serde_json::to_value(invalid_noop).is_err());
 
-        let rejection = OutputControlResponseV1::Rejected(OutputControlRejectionV1 {
+        let rejection = OutputControlResponseV2::Rejected(OutputControlRejectionV2 {
             operation_id: OUTPUT_OWNERSHIP_ARM_OPERATION_ID.to_string(),
             request_id: 25,
-            error: OutputControlErrorCodeV1::ConsentPending,
+            error: OutputControlErrorCodeV2::Busy,
         });
         let rejection_json = serde_json::to_value(&rejection).unwrap();
         assert_eq!(
-            serde_json::from_value::<OutputControlResponseV1>(rejection_json.clone()).unwrap(),
+            serde_json::from_value::<OutputControlResponseV2>(rejection_json.clone()).unwrap(),
             rejection
         );
         let mut unknown_error = rejection_json;
         unknown_error["rejection"]["error"] = serde_json::json!("future_error");
-        assert!(serde_json::from_value::<OutputControlResponseV1>(unknown_error).is_err());
+        assert!(serde_json::from_value::<OutputControlResponseV2>(unknown_error).is_err());
     }
 
     #[test]
@@ -4445,10 +4179,10 @@ mod tests {
             }))
             .is_err()
         );
-        let acquire = OutputControlActionV1::AcquireLease {
+        let acquire = OutputControlActionV2::AcquireLease {
             role: OutputControlTargetRoleV1::Lighting,
         };
-        let renew = OutputControlActionV1::RenewLease { lease: authority };
+        let renew = OutputControlActionV2::RenewLease { lease: authority };
         let mut acquire_shape = Vec::new();
         acquire.append_canonical_bytes(&mut acquire_shape).unwrap();
         let mut renew_shape = Vec::new();
@@ -4459,5 +4193,163 @@ mod tests {
             acquire.operation_id().as_bytes(),
             renew.operation_id().as_bytes()
         );
+
+        let enable = OutputControlActionV2::EnableOutput;
+        assert_eq!(enable.operation_id(), OUTPUT_ENABLE_OPERATION_ID);
+        let mut enable_shape = Vec::new();
+        enable.append_canonical_bytes(&mut enable_shape).unwrap();
+        assert_eq!(enable_shape, vec![9]);
+        let authority = lease_authority();
+        let windows_device_label = DisplayOutputSpecV2 {
+            label: r"\\.\DISPLAY2".to_string(),
+            monitor_identity: "a".repeat(64),
+            monitor_index: 1,
+            width: 1920,
+            height: 1080,
+            fullscreen: true,
+        };
+        assert_eq!(
+            windows_device_label.validate(),
+            Err(OutputControlValidationErrorV1::InvalidDisplayOutputSpec),
+            "Windows device paths stay rejected on the wire"
+        );
+        let safe_display_label = DisplayOutputSpecV2 {
+            label: "Display 2".to_string(),
+            ..windows_device_label
+        };
+        assert!(safe_display_label.validate().is_ok());
+        let legacy_shapes = [
+            (
+                0,
+                OutputControlActionV2::Arm {
+                    role: OutputControlTargetRoleV1::Lighting,
+                    lease: authority.clone(),
+                },
+            ),
+            (
+                1,
+                OutputControlActionV2::ReleaseBlackout {
+                    lease: authority.clone(),
+                },
+            ),
+            (
+                2,
+                OutputControlActionV2::TakeOverStandby {
+                    force: false,
+                    standby_session_id: "primary-session-1".to_string(),
+                    standby_generation: 1,
+                    lease: authority.clone(),
+                },
+            ),
+            (
+                3,
+                OutputControlActionV2::AcquireLease {
+                    role: OutputControlTargetRoleV1::Both,
+                },
+            ),
+            (
+                4,
+                OutputControlActionV2::RenewLease {
+                    lease: authority.clone(),
+                },
+            ),
+            (
+                5,
+                OutputControlActionV2::RecoverLease {
+                    lease: authority.clone(),
+                },
+            ),
+            (
+                6,
+                OutputControlActionV2::RelinquishOutputLease {
+                    lease: authority.clone(),
+                },
+            ),
+            (
+                7,
+                OutputControlActionV2::ForceTransferLease {
+                    lease: authority.clone(),
+                },
+            ),
+            (
+                8,
+                OutputControlActionV2::AddDisplay {
+                    spec: DisplayOutputSpecV2 {
+                        label: "display".to_string(),
+                        monitor_identity:
+                            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                .to_string(),
+                        monitor_index: 0,
+                        width: 1920,
+                        height: 1080,
+                        fullscreen: true,
+                    },
+                    lease: authority,
+                },
+            ),
+        ];
+        for (expected, action) in &legacy_shapes {
+            let mut shape = Vec::new();
+            action.append_canonical_bytes(&mut shape).unwrap();
+            assert_eq!(shape.first(), Some(expected));
+        }
+        let enable_json = serde_json::to_value(&enable).unwrap();
+        assert_eq!(enable_json, serde_json::json!({ "kind": "enable_output" }));
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(enable_json.clone()).unwrap(),
+            enable
+        );
+        let mut forged_enable = enable_json;
+        forged_enable["lease"] = serde_json::json!({
+            "lease_id": "lease-0000000000000001",
+            "generation": 1
+        });
+        assert!(serde_json::from_value::<OutputControlActionV2>(forged_enable).is_err());
+        let enable_request = OutputControlCommandRequestV2 {
+            operation_id: OUTPUT_ENABLE_OPERATION_ID.to_string(),
+            request_id: 77,
+            expected_fence: output_fence(),
+            action: enable,
+        };
+        assert_eq!(
+            serde_json::from_value::<OutputControlCommandRequestV2>(
+                serde_json::to_value(&enable_request).unwrap()
+            )
+            .unwrap(),
+            enable_request
+        );
+
+        // The v2 operation/schema boundary is explicit: every retired v1 and
+        // unknown future v3 mutating operation is rejected even when its
+        // payload otherwise has a valid action shape.
+        for (_, action) in &legacy_shapes {
+            for suffix in ["v1", "v3"] {
+                let retired_operation = action.operation_id().replace(".v2", &format!(".{suffix}"));
+                let retired_request = OutputControlCommandRequestV2 {
+                    operation_id: action.operation_id().to_string(),
+                    request_id: 78,
+                    expected_fence: output_fence(),
+                    action: action.clone(),
+                };
+                let mut retired_json = serde_json::to_value(retired_request).unwrap();
+                retired_json["operation_id"] = serde_json::json!(retired_operation);
+                assert!(
+                    serde_json::from_value::<OutputControlCommandRequestV2>(retired_json).is_err()
+                );
+            }
+        }
+        for suffix in ["v1", "v3"] {
+            let retired_operation =
+                OUTPUT_ENABLE_OPERATION_ID.replace(".v2", &format!(".{suffix}"));
+            let retired_request = OutputControlCommandRequestV2 {
+                operation_id: OUTPUT_ENABLE_OPERATION_ID.to_string(),
+                request_id: 79,
+                expected_fence: output_fence(),
+                action: OutputControlActionV2::EnableOutput,
+            };
+            let mut retired_json = serde_json::to_value(retired_request).unwrap();
+            retired_json["operation_id"] = serde_json::json!(retired_operation);
+            assert!(serde_json::from_value::<OutputControlCommandRequestV2>(retired_json).is_err());
+        }
     }
 }

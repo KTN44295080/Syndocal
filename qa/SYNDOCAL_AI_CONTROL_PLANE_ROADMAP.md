@@ -1,5 +1,17 @@
 # Syndocal AI Control Plane roadmap
 
+## 2026-08-21 OutputControl consent supersession
+
+Physical-input consent is no longer part of the product. Supersede every older
+AI3 item that calls for a six-digit/Raw Input/physical Enter challenge or
+prepare/status/consume consent route. Normal local Output Enable is a single
+`enable_output_control_v2` action that atomically acquires and arms exact Both.
+Dangerous local mutations use a parented OS-native Warning/Yes-No confirmation;
+No/close is terminal and replay-safe. The ten mutating output/lease operations
+are command-schema 2 and registry-wire-schema 4, while retired v1, future v3,
+and every non-local adapter remain fail closed. The owner/fence/durable/S0
+invariants below remain authoritative.
+
 ## 1. Product objective
 
 Syndocal must be fully operable by an AI or another automation client through
@@ -478,23 +490,27 @@ remain the next implementation slices. AI3 remains incomplete.
   restart non-reclamation, and retained local priority Blackout.
 - Queue saturation proves pre-admission `overloaded`, no accepted-command loss,
   no realtime jitter regression, and event gap/resnapshot without publisher stall.
-- Release-native consent proof shows ordinary DOM/accessibility invocation,
-  `SendInput`, posted window messages, Remote/API events, and stale physical input
-  cannot mint presence; only the fresh Raw Input challenge can authorize `R4`/`R5`,
-  and the release artifact contains no test bypass.
+- Release-native local-action proof shows the normal `enable_output_control_v2`
+  path is one explicit local click with no modal or physical-input challenge.
+  Release, advanced Arm, Take Over, Add Display, and Force Transfer are the only
+  dangerous OutputControl actions admitted through the parented OS-native
+  Warning/Yes-No confirmation seam; only the backend-observed native Yes result
+  proceeds. Remote/API/MIDI/OSC/DMX/shortcut routes cannot invoke these mutations.
 
 ## 8. Release blockers and non-claims
 
 The following are P0/P1 until closed:
 
 - any project/output mutation bypassing the registry;
-- external `R4`/`R5` execution without bound local consent;
+- external `R4`/`R5` execution outside its exact reviewed adapter and consent
+  policy (`LocalExplicitAction` for normal Enable, `NativeDangerConfirmation`
+  for dangerous local output actions);
 - accepting localhost, PID, process name, or possession of a port as principal
   authentication, or exposing registry state before the authenticated handshake;
 - allowing emergency Blackout engage to toggle/release output, or failing to keep
   local priority Blackout reachable during saturation/revocation;
-- treating DOM/accessibility/`SendInput`/posted messages as human presence, or
-  shipping a release-build bypass for the physical confirmation challenge;
+- accepting a frontend boolean, DOM dialog, accessibility event, remote event,
+  or synthetic key as the native Yes result for a dangerous output action;
 - commit/receipt races that allow double execution;
 - output changes caused by adapter disconnect or crash;
 - unclassified commands defaulting open;
@@ -514,17 +530,48 @@ feature parity, or that unattended high-risk automation is safe.
 
 ## 9. 2026-08-21 Windows native output-control verification boundary
 
-The current release executable is running as the sole exact-checkout process with
-one responsive maximized Syndocal main window. Five enabled Display outputs are
-configured against monitor indices 0 through 4. The live ownership query remains
-fail closed: `Both` is requested and persisted, while effective ownership is
-Standby and lighting/video are fenced. Acquisition and active Arm require the
-backend-issued Output Lease plus the fresh six-digit Raw Input challenge.
+This section supersedes the earlier six-digit/Raw Input acceptance text in full.
+There is no physical-input challenge, Enter gesture, prepare/status/consume IPC,
+or 15-second confirmation timer in the active OutputControl design. The normal
+local operator path is the single `enable_output_control_v2` action. Advanced
+dangerous output mutations use a parented Windows Warning/Yes-No dialog and only
+the native Yes result proceeds.
 
-This is the intended R4 boundary, not a test failure and not permission to inject
-synthetic input. A successful human-keyboard consent, five physical fullscreen
-windows, verified monitor origins, and the final editor + LED panel + projector
-state remain the next hardware acceptance action. The Windows warning workflow
-now covers all nine enforced Windows configurations and its frozen diff received
-independent P0 0 / P1 0 / P2 0 review; the two macOS-only warning rows remain a
-separate cross-platform blocker.
+The first `1.2.0-alpha.2` native pass verified one responsive maximized exact-path
+Syndocal window and a one-click transition to the accessible `Output enabled`
+state without a modal or keyboard input. Five active physical display modes were
+enumerated as DISPLAY1 2560x1440, DISPLAY2 1920x1080 primary, DISPLAY3 3840x2160,
+DISPLAY5 1920x1080, and DISPLAY6 2560x720. Full acceptance still requires the
+canonical Add Display transaction to persist and revalidate a stable monitor
+identity, create the native output window before project publication, and prove
+the five fullscreen origins plus the retained editor + LED panel + projector
+layout. The Windows warning workflow covers all nine enforced Windows
+configurations; the two macOS-only warning rows remain a separate blocker.
+
+## 10. 2026-08-22 backend-first Add Display acceptance
+
+The canonical Add Display transaction now has a single full backend core shared
+by production and deterministic validation. Repeated expiry, stall, stale-fence,
+terminal-record-fault, cleanup, occupied-worker, and four-display checks use that
+backend route; frontend clicking is not the regression harness. Computer Use was
+used once for the remaining physical Windows evidence: the exact release app,
+maximized editor, parented native confirmations, and four visible non-editor
+output windows.
+
+Final native evidence is one responsive 1920x1032 editor plus four responsive
+outputs on DISPLAY5, DISPLAY6, DISPLAY1, and DISPLAY3. Current-origin durable
+requests 1-5 are terminal with no Pending or replay guard. Independent review
+reports P0 0 / P1 0. This closes only the local OutputControl/Add Display Windows
+tranche; the full AI roadmap and whole-product roadmap remain incomplete. The
+authoritative product checklist is still 13/79 (16.5%).
+
+The final message-clearance P2 is also closed. Terminal Add success can no longer
+be reclassified as a failed Add by a transient post-commit refresh: only the two
+exact transaction/publication convergence messages clear after the refresh,
+while unrelated refresh failure stays visible as `added; refresh pending` and a
+real mutation failure still rejects. The production classifier is executed by
+the display-target contract checker. A subsequent release build produced SHA-256
+`977D3D63A60E77ACE9E6A6E1CA91652EC0356E8389367921DAB7032894DA0DCB`;
+the sole exact-path PID 87060 exposed one responsive maximized 1920x1032 editor
+after more than ten seconds. Four-display regression remains backend-first; no
+redundant manual Add sequence is required for each frontend-only convergence fix.

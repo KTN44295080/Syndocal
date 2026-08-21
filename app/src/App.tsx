@@ -79,7 +79,10 @@ import {
 import { SetupMappingWorkspace } from "./components/SetupMappingWorkspace";
 import { MappingPersistentWorkspaceBand } from "./components/MappingPersistentWorkspaceBand";
 import { SetupVideoPanel } from "./components/SetupVideoPanel";
-import type { VideoDisplayMonitorDescriptor } from "./components/VideoOutputCreatePanel";
+import {
+  videoDisplayTargetSummary,
+  type VideoDisplayMonitorDescriptor,
+} from "./components/VideoOutputCreatePanel";
 import { StagePreview2D } from "./components/StagePreview2D";
 import { VideoControlPanel } from "./components/VideoControlPanel";
 import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspectorPanel";
@@ -506,8 +509,11 @@ import { createTimelineKeyframeController } from "./createTimelineKeyframeContro
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
 import {
+  executeDisplayAddOutputControl,
   executeOutputControl,
+  queryDisplayAddLeaseAuthority,
   queryOutputLeaseAuthority,
+  selectExactBothLeaseForDisplayAdd,
   selectOnlyActiveOutputLease,
 } from "./outputControlController";
 import { createTimelineFollowAbortRuntimeController } from "./timelineFollowAbortRuntimeController";
@@ -1882,6 +1888,43 @@ const projectTransactionOwnerId = typeof crypto !== "undefined" && "randomUUID" 
   ? `renderer:${crypto.randomUUID()}`
   : `renderer:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
 
+// A convergence poll can briefly leave the old transaction/recovery detail in
+// the global status line after the native Add transaction has already reached
+// its terminal success. Keep this allowlist exact: a successful Add may clear
+// only these known stale messages, never a current Add error or an unrelated
+// operator status.
+const staleDisplayAddRecoveryMessages = new Set([
+  "Project transaction is active; retry after Display output publication",
+  "Display output publication is active; retry the output ownership transition",
+]);
+const isStaleDisplayAddRecoveryMessage = (text: string) =>
+  staleDisplayAddRecoveryMessages.has(text.trim().replace(/^Error:\s*/i, ""));
+const displayAddPostCommitRefreshResult = (
+  statusBeforeRefresh: string,
+  statusAfterRefresh: string,
+  refreshError?: unknown,
+) => {
+  if (refreshError !== undefined) {
+    const detail = String(refreshError);
+    return isStaleDisplayAddRecoveryMessage(detail)
+      ? { kind: "clear" as const }
+      : {
+        kind: "refresh_pending" as const,
+        message: `Display output added; refresh pending: ${detail}`,
+      };
+  }
+  if (isStaleDisplayAddRecoveryMessage(statusAfterRefresh)) {
+    return { kind: "clear" as const };
+  }
+  if (statusAfterRefresh !== statusBeforeRefresh) {
+    return {
+      kind: "refresh_pending" as const,
+      message: `Display output added; refresh pending: ${statusAfterRefresh}`,
+    };
+  }
+  return { kind: "preserve" as const };
+};
+
 export default function App() {
   const outputWindowId = readVideoOutputWindowId();
   if (outputWindowId !== null) {
@@ -2569,7 +2612,10 @@ export default function App() {
   const [videoOutputWidth, setVideoOutputWidth] = createSignal(1920);
   const [videoOutputHeight, setVideoOutputHeight] = createSignal(1080);
   const [videoOutputFullscreen, setVideoOutputFullscreen] = createSignal(true);
-  const [videoOutputMonitorId, setVideoOutputMonitorId] = createSignal(0);
+  // No numeric monitor draft is selected until the authoritative display
+  // query resolves a stable identity.  In particular, index 0 must never be
+  // treated as an implicit fallback for a stale or missing monitor target.
+  const [videoOutputMonitorId, setVideoOutputMonitorId] = createSignal(-1);
   const [videoOutputEndpoint, setVideoOutputEndpoint] = createSignal("");
   const [videoOutputConfigDrafts, setVideoOutputConfigDrafts] = createSignal<Record<number, VideoOutputConfigDraft>>({});
   const [videoOutputFadeMs, setVideoOutputFadeMs] = createSignal(1000);
@@ -4308,6 +4354,22 @@ export default function App() {
   const setMessage = (text: string, key?: string) => {
     setAppStatus(appStatusFromMessage(text, key));
     return text;
+  };
+  const finishDisplayAddPostCommitRefresh = (
+    statusBeforeRefresh: string,
+    statusAfterRefresh: string,
+    refreshError?: unknown,
+  ) => {
+    const result = displayAddPostCommitRefreshResult(
+      statusBeforeRefresh,
+      statusAfterRefresh,
+      refreshError,
+    );
+    if (result.kind === "clear") {
+      setAppStatus(appStatusFromMessage("Ready"));
+    } else if (result.kind === "refresh_pending") {
+      setMessage(result.message, "display-add-refresh-pending");
+    }
   };
   let projectTransactionOwnerRegistration: Promise<void> | null = null;
   if (isTauriRuntime()) {
@@ -15687,9 +15749,6 @@ export default function App() {
         await executeOutputControl(
           invoke,
           { kind: "release_blackout", lease },
-          ({ displayCode }) => setMessage(
-            `Release blackout confirmation required: type ${displayCode} on the physical keyboard.`,
-          ),
         );
       }
       await refreshSnapshot();
@@ -19718,37 +19777,48 @@ export default function App() {
   };
 
   const addDisplayVideoOutput = async (monitor: VideoDisplayMonitorDescriptor) => {
-    try {
-      if (!isTauriRuntime()) {
-        setMessage(tauriBackendUnavailableMessage);
-        return;
-      }
-      const leaseQuery = await queryOutputLeaseAuthority(invoke);
-      const lease = selectOnlyActiveOutputLease(leaseQuery, ["video"]);
-      await executeOutputControl(
-        invoke,
-        {
-          kind: "add_display",
-          spec: {
-            label: videoOutputLabel().trim() || monitor.name.trim() || `Display ${monitor.index + 1}`,
-            monitor_identity: monitor.identity,
-            monitor_index: monitor.index,
-            width: Math.max(1, Math.round(monitor.physicalWidth)),
-            height: Math.max(1, Math.round(monitor.physicalHeight)),
-            fullscreen: videoOutputFullscreen(),
-          },
-          lease,
+    if (!isTauriRuntime()) {
+      throw new Error(tauriBackendUnavailableMessage);
+    }
+    const target = videoDisplayTargetSummary(monitor);
+    if (!Number.isInteger(monitor.index) || monitor.index < 0 || monitor.index > 255
+      || !/^[0-9a-f]{64}$/.test(monitor.identity)
+      || typeof monitor.isEditorMonitor !== "boolean"
+      || !target.label || !Number.isInteger(target.width) || target.width <= 0
+      || !Number.isInteger(target.height) || target.height <= 0) {
+      throw new Error("Selected display target is stale; refresh screen detection before adding output.");
+    }
+    const displayAddAuthority = await queryDisplayAddLeaseAuthority(invoke);
+    const lease = selectExactBothLeaseForDisplayAdd(displayAddAuthority);
+    await executeDisplayAddOutputControl(
+      invoke,
+      {
+        kind: "add_display",
+        spec: {
+          label: target.label,
+          monitor_identity: monitor.identity,
+          monitor_index: monitor.index,
+          width: target.width,
+          height: target.height,
+          fullscreen: target.fullscreen,
         },
-        ({ displayCode }) => setMessage(
-          `Display output confirmation required: type ${displayCode} on the physical keyboard.`,
-        ),
-      );
-      setVideoOutputLabel(`Display ${snapshot().video.outputs.length + 1}`);
-      setMessage(`Added display output for ${monitor.name || `Display ${monitor.index + 1}`}.`);
+        lease,
+      },
+      displayAddAuthority,
+    );
+    setVideoOutputLabel(`Display ${snapshot().video.outputs.length + 1}`);
+    const statusBeforeRefresh = appStatus().text;
+    let refreshError: unknown;
+    try {
       await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
-      setMessage(String(error));
+      // The Add receipt is already terminal. A refresh rejection must never
+      // turn a committed output into a false Add failure; classify it after
+      // the refresh so stale transaction text can be cleared and unknown
+      // refresh failures can be reported as "added, refresh pending".
+      refreshError = error;
     }
+    finishDisplayAddPostCommitRefresh(statusBeforeRefresh, appStatus().text, refreshError);
   };
 
   const removeVideoOutput = async (outputId: number) => {
@@ -19779,6 +19849,7 @@ export default function App() {
         height,
         fullscreen: draft.kind === "Display" ? draft.fullscreen : false,
         monitorId: draft.kind === "Display" ? monitorId : null,
+        monitorIdentity: draft.kind === "Display" ? draft.monitor_identity : null,
         endpointName: draft.kind === "Display" ? null : draft.endpoint_name,
       });
       setVideoOutputConfigDrafts((current) => ({

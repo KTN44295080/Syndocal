@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.2.0-alpha.1"
+version = "1.2.0-alpha.2"
 edition = "2021"
 license = "MIT"
 authors = ["Seraf()のKTN"]

@@ -11,6 +11,7 @@ const app = await read("../src/App.tsx");
 const types = await read("../src/types.ts");
 const localization = await read("../src/uiLocalization.ts");
 const appBackend = await read("../../app/src-tauri/src/main.rs");
+const outputRuntime = await read("../../app/src-tauri/src/control_plane_runtime.rs");
 const ndiTransport = await read("../../app/src-tauri/src/ndi_transport.rs");
 const ndiIo = await read("../../crates/io/src/ndi.rs");
 const spoutTransport = await read("../../app/src-tauri/src/spout_transport.rs");
@@ -999,24 +1000,78 @@ assert.deepEqual(
 );
 
 const canonicalR4TauriOutputRoutes = [
-  "arm_output_control_v1",
+  "add_display_output_v2",
+  "arm_output_control_v2",
   "arm_output_ownership_role",
-  "force_transfer_output_lease_v1",
-  "recover_output_lease_v1",
-  "release_blackout_output_control_v1",
-  "relinquish_output_lease_v1",
-  "renew_output_lease_v1",
+  "enable_output_control_v2",
+  "force_transfer_output_lease_v2",
+  "recover_output_lease_v2",
+  "release_blackout_output_control_v2",
+  "relinquish_output_lease_v2",
+  "renew_output_lease_v2",
   "safety_blackout_engage_v1",
   "set_output_ownership_role",
   "start_standby_sync",
   "stop_standby_sync",
-  "take_over_output_control_v1",
+  "take_over_output_control_v2",
   "take_over_standby",
 ];
 assert.deepEqual(
   canonicalR4TauriOutputRoutes,
   [...canonicalR4TauriOutputRoutes].sort(),
   "canonical R4/S0 output-route inventory must remain bytewise sorted",
+);
+
+const nativeDangerConfirmation = sliceBetween(
+  outputRuntime,
+  "fn output_action_requires_native_danger_confirmation(",
+  "pub(crate) fn issue_output_control_authority(",
+  "native dangerous OutputControl confirmation helper",
+);
+assert.match(
+  nativeDangerConfirmation,
+  /MessageDialog::new\(\)[\s\S]*MessageButtons::YesNo[\s\S]*set_parent\(window\)[\s\S]*MessageDialogResult::Yes/,
+  "advanced OutputControl must use a parented Yes-only native confirmation",
+);
+for (const dangerousAction of [
+  "ReleaseBlackout",
+  "Arm",
+  "TakeOverStandby",
+  "AddDisplay",
+  "ForceTransferLease",
+]) {
+  assert.match(
+    nativeDangerConfirmation,
+    new RegExp(`OutputControlActionV2::${dangerousAction}`),
+    `${dangerousAction} must require native confirmation`,
+  );
+}
+const outputControlExecution = sliceBetween(
+  outputRuntime,
+  "fn execute_output_control_with_confirmation<F>(",
+  "pub(crate) fn exact_output_control_fence_matches(",
+  "OutputControl execution lane",
+);
+assert(
+  outputControlExecution.indexOf("recheck_output_control_terminal")
+    < outputControlExecution.indexOf("output_confirmation_gate"),
+  "terminal replay must be checked before a native confirmation can be shown",
+);
+const enableDispatch = sliceBetween(
+  outputControlExecution,
+  "OutputControlActionV2::EnableOutput =>",
+  "OutputControlActionV2::ReleaseBlackout",
+  "normal Enable dispatch",
+);
+assert.doesNotMatch(
+  enableDispatch,
+  /MessageDialog|confirm_native_dangerous_output_action/,
+  "normal Enable must not invoke the dangerous native confirmation helper",
+);
+assert.match(
+  outputRuntime,
+  /output_confirmation_gate\([\s\S]*?store_output_control_terminal\([\s\S]*?Forbidden/,
+  "cancel/close must become a terminal rejection before admission or mutation",
 );
 
 const nativeSinkHits = (source, markers = nativePhysicalSinkMarkers) =>

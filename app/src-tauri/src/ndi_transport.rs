@@ -1800,6 +1800,7 @@ mod capture_decoder_tests {
                 composition_id: 1,
                 fullscreen: false,
                 monitor_id: None,
+                monitor_identity: None,
                 width,
                 height,
                 endpoint_name: None,

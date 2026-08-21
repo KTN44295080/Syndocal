@@ -1656,6 +1656,11 @@ pub struct VideoOutputSummary {
     pub composition_id: CompositionId,
     pub fullscreen: bool,
     pub monitor_id: Option<u32>,
+    /// Stable physical display identity captured with the authored output.
+    /// A missing value is retained for legacy project migration but is never
+    /// sufficient to open or synchronize a native Display output.
+    #[serde(default)]
+    pub monitor_identity: Option<String>,
     pub width: u32,
     pub height: u32,
     pub endpoint_name: Option<String>,
@@ -13299,6 +13304,7 @@ mod tests {
             composition_id: 9,
             fullscreen: false,
             monitor_id: None,
+            monitor_identity: None,
             width: 1920,
             height: 1080,
             endpoint_name: None,
@@ -13711,6 +13717,39 @@ mod tests {
             serde_json::json!("renderer-selected-token-that-must-be-ignored");
         let decoded: super::RemoteControlConfig = serde_json::from_value(incoming).unwrap();
         assert!(decoded.dj_link_token.is_none());
+    }
+
+    #[test]
+    fn video_output_monitor_identity_is_persisted_and_legacy_missing_is_stale() {
+        let identity = "a".repeat(64);
+        let summary = super::VideoOutputSummary {
+            id: 7,
+            label: "Display 2".to_string(),
+            kind: super::VideoOutputKind::Display,
+            enabled: true,
+            composition_id: 1,
+            fullscreen: true,
+            monitor_id: Some(1),
+            monitor_identity: Some(identity.clone()),
+            width: 1920,
+            height: 1080,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: super::VideoOutputMapping::default(),
+        };
+        let mut legacy = serde_json::to_value(&summary).unwrap();
+        legacy.as_object_mut().unwrap().remove("monitor_identity");
+        let parsed_legacy: super::VideoOutputSummary = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed_legacy.monitor_id, Some(1));
+        assert_eq!(parsed_legacy.monitor_identity, None);
+
+        let round_trip: super::VideoOutputSummary =
+            serde_json::from_value(serde_json::to_value(&summary).unwrap()).unwrap();
+        assert_eq!(
+            round_trip.monitor_identity.as_deref(),
+            Some(identity.as_str())
+        );
     }
 
     #[test]

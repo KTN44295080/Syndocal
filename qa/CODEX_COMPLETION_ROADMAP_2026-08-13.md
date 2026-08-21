@@ -4,8 +4,14 @@
 > requirement and final-gate authority, but its frozen checkpoint, 75.5% planning
 > roll-up, and Media A1 resume instructions are historical. Use
 > `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for the current dependency order,
-> `1.2.0-alpha.1` version train, warning ratchet, AI3 resume point, and checkpoint
+> `1.2.0-alpha.2` version train, warning ratchet, AI3 resume point, and checkpoint
 > workflow. Do not compare old and current percentages without identical denominators.
+
+> **OutputControl supersession (2026-08-21):** physical six-digit/Raw Input/Enter
+> consent and its challenge IPC are removed from the product. Normal Enable is one
+> local v2 click for exact Both; dangerous advanced output mutations use a parented
+> native Warning/Yes-No confirmation. Older physical-consent acceptance items are
+> historical. Owner/fence/durable/S0 requirements remain in force.
 
 Status: implementation resumed on 2026-08-13 (JST). Media Asset A1-A8 are accepted for the current Windows tranche, including the rebuilt Media Library thumbnail/hover supplement; the whole-product Q5 completion query still fails and Critical Path B is next.
 Roadmap revision: v4, current Windows Media Asset A8 evidence integrated on 2026-08-14 (JST).
@@ -2098,7 +2104,10 @@ state is `qa/CODEX_HANDOFF_2026-08-19.md`.
   Exactly one responsive exact-path Syndocal window was launched and explicitly
   maximized before UI operations.
 
-The remaining Windows acceptance sequence is now narrow and physical: real HID
-Raw Input Ready/consume, separate fresh `Both` Arm consent, five fullscreen origin
-checks, and the retained editor + LED panel + projector layout. Do not automate the
-six challenge digits; all surrounding UI actions should be automated.
+The physical-input consent sequence in the preceding historical checkpoint is
+retired and must not be executed. The remaining Windows acceptance sequence is:
+single-click local `enable_output_control_v2`; native Warning/Yes-No only for the
+advanced dangerous mutations; stable monitor-identity persistence and
+revalidation; five canonical fullscreen output-window origin checks; and the
+retained editor + LED panel + projector layout. No six-digit, Raw Input, Enter, or
+15-second challenge remains in production or acceptance.

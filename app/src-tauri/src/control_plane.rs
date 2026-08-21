@@ -16,13 +16,15 @@ use protocol::control_plane::{
 };
 use protocol::control_plane_command::{
     CUE_LIST_DELETE_OPERATION_ID, CUE_LIST_REORDER_OPERATION_ID, EMPTY_CUE_CREATE_OPERATION_ID,
-    OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_CONSENT_PREPARE_OPERATION_ID,
-    OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-    OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
-    OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
-    SET_EFFECT_ENABLED_OPERATION_ID, TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
-    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
-    TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+    OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+    OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION, OUTPUT_DISPLAY_ADD_OPERATION_ID,
+    OUTPUT_ENABLE_OPERATION_ID, OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
+    OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
+    OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
+    OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SET_EFFECT_ENABLED_OPERATION_ID,
+    TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
+    TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
 };
 use protocol::control_plane_registry_v2::{
     AdapterPolicy, CanonicalControlPlaneRegistry, CanonicalOperationDescriptor,
@@ -33,6 +35,8 @@ use protocol::control_plane_registry_v2::{
 use serde::{Deserialize, Serialize};
 
 const MAX_REGISTERED_OPERATIONS: usize = 2048;
+const OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID: &str =
+    "syndocal.query.output.display.add.authority.v1";
 const MAIN_RS_SOURCE: &str = include_str!("main.rs");
 const FRONTEND_INVOKE_MANIFEST: &str = include_str!("../../src/tauri-invoke-manifest.json");
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
@@ -268,11 +272,7 @@ fn canonical_source_inventory_descriptor(
     let source_key = SourceKey::new(source_family, descriptor.source_id.clone());
     let disposition = match source_family {
         CanonicalSourceFamily::TauriCommand => {
-            if descriptor.source_id == "prepare_output_consent_v1" {
-                SourceDisposition::SupportPhase {
-                    support_id: OUTPUT_CONSENT_PREPARE_OPERATION_ID.to_string(),
-                }
-            } else if let Some(reviewed) = reviewed_canonical_operation(&descriptor.source_id) {
+            if let Some(reviewed) = reviewed_canonical_operation(&descriptor.source_id) {
                 SourceDisposition::Operation {
                     canonical_operation_id: reviewed.operation_id().to_string(),
                     projection: TypedSchemaProjection::Exact,
@@ -535,6 +535,12 @@ enum ReviewedCanonicalOperation {
     ArmOutputOwnership,
     TakeOverStandby,
     AddDisplayOutput,
+    EnableOutput,
+    AcquireOutputLease,
+    RenewOutputLease,
+    RecoverOutputLease,
+    RelinquishOutputLease,
+    ForceTransferOutputLease,
     ReorderCueLists,
     DeleteCueList,
     CreateEmptyCue,
@@ -552,6 +558,12 @@ impl ReviewedCanonicalOperation {
             Self::ArmOutputOwnership => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
             Self::TakeOverStandby => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             Self::AddDisplayOutput => OUTPUT_DISPLAY_ADD_OPERATION_ID,
+            Self::EnableOutput => OUTPUT_ENABLE_OPERATION_ID,
+            Self::AcquireOutputLease => OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
+            Self::RenewOutputLease => OUTPUT_LEASE_RENEW_OPERATION_ID,
+            Self::RecoverOutputLease => OUTPUT_LEASE_RECOVER_OPERATION_ID,
+            Self::RelinquishOutputLease => OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
+            Self::ForceTransferOutputLease => OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
             Self::ReorderCueLists => CUE_LIST_REORDER_OPERATION_ID,
             Self::DeleteCueList => CUE_LIST_DELETE_OPERATION_ID,
             Self::CreateEmptyCue => EMPTY_CUE_CREATE_OPERATION_ID,
@@ -570,10 +582,18 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         }
         "abort_timeline_follow_runtime_v1" => Some(ReviewedCanonicalOperation::AbortTimelineFollow),
         "safety_blackout_engage_v1" => Some(ReviewedCanonicalOperation::EngageSafetyBlackout),
-        "release_blackout_output_control_v1" => Some(ReviewedCanonicalOperation::ReleaseBlackout),
-        "arm_output_control_v1" => Some(ReviewedCanonicalOperation::ArmOutputOwnership),
-        "take_over_output_control_v1" => Some(ReviewedCanonicalOperation::TakeOverStandby),
-        "add_display_output_v1" => Some(ReviewedCanonicalOperation::AddDisplayOutput),
+        "release_blackout_output_control_v2" => Some(ReviewedCanonicalOperation::ReleaseBlackout),
+        "arm_output_control_v2" => Some(ReviewedCanonicalOperation::ArmOutputOwnership),
+        "take_over_output_control_v2" => Some(ReviewedCanonicalOperation::TakeOverStandby),
+        "add_display_output_v2" => Some(ReviewedCanonicalOperation::AddDisplayOutput),
+        "enable_output_control_v2" => Some(ReviewedCanonicalOperation::EnableOutput),
+        "acquire_output_lease_v2" => Some(ReviewedCanonicalOperation::AcquireOutputLease),
+        "renew_output_lease_v2" => Some(ReviewedCanonicalOperation::RenewOutputLease),
+        "recover_output_lease_v2" => Some(ReviewedCanonicalOperation::RecoverOutputLease),
+        "relinquish_output_lease_v2" => Some(ReviewedCanonicalOperation::RelinquishOutputLease),
+        "force_transfer_output_lease_v2" => {
+            Some(ReviewedCanonicalOperation::ForceTransferOutputLease)
+        }
         "reorder_cue_lists" => Some(ReviewedCanonicalOperation::ReorderCueLists),
         "delete_cue_list" => Some(ReviewedCanonicalOperation::DeleteCueList),
         "create_empty_cue" => Some(ReviewedCanonicalOperation::CreateEmptyCue),
@@ -673,7 +693,22 @@ fn canonical_descriptor_for_source(
         ReviewedCanonicalOperation::ReleaseBlackout
         | ReviewedCanonicalOperation::ArmOutputOwnership
         | ReviewedCanonicalOperation::TakeOverStandby
-        | ReviewedCanonicalOperation::AddDisplayOutput => (
+        | ReviewedCanonicalOperation::AddDisplayOutput
+        | ReviewedCanonicalOperation::ForceTransferOutputLease => (
+            OperationClass::Mutation,
+            vec![
+                OperationCapability::LocalWindowBound,
+                OperationCapability::OutputControl,
+            ],
+            OperationIdempotency::Mutating,
+            AdapterPolicy::LocalWindowDangerousOutputControl,
+            ReceiptPolicy::ExactTerminalReceipt,
+        ),
+        ReviewedCanonicalOperation::EnableOutput
+        | ReviewedCanonicalOperation::AcquireOutputLease
+        | ReviewedCanonicalOperation::RenewOutputLease
+        | ReviewedCanonicalOperation::RecoverOutputLease
+        | ReviewedCanonicalOperation::RelinquishOutputLease => (
             OperationClass::Mutation,
             vec![
                 OperationCapability::LocalWindowBound,
@@ -696,6 +731,12 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::EnableOutput
+                | ReviewedCanonicalOperation::AcquireOutputLease
+                | ReviewedCanonicalOperation::RenewOutputLease
+                | ReviewedCanonicalOperation::RecoverOutputLease
+                | ReviewedCanonicalOperation::RelinquishOutputLease
+                | ReviewedCanonicalOperation::ForceTransferOutputLease
         ) {
             OperationRisk::R4
         } else {
@@ -713,6 +754,12 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::EnableOutput
+                | ReviewedCanonicalOperation::AcquireOutputLease
+                | ReviewedCanonicalOperation::RenewOutputLease
+                | ReviewedCanonicalOperation::RecoverOutputLease
+                | ReviewedCanonicalOperation::RelinquishOutputLease
+                | ReviewedCanonicalOperation::ForceTransferOutputLease
         ) {
             OperationAuditRequirement::Immutable
         } else {
@@ -729,6 +776,12 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::EnableOutput
+                | ReviewedCanonicalOperation::AcquireOutputLease
+                | ReviewedCanonicalOperation::RenewOutputLease
+                | ReviewedCanonicalOperation::RecoverOutputLease
+                | ReviewedCanonicalOperation::RelinquishOutputLease
+                | ReviewedCanonicalOperation::ForceTransferOutputLease
         ) {
             RatePolicy::TokenBucket4PerSecondBurst8
         } else {
@@ -739,12 +792,22 @@ fn canonical_descriptor_for_source(
             ConsentPolicy::NotRequiredForSafetyOnly
         } else if matches!(
             reviewed,
+            ReviewedCanonicalOperation::EnableOutput
+                | ReviewedCanonicalOperation::AcquireOutputLease
+                | ReviewedCanonicalOperation::RenewOutputLease
+                | ReviewedCanonicalOperation::RecoverOutputLease
+                | ReviewedCanonicalOperation::RelinquishOutputLease
+        ) {
+            ConsentPolicy::LocalExplicitAction
+        } else if matches!(
+            reviewed,
             ReviewedCanonicalOperation::ReleaseBlackout
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::ForceTransferOutputLease
         ) {
-            ConsentPolicy::PreparedPhysicalConfirmation
+            ConsentPolicy::NativeDangerConfirmation
         } else {
             ConsentPolicy::FailClosed
         },
@@ -799,8 +862,8 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
         ),
-        "query_output_consent_status_v1" => (
-            OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
+        "query_display_add_lease_authority_v1" => (
+            OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
         ),
@@ -854,7 +917,16 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
     }
     if matches!(
         operation_id,
-        "add_display_output_v1" | "reorder_cue_lists" | "delete_cue_list" | "create_empty_cue"
+        "add_display_output_v2"
+            | "enable_output_control_v2"
+            | "acquire_output_lease_v2"
+            | "renew_output_lease_v2"
+            | "recover_output_lease_v2"
+            | "relinquish_output_lease_v2"
+            | "force_transfer_output_lease_v2"
+            | "reorder_cue_lists"
+            | "delete_cue_list"
+            | "create_empty_cue"
     ) {
         let source_id = operation_id;
         let reviewed = reviewed_canonical_operation(source_id)
@@ -891,25 +963,19 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
         );
     }
-    if operation_id == "prepare_output_consent_v1" {
-        return unavailable_descriptor_for_semantic_operation(
-            operation_id,
-            OUTPUT_CONSENT_PREPARE_OPERATION_ID,
-        );
-    }
-    if operation_id == "release_blackout_output_control_v1" {
+    if operation_id == "release_blackout_output_control_v2" {
         return unavailable_descriptor_for_semantic_operation(
             operation_id,
             OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
         );
     }
-    if operation_id == "arm_output_control_v1" {
+    if operation_id == "arm_output_control_v2" {
         return unavailable_descriptor_for_semantic_operation(
             operation_id,
             OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
         );
     }
-    if operation_id == "take_over_output_control_v1" {
+    if operation_id == "take_over_output_control_v2" {
         return unavailable_descriptor_for_semantic_operation(
             operation_id,
             OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
@@ -1025,7 +1091,23 @@ fn frontend_invoke_names_from_manifest(
 fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
     SchemaIdentity {
         name: format!("{operation_id}.{direction}"),
-        version: CONTROL_PLANE_SCHEMA_VERSION,
+        version: if matches!(
+            operation_id,
+            OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
+                | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+                | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                | OUTPUT_ENABLE_OPERATION_ID
+                | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                | OUTPUT_LEASE_RENEW_OPERATION_ID
+                | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
+        ) {
+            OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION
+        } else {
+            CONTROL_PLANE_SCHEMA_VERSION
+        },
     }
 }
 
@@ -1130,12 +1212,12 @@ mod tests {
             "syndocal.query.runtime.generations.v1",
             "syndocal.query.video.display_monitors.v1",
             OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-            OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
+            OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
         assert_eq!(names.len(), 469);
-        const ENGINE_COMMAND_COUNT: usize = 260;
+        const ENGINE_COMMAND_COUNT: usize = 261;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -1166,7 +1248,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1458);
+        assert_eq!(registry.operations.len(), 1459);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -1242,14 +1324,16 @@ mod tests {
         }
         for (source_id, semantic_operation_id) in [
             (
-                "release_blackout_output_control_v1",
+                "release_blackout_output_control_v2",
                 OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
             ),
-            ("arm_output_control_v1", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
+            ("arm_output_control_v2", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
+            ("enable_output_control_v2", OUTPUT_ENABLE_OPERATION_ID),
             (
-                "take_over_output_control_v1",
+                "take_over_output_control_v2",
                 OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             ),
+            ("add_display_output_v2", OUTPUT_DISPLAY_ADD_OPERATION_ID),
         ] {
             let descriptor = registry
                 .operations
@@ -1264,16 +1348,10 @@ mod tests {
             assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
             assert_eq!(descriptor.idempotency, OperationIdempotency::Mutating);
         }
-        for (source_id, semantic_operation_id) in [
-            (
-                "query_output_control_authority_v1",
-                OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-            ),
-            (
-                "query_output_consent_status_v1",
-                OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
-            ),
-        ] {
+        for (source_id, semantic_operation_id) in [(
+            "query_output_control_authority_v1",
+            OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+        )] {
             let descriptor = registry
                 .operations
                 .iter()
@@ -1290,24 +1368,6 @@ mod tests {
             );
             assert_eq!(descriptor.idempotency, OperationIdempotency::ReadOnly);
         }
-        let consent_prepare = registry
-            .operations
-            .iter()
-            .find(|descriptor| {
-                descriptor.source_family == OperationSourceFamily::TauriCommand
-                    && descriptor.source_id == "prepare_output_consent_v1"
-            })
-            .expect("missing OutputControl consent preparation descriptor");
-        assert_eq!(
-            consent_prepare.operation_id,
-            OUTPUT_CONSENT_PREPARE_OPERATION_ID
-        );
-        assert_eq!(consent_prepare.risk, OperationRisk::R5);
-        assert_eq!(
-            consent_prepare.availability,
-            OperationAvailability::Unavailable
-        );
-        assert_eq!(consent_prepare.idempotency, OperationIdempotency::Mutating);
         let engine_unavailable = registry
             .operations
             .iter()
@@ -1492,7 +1552,7 @@ mod tests {
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
         const TAURI_COUNT: usize = 469;
-        const ENGINE_COUNT: usize = 260;
+        const ENGINE_COUNT: usize = 261;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
         const FRONTEND_COUNT: usize = 407;
@@ -1502,10 +1562,10 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1458);
-        assert_eq!(SOURCE_TOTAL, 1491);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1459);
+        assert_eq!(SOURCE_TOTAL, 1492);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 24);
+        assert_eq!(canonical.canonical_operations.len(), 30);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -1517,19 +1577,38 @@ mod tests {
                         | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                         | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                         | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                        | OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                        | OUTPUT_LEASE_RENEW_OPERATION_ID
+                        | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                        | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                        | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(output_control_operations.len(), 4);
+        assert_eq!(output_control_operations.len(), 10);
         for (source_id, operation_id) in [
             (
-                "release_blackout_output_control_v1",
+                "release_blackout_output_control_v2",
                 OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
             ),
-            ("arm_output_control_v1", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
+            ("arm_output_control_v2", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
+            ("enable_output_control_v2", OUTPUT_ENABLE_OPERATION_ID),
             (
-                "take_over_output_control_v1",
+                "take_over_output_control_v2",
                 OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+            ),
+            ("add_display_output_v2", OUTPUT_DISPLAY_ADD_OPERATION_ID),
+            ("acquire_output_lease_v2", OUTPUT_LEASE_ACQUIRE_OPERATION_ID),
+            ("renew_output_lease_v2", OUTPUT_LEASE_RENEW_OPERATION_ID),
+            ("recover_output_lease_v2", OUTPUT_LEASE_RECOVER_OPERATION_ID),
+            (
+                "relinquish_output_lease_v2",
+                OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
+            ),
+            (
+                "force_transfer_output_lease_v2",
+                OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
             ),
         ] {
             let operation = output_control_operations
@@ -1543,15 +1622,45 @@ mod tests {
             assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
             assert_eq!(
                 operation.adapter_policy,
-                AdapterPolicy::LocalWindowOutputControl
+                if matches!(
+                    operation_id,
+                    OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                        | OUTPUT_LEASE_RENEW_OPERATION_ID
+                        | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                        | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                ) {
+                    AdapterPolicy::LocalWindowOutputControl
+                } else {
+                    AdapterPolicy::LocalWindowDangerousOutputControl
+                }
             );
             assert_eq!(
                 operation.receipt_policy,
                 ReceiptPolicy::ExactTerminalReceipt
             );
             assert_eq!(
+                operation.request_schema.version,
+                OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION
+            );
+            assert_eq!(
+                operation.response_schema.version,
+                OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION
+            );
+            assert_eq!(
                 operation.consent_policy,
-                ConsentPolicy::PreparedPhysicalConfirmation
+                if matches!(
+                    operation_id,
+                    OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                        | OUTPUT_LEASE_RENEW_OPERATION_ID
+                        | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                        | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                ) {
+                    ConsentPolicy::LocalExplicitAction
+                } else {
+                    ConsentPolicy::NativeDangerConfirmation
+                }
             );
             assert_eq!(
                 operation.capabilities,
@@ -1596,33 +1705,10 @@ mod tests {
                 Some(operation_id)
             );
         }
-        let consent_support = canonical
-            .source_inventory
-            .iter()
-            .find(|source| {
-                source.source_key.family == CanonicalSourceFamily::TauriCommand
-                    && source.source_key.source_id == "prepare_output_consent_v1"
-            })
-            .expect("OutputControl consent preparation must remain a support source");
-        assert!(matches!(
-            &consent_support.disposition,
-            SourceDisposition::SupportPhase { support_id }
-                if support_id == OUTPUT_CONSENT_PREPARE_OPERATION_ID
-        ));
-        assert!(canonical
-            .canonical_operation_for_source(&consent_support.source_key)
-            .unwrap()
-            .is_none());
-        for (source_id, operation_id) in [
-            (
-                "query_output_control_authority_v1",
-                OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-            ),
-            (
-                "query_output_consent_status_v1",
-                OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID,
-            ),
-        ] {
+        for (source_id, operation_id) in [(
+            "query_output_control_authority_v1",
+            OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+        )] {
             let source = canonical
                 .source_inventory
                 .iter()
@@ -1774,12 +1860,12 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 24);
+        assert_eq!(direct.len(), 30);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1054);
-        assert_eq!(support_phases.len(), 1);
+        assert_eq!(unclassified.len(), 1050);
+        assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
                 + aliases.len()
@@ -2047,6 +2133,12 @@ mod tests {
                     | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                    | OUTPUT_ENABLE_OPERATION_ID
+                    | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                    | OUTPUT_LEASE_RENEW_OPERATION_ID
+                    | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                    | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                    | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
             ) {
                 assert_eq!(operation.risk, OperationRisk::R4);
                 assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
@@ -2179,12 +2271,29 @@ mod tests {
                     | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                    | OUTPUT_ENABLE_OPERATION_ID
+                    | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                    | OUTPUT_LEASE_RENEW_OPERATION_ID
+                    | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                    | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                    | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
             ) {
                 assert_eq!(operation.class, OperationClass::Mutation);
                 assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
                 assert_eq!(
                     operation.adapter_policy,
-                    AdapterPolicy::LocalWindowOutputControl
+                    if matches!(
+                        operation.operation_id.as_str(),
+                        OUTPUT_ENABLE_OPERATION_ID
+                            | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                            | OUTPUT_LEASE_RENEW_OPERATION_ID
+                            | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                            | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                    ) {
+                        AdapterPolicy::LocalWindowOutputControl
+                    } else {
+                        AdapterPolicy::LocalWindowDangerousOutputControl
+                    }
                 );
                 assert_eq!(
                     operation.receipt_policy,
@@ -2196,7 +2305,18 @@ mod tests {
                 );
                 assert_eq!(
                     operation.consent_policy,
-                    ConsentPolicy::PreparedPhysicalConfirmation
+                    if matches!(
+                        operation.operation_id.as_str(),
+                        OUTPUT_ENABLE_OPERATION_ID
+                            | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+                            | OUTPUT_LEASE_RENEW_OPERATION_ID
+                            | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                            | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+                    ) {
+                        ConsentPolicy::LocalExplicitAction
+                    } else {
+                        ConsentPolicy::NativeDangerConfirmation
+                    }
                 );
                 assert_eq!(
                     operation.capabilities,
@@ -2376,11 +2496,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1458);
+        assert_eq!(legacy.operations.len(), 1459);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1458);
+        assert_eq!(operations.len(), 1459);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

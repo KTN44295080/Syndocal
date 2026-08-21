@@ -6,15 +6,16 @@ const japaneseText: Record<string, string> = {
   "· g": "· 世代",
   "· generation": "· 世代",
   "Acquire selected-role lease": "選択したロールのリースを取得",
-  "Backend physical confirmation": "バックエンド物理確認",
-  "Backend physical confirmation required": "バックエンド物理確認が必要です",
+  "Enable lighting and video output": "照明と映像の出力を有効化",
+  "Enable Output": "出力を有効化",
+  "Enable both lighting and video output in one step.": "照明と映像の出力を1ステップで有効化",
+  "Advanced output and lease controls": "出力・リースの詳細設定",
   "BLACKOUT RELEASE LOCKED": "ブラックアウト解除ロック中",
   "Force transfer": "強制移管",
   "Global effect to enable or bypass": "有効化またはバイパスするグローバルエフェクト",
   "Global FX": "グローバルFX",
-  "Lease IDs are backend-issued capabilities. Select one exact lease; lighting and video leases are never merged.":
-    "リースIDはバックエンド発行の権限です。正確なリースを1つ選択してください。照明と映像のリースは統合しません。",
-  "on the physical keyboard.": "物理キーボードで入力してください。",
+  "Advanced lease controls expose backend-issued authorities; normal Enable Output creates one exact lighting + video lease atomically.":
+    "詳細設定ではバックエンド発行の権限を操作します。通常の「出力を有効化」は照明と映像を1つの正確なリースとして原子的に作成します。",
   "Output lease": "出力リース",
   "Output lease authority": "出力リース権限",
   "Output lease state is Unavailable.": "出力リース状態は利用できません。",
@@ -24,9 +25,6 @@ const japaneseText: Record<string, string> = {
   "Select one lease": "リースを1つ選択",
   "Selected exact lease": "選択中の正確なリース",
   "Selected exact output lease": "選択中の正確な出力リース",
-  "The checkbox above is operator isolation confirmation. The backend physical confirmation challenge is shown separately and must also be completed.":
-    "上のチェックボックスはオペレーター隔離の確認です。バックエンド物理確認チャレンジは別に表示され、こちらも完了する必要があります。",
-  "Type challenge code": "チャレンジコードを入力",
   Ramp: "ランプ",
   Sinus3: "サイン3",
   Tangeant: "タンジェント",
@@ -83,7 +81,23 @@ const japaneseText: Record<string, string> = {
   "Connection settings": "接続設定",
   "Add configured output": "設定済み出力を追加",
   "Add display output": "ディスプレイ出力を追加",
+  "Adding display output…": "ディスプレイ出力を追加中…",
+  "Display output added.": "ディスプレイ出力を追加しました。",
+  "Could not add display output. Check the selected screen and output state, then try again.":
+    "ディスプレイ出力を追加できませんでした。選択した画面と出力状態を確認して再試行してください。",
+  "Display output authority is busy. Try again shortly.":
+    "ディスプレイ出力の権限確認が混み合っています。少し待ってから再試行してください。",
+  "Selected display is no longer available. Refresh screen detection and try again.":
+    "選択した画面が利用できなくなりました。画面を再検出して再試行してください。",
+  "Display output authority is unavailable. Nothing was applied.":
+    "ディスプレイ出力の権限を確認できません。変更は適用されていません。",
   "Advanced output settings": "出力の詳細設定",
+  "Editor screen": "エディター画面",
+  "· Editor screen": "· エディター画面",
+  "This editor screen overlaps the Syndocal control surface. Choose a different screen when possible.":
+    "このエディター画面はSyndocalの操作画面と重なります。通常は別の画面を選択してください。",
+  "The native display confirmation dialog will appear when this output is added.":
+    "この出力を追加すると、ネイティブのディスプレイ確認ダイアログが表示されます。",
   "Configure the output type and endpoint in Advanced output settings.":
     "出力種別とエンドポイントは出力の詳細設定で指定してください。",
   "Connection and access settings": "接続とアクセス設定",
@@ -2094,7 +2108,6 @@ const japaneseText: Record<string, string> = {
   "Unsaved Timeline edits will be discarded before continuing.": "続行すると、未保存のタイムライン編集は破棄されます。",
   "Unsaved project changes and Timeline edits will be discarded before continuing.": "続行すると、未保存のプロジェクト変更とタイムライン編集は破棄されます。",
   "Discard and Continue": "破棄して続行",
-  "s remaining. Only backend Raw Input counts; digits may also appear in the focused text field.": "秒残っています。バックエンドのRaw Inputのみを受け付けます。数字はフォーカス中の入力欄にも表示される場合があります。",
   "UNSAVED CHANGES + LIVE OUTPUT": "未保存の変更 + ライブ出力中",
   "UNSAVED SESSION": "未保存のセッション",
   "UNSAVED TIMELINE": "未保存のタイムライン",
@@ -2798,6 +2811,8 @@ const japaneseText: Record<string, string> = {
     "テイクオーバーはこのマシンをスタンバイのまま最新の複製プロジェクトを読み込みます。出力を有効化する前に同期を停止し、後で明示的にマシンロールを選択してください。",
   "Take Over loads the latest replicated project with its original DMX and video output state. Confirm the old Primary cannot still transmit.":
     "テイクオーバーは最新の複製プロジェクトを元のDMX・映像出力状態で開きます。旧プライマリが送信できないことを確認してください。",
+  "The checkbox above is the explicit operator isolation confirmation required before this dangerous transfer.":
+    "この危険な移行の前に必要な、オペレーターによる隔離確認です。",
   "Target groups": "対象グループ",
   "Target H": "対象H",
   "Target IP": "対象IP",
@@ -3030,7 +3045,7 @@ const japaneseText: Record<string, string> = {
     "エンジンスナップショットが使用中のため、タイムライン音声マスター更新をロールバックしました",
   "DMX Connections": "DMX接続",
   "Output routes and detected interfaces": "出力ルートと検出済みインターフェース",
-  "Output enabled": "出力を有効化",
+  "Output enabled": "出力が有効です",
   "Add Art-Net route": "Art-Netルートを追加",
   "Add sACN route": "sACNルートを追加",
   "Add current route": "現在のルートを追加",
@@ -3768,6 +3783,25 @@ export function translateUiText(value: string, locale: UiLocale): string {
     if (match) return `${leading}${render(...match.slice(1))}${trailing}`;
   }
   return value;
+}
+
+/**
+ * Convert AddDisplay failures into short operator-facing copy. Backend error
+ * text is deliberately not rendered verbatim beside the Add button: it may
+ * contain internal fence/transport detail. The raw Error remains available
+ * to the caller for diagnostics, while the visible message is stable and
+ * localized.
+ */
+export function displayAddErrorMessage(error: unknown, locale: UiLocale): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const source = /busy|overloaded|contention/i.test(raw)
+    ? "Display output authority is busy. Try again shortly."
+    : /stale|changed|refresh screen detection|no longer available/i.test(raw)
+      ? "Selected display is no longer available. Refresh screen detection and try again."
+      : /authority|lease|forbidden|ambiguous|invalid|unavailable|foreign|split|subset/i.test(raw)
+        ? "Display output authority is unavailable. Nothing was applied."
+        : "Could not add display output. Check the selected screen and output state, then try again.";
+  return translateUiText(source, locale);
 }
 
 export interface TimelineOverviewMarkerAccessibleEvent {

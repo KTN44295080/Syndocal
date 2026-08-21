@@ -8,6 +8,14 @@ use std::{collections::BTreeSet, fmt};
 
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
+use crate::control_plane_command::{
+    OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION,
+    OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID, OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
+    OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
+    OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
+    OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+};
+
 /// Wire format version for the control-plane inventory.
 pub const CONTROL_PLANE_SCHEMA_VERSION: u16 = 1;
 pub const OPERATION_DESCRIPTOR_SCHEMA_NAME: &str = "syndocal.control-plane.operation-descriptor";
@@ -78,8 +86,8 @@ pub enum OperationCapability {
     /// engagement. It cannot authorize release or any other S0 operation.
     SafetyBlackoutEngage,
     /// Local-only output control. This capability is always paired with the
-    /// reviewed R4 output-control adapter and a prepared physical-confirmation
-    /// policy; it never implies an external principal or grant.
+    /// reviewed R4 output-control adapter and a local-window policy; it never
+    /// implies an external principal or grant.
     OutputControl,
     /// Marks an internal source-family inventory entry.  It grants neither a
     /// local-window invocation nor an external execution adapter.
@@ -478,7 +486,20 @@ fn validate_operation_schema_identity(
     if schema.name.is_empty() || schema.name != format!("{operation_id}.{direction}") {
         return Err(OperationDescriptorValidationError::InvalidOperationSchemaName);
     }
-    if schema.version != CONTROL_PLANE_SCHEMA_VERSION {
+    let expected_version = match operation_id {
+        OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+        | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
+        | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+        | OUTPUT_DISPLAY_ADD_OPERATION_ID
+        | OUTPUT_ENABLE_OPERATION_ID
+        | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
+        | OUTPUT_LEASE_RENEW_OPERATION_ID
+        | OUTPUT_LEASE_RECOVER_OPERATION_ID
+        | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
+        | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID => OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION,
+        _ => CONTROL_PLANE_SCHEMA_VERSION,
+    };
+    if schema.version != expected_version {
         return Err(OperationDescriptorValidationError::UnsupportedOperationSchemaVersion);
     }
     Ok(())

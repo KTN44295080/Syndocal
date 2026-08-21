@@ -64,7 +64,7 @@ type SetupVideoPanelProps = {
   onOutputFullscreen: (value: boolean) => void;
   onOutputEndpoint: (value: string) => void;
   invokeCommand: FrontendTauriInvoke;
-  onAddDisplayOutput: (monitor: VideoDisplayMonitorDescriptor) => MaybePromise;
+  onAddDisplayOutput: (monitor: VideoDisplayMonitorDescriptor) => Promise<void>;
   onConfigDraft: (output: VideoOutputSummary, patch: Partial<VideoOutputConfigDraft>) => void;
   onApplyConfig: (output: VideoOutputSummary) => MaybePromise;
   onSelectOutput: (outputId: number) => void;

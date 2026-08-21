@@ -2174,6 +2174,7 @@ export interface VideoOutputSummary {
   composition_id: number;
   fullscreen: boolean;
   monitor_id?: number | null;
+  monitor_identity?: string | null;
   width: number;
   height: number;
   endpoint_name?: string | null;

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     env,
     ffi::{OsStr, OsString},
     fs,
@@ -9,7 +9,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
-        Arc, Condvar, Mutex, TryLockError,
+        mpsc, Arc, Condvar, Mutex, TryLockError,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -40,15 +40,14 @@ use protocol::DmxControlAction;
 use protocol::{
     canonical_video_output_mapping_field,
     control_plane_command::{
-        AuthoredRequestV1, DisplayOutputSpecV1, OutputConsentChallengeV1,
-        OutputConsentPrepareRequestV1, OutputConsentStatusRequestV1, OutputConsentStatusV1,
-        OutputControlAuthorityBundleV1, OutputControlCommandRequestV1, OutputControlFenceV1,
-        OutputControlResponseV1, ProjectMutationFenceV1, RuntimeCommandAuthorityBundleV1,
-        RuntimeCommandErrorV1, RuntimeCommandRequestV1, RuntimeCommandResponseV1,
-        SafetyBlackoutEngageRequestV1, SafetyBlackoutEngageResponseV1, SetEffectEnabledPayload,
-        SetEffectEnabledResponseV1, TimelineFollowAbortAuthorityBundleV1,
-        TimelineFollowAbortRuntimeRequestV1, TimelineFollowAbortRuntimeResponseV1,
-        OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_DISPLAY_ADD_OPERATION_ID,
+        AuthoredRequestV1, DisplayOutputSpecV2, OutputControlAuthorityBundleV1,
+        OutputControlCommandRequestV2, OutputControlFenceV1, OutputControlResponseV2,
+        ProjectMutationFenceV1, RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorV1,
+        RuntimeCommandRequestV1, RuntimeCommandResponseV1, SafetyBlackoutEngageRequestV1,
+        SafetyBlackoutEngageResponseV1, SetEffectEnabledPayload, SetEffectEnabledResponseV1,
+        TimelineFollowAbortAuthorityBundleV1, TimelineFollowAbortRuntimeRequestV1,
+        TimelineFollowAbortRuntimeResponseV1, OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+        OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
         OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
         OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
         OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
@@ -115,7 +114,6 @@ mod capture_transport;
 mod control_plane;
 mod control_plane_query;
 mod control_plane_runtime;
-mod control_plane_security;
 mod dvc_import;
 mod ndi_transport;
 mod output_lease;
@@ -140,6 +138,11 @@ type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
 >;
 
 const APP_NAME: &str = "Syndocal";
+/// AddDisplay-only read authority. This is intentionally separate from the
+/// public lease lifecycle query so an expired exact Both lease can be shown as
+/// recoverable without mutating or broadening Acquire/Recover.
+const OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID: &str =
+    "syndocal.query.output.display.add.authority.v1";
 #[cfg(target_os = "windows")]
 const DESKTOP_ESCAPE_SHORTCUT_EVENT: &str = "desktop-window-forward-escape";
 const PROJECT_FILE_VERSION: u32 = 1;
@@ -266,6 +269,7 @@ static MEDIA_ASSET_SNAPSHOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 static RDM_TRANSACTION_NUMBER: AtomicU8 = AtomicU8::new(1);
 static LIVE_VIDEO_MONITOR_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static PROJECT_SAVE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static NATIVE_VIDEO_OUTPUT_QUARANTINE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// `mediaAssetAuthority.ts` creates request IDs in the exact JavaScript-safe
 /// range `1..=2^53-1` (`21-bit prefix * 2^32 + 32-bit sequence`). Compatibility
 /// IPC has no request field at all, so it owns this disjoint server-only
@@ -325,7 +329,19 @@ struct ProjectOperatorSession {
 }
 
 const MAX_DURABLE_OUTPUT_LEASE_RECEIPTS: usize = output_lease::MAX_OUTPUT_LEASE_REQUESTS;
-const MAX_DURABLE_OUTPUT_LEASE_ORIGINS: usize = output_lease::MAX_OUTPUT_LEASE_REQUEST_ORIGINS;
+// Keep one extra durable-origin slot for the request currently in Pending.
+// Once its terminal receipt is recorded, receipt eviction and origin GC bring
+// the retained set back under the 128-record bound.  Without this slot, a
+// fresh principal arriving after exactly 128 retained receipts is rejected
+// before the oldest receipt can be evicted.
+const MAX_DURABLE_OUTPUT_LEASE_ORIGINS: usize = output_lease::MAX_OUTPUT_LEASE_REQUEST_ORIGINS + 1;
+
+fn default_output_lease_replay_guard() -> bool {
+    // Older journals did not distinguish a receiptless SafeAbort from an
+    // evicted terminal receipt.  Preserve the replay barrier conservatively
+    // when migrating such an origin.
+    true
+}
 
 /// The output-lease registry intentionally starts empty after every backend
 /// restart.  This journal retains only bounded terminal evidence so an exact
@@ -338,6 +354,12 @@ struct PersistedOutputLeaseReceiptOrigin {
     principal: String,
     domain: String,
     high_water_request_id: u64,
+    /// A SafeAbort has no retained receipt, but its high-water request ID is
+    /// still the replay guard for that exact physical attempt.  It becomes
+    /// pruneable once the operation reaches a terminal receipt and that
+    /// receipt is later evicted.
+    #[serde(default = "default_output_lease_replay_guard")]
+    replay_guard: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -380,6 +402,54 @@ enum OutputLeaseDurablePrepareResult {
     Terminal,
 }
 
+/// Classifies a physical/project callback failure at the durable output
+/// boundary.  A SafeAbort proves that no external resource remains and that
+/// the engine/project candidate was rolled back, so its Pending marker may be
+/// removed.  InDoubt means that any cleanup acknowledgement was lost or
+/// failed; the Pending marker must remain and the exact operation must be
+/// refused on retry rather than risk a second physical output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OutputLeaseCandidateCommitFailure {
+    SafeAbort(String),
+    InDoubt(String),
+}
+
+impl OutputLeaseCandidateCommitFailure {
+    fn safe(message: impl Into<String>) -> Self {
+        Self::SafeAbort(message.into())
+    }
+
+    fn in_doubt(message: impl Into<String>) -> Self {
+        Self::InDoubt(message.into())
+    }
+
+    fn with_cleanup(self, context: &str, cleanup: Result<(), String>) -> Self {
+        match cleanup {
+            Ok(()) => self,
+            Err(cleanup_error) => Self::InDoubt(format!("{self:?}; {context}: {cleanup_error}")),
+        }
+    }
+
+    fn into_message(self) -> String {
+        match self {
+            Self::SafeAbort(message) => message,
+            Self::InDoubt(message) => format!("{message}; durable output commit is in doubt"),
+        }
+    }
+}
+
+impl From<String> for OutputLeaseCandidateCommitFailure {
+    fn from(message: String) -> Self {
+        Self::safe(message)
+    }
+}
+
+impl From<&str> for OutputLeaseCandidateCommitFailure {
+    fn from(message: &str) -> Self {
+        Self::safe(message)
+    }
+}
+
 impl OutputLeaseDurableReceiptJournal {
     fn in_memory() -> Self {
         Self {
@@ -399,6 +469,7 @@ impl OutputLeaseDurableReceiptJournal {
         self.state
             .origins
             .iter()
+            .filter(|origin| self.origin_is_retained(origin))
             .map(|origin| origin.high_water_request_id)
             .max()
             .unwrap_or(0)
@@ -442,6 +513,7 @@ impl OutputLeaseDurableReceiptJournal {
             .state
             .origins
             .iter()
+            .filter(|origin| self.origin_is_retained(origin))
             .find(|origin| {
                 origin.principal == request.key.principal && origin.domain == request.key.domain
             })
@@ -463,8 +535,9 @@ impl OutputLeaseDurableReceiptJournal {
         if request.shape.canonical_hash()? != request.shape_hash {
             return Err(output_lease::OutputLeaseError::InvalidRequest);
         }
-        if let Some(receipt) = self
-            .state
+        let mut candidate = self.state.clone();
+        Self::prune_empty_origins(&mut candidate);
+        if let Some(receipt) = candidate
             .receipts
             .iter()
             .find(|receipt| receipt.key == request.key)
@@ -474,19 +547,19 @@ impl OutputLeaseDurableReceiptJournal {
             }
             return Ok(OutputLeaseDurablePrepareResult::Terminal);
         }
-        if self.state.pending.iter().any(|pending| {
+        if candidate.pending.iter().any(|pending| {
             pending.key.principal == request.key.principal
                 && pending.key.domain == request.key.domain
         }) {
             return Err(output_lease::OutputLeaseError::RequestCapacity);
         }
-        let mut candidate = self.state.clone();
         let origin_index = candidate.origins.iter().position(|origin| {
             origin.principal == request.key.principal && origin.domain == request.key.domain
         });
         match origin_index {
             Some(index) => {
                 let origin = &mut candidate.origins[index];
+                origin.replay_guard = true;
                 if request.key.request_id <= origin.high_water_request_id {
                     return Err(output_lease::OutputLeaseError::ReceiptNotRetained);
                 }
@@ -500,6 +573,7 @@ impl OutputLeaseDurableReceiptJournal {
                     principal: request.key.principal.clone(),
                     domain: request.key.domain.clone(),
                     high_water_request_id: request.key.request_id,
+                    replay_guard: true,
                 });
             }
         }
@@ -523,6 +597,7 @@ impl OutputLeaseDurableReceiptJournal {
         candidate
             .pending
             .retain(|pending| pending.key != request.key);
+        Self::prune_empty_origins(&mut candidate);
         if let Some(path) = self.path.as_deref() {
             persist_output_lease_receipt_state_to_path(path, &candidate)
                 .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?;
@@ -536,6 +611,7 @@ impl OutputLeaseDurableReceiptJournal {
         receipt: &output_lease::OutputLeaseRequestReceipt,
     ) -> Result<(), output_lease::OutputLeaseError> {
         let mut candidate = self.state.clone();
+        Self::prune_empty_origins(&mut candidate);
         if let Some(existing) = candidate
             .receipts
             .iter()
@@ -559,6 +635,7 @@ impl OutputLeaseDurableReceiptJournal {
         match origin_index {
             Some(index) => {
                 let origin = &mut candidate.origins[index];
+                origin.replay_guard = false;
                 if !had_pending && receipt.key.request_id <= origin.high_water_request_id {
                     return Err(output_lease::OutputLeaseError::ReceiptNotRetained);
                 }
@@ -572,6 +649,7 @@ impl OutputLeaseDurableReceiptJournal {
                     principal: receipt.key.principal.clone(),
                     domain: receipt.key.domain.clone(),
                     high_water_request_id: receipt.key.request_id,
+                    replay_guard: false,
                 });
             }
         }
@@ -580,6 +658,7 @@ impl OutputLeaseDurableReceiptJournal {
             let remove_count = candidate.receipts.len() - MAX_DURABLE_OUTPUT_LEASE_RECEIPTS;
             candidate.receipts.drain(..remove_count);
         }
+        Self::prune_empty_origins(&mut candidate);
         if let Some(path) = self.path.as_deref() {
             persist_output_lease_receipt_state_to_path(path, &candidate)
                 .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?;
@@ -591,6 +670,24 @@ impl OutputLeaseDurableReceiptJournal {
     #[cfg(test)]
     fn receipt_count(&self) -> usize {
         self.state.receipts.len()
+    }
+
+    fn origin_is_retained(&self, origin: &PersistedOutputLeaseReceiptOrigin) -> bool {
+        self.state.receipts.iter().any(|receipt| {
+            receipt.key.principal == origin.principal && receipt.key.domain == origin.domain
+        }) || self.state.pending.iter().any(|pending| {
+            pending.key.principal == origin.principal && pending.key.domain == origin.domain
+        }) || origin.replay_guard
+    }
+
+    fn prune_empty_origins(state: &mut PersistedOutputLeaseReceiptState) {
+        state.origins.retain(|origin| {
+            state.receipts.iter().any(|receipt| {
+                receipt.key.principal == origin.principal && receipt.key.domain == origin.domain
+            }) || state.pending.iter().any(|pending| {
+                pending.key.principal == origin.principal && pending.key.domain == origin.domain
+            }) || origin.replay_guard
+        });
     }
 }
 
@@ -1173,7 +1270,6 @@ struct AppState {
     /// mutations which retain the legacy local Tauri source name.
     authored_control_plane: authored_control_plane::AuthoredControlPlaneState,
     runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState,
-    control_plane_security: control_plane_security::ControlPlaneSecurityState,
     /// Process-local AI3 authority. It is deliberately not persisted or
     /// reconstructed from project/query state; every production mutation
     /// enters through `submit_request`.
@@ -11154,6 +11250,11 @@ fn media_asset_commit_receipt_layer_ids(receipt: &MediaAssetCommitReceipt) -> Ve
 struct NativeVideoOutputWorker {
     stop: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<Result<(), String>>>,
+    /// AddDisplay prepares its GPU presenter and first frame before the
+    /// authored Engine/project record is published.  That candidate worker is
+    /// allowed to start its render loop only after the final commit boundary.
+    /// Ordinary/legacy workers have no gate and start immediately.
+    start_gate: Option<Arc<AtomicBool>>,
     /// A worker-failure fence is deliberately owned by the registry entry,
     /// not by the render thread. It remains live until the thread has joined
     /// (and therefore dropped its GPU presenter) and the native window has
@@ -11162,6 +11263,8 @@ struct NativeVideoOutputWorker {
 }
 
 impl NativeVideoOutputWorker {
+    const JOIN_TIMEOUT: Duration = Duration::from_secs(1);
+
     #[cfg(test)]
     fn new(stop: Arc<AtomicBool>, join: std::thread::JoinHandle<Result<(), String>>) -> Self {
         Self::with_teardown_lease(stop, join, Arc::new(Mutex::new(None)))
@@ -11172,9 +11275,19 @@ impl NativeVideoOutputWorker {
         join: std::thread::JoinHandle<Result<(), String>>,
         teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
     ) -> Self {
+        Self::with_teardown_lease_and_start_gate(stop, join, teardown_lease, None)
+    }
+
+    fn with_teardown_lease_and_start_gate(
+        stop: Arc<AtomicBool>,
+        join: std::thread::JoinHandle<Result<(), String>>,
+        teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
+        start_gate: Option<Arc<AtomicBool>>,
+    ) -> Self {
         Self {
             stop,
             join: Some(join),
+            start_gate,
             teardown_lease,
         }
     }
@@ -11196,6 +11309,33 @@ impl NativeVideoOutputWorker {
             .join()
             .map_err(|_| format!("Native video output worker {label} panicked"))?;
         result.map_err(|error| format!("Native video output worker {label} failed: {error}"))
+    }
+
+    /// Join only after the render thread has reported that it finished.  A
+    /// presenter may be blocked in a Tauri window dispatcher call while the
+    /// command thread is retiring the window; an unbounded `JoinHandle::join`
+    /// in that path can freeze the main window forever.  Keep the handle in
+    /// `self` on timeout so the caller can retain the teardown/failure fence
+    /// rather than pretending that the native resource was reclaimed.
+    fn join_with_deadline(&mut self, label: &str, timeout: Duration) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let Some(join) = self.join.as_ref() else {
+                return Err(format!(
+                    "Native video output worker {label} was already joined"
+                ));
+            };
+            if join.is_finished() {
+                return self.join(label);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "Native video output worker {label} did not stop within {} ms",
+                    timeout.as_millis()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     fn release_teardown_lease_after_retirement_ack(&mut self) {
@@ -15060,7 +15200,7 @@ struct StandbyCheckpoint {
     mappings: ProjectControlMappings,
 }
 
-/// Immutable identity of the checkpoint bound to a takeover consent/fence.
+/// Immutable identity of the checkpoint bound to a takeover authorization fence.
 /// The session and generation are carried together so a later heartbeat from
 /// the same session cannot silently replace the authorized project image.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15071,7 +15211,7 @@ pub(crate) struct StandbyCheckpointIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StandbyTakeoverCheckpointSelector {
-    /// Control-plane behavior: require the exact consent-bound identity.
+    /// Control-plane behavior: require the exact authorization-bound identity.
     Exact(StandbyCheckpointIdentity),
 }
 
@@ -15485,6 +15625,24 @@ fn lock_project_coordinator<'a>(
 fn lock_project_external_command_admission<'a>(
     state: &'a AppState,
 ) -> Result<std::sync::MutexGuard<'a, ()>, String> {
+    lock_project_external_command_admission_inner(state, false)
+}
+
+/// The Display Add finalizer is the only caller allowed to re-enter the
+/// external-admission boundary after it has armed `project_transaction_active`.
+/// Every ordinary project mutation fails closed while the flag is live, which
+/// lets the Add engine acknowledgement run without retaining this mutex (or the
+/// coordinator/output-transition guards) across the bounded wait.
+fn lock_project_external_command_admission_for_display_finalize<'a>(
+    state: &'a AppState,
+) -> Result<std::sync::MutexGuard<'a, ()>, String> {
+    lock_project_external_command_admission_inner(state, true)
+}
+
+fn lock_project_external_command_admission_inner<'a>(
+    state: &'a AppState,
+    allow_active_display_finalize: bool,
+) -> Result<std::sync::MutexGuard<'a, ()>, String> {
     let guard = state
         .project_external_command_admission
         .gate
@@ -15497,7 +15655,12 @@ fn lock_project_external_command_admission<'a>(
     {
         return Err(
             "Project recovery authority is awaiting startup reconciliation after an indeterminate Save; restart Syndocal before editing, saving, or changing the project"
-                .to_string(),
+            .to_string(),
+        );
+    }
+    if !allow_active_display_finalize && state.project_transaction_active.load(Ordering::Acquire) {
+        return Err(
+            "Project transaction is active; retry after Display output publication".to_string(),
         );
     }
     Ok(guard)
@@ -15595,12 +15758,12 @@ fn reserve_project_callback_epoch(callback_epoch: &AtomicU64) -> Result<u64, Str
 ///
 /// MIDI, OSC, DMX input, and the legacy Web Remote are advisory input
 /// adapters; they do not carry the local OutputControl R4 lease, owner fence,
-/// or physical-consent challenge.  Their output authority transitions must
+/// or local confirmation authority.  Their output authority transitions must
 /// therefore stop before the engine queue.  The safer-direction blackout
 /// engage is deliberately a separate `safety_blackout_engage_v1` control-plane
 /// path, not an exception here.  Keeping this policy at the shared callback
 /// boundary prevents a new adapter call site from accidentally reintroducing a
-/// physical bypass.
+/// confirmation bypass.
 ///
 /// This match is intentionally exhaustive and has no default arm.  Adding an
 /// `EngineCommand` variant therefore fails compilation until it is classified
@@ -15625,6 +15788,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::AddVideoOutput(..)
         | EngineCommand::AddVideoOutputPublished { .. }
         | EngineCommand::RemoveVideoOutput(..)
+        | EngineCommand::RemoveVideoOutputPublished { .. }
         | EngineCommand::SetVideoOutputConfig { .. }
         | EngineCommand::SetVideoOutputEnabled { .. }
         | EngineCommand::SetVideoOutputRouting { .. }
@@ -15877,13 +16041,13 @@ fn external_control_source_requires_local_r4(source: &str) -> bool {
 
 /// Return the common fail-closed error for legacy Tauri output commands.
 ///
-/// These commands predate the R4 request/consent lane and cannot safely
-/// manufacture a lease or a physical challenge.  A generic result keeps the
+/// These commands predate the R4 request/confirmation lane and cannot safely
+/// manufacture a lease or an explicit native confirmation.  A generic result keeps the
 /// individual Tauri wrappers side-effect free while preserving their typed
 /// return shapes.
 fn reject_legacy_output_control_route<T>(operation: &str) -> Result<T, String> {
     Err(format!(
-        "{operation} is fail-closed: use the authenticated local OutputControl R4 path with an active lease and physical consent"
+        "{operation} is fail-closed: use the authenticated local OutputControl R4 path with an active lease and the operation's explicit local/native confirmation"
     ))
 }
 
@@ -15975,11 +16139,11 @@ mod legacy_output_control_route_tests {
     }
 
     #[test]
-    fn legacy_tauri_output_error_identifies_r4_and_physical_consent() {
+    fn legacy_tauri_output_error_identifies_r4_and_native_confirmation() {
         let error = reject_legacy_output_control_route::<()>(&"video output enable")
             .expect_err("legacy output routes must never produce a value");
         assert!(error.contains("OutputControl R4"));
-        assert!(error.contains("physical consent"));
+        assert!(error.contains("native confirmation"));
     }
 
     #[test]
@@ -18635,15 +18799,20 @@ fn save_engine_telemetry_report(
 }
 
 #[tauri::command]
-fn get_engine_telemetry_report(
-    state: State<'_, AppState>,
+async fn get_engine_telemetry_report(
+    app: tauri::AppHandle,
 ) -> Result<EngineTelemetryReport, String> {
-    let captured_at_unix_ms = current_unix_ms();
-    let snapshot = state.engine.snapshot();
-    Ok(engine_telemetry_report_from_snapshot(
-        &snapshot,
-        captured_at_unix_ms,
-    ))
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let captured_at_unix_ms = current_unix_ms();
+        let snapshot = state.engine.snapshot();
+        Ok(engine_telemetry_report_from_snapshot(
+            &snapshot,
+            captured_at_unix_ms,
+        ))
+    })
+    .await
+    .map_err(|error| format!("Engine telemetry query worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -20168,8 +20337,8 @@ fn dispatch_external_control_event(
     source: &str,
 ) {
     if external_control_source_requires_local_r4(source) {
-        // DMX mappings are not bound to an R4 lease/owner or physical
-        // consent.  Dropping the complete mapping event is safer than
+        // DMX mappings are not bound to an R4 lease/owner or local
+        // confirmation. Dropping the complete mapping event is safer than
         // allowing a fixture/video/timeline mapping to become an untracked
         // physical mutation.  The S0 blackout engage is handled only by its
         // dedicated safety command, not by DMX mapping.
@@ -20698,8 +20867,12 @@ fn stop_osc_input(state: State<'_, AppState>, expected_epoch: Option<u64>) -> Re
 }
 
 #[tauri::command]
-fn remote_access_urls(config: RemoteControlConfig) -> Vec<String> {
-    build_remote_access_urls(&config, discover_lan_ip())
+async fn remote_access_urls(config: RemoteControlConfig) -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        build_remote_access_urls(&config, discover_lan_ip())
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Return only addresses that are explicitly reported by an adapter's
@@ -20746,27 +20919,31 @@ fn parse_show_lan_interface_addresses(output: &str) -> Vec<IpAddr> {
 }
 
 #[tauri::command]
-fn list_show_lan_interfaces() -> Result<Vec<String>, String> {
-    let program = if cfg!(target_os = "windows") {
-        "ipconfig"
-    } else {
-        "ifconfig"
-    };
-    let output = Command::new(program)
-        .output()
-        .map_err(|error| format!("LAN interface enumeration failed: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "LAN interface enumeration exited with {}",
-            output.status
-        ));
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let addresses = normalize_show_lan_interfaces(parse_show_lan_interface_addresses(&text));
-    if addresses.is_empty() {
-        return Err("No eligible non-loopback LAN interface was discovered".to_string());
-    }
-    Ok(addresses)
+async fn list_show_lan_interfaces() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let program = if cfg!(target_os = "windows") {
+            "ipconfig"
+        } else {
+            "ifconfig"
+        };
+        let output = Command::new(program)
+            .output()
+            .map_err(|error| format!("LAN interface enumeration failed: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "LAN interface enumeration exited with {}",
+                output.status
+            ));
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let addresses = normalize_show_lan_interfaces(parse_show_lan_interface_addresses(&text));
+        if addresses.is_empty() {
+            return Err("No eligible non-loopback LAN interface was discovered".to_string());
+        }
+        Ok(addresses)
+    })
+    .await
+    .map_err(|error| format!("LAN interface enumeration worker failed: {error}"))?
 }
 
 fn discover_lan_ip() -> Option<IpAddr> {
@@ -21236,52 +21413,57 @@ fn start_remote_control(
 }
 
 #[tauri::command]
-fn remote_control_status(state: State<'_, AppState>) -> Result<RemoteControlStatus, String> {
-    let guard = state
-        .remote_control
-        .lock()
-        .map_err(|_| "Remote control state lock was poisoned".to_string())?;
-    let mut status = guard
-        .as_ref()
-        .map(RemoteWsServer::status)
-        .unwrap_or_default();
-    drop(guard);
-    let transport = status.dj_link.take().unwrap_or_default();
-    let runtime = state
-        .dj_link_runtime
-        .lock()
-        .map_err(|_| "DJ Link runtime state lock was poisoned".to_string())?;
-    status.dj_link = Some(protocol::DjLinkRuntimeStatus {
-        connected: transport.connected,
-        peer: transport.peer,
-        generation: runtime.state_generation.max(transport.generation),
-        agent_id: transport.agent_id,
-        session_id: transport.session_id,
-        master: runtime.master,
-        track_active: runtime.track_active,
-        loop_division: runtime.loop_division,
-        released: runtime.released,
-        last_event_id: runtime.last_event_id.clone().or(transport.last_event_id),
-        age_ms: transport.age_ms,
-        master_deck: runtime.master_deck.clone(),
-        track_content_id: runtime.track_content_id.clone(),
-        track_title: runtime.track_title.clone(),
-        track_artist: runtime.track_artist.clone(),
-        track_deck_id: runtime.track_deck_id.clone(),
-        track_started_at: runtime.track_started_at.clone(),
-        track_playing: runtime.track_playing,
-        track_bpm: runtime.track_bpm,
-        position_sec: runtime.position_sec,
-        snapshot_ready: transport.snapshot_ready,
-        authoritative_state: Some(runtime.authoritative_state),
-        timeline_id: runtime.timeline_id.clone(),
-        position_bars: Some(runtime.position_bars),
-        loop_active: runtime.loop_active,
-        last_outbound_event_id: transport.last_outbound_event_id,
-        last_outbound_sequence: transport.last_outbound_sequence,
-        last_outbound_delivery: transport.last_outbound_delivery,
-    });
-    Ok(status)
+async fn remote_control_status(app: tauri::AppHandle) -> Result<RemoteControlStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let guard = state
+            .remote_control
+            .lock()
+            .map_err(|_| "Remote control state lock was poisoned".to_string())?;
+        let mut status = guard
+            .as_ref()
+            .map(RemoteWsServer::status)
+            .unwrap_or_default();
+        drop(guard);
+        let transport = status.dj_link.take().unwrap_or_default();
+        let runtime = state
+            .dj_link_runtime
+            .lock()
+            .map_err(|_| "DJ Link runtime state lock was poisoned".to_string())?;
+        status.dj_link = Some(protocol::DjLinkRuntimeStatus {
+            connected: transport.connected,
+            peer: transport.peer,
+            generation: runtime.state_generation.max(transport.generation),
+            agent_id: transport.agent_id,
+            session_id: transport.session_id,
+            master: runtime.master,
+            track_active: runtime.track_active,
+            loop_division: runtime.loop_division,
+            released: runtime.released,
+            last_event_id: runtime.last_event_id.clone().or(transport.last_event_id),
+            age_ms: transport.age_ms,
+            master_deck: runtime.master_deck.clone(),
+            track_content_id: runtime.track_content_id.clone(),
+            track_title: runtime.track_title.clone(),
+            track_artist: runtime.track_artist.clone(),
+            track_deck_id: runtime.track_deck_id.clone(),
+            track_started_at: runtime.track_started_at.clone(),
+            track_playing: runtime.track_playing,
+            track_bpm: runtime.track_bpm,
+            position_sec: runtime.position_sec,
+            snapshot_ready: transport.snapshot_ready,
+            authoritative_state: Some(runtime.authoritative_state),
+            timeline_id: runtime.timeline_id.clone(),
+            position_bars: Some(runtime.position_bars),
+            loop_active: runtime.loop_active,
+            last_outbound_event_id: transport.last_outbound_event_id,
+            last_outbound_sequence: transport.last_outbound_sequence,
+            last_outbound_delivery: transport.last_outbound_delivery,
+        });
+        Ok(status)
+    })
+    .await
+    .map_err(|error| format!("Remote control status query worker failed: {error}"))?
 }
 
 /// Rotate the machine-local DJ Link secret.  The current listener is stopped
@@ -21497,15 +21679,20 @@ fn learn_dmx_control(
 }
 
 #[tauri::command]
-fn dmx_input_status(state: State<'_, AppState>) -> Result<DmxInputStatus, String> {
-    let active = state
-        .dmx_input
-        .lock()
-        .map_err(|_| "DMX input state lock was poisoned".to_string())?;
-    Ok(active
-        .as_ref()
-        .map(io::dmx_input::DmxInput::status)
-        .unwrap_or_default())
+async fn dmx_input_status(app: tauri::AppHandle) -> Result<DmxInputStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let active = state
+            .dmx_input
+            .lock()
+            .map_err(|_| "DMX input state lock was poisoned".to_string())?;
+        Ok(active
+            .as_ref()
+            .map(io::dmx_input::DmxInput::status)
+            .unwrap_or_default())
+    })
+    .await
+    .map_err(|error| format!("DMX input status query worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -25848,6 +26035,19 @@ fn commit_internal_media_asset_transaction_after_preflight(
     coordinator: &mut ProjectCoordinator,
     plan: PreparedInternalMediaAssetCommit,
 ) {
+    apply_internal_media_asset_transaction_after_preflight(coordinator, plan);
+    transaction_active.store(false, Ordering::Release);
+}
+
+/// Assignment-only project commit used by Display Add while its durable
+/// terminal record is still fallible. The caller clears the transaction fence
+/// only after that record succeeds; an indeterminate journal write therefore
+/// leaves ordinary project/output mutation fail-closed while preserving the
+/// one already committed physical truth.
+fn apply_internal_media_asset_transaction_after_preflight(
+    coordinator: &mut ProjectCoordinator,
+    plan: PreparedInternalMediaAssetCommit,
+) {
     if let Some(next_transaction_id) = plan.next_transaction_id {
         coordinator.next_transaction_id = next_transaction_id;
     }
@@ -25867,7 +26067,6 @@ fn commit_internal_media_asset_transaction_after_preflight(
     if let Some(next_history_generation) = plan.next_history_generation {
         coordinator.history_generation = next_history_generation;
     }
-    transaction_active.store(false, Ordering::Release);
 }
 
 /// Run one internal media-asset project transaction around a bounded engine
@@ -25908,6 +26107,21 @@ fn run_admitted_internal_media_asset_transaction<T>(
     plan: PreparedInternalMediaAssetCommit,
     publish: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
+    run_admitted_internal_media_asset_transaction_classified(
+        transaction_active,
+        coordinator,
+        plan,
+        || publish().map_err(OutputLeaseCandidateCommitFailure::safe),
+    )
+    .map_err(OutputLeaseCandidateCommitFailure::into_message)
+}
+
+fn run_admitted_internal_media_asset_transaction_classified<T>(
+    transaction_active: &AtomicBool,
+    coordinator: &mut ProjectCoordinator,
+    plan: PreparedInternalMediaAssetCommit,
+    publish: impl FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
+) -> Result<T, OutputLeaseCandidateCommitFailure> {
     // Arm the bounded transaction window only for the publication + commit; a
     // pre-admit error above never reaches here, so it can never leave the flag
     // armed.
@@ -28737,6 +28951,7 @@ fn safe_first_run_vj_output(output_id: VideoOutputId) -> VideoOutputSummary {
         composition_id: 1,
         fullscreen: false,
         monitor_id: Some(0),
+        monitor_identity: None,
         width: 1920,
         height: 1080,
         endpoint_name: None,
@@ -33769,10 +33984,407 @@ fn set_video_composition_layers(
 }
 
 #[tauri::command]
-fn list_video_display_monitors(window: WebviewWindow) -> Result<Vec<VideoDisplayMonitor>, String> {
+async fn list_video_display_monitors(
+    window: WebviewWindow,
+) -> Result<Vec<VideoDisplayMonitor>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let monitors = window
+            .available_monitors()
+            .map_err(|error| format!("Display enumeration failed: {error}"))?;
+        let descriptors = video_display_monitors_from_available(monitors)?;
+        annotate_video_display_monitors_for_window(&window, descriptors)
+    })
+    .await
+    .map_err(|error| format!("Display enumeration worker failed: {error}"))?
+}
+
+/// Mark the editor's current physical target only after matching the current
+/// Tauri monitor against the same authoritative descriptor fields used by
+/// AddDisplay. A numeric index is never sufficient: Windows may reuse it
+/// after a topology change, and an unresolved/ambiguous match fails closed.
+fn annotate_video_display_monitors_for_window(
+    window: &WebviewWindow,
+    mut descriptors: Vec<VideoDisplayMonitor>,
+) -> Result<Vec<VideoDisplayMonitor>, String> {
+    let current = window
+        .current_monitor()
+        .map_err(|error| format!("Current editor display could not be determined: {error}"))?
+        .ok_or_else(|| "Current editor display is unavailable".to_string())?;
+    let editor_index = video_display_monitor_index_for_current_monitor(&current, &descriptors)?;
+    let mut marked = 0usize;
+    for descriptor in &mut descriptors {
+        descriptor.is_editor_monitor = descriptor.index == editor_index;
+        marked += usize::from(descriptor.is_editor_monitor);
+    }
+    if marked != 1 {
+        return Err("Current editor display did not map to exactly one target".to_string());
+    }
+    Ok(descriptors)
+}
+
+pub(crate) fn validate_editor_monitor_for_window(window: &WebviewWindow) -> Result<u32, String> {
     let monitors = window
         .available_monitors()
         .map_err(|error| format!("Display enumeration failed: {error}"))?;
+    let descriptors = video_display_monitors_from_available(monitors)?;
+    let current = window
+        .current_monitor()
+        .map_err(|error| format!("Current editor display could not be determined: {error}"))?
+        .ok_or_else(|| "Current editor display is unavailable".to_string())?;
+    video_display_monitor_index_for_current_monitor(&current, &descriptors)
+}
+
+fn video_display_monitor_index_for_current_monitor(
+    current: &tauri::Monitor,
+    descriptors: &[VideoDisplayMonitor],
+) -> Result<u32, String> {
+    let size = current.size();
+    let position = current.position();
+    let current_name = current
+        .name()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty());
+    video_display_monitor_index_for_fingerprint(
+        current_name,
+        size.width,
+        size.height,
+        position.x,
+        position.y,
+        current.scale_factor(),
+        descriptors,
+    )
+}
+
+fn video_display_monitor_index_for_fingerprint(
+    current_name: Option<&str>,
+    width: u32,
+    height: u32,
+    position_x: i32,
+    position_y: i32,
+    scale_factor: f64,
+    descriptors: &[VideoDisplayMonitor],
+) -> Result<u32, String> {
+    let matches = descriptors
+        .iter()
+        .filter(|descriptor| {
+            current_name.is_none_or(|name| {
+                video_display_monitor_names_match(name, descriptor.name.as_str())
+            })
+        })
+        .filter(|descriptor| {
+            descriptor.physical_width == width
+                && descriptor.physical_height == height
+                && descriptor.position_x == position_x
+                && descriptor.position_y == position_y
+                && descriptor.scale_factor.to_bits() == scale_factor.to_bits()
+        })
+        .map(|descriptor| descriptor.index)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [index] => Ok(*index),
+        [] => Err(
+            "Current editor display does not match an authoritative physical target".to_string(),
+        ),
+        _ => Err("Current editor display matches multiple physical targets".to_string()),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn video_display_monitor_names_match(left: &str, right: &str) -> bool {
+    normalized_display_name(left) == normalized_display_name(right)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn video_display_monitor_names_match(left: &str, right: &str) -> bool {
+    left.trim() == right.trim()
+}
+
+const VIDEO_DISPLAY_MONITOR_IDENTITY_DOMAIN: &str = "syndocal.display-monitor.v2";
+
+fn video_display_monitor_identity(
+    name: &str,
+    device_path: &str,
+    width: u32,
+    height: u32,
+    position_x: i32,
+    position_y: i32,
+    scale_factor: f64,
+    primary: bool,
+) -> String {
+    let identity_material = format!(
+        "{VIDEO_DISPLAY_MONITOR_IDENTITY_DOMAIN}\0{name}\0{device_path}\0{width}\0{height}\0{position_x}\0{position_y}\0{}\0{}",
+        scale_factor.to_bits(),
+        u8::from(primary),
+    );
+    sha256_hex(identity_material.as_bytes())
+}
+
+fn make_video_display_monitor(
+    index: u32,
+    name: String,
+    device_path: String,
+    width: u32,
+    height: u32,
+    position_x: i32,
+    position_y: i32,
+    scale_factor: f64,
+    primary: bool,
+) -> Result<VideoDisplayMonitor, String> {
+    if name.trim().is_empty() || width == 0 || height == 0 {
+        return Err(format!(
+            "Display {index} reported an invalid authoritative descriptor"
+        ));
+    }
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Err(format!("Display {index} reported an invalid scale factor"));
+    }
+    Ok(VideoDisplayMonitor {
+        index,
+        identity: video_display_monitor_identity(
+            &name,
+            &device_path,
+            width,
+            height,
+            position_x,
+            position_y,
+            scale_factor,
+            primary,
+        ),
+        name,
+        physical_width: width,
+        physical_height: height,
+        position_x,
+        position_y,
+        scale_factor,
+        primary,
+        is_editor_monitor: false,
+    })
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone)]
+struct WindowsDisplayConfigRecord {
+    source_name: String,
+    monitor_device_path: String,
+    width: u32,
+    height: u32,
+    position_x: i32,
+    position_y: i32,
+}
+
+#[cfg(target_os = "windows")]
+fn display_config_utf16_string(value: &[u16]) -> Result<String, String> {
+    let end = value
+        .iter()
+        .position(|character| *character == 0)
+        .unwrap_or(value.len());
+    String::from_utf16(&value[..end])
+        .map(|value| value.trim().to_string())
+        .map_err(|_| "Windows display configuration returned invalid UTF-16".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn normalized_display_name(name: &str) -> String {
+    name.trim().to_ascii_uppercase()
+}
+
+#[cfg(target_os = "windows")]
+fn query_windows_display_config() -> Result<Vec<WindowsDisplayConfigRecord>, String> {
+    use std::mem::size_of;
+
+    use windows::Win32::Devices::Display::{
+        DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
+        DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+        DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE,
+        DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+        DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
+    };
+    use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
+
+    for _attempt in 0..3 {
+        let mut path_count = 0u32;
+        let mut mode_count = 0u32;
+        let status = unsafe {
+            GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut path_count, &mut mode_count)
+        };
+        if status != ERROR_SUCCESS {
+            return Err(format!(
+                "GetDisplayConfigBufferSizes failed with Win32 error {}",
+                status.0
+            ));
+        }
+        if path_count == 0 || mode_count == 0 {
+            return Err("Windows reported no active display configuration".to_string());
+        }
+
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); path_count as usize];
+        let mut modes = vec![
+            windows::Win32::Devices::Display::DISPLAYCONFIG_MODE_INFO::default();
+            mode_count as usize
+        ];
+        let mut path_count = path_count;
+        let mut mode_count = mode_count;
+        let status = unsafe {
+            QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &mut path_count,
+                paths.as_mut_ptr(),
+                &mut mode_count,
+                modes.as_mut_ptr(),
+                None,
+            )
+        };
+        if status == ERROR_INSUFFICIENT_BUFFER {
+            continue;
+        }
+        if status != ERROR_SUCCESS {
+            return Err(format!(
+                "QueryDisplayConfig failed with Win32 error {}",
+                status.0
+            ));
+        }
+        paths.truncate(path_count.min(paths.len() as u32) as usize);
+        modes.truncate(mode_count.min(modes.len() as u32) as usize);
+
+        let mut records = Vec::with_capacity(paths.len());
+        for path in paths {
+            if !path.targetInfo.targetAvailable.as_bool() {
+                continue;
+            }
+            let source_mode_index = unsafe { path.sourceInfo.Anonymous.modeInfoIdx as usize };
+            let Some(mode) = modes.get(source_mode_index) else {
+                return Err(
+                    "Windows display configuration referenced a missing source mode".to_string(),
+                );
+            };
+            if mode.infoType != DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE {
+                return Err(
+                    "Windows display configuration source mode type was invalid".to_string()
+                );
+            }
+            let source_mode = unsafe { mode.Anonymous.sourceMode };
+            if source_mode.width == 0 || source_mode.height == 0 {
+                return Err(
+                    "Windows display configuration reported an empty source mode".to_string(),
+                );
+            }
+
+            let source_header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+                size: size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32,
+                adapterId: path.sourceInfo.adapterId,
+                id: path.sourceInfo.id,
+            };
+            let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME {
+                header: source_header,
+                ..Default::default()
+            };
+            let source_status = unsafe { DisplayConfigGetDeviceInfo(&mut source_name.header) };
+            if source_status != 0 {
+                return Err(format!(
+                    "DisplayConfigGetDeviceInfo source failed with Win32 error {}",
+                    source_status
+                ));
+            }
+            let source_name = display_config_utf16_string(&source_name.viewGdiDeviceName)?;
+            if source_name.is_empty() {
+                return Err(
+                    "Windows display configuration returned an empty source name".to_string(),
+                );
+            }
+
+            let target_header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+                size: size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
+                adapterId: path.targetInfo.adapterId,
+                id: path.targetInfo.id,
+            };
+            let mut target_name = DISPLAYCONFIG_TARGET_DEVICE_NAME {
+                header: target_header,
+                ..Default::default()
+            };
+            let target_status = unsafe { DisplayConfigGetDeviceInfo(&mut target_name.header) };
+            if target_status != 0 {
+                return Err(format!(
+                    "DisplayConfigGetDeviceInfo target failed with Win32 error {}",
+                    target_status
+                ));
+            }
+            let monitor_device_path = display_config_utf16_string(&target_name.monitorDevicePath)?;
+            if monitor_device_path.is_empty() {
+                return Err(
+                    "Windows display configuration returned an empty monitor device path"
+                        .to_string(),
+                );
+            }
+            records.push(WindowsDisplayConfigRecord {
+                source_name,
+                monitor_device_path,
+                width: source_mode.width,
+                height: source_mode.height,
+                position_x: source_mode.position.x,
+                position_y: source_mode.position.y,
+            });
+        }
+        if records.is_empty() {
+            return Err("Windows reported no active physical display targets".to_string());
+        }
+        return Ok(records);
+    }
+    Err("Windows display topology changed while it was being queried".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn video_display_monitors_from_available(
+    monitors: Vec<tauri::Monitor>,
+) -> Result<Vec<VideoDisplayMonitor>, String> {
+    if monitors.is_empty() {
+        return Err("No physical display was discovered".to_string());
+    }
+    let records = query_windows_display_config()?;
+    let mut by_source_name = HashMap::with_capacity(records.len());
+    for record in records {
+        let key = normalized_display_name(&record.source_name);
+        if by_source_name.insert(key.clone(), record).is_some() {
+            return Err(format!("Windows returned duplicate display source {key}"));
+        }
+    }
+    let mut result = Vec::with_capacity(monitors.len());
+    for (index, monitor) in monitors.into_iter().enumerate() {
+        let index = u32::try_from(index)
+            .map_err(|_| "Display enumeration exceeded the supported index range".to_string())?;
+        let name = monitor
+            .name()
+            .cloned()
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| format!("Display {index} has no stable Windows source name"))?;
+        let key = normalized_display_name(&name);
+        let record = by_source_name
+            .remove(&key)
+            .ok_or_else(|| format!("Windows display configuration has no source for {name}"))?;
+        let primary = record.position_x == 0 && record.position_y == 0;
+        result.push(make_video_display_monitor(
+            index,
+            record.source_name,
+            record.monitor_device_path,
+            record.width,
+            record.height,
+            record.position_x,
+            record.position_y,
+            monitor.scale_factor(),
+            primary,
+        )?);
+    }
+    if result.iter().filter(|monitor| monitor.primary).count() > 1 {
+        return Err("Windows display configuration reported multiple primary displays".to_string());
+    }
+    Ok(result)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn video_display_monitors_from_available(
+    monitors: Vec<tauri::Monitor>,
+) -> Result<Vec<VideoDisplayMonitor>, String> {
     if monitors.is_empty() {
         return Err("No physical display was discovered".to_string());
     }
@@ -33785,33 +34397,22 @@ fn list_video_display_monitors(window: WebviewWindow) -> Result<Vec<VideoDisplay
             })?;
             let size = monitor.size();
             let position = monitor.position();
-            let scale_factor = monitor.scale_factor();
-            if !scale_factor.is_finite() || scale_factor <= 0.0 {
-                return Err(format!("Display {index} reported an invalid scale factor"));
-            }
             let name = monitor
                 .name()
                 .cloned()
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or_else(|| format!("Display {}", index + 1));
-            let identity_material = format!(
-                "syndocal.display-monitor.v1\0{name}\0{}\0{}\0{}\0{}\0{}",
-                position.x,
-                position.y,
+            make_video_display_monitor(
+                index,
+                name,
+                "tauri-monitor".to_string(),
                 size.width,
                 size.height,
-                scale_factor.to_bits(),
-            );
-            Ok(VideoDisplayMonitor {
-                index,
-                identity: sha256_hex(identity_material.as_bytes()),
-                name,
-                physical_width: size.width,
-                physical_height: size.height,
-                position_x: position.x,
-                position_y: position.y,
-                scale_factor,
-            })
+                position.x,
+                position.y,
+                monitor.scale_factor(),
+                position.x == 0 && position.y == 0,
+            )
         })
         .collect()
 }
@@ -33849,6 +34450,7 @@ fn add_video_output(
             composition_id: 1,
             fullscreen: config.fullscreen,
             monitor_id: config.monitor_id,
+            monitor_identity: None,
             width: config.width,
             height: config.height,
             endpoint_name: config.endpoint_name,
@@ -33880,6 +34482,7 @@ fn set_video_output_config(
     height: u32,
     fullscreen: bool,
     monitor_id: Option<u32>,
+    monitor_identity: Option<String>,
     endpoint_name: Option<String>,
 ) -> Result<(), String> {
     reject_legacy_output_control_route::<()>("Video output configuration")?;
@@ -33893,7 +34496,18 @@ fn set_video_output_config(
         monitor_id,
         endpoint_name,
     )?;
+    if config.kind == VideoOutputKind::Display
+        && monitor_identity
+            .as_deref()
+            .map_or(true, |identity| identity.trim().is_empty())
+    {
+        return Err(
+            "Display output configuration requires the persisted monitor identity; re-detect the display"
+                .to_string(),
+        );
+    }
     ensure_video_output_backend_available(&config.kind)?;
+    let is_display = config.kind == VideoOutputKind::Display;
     state
         .engine
         .send(EngineCommand::SetVideoOutputConfig {
@@ -33902,6 +34516,7 @@ fn set_video_output_config(
             kind: config.kind,
             fullscreen: config.fullscreen,
             monitor_id: config.monitor_id,
+            monitor_identity: if is_display { monitor_identity } else { None },
             width: config.width,
             height: config.height,
             endpoint_name: config.endpoint_name,
@@ -34513,186 +35128,365 @@ fn abort_timeline_follow_runtime_v1(
     control_plane_runtime::abort_timeline_follow_runtime(&window, &state, &query_state, request)
 }
 
-#[tauri::command]
-fn query_output_control_authority_v1(
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-) -> Result<OutputControlAuthorityBundleV1, String> {
-    control_plane_runtime::issue_output_control_authority(&window, &state, &query_state)
-}
-
-#[tauri::command]
-fn prepare_output_consent_v1(
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-    request: OutputConsentPrepareRequestV1,
-) -> Result<OutputConsentChallengeV1, String> {
-    control_plane_runtime::prepare_output_consent(&window, &state, &query_state, request)
-}
-
-#[tauri::command]
-fn query_output_consent_status_v1(
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    request: OutputConsentStatusRequestV1,
-) -> Result<OutputConsentStatusV1, String> {
-    control_plane_runtime::output_consent_status(&window, &state, request)
-}
-
-#[tauri::command]
-fn release_blackout_output_control_v1(
+/// Run output-control mutations away from the Tauri event-loop thread. The
+/// physical lane may create a native window, initialize a GPU surface, or
+/// retire a renderer; none of those operations may synchronously join an
+/// event-loop-affine worker while the UI is serving its window messages.
+async fn execute_output_control_off_event_loop(
     app: tauri::AppHandle,
     window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
-    control_plane_runtime::execute_output_control_for_operation(
-        &app,
-        &window,
-        &state,
-        &query_state,
+    operation_id: &'static str,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    let replay_request = request.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let query_state = app.state::<ControlPlaneQueryState>();
+        control_plane_runtime::execute_output_control_for_operation(
+            &app,
+            &window,
+            &state,
+            &query_state,
+            operation_id,
+            request,
+        )
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(_) => control_plane_runtime::output_control_executor_failure(&replay_request),
+    }
+}
+
+async fn execute_output_lease_lifecycle_off_event_loop(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    operation_id: &'static str,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    let replay_request = request.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let query_state = app.state::<ControlPlaneQueryState>();
+        control_plane_runtime::execute_output_lease_lifecycle_for_operation(
+            &window,
+            &state,
+            &query_state,
+            operation_id,
+            request,
+        )
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(_) => control_plane_runtime::output_control_executor_failure(&replay_request),
+    }
+}
+
+#[tauri::command]
+async fn query_output_control_authority_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+) -> Result<OutputControlAuthorityBundleV1, String> {
+    let window_label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let query_state = app.state::<ControlPlaneQueryState>();
+        control_plane_runtime::issue_output_control_authority_for_window_label(
+            &window_label,
+            &state,
+            &query_state,
+        )
+    })
+    .await
+    .map_err(|error| format!("Output control authority query worker failed: {error}"))?
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DisplayAddLeaseAuthorityStatusV1 {
+    HeldActive,
+    ExpiredRecoverable,
+    HeldOrphaned,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DisplayAddLeaseAuthorityQueryV1 {
+    operation_id: String,
+    status: DisplayAddLeaseAuthorityStatusV1,
+    authority: Option<protocol::control_plane_command::OutputLeaseAuthorityV1>,
+    resources: Vec<protocol::control_plane_command::OutputControlTargetRoleV1>,
+}
+
+fn query_display_add_lease_authority_for_window(
+    window_label: &str,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+) -> Result<DisplayAddLeaseAuthorityQueryV1, String> {
+    let _owner_rotation = match state.project_transaction_owner_rotation.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::WouldBlock) => {
+            return Err("Display Add authority query is busy".to_string())
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("Display Add authority query lock was poisoned".to_string())
+        }
+    };
+    let registry = match state.output_lease_registry.try_lock() {
+        Ok(registry) => registry,
+        Err(TryLockError::WouldBlock) => {
+            return Err("Display Add authority query is busy".to_string())
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("Display Add authority registry lock was poisoned".to_string())
+        }
+    };
+    let coordinator = match state.project_coordinator.try_lock() {
+        Ok(coordinator) => coordinator,
+        Err(TryLockError::WouldBlock) => {
+            return Err("Display Add authority query is busy".to_string())
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("Display Add authority coordinator lock was poisoned".to_string())
+        }
+    };
+    let principal = state
+        .project_transaction_owners
+        .lock()
+        .map_err(|_| "Display Add authority owner lock was poisoned".to_string())?
+        .get(window_label)
+        .cloned()
+        .ok_or_else(|| "Display Add authority window is not registered".to_string())?;
+    let owner_incarnation = *state
+        .project_transaction_owner_incarnations
+        .lock()
+        .map_err(|_| "Display Add authority incarnation lock was poisoned".to_string())?
+        .get(window_label)
+        .ok_or_else(|| "Display Add authority window incarnation is unavailable".to_string())?;
+    let process_incarnation = query_state.process_incarnation();
+    if registry.process_session_incarnation() != process_incarnation {
+        return Err("Display Add authority process identity is stale".to_string());
+    }
+    let owner = OutputLeaseOwner::new(
+        principal,
+        window_label.to_string(),
+        process_incarnation,
+        owner_incarnation,
+    )
+    .map_err(|error| format!("Display Add authority owner is invalid: {error:?}"))?;
+    let now_ms = state.output_lease_now_ms()?;
+    let project_identity = output_lease_project_identity(coordinator.epoch);
+    let status = match registry.query_display_add_authority(&owner, &project_identity, now_ms) {
+        Ok(authority) => {
+            let status = match authority.status {
+                output_lease::DisplayAddLeaseAuthorityStatus::HeldActive => {
+                    DisplayAddLeaseAuthorityStatusV1::HeldActive
+                }
+                output_lease::DisplayAddLeaseAuthorityStatus::ExpiredRecoverable => {
+                    DisplayAddLeaseAuthorityStatusV1::ExpiredRecoverable
+                }
+                output_lease::DisplayAddLeaseAuthorityStatus::HeldOrphaned => {
+                    DisplayAddLeaseAuthorityStatusV1::HeldOrphaned
+                }
+                output_lease::DisplayAddLeaseAuthorityStatus::Unavailable => {
+                    DisplayAddLeaseAuthorityStatusV1::Unavailable
+                }
+            };
+            let resources = authority
+                .resources
+                .as_slice()
+                .iter()
+                .map(|resource| match resource {
+                    OutputLeaseResource::Lighting => {
+                        protocol::control_plane_command::OutputControlTargetRoleV1::Lighting
+                    }
+                    OutputLeaseResource::Video => {
+                        protocol::control_plane_command::OutputControlTargetRoleV1::Video
+                    }
+                })
+                .collect();
+            DisplayAddLeaseAuthorityQueryV1 {
+                operation_id: OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID.to_string(),
+                status,
+                authority: Some(protocol::control_plane_command::OutputLeaseAuthorityV1 {
+                    lease_id: authority.lease_id.encode(),
+                    generation: authority.generation,
+                }),
+                resources,
+            }
+        }
+        Err(
+            output_lease::OutputLeaseError::ResourceConflict
+            | output_lease::OutputLeaseError::InvalidTransition
+            | output_lease::OutputLeaseError::UnknownLease,
+        ) => DisplayAddLeaseAuthorityQueryV1 {
+            operation_id: OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID.to_string(),
+            status: DisplayAddLeaseAuthorityStatusV1::Unavailable,
+            authority: None,
+            resources: Vec::new(),
+        },
+        Err(error) => return Err(format!("Display Add authority is unavailable: {error:?}")),
+    };
+    Ok(status)
+}
+
+/// Read-only, AddDisplay-specific lease discovery. It is intentionally async
+/// at the Tauri boundary and uses try-locks in its bounded worker; it never
+/// mutates expiry, audit, durable receipts, or lease state.
+#[tauri::command]
+async fn query_display_add_lease_authority_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+) -> Result<DisplayAddLeaseAuthorityQueryV1, String> {
+    let window_label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let query_state = app.state::<ControlPlaneQueryState>();
+        query_display_add_lease_authority_for_window(&window_label, &state, &query_state)
+    })
+    .await
+    .map_err(|error| format!("Display Add authority query worker failed: {error}"))?
+}
+
+#[tauri::command]
+async fn release_blackout_output_control_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
         OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
         request,
     )
+    .await
 }
 
 #[tauri::command]
-fn arm_output_control_v1(
+async fn arm_output_control_v2(
     app: tauri::AppHandle,
     window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
-    control_plane_runtime::execute_output_control_for_operation(
-        &app,
-        &window,
-        &state,
-        &query_state,
-        OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
-        request,
-    )
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(app, window, OUTPUT_OWNERSHIP_ARM_OPERATION_ID, request)
+        .await
+}
+
+/// Normal one-step output enable from the local Tauri renderer. The backend
+/// commits the Lighting+Video lease and Both arm atomically behind the exact
+/// local window/owner/project/output/safety fence.
+#[tauri::command]
+async fn enable_output_control_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(app, window, OUTPUT_ENABLE_OPERATION_ID, request).await
 }
 
 #[tauri::command]
-fn take_over_output_control_v1(
+async fn take_over_output_control_v2(
     app: tauri::AppHandle,
     window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
-    control_plane_runtime::execute_output_control_for_operation(
-        &app,
-        &window,
-        &state,
-        &query_state,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
         OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
         request,
     )
+    .await
 }
 
 /// Authoritative Display-output creation lane.  This is deliberately a new
 /// operation; the legacy `add_video_output` route remains fail-closed.
 #[tauri::command]
-fn add_display_output_v1(
+async fn add_display_output_v2(
     app: tauri::AppHandle,
     window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
-    control_plane_runtime::execute_output_control_for_operation(
-        &app,
-        &window,
-        &state,
-        &query_state,
-        OUTPUT_DISPLAY_ADD_OPERATION_ID,
-        request,
-    )
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(app, window, OUTPUT_DISPLAY_ADD_OPERATION_ID, request)
+        .await
 }
 
 #[tauri::command]
-fn acquire_output_lease_v1(
+async fn acquire_output_lease_v2(
+    app: tauri::AppHandle,
     window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
-    control_plane_runtime::execute_output_lease_lifecycle_for_operation(
-        &window,
-        &state,
-        &query_state,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_lease_lifecycle_off_event_loop(
+        app,
+        window,
         OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
         request,
     )
+    .await
 }
 
 #[tauri::command]
-fn renew_output_lease_v1(
+async fn renew_output_lease_v2(
+    app: tauri::AppHandle,
     window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
-    control_plane_runtime::execute_output_lease_lifecycle_for_operation(
-        &window,
-        &state,
-        &query_state,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_lease_lifecycle_off_event_loop(
+        app,
+        window,
         OUTPUT_LEASE_RENEW_OPERATION_ID,
         request,
     )
+    .await
 }
 
 #[tauri::command]
-fn recover_output_lease_v1(
+async fn recover_output_lease_v2(
+    app: tauri::AppHandle,
     window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
-    control_plane_runtime::execute_output_lease_lifecycle_for_operation(
-        &window,
-        &state,
-        &query_state,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_lease_lifecycle_off_event_loop(
+        app,
+        window,
         OUTPUT_LEASE_RECOVER_OPERATION_ID,
         request,
     )
+    .await
 }
 
 #[tauri::command]
-fn relinquish_output_lease_v1(
+async fn relinquish_output_lease_v2(
+    app: tauri::AppHandle,
     window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
-    control_plane_runtime::execute_output_lease_lifecycle_for_operation(
-        &window,
-        &state,
-        &query_state,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_lease_lifecycle_off_event_loop(
+        app,
+        window,
         OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
         request,
     )
+    .await
 }
 
 #[tauri::command]
-fn force_transfer_output_lease_v1(
+async fn force_transfer_output_lease_v2(
+    app: tauri::AppHandle,
     window: WebviewWindow,
-    state: State<'_, AppState>,
-    query_state: State<'_, ControlPlaneQueryState>,
-    request: OutputControlCommandRequestV1,
-) -> OutputControlResponseV1 {
-    control_plane_runtime::execute_output_lease_lifecycle_for_operation(
-        &window,
-        &state,
-        &query_state,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_lease_lifecycle_off_event_loop(
+        app,
+        window,
         OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
         request,
     )
+    .await
 }
 
 /// Engage the safer-direction, runtime-only DMX safety latch. There is no
@@ -36603,16 +37397,59 @@ fn get_project_checkpoint(
 }
 
 #[tauri::command]
-fn get_project_checkpoint_bundle(
-    state: State<'_, AppState>,
+async fn get_project_checkpoint_bundle(
+    app: tauri::AppHandle,
     expected_epoch: u64,
     expected_revision: u64,
     expected_checkpoint_hash: String,
 ) -> Result<ProjectCheckpointBundle, String> {
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        get_project_checkpoint_bundle_core(
+            &state,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+        )
+    })
+    .await
+    .map_err(|error| format!("Project recovery capture worker failed: {error}"))?
+}
+
+fn get_project_checkpoint_bundle_core(
+    state: &AppState,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+) -> Result<ProjectCheckpointBundle, String> {
+    let _external_admission = match state.project_external_command_admission.gate.try_lock() {
+        Ok(guard)
+            if !state
+                .project_external_command_admission
+                .recovery_authority_faulted
+                .load(Ordering::Acquire)
+                && !state.project_transaction_active.load(Ordering::Acquire) =>
+        {
+            guard
+        }
+        Ok(_) | Err(TryLockError::WouldBlock) => {
+            return Err("Project recovery capture is busy; retry".to_string())
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("Project recovery capture admission lock was poisoned".to_string())
+        }
+    };
+    let mut coordinator = match state.project_coordinator.try_lock() {
+        Ok(coordinator) => coordinator,
+        Err(TryLockError::WouldBlock) => {
+            return Err("Project recovery capture is busy; retry".to_string())
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("Project recovery capture coordinator lock was poisoned".to_string())
+        }
+    };
     ensure_no_pending_project_transaction(&coordinator)?;
-    let checkpoint = reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
+    let checkpoint = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
     if checkpoint.epoch != expected_epoch
         || checkpoint.revision != expected_revision
         || checkpoint.hash != expected_checkpoint_hash
@@ -36860,8 +37697,8 @@ fn poll_project_authority_bundle_seqlock(
 /// when nothing changed. A read-only seqlock capture keeps live callbacks
 /// available even if the engine snapshot read stalls.
 #[tauri::command]
-fn poll_project_authority_bundle(
-    state: State<'_, AppState>,
+async fn poll_project_authority_bundle(
+    app: tauri::AppHandle,
     known_epoch: u64,
     known_revision: u64,
     known_checkpoint_hash: String,
@@ -36873,19 +37710,24 @@ fn poll_project_authority_bundle(
     known_project_input_runtime_generation: Option<u64>,
     known_mapping_input_runtime_generation: Option<u64>,
 ) -> Result<Option<ProjectAuthorityBundle>, String> {
-    poll_project_authority_bundle_seqlock(
-        &state,
-        known_epoch,
-        known_revision,
-        &known_checkpoint_hash,
-        known_path_generation,
-        known_history_generation,
-        known_mapping_replacement_generation,
-        known_authority_disposition_generation,
-        known_recovery_authority_serial,
-        known_project_input_runtime_generation,
-        known_mapping_input_runtime_generation,
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        poll_project_authority_bundle_seqlock(
+            &state,
+            known_epoch,
+            known_revision,
+            &known_checkpoint_hash,
+            known_path_generation,
+            known_history_generation,
+            known_mapping_replacement_generation,
+            known_authority_disposition_generation,
+            known_recovery_authority_serial,
+            known_project_input_runtime_generation,
+            known_mapping_input_runtime_generation,
+        )
+    })
+    .await
+    .map_err(|error| format!("Project authority poll worker failed: {error}"))?
 }
 
 fn project_history_status(history: &ProjectHistory) -> ProjectHistoryStatus {
@@ -37310,7 +38152,7 @@ fn ensure_output_lease_receipt_succeeded_or_commit_expiry(
 /// A successful callback publishes the candidate; an ordinary callback error
 /// leaves live lease truth untouched. Deadline expiry is the sole intentional
 /// rejection that publishes its orphan transition before returning an error.
-fn submit_output_lease_candidate_with_commit<T, Commit>(
+fn submit_output_lease_candidate_with_classified_commit<T, Commit>(
     state: &AppState,
     live_registry: &mut OutputLeaseRegistry,
     request: &OutputLeaseRequest,
@@ -37319,7 +38161,7 @@ fn submit_output_lease_candidate_with_commit<T, Commit>(
     commit: Commit,
 ) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
 where
-    Commit: FnOnce() -> Result<T, String>,
+    Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
 {
     let mut candidate = live_registry.clone();
     let receipt = candidate
@@ -37348,11 +38190,31 @@ where
             // project transaction rejects the requested resource.
             let committed = match commit() {
                 Ok(committed) => committed,
-                Err(error) => {
-                    if let Ok(mut durable) = state.output_lease_durable_receipts.lock() {
-                        let _ = durable.abort(request);
-                    }
-                    return Err(error);
+                Err(OutputLeaseCandidateCommitFailure::SafeAbort(error)) => {
+                    let abort_result = state
+                        .output_lease_durable_receipts
+                        .lock()
+                        .map_err(|_| {
+                            format!(
+                                "Output lease {context} safe rollback could not acquire the durable journal lock; pending receipt retained: {error}"
+                            )
+                        })
+                        .and_then(|mut durable| {
+                            durable.abort(request).map_err(|abort_error| {
+                                format!(
+                                    "Output lease {context} safe rollback could not clear its pending receipt ({abort_error:?}): {error}"
+                                )
+                            })
+                        });
+                    return Err(match abort_result {
+                        Ok(()) => error,
+                        Err(abort_error) => abort_error,
+                    });
+                }
+                Err(OutputLeaseCandidateCommitFailure::InDoubt(error)) => {
+                    return Err(format!(
+                        "Output lease {context} has an in-doubt physical cleanup; pending receipt retained: {error}"
+                    ));
                 }
             };
             {
@@ -37388,24 +38250,276 @@ where
     }
 }
 
+/// Private authority image for the long AddDisplay transaction.  `baseline`
+/// is compared byte-for-byte with live authority at both short commit
+/// boundaries; `candidate` is not published until the native candidate and
+/// acknowledged Engine record are ready to commit.
+struct PreparedDisplayOutputLeaseCandidate {
+    baseline: OutputLeaseRegistry,
+    candidate: OutputLeaseRegistry,
+    receipt: output_lease::OutputLeaseRequestReceipt,
+}
+
+fn prepare_display_output_lease_candidate(
+    state: &AppState,
+    live_registry: &OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    now_ms: u64,
+) -> Result<PreparedDisplayOutputLeaseCandidate, String> {
+    let baseline = live_registry.clone();
+    let mut candidate = baseline.clone();
+    let receipt = candidate
+        .submit_request(request, now_ms)
+        .map_err(|error| format!("Output lease Display creation admission failed: {error:?}"))?;
+    if let Err(error) = &receipt.outcome {
+        return Err(format!(
+            "AI3 output lease Display creation transition failed: {error:?}"
+        ));
+    }
+    let mut durable = state
+        .output_lease_durable_receipts
+        .lock()
+        .map_err(|_| "Output lease durable receipt journal lock was poisoned".to_string())?;
+    if matches!(
+        durable.prepare(request).map_err(|error| format!(
+            "Output lease Display creation durable prepare failed: {error:?}"
+        ))?,
+        OutputLeaseDurablePrepareResult::Terminal
+    ) {
+        return Err(
+            "Output lease Display creation terminal receipt already exists; physical replay refused"
+                .to_string(),
+        );
+    }
+    Ok(PreparedDisplayOutputLeaseCandidate {
+        baseline,
+        candidate,
+        receipt,
+    })
+}
+
+fn abort_prepared_display_output_lease_candidate(
+    state: &AppState,
+    request: &OutputLeaseRequest,
+    failure: OutputLeaseCandidateCommitFailure,
+) -> String {
+    match failure {
+        OutputLeaseCandidateCommitFailure::InDoubt(error) => format!(
+            "Output lease Display creation has an in-doubt physical cleanup; pending receipt retained: {error}"
+        ),
+        OutputLeaseCandidateCommitFailure::SafeAbort(error) => {
+            let abort = state
+                .output_lease_durable_receipts
+                .lock()
+                .map_err(|_| {
+                    format!(
+                        "Output lease Display creation safe rollback could not acquire the durable journal lock; pending receipt retained: {error}"
+                    )
+                })
+                .and_then(|mut durable| {
+                    durable.abort(request).map_err(|abort_error| {
+                        format!(
+                            "Output lease Display creation safe rollback could not clear its pending receipt ({abort_error:?}): {error}"
+                        )
+                    })
+                });
+            abort.err().unwrap_or(error)
+        }
+    }
+}
+
+/// Complete the durable terminal edge only after the Display Engine/project,
+/// native worker, and lease candidate are all published.  The active project
+/// fence deliberately remains armed across durable I/O: if the terminal write
+/// fails, the one physical truth stays queryable while every ordinary mutation
+/// and exact retry remains fail-closed behind the retained Pending record.
+fn record_published_display_output_terminal(
+    durable_receipts: &Mutex<OutputLeaseDurableReceiptJournal>,
+    project_transaction_active: &AtomicBool,
+    receipt: &output_lease::OutputLeaseRequestReceipt,
+) -> Result<(), OutputLeaseCandidateCommitFailure> {
+    durable_receipts
+        .lock()
+        .map_err(|_| {
+            OutputLeaseCandidateCommitFailure::in_doubt(
+                "Display output committed but durable receipt journal lock was poisoned",
+            )
+        })?
+        .record(receipt)
+        .map_err(|error| {
+            OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                "Display output committed but durable terminal receipt is pending: {error:?}"
+            ))
+        })?;
+    project_transaction_active.store(false, Ordering::Release);
+    Ok(())
+}
+
+/// Production ordering seam: the potentially stalled native/GPU preparation
+/// always completes before `admit` is invoked.  The admission closure owns all
+/// short authority guards and therefore no caller can accidentally retain one
+/// across `prepare`.  Tests stall this exact seam and exercise the real query
+/// locks while the candidate remains unpublished.
+fn prepare_then_admit_unpublished_display_candidate<Candidate, Reservation, Prepare, Admit>(
+    prepare: Prepare,
+    admit: Admit,
+) -> Result<(Candidate, Reservation), (Option<Candidate>, OutputLeaseCandidateCommitFailure)>
+where
+    Prepare: FnOnce() -> Result<Candidate, OutputLeaseCandidateCommitFailure>,
+    Admit: FnOnce(&Candidate) -> Result<Reservation, OutputLeaseCandidateCommitFailure>,
+{
+    let candidate = prepare().map_err(|error| (None, error))?;
+    match admit(&candidate) {
+        Ok(reservation) => Ok((candidate, reservation)),
+        Err(error) => Err((Some(candidate), error)),
+    }
+}
+
+/// Full production ordering core for AddDisplay's two unbounded native steps.
+/// The hidden candidate is prepared without authority guards, the short admit
+/// closure revalidates and arms the reservation, and only then may `start`
+/// initialize GPU state/show/present.  `start` owns cleanup if it fails after
+/// consuming the hidden candidate; an admission failure returns that still-
+/// hidden candidate so the caller can acknowledge its retirement.
+fn run_unpublished_display_native_transaction<
+    HiddenCandidate,
+    Reservation,
+    NativeCandidate,
+    Prepare,
+    Admit,
+    Start,
+>(
+    prepare: Prepare,
+    admit: Admit,
+    start: Start,
+) -> Result<
+    (NativeCandidate, Reservation),
+    (Option<HiddenCandidate>, OutputLeaseCandidateCommitFailure),
+>
+where
+    Prepare: FnOnce() -> Result<HiddenCandidate, OutputLeaseCandidateCommitFailure>,
+    Admit: FnOnce(&HiddenCandidate) -> Result<Reservation, OutputLeaseCandidateCommitFailure>,
+    Start: FnOnce(HiddenCandidate) -> Result<NativeCandidate, OutputLeaseCandidateCommitFailure>,
+{
+    let (hidden, reservation) = prepare_then_admit_unpublished_display_candidate(prepare, admit)?;
+    start(hidden)
+        .map(|native| (native, reservation))
+        .map_err(|error| (None, error))
+}
+
+const DISPLAY_HIDDEN_SHELL_PHASE_TIMEOUT: Duration = Duration::from_secs(5);
+const DISPLAY_GPU_FIRST_FRAME_PHASE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Run a potentially blocking native phase on its own named worker and bound
+/// the command response. On timeout the durable Pending record is retained and
+/// a single reaper owns the eventual value; the request replay barrier prevents
+/// subsequent Add attempts from accumulating more workers for the same exact
+/// operation.
+fn run_bounded_display_native_phase<T, Work, LateCleanup>(
+    worker_name: &str,
+    timeout: Duration,
+    work: Work,
+    late_cleanup: LateCleanup,
+) -> Result<T, OutputLeaseCandidateCommitFailure>
+where
+    T: Send + 'static,
+    Work: FnOnce(Arc<AtomicBool>) -> Result<T, OutputLeaseCandidateCommitFailure> + Send + 'static,
+    LateCleanup: FnOnce(T) + Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&cancelled);
+    std::thread::Builder::new()
+        .name(worker_name.to_string())
+        .spawn(move || {
+            let _ = sender.send(work(worker_cancelled));
+        })
+        .map_err(|error| {
+            OutputLeaseCandidateCommitFailure::safe(format!(
+                "Unable to start Display native phase worker: {error}"
+            ))
+        })?;
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            cancelled.store(true, Ordering::Release);
+            let reaper_name = format!("{worker_name}-reaper");
+            std::thread::Builder::new()
+                .name(reaper_name)
+                .spawn(move || {
+                    if let Ok(Ok(candidate)) = receiver.recv() {
+                        late_cleanup(candidate);
+                    }
+                })
+                .map_err(|error| {
+                    OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                        "Display native phase timed out and its reaper could not start: {error}"
+                    ))
+                })?;
+            Err(OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                "Display native phase exceeded its {} ms deadline; pending receipt retained",
+                timeout.as_millis()
+            )))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(OutputLeaseCandidateCommitFailure::in_doubt(
+                "Display native phase worker disconnected without a cleanup acknowledgement",
+            ))
+        }
+    }
+}
+
+/// The ordinary output-control paths have a definitive callback contract:
+/// their engine ACK either happened or did not mutate anything.  Keep that
+/// simple API while routing Display creation through the classified variant
+/// above, where native cleanup can be genuinely indeterminate.
+fn submit_output_lease_candidate_with_commit<T, Commit>(
+    state: &AppState,
+    live_registry: &mut OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    now_ms: u64,
+    context: &str,
+    commit: Commit,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, String>,
+{
+    submit_output_lease_candidate_with_classified_commit(
+        state,
+        live_registry,
+        request,
+        now_ms,
+        context,
+        || commit().map_err(OutputLeaseCandidateCommitFailure::safe),
+    )
+}
+
 fn output_lease_resources_for_control_action(
-    action: &protocol::control_plane_command::OutputControlActionV1,
+    action: &protocol::control_plane_command::OutputControlActionV2,
 ) -> Result<OutputLeaseResources, String> {
     use protocol::control_plane_command::OutputControlTargetRoleV1;
     let resources = match action {
-        protocol::control_plane_command::OutputControlActionV1::Arm { role, .. } => match role {
+        protocol::control_plane_command::OutputControlActionV2::EnableOutput => {
+            vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
+        }
+        protocol::control_plane_command::OutputControlActionV2::Arm { role, .. } => match role {
             OutputControlTargetRoleV1::Lighting => vec![OutputLeaseResource::Lighting],
             OutputControlTargetRoleV1::Video => vec![OutputLeaseResource::Video],
             OutputControlTargetRoleV1::Both => {
                 vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
             }
         },
-        protocol::control_plane_command::OutputControlActionV1::ReleaseBlackout { .. }
-        | protocol::control_plane_command::OutputControlActionV1::AddDisplay { .. }
-        | protocol::control_plane_command::OutputControlActionV1::TakeOverStandby { .. } => {
+        protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
+        | protocol::control_plane_command::OutputControlActionV2::AddDisplay { .. }
+        | protocol::control_plane_command::OutputControlActionV2::TakeOverStandby { .. } => {
             match action {
-                protocol::control_plane_command::OutputControlActionV1::AddDisplay { .. } => {
-                    vec![OutputLeaseResource::Video]
+                protocol::control_plane_command::OutputControlActionV2::AddDisplay { .. } => {
+                    // Display creation is a video operation, but the normal
+                    // one-click Enable path owns the exact Both lease.  Keep
+                    // AddDisplay strict: only that one canonical Both lease
+                    // may authorize the operation; Video-only or ambiguous
+                    // lease candidates fail closed before the native dialog.
+                    vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
                 }
                 _ => vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video],
             }
@@ -37422,18 +38536,10 @@ pub(crate) fn build_output_lease_authorization_request(
     window_label: &str,
     owner_incarnation: u64,
     request_id: u64,
-    action: &protocol::control_plane_command::OutputControlActionV1,
+    action: &protocol::control_plane_command::OutputControlActionV2,
+    project_epoch: u64,
 ) -> Result<(OutputLeaseRequest, u64), String> {
-    use protocol::control_plane_command::OutputControlActionV1;
-    let authority = match action {
-        OutputControlActionV1::Arm { lease, .. }
-        | OutputControlActionV1::ReleaseBlackout { lease }
-        | OutputControlActionV1::AddDisplay { lease, .. }
-        | OutputControlActionV1::TakeOverStandby { lease, .. } => lease,
-        _ => return Err("Output lease authority is not an ordinary output action".to_string()),
-    };
-    let lease_id = output_lease::OutputLeaseId::decode(&authority.lease_id)
-        .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
+    use protocol::control_plane_command::OutputControlActionV2;
     let resources = output_lease_resources_for_control_action(action)?;
     let registry = state
         .output_lease_registry
@@ -37446,16 +38552,48 @@ pub(crate) fn build_output_lease_authorization_request(
         owner_incarnation,
     )
     .map_err(|error| format!("Output lease owner is invalid: {error:?}"))?;
+    let lease_action = match action {
+        OutputControlActionV2::EnableOutput => OutputLeaseRequestAction::EnableAcquireOrRecover {
+            owner,
+            resources,
+            // The command's exact project fence remains authoritative.  This
+            // stable identity keeps the compound lease request distinct from
+            // the public lifecycle Acquire route without exposing a second
+            // operator-visible step.
+            project_identity: output_lease_project_identity(project_epoch),
+            ttl_ms: output_lease::MAX_OUTPUT_LEASE_TTL_MS,
+        },
+        OutputControlActionV2::AddDisplay { lease, .. } => {
+            let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
+                .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
+            OutputLeaseRequestAction::AuthorizeOrRecoverDisplay {
+                lease_id,
+                owner,
+                expected_generation: lease.generation,
+                exact_resources: resources,
+                project_identity: output_lease_project_identity(project_epoch),
+                ttl_ms: output_lease::MAX_OUTPUT_LEASE_TTL_MS,
+            }
+        }
+        OutputControlActionV2::Arm { lease, .. }
+        | OutputControlActionV2::ReleaseBlackout { lease }
+        | OutputControlActionV2::TakeOverStandby { lease, .. } => {
+            let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
+                .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
+            OutputLeaseRequestAction::AuthorizeOrdinary {
+                lease_id,
+                owner,
+                expected_generation: lease.generation,
+                exact_resources: resources,
+            }
+        }
+        _ => return Err("Output lease authority is not an ordinary output action".to_string()),
+    };
     let request = OutputLeaseRequest::from_action(
         binding.to_string(),
         "output-control",
         request_id,
-        OutputLeaseRequestAction::AuthorizeOrdinary {
-            lease_id,
-            owner,
-            expected_generation: authority.generation,
-            exact_resources: resources,
-        },
+        lease_action,
     )
     .map_err(|error| format!("Output lease request is invalid: {error:?}"))?;
     let now_ms = state.output_lease_now_ms()?;
@@ -37468,7 +38606,8 @@ pub(crate) fn preflight_output_lease_for_control_action(
     window_label: &str,
     owner_incarnation: u64,
     request_id: u64,
-    action: &protocol::control_plane_command::OutputControlActionV1,
+    action: &protocol::control_plane_command::OutputControlActionV2,
+    project_epoch: u64,
 ) -> Result<(), String> {
     let (request, now_ms) = build_output_lease_authorization_request(
         state,
@@ -37477,6 +38616,7 @@ pub(crate) fn preflight_output_lease_for_control_action(
         owner_incarnation,
         request_id,
         action,
+        project_epoch,
     )?;
     {
         let durable = state
@@ -37512,6 +38652,9 @@ pub(crate) fn submit_output_lease_lifecycle_request(
     } else {
         None
     };
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err(output_lease::OutputLeaseError::Busy);
+    }
     let mut registry = state
         .output_lease_registry
         .lock()
@@ -38852,6 +39995,25 @@ fn validate_output_lease_receipt_state(
             ));
         }
     }
+    for origin in &state.origins {
+        let retained_receipts = state.receipts.iter().filter(|receipt| {
+            receipt.key.principal == origin.principal && receipt.key.domain == origin.domain
+        });
+        let max_retained_request_id = retained_receipts
+            .map(|receipt| receipt.key.request_id)
+            .max();
+        let has_pending = state.pending.iter().any(|pending| {
+            pending.key.principal == origin.principal && pending.key.domain == origin.domain
+        });
+        if !origin.replay_guard
+            && (has_pending || max_retained_request_id != Some(origin.high_water_request_id))
+        {
+            return Err(format!(
+                "Output-lease receipt state has an unguarded origin with incomplete terminal evidence {}",
+                origin.high_water_request_id
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -38908,13 +40070,54 @@ fn load_output_lease_receipt_state_from_path(
             MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES
         ));
     }
-    let state: PersistedOutputLeaseReceiptState =
-        serde_json::from_slice(&bytes).map_err(|error| {
+    let raw_state: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "Output-lease receipt state {} is corrupt: {error}",
+            path.display()
+        )
+    })?;
+    let mut state: PersistedOutputLeaseReceiptState = serde_json::from_value(raw_state.clone())
+        .map_err(|error| {
             format!(
                 "Output-lease receipt state {} is corrupt: {error}",
                 path.display()
             )
         })?;
+    // `replay_guard` was added additively.  Preserve an explicitly serialized
+    // value exactly; only synthesize a value for an older journal that has no
+    // field.  A legacy origin is guarded when its high-water mark is ahead of
+    // every retained request, or while a legacy Pending marker exists.  This
+    // is conservative for an evicted terminal or an in-doubt physical attempt
+    // without making ordinary retained receipts permanently uncollectable.
+    let raw_origins = raw_state
+        .get("origins")
+        .and_then(serde_json::Value::as_array);
+    for (index, origin) in state.origins.iter_mut().enumerate() {
+        let has_explicit_guard = raw_origins
+            .and_then(|origins| origins.get(index))
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|value| value.contains_key("replay_guard"));
+        if has_explicit_guard {
+            continue;
+        }
+        let max_retained_request_id = state
+            .receipts
+            .iter()
+            .filter(|receipt| {
+                receipt.key.principal == origin.principal && receipt.key.domain == origin.domain
+            })
+            .map(|receipt| receipt.key.request_id)
+            .chain(state.pending.iter().filter_map(|pending| {
+                (pending.key.principal == origin.principal && pending.key.domain == origin.domain)
+                    .then_some(pending.key.request_id)
+            }))
+            .max()
+            .unwrap_or(0);
+        let has_pending = state.pending.iter().any(|pending| {
+            pending.key.principal == origin.principal && pending.key.domain == origin.domain
+        });
+        origin.replay_guard = has_pending || origin.high_water_request_id > max_retained_request_id;
+    }
     validate_output_lease_receipt_state(&state).map_err(|error| {
         format!(
             "Output-lease receipt state {} is invalid: {error}",
@@ -38943,6 +40146,13 @@ fn persist_output_lease_receipt_state_to_path(
     })?;
     let bytes = serde_json::to_vec(state)
         .map_err(|error| format!("Unable to encode output-lease receipt state: {error}"))?;
+    if bytes.len() as u64 > MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES {
+        return Err(format!(
+            "Output-lease receipt state {} exceeds the {} byte safety limit",
+            path.display(),
+            MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES
+        ));
+    }
     let file_name = path
         .file_name()
         .and_then(OsStr::to_str)
@@ -41068,17 +42278,22 @@ fn stop_standby_sync(state: State<'_, AppState>) -> Result<StandbySyncStatus, St
 }
 
 #[tauri::command]
-fn standby_sync_status(state: State<'_, AppState>) -> Result<StandbySyncStatus, String> {
-    let status = state
-        .standby_sync
-        .lock()
-        .map_err(|_| "Standby synchronization lock was poisoned".to_string())?
-        .status
-        .clone();
-    status
-        .lock()
-        .map(|status| status.clone())
-        .map_err(|_| "Standby synchronization status lock was poisoned".to_string())
+async fn standby_sync_status(app: tauri::AppHandle) -> Result<StandbySyncStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let status = state
+            .standby_sync
+            .lock()
+            .map_err(|_| "Standby synchronization lock was poisoned".to_string())?
+            .status
+            .clone();
+        status
+            .lock()
+            .map(|status| status.clone())
+            .map_err(|_| "Standby synchronization status lock was poisoned".to_string())
+    })
+    .await
+    .map_err(|error| format!("Standby synchronization status query worker failed: {error}"))?
 }
 
 fn lock_and_validate_standby_takeover_status<'a>(
@@ -41129,7 +42344,7 @@ where
 
     let StandbyTakeoverCheckpointSelector::Exact(expected) = selector;
     // Re-check the status after taking lifecycle ownership. The control plane
-    // validated this identity before consuming consent, but the polling worker
+    // validated this identity before consuming the authorization, but the polling worker
     // can advance status while the external locks are released. A changed
     // status is stale even before reading the file.
     if status_snapshot.session_id.as_deref() != Some(expected.session_id.as_str())
@@ -41141,11 +42356,11 @@ where
     // Validate the project/output identity before reading and stopping the
     // standby worker. The replacement boundary repeats this check after
     // stop/join; this early check avoids retiring a healthy worker for an
-    // already-stale consent while lifecycle ownership is held.
+    // already-stale authorization while lifecycle ownership is held.
     validate_output_fence()?;
 
     let StandbyTakeoverCheckpointSelector::Exact(expected) = selector;
-    // Read the latest manifest for the consent-bound session and reject any
+    // Read the latest manifest for the authorization-bound session and reject any
     // generation advance before stopping the worker. This is intentionally
     // fail-closed and never falls back to an older checkpoint when a newer
     // manifest exists.
@@ -41261,7 +42476,7 @@ fn take_over_standby_core_with_optional_lease(
         },
     )?;
     // Keep the worker alive until the fenced publication commits. A stale
-    // consent must not leave an otherwise healthy Standby worker stopped.
+    // authorization must not leave an otherwise healthy Standby worker stopped.
     // The commit closure sets this token while external/coordinator/output
     // guards remain held; a worker already queued behind those guards checks
     // the same token after taking the output guard and exits without
@@ -42271,8 +43486,8 @@ fn load_project_from_file_with_control_mappings_in_scope(
 }
 
 /// Prepare a Take Over snapshot while the caller holds the Standby lifecycle
-/// guard, then revalidate the consent-bound output fence at the exact
-/// coordinator/replacement boundary. This closes the post-consent window in
+/// guard, then revalidate the authorization-bound output fence at the exact
+/// coordinator/replacement boundary. This closes the post-authorization window in
 /// which a project publication could otherwise race the consumed fence.
 fn load_project_from_file_with_control_mappings_in_scope_and_expected_output_fence(
     state: &AppState,
@@ -47776,36 +48991,41 @@ fn engine_snapshot_delta(before: &EngineSnapshot, after: &EngineSnapshot) -> Eng
 }
 
 #[tauri::command]
-fn get_snapshot_delta(
-    state: State<'_, AppState>,
+async fn get_snapshot_delta(
+    app: tauri::AppHandle,
     client_revision: Option<u64>,
 ) -> Result<EngineSnapshotSyncResponse, String> {
-    let current = state.engine.snapshot();
-    let mut sync = state
-        .snapshot_sync
-        .lock()
-        .map_err(|_| "Snapshot synchronization lock was poisoned".to_string())?;
-    let can_send_delta = client_revision == Some(sync.revision) && sync.last_snapshot.is_some();
-    sync.revision = sync.revision.wrapping_add(1).max(1);
-    let revision = sync.revision;
-    let response = if can_send_delta {
-        EngineSnapshotSyncResponse {
-            revision,
-            full: None,
-            delta: sync
-                .last_snapshot
-                .as_ref()
-                .map(|before| engine_snapshot_delta(before, &current)),
-        }
-    } else {
-        EngineSnapshotSyncResponse {
-            revision,
-            full: Some(current.clone()),
-            delta: None,
-        }
-    };
-    sync.last_snapshot = Some(current);
-    Ok(response)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let current = state.engine.snapshot();
+        let mut sync = state
+            .snapshot_sync
+            .lock()
+            .map_err(|_| "Snapshot synchronization lock was poisoned".to_string())?;
+        let can_send_delta = client_revision == Some(sync.revision) && sync.last_snapshot.is_some();
+        sync.revision = sync.revision.wrapping_add(1).max(1);
+        let revision = sync.revision;
+        let response = if can_send_delta {
+            EngineSnapshotSyncResponse {
+                revision,
+                full: None,
+                delta: sync
+                    .last_snapshot
+                    .as_ref()
+                    .map(|before| engine_snapshot_delta(before, &current)),
+            }
+        } else {
+            EngineSnapshotSyncResponse {
+                revision,
+                full: Some(current.clone()),
+                delta: None,
+            }
+        };
+        sync.last_snapshot = Some(current);
+        Ok(response)
+    })
+    .await
+    .map_err(|error| format!("Snapshot delta query worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -48866,20 +50086,51 @@ fn take_native_video_output_worker<T>(
         .map(|mut workers| workers.remove(label))
 }
 
+enum NativeVideoOutputWorkerInsertError<T> {
+    RegistryPoisoned { label: String, worker: T },
+    Occupied { label: String, worker: T },
+}
+
+impl<T> NativeVideoOutputWorkerInsertError<T> {
+    fn is_occupied(&self) -> bool {
+        matches!(self, Self::Occupied { .. })
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::RegistryPoisoned { label, .. } => format!(
+                "Native video output worker registry lock was poisoned while inserting {label}"
+            ),
+            Self::Occupied { label, .. } => format!(
+                "Native video output worker registry already contains active or quarantined {label}"
+            ),
+        }
+    }
+
+    fn into_worker(self) -> T {
+        match self {
+            Self::RegistryPoisoned { worker, .. } | Self::Occupied { worker, .. } => worker,
+        }
+    }
+}
+
 fn insert_native_video_output_worker<T>(
     workers: &Mutex<HashMap<String, T>>,
     label: String,
     worker: T,
-) -> Result<(), (String, T)> {
-    match workers.lock() {
-        Ok(mut workers) => {
-            workers.insert(label, worker);
+) -> Result<(), NativeVideoOutputWorkerInsertError<T>> {
+    let mut registry = match workers.lock() {
+        Ok(registry) => registry,
+        Err(_) => {
+            return Err(NativeVideoOutputWorkerInsertError::RegistryPoisoned { label, worker });
+        }
+    };
+    match registry.entry(label.clone()) {
+        Entry::Vacant(entry) => {
+            entry.insert(worker);
             Ok(())
         }
-        Err(_) => Err((
-            "Native video output worker registry lock was poisoned".to_string(),
-            worker,
-        )),
+        Entry::Occupied(_) => Err(NativeVideoOutputWorkerInsertError::Occupied { label, worker }),
     }
 }
 
@@ -49016,30 +50267,127 @@ fn wait_for_native_video_output_window_retirement(
     }
 }
 
-fn retire_unregistered_native_video_output_worker(
+/// Close only the candidate native shell. This deliberately does not inspect
+/// or remove the worker registry entry for `label`; an occupied entry belongs
+/// to an incumbent active/quarantined worker and must survive a losing Add.
+fn retire_native_video_output_candidate_shell_only(
     app: &tauri::AppHandle,
     label: &str,
+) -> Result<(), String> {
+    if let Some(window) = app.windows().get(label).cloned() {
+        window.close().map_err(|error| {
+            format!("Unable to close candidate native video output {label}: {error}")
+        })?;
+    }
+    wait_for_native_video_output_window_retirement(app, label)
+}
+
+fn quarantine_native_video_output_worker(
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+    label: &str,
+    worker: NativeVideoOutputWorker,
+) -> Result<(), String> {
+    let mut registry = workers
+        .lock()
+        .map_err(|_| "Native video output worker registry lock was poisoned".to_string())?;
+    if registry.contains_key(label) {
+        std::mem::forget(worker);
+        return Err(format!(
+            "Native video output worker quarantine already contains {label}"
+        ));
+    }
+    registry.insert(label.to_string(), worker);
+    Ok(())
+}
+
+fn native_video_output_quarantine_label(label: &str) -> String {
+    format!(
+        "{label}::quarantine-{}",
+        NATIVE_VIDEO_OUTPUT_QUARANTINE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn retire_unregistered_native_video_output_worker(
+    app: &tauri::AppHandle,
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+    label: &str,
+    worker: NativeVideoOutputWorker,
+) -> Result<(), String> {
+    retire_unregistered_native_video_output_worker_with_window(app, workers, label, worker, true)
+}
+
+/// Retire a worker that lost the registry insertion race without touching the
+/// window for `label`.  An occupied label belongs to the existing active or
+/// quarantined worker; closing that window here would tear down the resource
+/// that won the race.  If the losing worker cannot join promptly, quarantine
+/// it under a unique key so the original label remains reserved and the join
+/// handle/failure fence remain owned by the registry.
+fn retire_unregistered_native_video_output_worker_without_window(
+    app: &tauri::AppHandle,
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+    label: &str,
+    worker: NativeVideoOutputWorker,
+) -> Result<(), String> {
+    retire_unregistered_native_video_output_worker_with_window(app, workers, label, worker, false)
+}
+
+fn retire_unregistered_native_video_output_worker_with_window(
+    app: &tauri::AppHandle,
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+    label: &str,
     mut worker: NativeVideoOutputWorker,
+    touch_existing_window: bool,
 ) -> Result<(), String> {
     worker.request_stop();
     let mut errors = Vec::new();
-    if let Some(window) = app.windows().get(label).cloned() {
-        if let Err(error) = window.close() {
-            errors.push(format!(
-                "Unable to close native video output {label}: {error}"
-            ));
+    if touch_existing_window {
+        if let Some(window) = app.windows().get(label).cloned() {
+            if let Err(error) = window.close() {
+                errors.push(format!(
+                    "Unable to close native video output {label}: {error}"
+                ));
+            }
         }
     }
-    if let Err(error) = worker.join(label) {
-        errors.push(error);
-    }
-    let window_retirement = wait_for_native_video_output_window_retirement(app, label);
+    let worker_joined =
+        match worker.join_with_deadline(label, NativeVideoOutputWorker::JOIN_TIMEOUT) {
+            Ok(()) => true,
+            Err(error) => {
+                errors.push(error);
+                false
+            }
+        };
+    let window_retirement = if touch_existing_window {
+        wait_for_native_video_output_window_retirement(app, label)
+    } else {
+        Ok(())
+    };
+    let quarantine_label = if touch_existing_window {
+        label.to_string()
+    } else {
+        native_video_output_quarantine_label(label)
+    };
     if let Err(error) = &window_retirement {
         errors.push(error.clone());
-        // A failed acknowledgement must preserve the worker-held failure fence.
-        std::mem::forget(worker);
-    } else {
+        // A failed acknowledgement must preserve the worker-held failure
+        // fence and prevent label reuse. Keep it in the quarantine registry
+        // for a later bounded retirement attempt.
+        if let Err(quarantine) =
+            quarantine_native_video_output_worker(workers, &quarantine_label, worker)
+        {
+            errors.push(quarantine);
+        }
+    } else if worker_joined {
         worker.release_teardown_lease_after_retirement_ack();
+    } else {
+        // The window can disappear before the renderer thread acknowledges
+        // its stop. Keep the worker/fence alive until a later retirement
+        // attempt can prove that the GPU presenter is gone.
+        if let Err(quarantine) =
+            quarantine_native_video_output_worker(workers, &quarantine_label, worker)
+        {
+            errors.push(quarantine);
+        }
     }
     if errors.is_empty() {
         Ok(())
@@ -49075,22 +50423,34 @@ fn retire_native_video_output_window(
         }
     }
     let mut worker = worker;
+    let mut worker_joined = true;
     if let Some(worker) = worker.as_mut() {
-        if let Err(error) = worker.join(label) {
-            errors.push(error);
-        }
+        worker_joined = if worker.join.is_none() {
+            true
+        } else {
+            match worker.join_with_deadline(label, NativeVideoOutputWorker::JOIN_TIMEOUT) {
+                Ok(()) => true,
+                Err(error) => {
+                    errors.push(error);
+                    false
+                }
+            }
+        };
     }
     let retirement_ack = wait_for_native_video_output_retirement(app, workers, label);
     if let Err(error) = retirement_ack.as_ref() {
         errors.push(error.clone());
     }
     if let Some(mut worker) = worker {
-        if retirement_ack.is_ok() {
+        if retirement_ack.is_ok() && worker_joined {
             worker.release_teardown_lease_after_retirement_ack();
         } else {
             // The worker may be holding a failure-fence teardown lease. Keep
-            // that lease alive while the native window remains unacknowledged.
-            std::mem::forget(worker);
+            // that lease alive and reserve the label for a later bounded
+            // reaper attempt.
+            if let Err(quarantine) = quarantine_native_video_output_worker(workers, label, worker) {
+                errors.push(quarantine);
+            }
         }
     }
 
@@ -49561,57 +50921,454 @@ where
     apply(&guard, validation)
 }
 
-/// Commit one Display output through the authenticated R4 lane.  The legacy
-/// `add_video_output` command remains fail-closed; this seam owns the exact
-/// lease, transition lock, monitor revalidation, engine publication, and
-/// terminal output fence for the simplified setup flow.
-fn validate_display_output_monitor_snapshot(
+/// Construct an unpublished, hidden native shell for a new Display output.
+/// No `show` or frame presentation is allowed before the later exact-authority
+/// admission boundary has armed the bounded project transaction fence.
+fn prepare_native_display_output_window(
     app: &tauri::AppHandle,
-    spec: &DisplayOutputSpecV1,
+    output: &VideoOutputSummary,
+    monitor: &VideoDisplayMonitor,
+) -> Result<String, OutputLeaseCandidateCommitFailure> {
+    let label = video_output_window_label(output.id, false);
+    if app.windows().contains_key(&label) {
+        return Err(OutputLeaseCandidateCommitFailure::safe(format!(
+            "Native video output window {label} already exists for an unpublished candidate"
+        )));
+    }
+    let builder_app = app.clone();
+    let builder = tauri::window::WindowBuilder::new(&builder_app, label.clone())
+        .title(format!("Syndocal Output - {}", output.label))
+        .inner_size(output.width as f64, output.height as f64)
+        .resizable(true)
+        .decorations(!output.fullscreen)
+        .fullscreen(output.fullscreen)
+        .visible(false)
+        .position(monitor.position_x as f64, monitor.position_y as f64);
+    let window = builder.build().map_err(|error| {
+        OutputLeaseCandidateCommitFailure::safe(format!(
+            "Native video output window creation failed: {error}"
+        ))
+    })?;
+    if let Err(error) = (|| {
+        apply_native_video_output_window_shell_with_monitor(&window, output, false, Some(monitor))
+    })() {
+        let close_error = window.close().err().map(|close| close.to_string());
+        let retirement = wait_for_native_video_output_window_retirement(app, &label);
+        return Err(match (close_error, retirement) {
+            (None, Ok(())) => OutputLeaseCandidateCommitFailure::safe(error),
+            (Some(close), Ok(())) => OutputLeaseCandidateCommitFailure::safe(format!(
+                "{error}; native shell close failed: {close}"
+            )),
+            (close, Err(retire)) => OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                "{error}; native shell retirement failed: {retire}{}",
+                close
+                    .map(|close| format!("; close failed: {close}"))
+                    .unwrap_or_default()
+            )),
+        });
+    }
+    Ok(label)
+}
+
+/// A GPU-initialized Display candidate whose first frame exists but whose
+/// renderer thread, metrics, and worker handle are not reachable from any live
+/// registry. The shell is shown and this value is created only after exact
+/// authority admission; the thread then waits on its start gate until final
+/// project/lease publication.
+struct PreparedNativeVideoOutputCandidate {
+    label: String,
+    output_id: VideoOutputId,
+    metrics: Arc<Mutex<NativeVideoOutputMetrics>>,
+    worker: NativeVideoOutputWorker,
+}
+
+/// Publish a fully prepared native Display candidate through one registry
+/// state machine shared by the Tauri implementation and deterministic fakes.
+/// Both registry locks remain held from the occupancy check through the
+/// infallible insertions and start-gate release, so no observer can see a
+/// worker without its metrics or a released worker outside the registry.
+fn publish_display_native_candidate_registry_state<Candidate, Worker, Metrics, T, Commit, Split>(
+    workers: &Mutex<HashMap<String, Worker>>,
+    metrics: &Mutex<HashMap<VideoOutputId, Metrics>>,
+    candidate: Candidate,
+    label: String,
+    output_id: VideoOutputId,
+    start_gate: Option<Arc<AtomicBool>>,
+    commit: Commit,
+    split: Split,
+) -> Result<T, (Candidate, OutputLeaseCandidateCommitFailure)>
+where
+    Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
+    Split: FnOnce(Candidate) -> (Worker, Metrics),
+{
+    let mut workers = match workers.lock() {
+        Ok(workers) => workers,
+        Err(_) => {
+            return Err((
+                candidate,
+                OutputLeaseCandidateCommitFailure::safe(
+                    "Native video output worker registry lock was poisoned before publication",
+                ),
+            ));
+        }
+    };
+    let mut metrics = match metrics.lock() {
+        Ok(metrics) => metrics,
+        Err(_) => {
+            return Err((
+                candidate,
+                OutputLeaseCandidateCommitFailure::safe(
+                    "Native video output metrics registry lock was poisoned before publication",
+                ),
+            ));
+        }
+    };
+    if workers.contains_key(&label) || metrics.contains_key(&output_id) {
+        return Err((
+            candidate,
+            OutputLeaseCandidateCommitFailure::safe(
+                "Display native candidate identity is already published",
+            ),
+        ));
+    }
+    let committed = match commit() {
+        Ok(committed) => committed,
+        Err(error) => return Err((candidate, error)),
+    };
+    let (worker, metric) = split(candidate);
+    workers.insert(label, worker);
+    metrics.insert(output_id, metric);
+    if let Some(start_gate) = start_gate {
+        start_gate.store(true, Ordering::Release);
+    }
+    Ok(committed)
+}
+
+/// The full AddDisplay authority/lease/project/Engine transaction is shared by
+/// release and deterministic tests. Only operations that require a concrete
+/// Tauri window or native presenter are injected through this bundle.
+trait DisplayOutputNativeOperations: Clone + Send + Sync + 'static {
+    type HiddenCandidate: Send + 'static;
+    type NativeCandidate: Send + 'static;
+
+    fn hidden_phase_timeout(&self) -> Duration {
+        DISPLAY_HIDDEN_SHELL_PHASE_TIMEOUT
+    }
+
+    fn gpu_phase_timeout(&self) -> Duration {
+        DISPLAY_GPU_FIRST_FRAME_PHASE_TIMEOUT
+    }
+
+    fn validate_editor_monitor(&self) -> Result<(), String>;
+    fn authoritative_monitor(
+        &self,
+        monitor_index: u32,
+        monitor_identity: &str,
+    ) -> Result<VideoDisplayMonitor, String>;
+    fn prepare_hidden_candidate(
+        &self,
+        output: &VideoOutputSummary,
+        monitor: &VideoDisplayMonitor,
+    ) -> Result<Self::HiddenCandidate, OutputLeaseCandidateCommitFailure>;
+    fn cleanup_hidden_candidate(&self, candidate: Self::HiddenCandidate) -> Result<(), String>;
+    fn prepare_native_candidate(
+        &self,
+        hidden: Self::HiddenCandidate,
+        output: &VideoOutputSummary,
+        monitor: &VideoDisplayMonitor,
+        unpublished_snapshot: EngineSnapshot,
+        expected_fence: &OutputControlFenceV1,
+        phase_cancelled: Arc<AtomicBool>,
+    ) -> Result<Self::NativeCandidate, (Self::HiddenCandidate, OutputLeaseCandidateCommitFailure)>;
+    fn cleanup_native_candidate(&self, candidate: Self::NativeCandidate) -> Result<(), String>;
+    fn publish_native_candidate_after_preflight<T, Commit>(
+        &self,
+        candidate: Self::NativeCandidate,
+        commit: Commit,
+    ) -> Result<T, (Self::NativeCandidate, OutputLeaseCandidateCommitFailure)>
+    where
+        Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>;
+}
+
+#[derive(Clone)]
+struct TauriDisplayOutputNativeOperations {
+    app: tauri::AppHandle,
+    editor_window: WebviewWindow,
+}
+
+impl DisplayOutputNativeOperations for TauriDisplayOutputNativeOperations {
+    type HiddenCandidate = String;
+    type NativeCandidate = PreparedNativeVideoOutputCandidate;
+
+    fn validate_editor_monitor(&self) -> Result<(), String> {
+        validate_editor_monitor_for_window(&self.editor_window).map(|_| ())
+    }
+
+    fn authoritative_monitor(
+        &self,
+        monitor_index: u32,
+        monitor_identity: &str,
+    ) -> Result<VideoDisplayMonitor, String> {
+        authoritative_video_display_monitor(&self.app, monitor_index, monitor_identity)
+    }
+
+    fn prepare_hidden_candidate(
+        &self,
+        output: &VideoOutputSummary,
+        monitor: &VideoDisplayMonitor,
+    ) -> Result<Self::HiddenCandidate, OutputLeaseCandidateCommitFailure> {
+        prepare_native_display_output_window(&self.app, output, monitor)
+    }
+
+    fn cleanup_hidden_candidate(&self, candidate: Self::HiddenCandidate) -> Result<(), String> {
+        retire_native_video_output_candidate_shell_only(&self.app, &candidate)
+    }
+
+    fn prepare_native_candidate(
+        &self,
+        hidden: Self::HiddenCandidate,
+        output: &VideoOutputSummary,
+        monitor: &VideoDisplayMonitor,
+        unpublished_snapshot: EngineSnapshot,
+        expected_fence: &OutputControlFenceV1,
+        phase_cancelled: Arc<AtomicBool>,
+    ) -> Result<Self::NativeCandidate, (Self::HiddenCandidate, OutputLeaseCandidateCommitFailure)>
+    {
+        let state = self.app.state::<AppState>();
+        debug_assert_eq!(hidden, video_output_window_label(output.id, false));
+        prepare_native_video_output_candidate_worker(
+            &self.app,
+            &state,
+            output,
+            monitor,
+            unpublished_snapshot,
+            expected_fence,
+            phase_cancelled,
+        )
+        .map_err(|error| (hidden, error))
+    }
+
+    fn cleanup_native_candidate(&self, candidate: Self::NativeCandidate) -> Result<(), String> {
+        let state = self.app.state::<AppState>();
+        retire_prepared_native_video_output_candidate(&self.app, &state, candidate)
+    }
+
+    fn publish_native_candidate_after_preflight<T, Commit>(
+        &self,
+        candidate: Self::NativeCandidate,
+        commit: Commit,
+    ) -> Result<T, (Self::NativeCandidate, OutputLeaseCandidateCommitFailure)>
+    where
+        Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
+    {
+        let state = self.app.state::<AppState>();
+        let label = candidate.label.clone();
+        let output_id = candidate.output_id;
+        let start_gate = candidate.worker.start_gate.clone();
+        publish_display_native_candidate_registry_state(
+            &state.native_video_output_workers,
+            &state.native_video_output_metrics,
+            candidate,
+            label,
+            output_id,
+            start_gate,
+            commit,
+            |candidate| (candidate.worker, candidate.metrics),
+        )
+    }
+}
+
+fn retire_prepared_native_video_output_candidate(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    candidate: PreparedNativeVideoOutputCandidate,
 ) -> Result<(), String> {
+    retire_unregistered_native_video_output_worker(
+        app,
+        &state.native_video_output_workers,
+        &candidate.label,
+        candidate.worker,
+    )
+}
+
+fn cleanup_display_candidate_after_engine_attempt<NativeOps>(
+    native_ops: &NativeOps,
+    state: &AppState,
+    output_id: VideoOutputId,
+    candidate: NativeOps::NativeCandidate,
+) -> Result<(), String>
+where
+    NativeOps: DisplayOutputNativeOperations,
+{
+    let mut errors = Vec::new();
+    if let Err(error) = native_ops.cleanup_native_candidate(candidate) {
+        errors.push(format!("native cleanup failed: {error}"));
+    }
+    // The Add acknowledgement may have been lost after the command entered
+    // the engine queue. A definitive remove ACK is required before this can be
+    // classified as SafeAbort.
+    if let Err(error) = state.engine.remove_video_output_published(output_id) {
+        errors.push(format!("engine cleanup failed: {error}"));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+#[cfg(test)]
+fn cleanup_native_video_output_candidate_after_start_failure<S, R>(
+    preserve_registered_label: bool,
+    shell_only: S,
+    registered_worker_and_shell: R,
+) -> Result<(), String>
+where
+    S: FnOnce() -> Result<(), String>,
+    R: FnOnce() -> Result<(), String>,
+{
+    if preserve_registered_label {
+        shell_only()
+    } else {
+        registered_worker_and_shell()
+    }
+}
+
+fn prepare_native_video_output_candidate_worker(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    output: &VideoOutputSummary,
+    monitor: &VideoDisplayMonitor,
+    unpublished_snapshot: EngineSnapshot,
+    expected_fence: &OutputControlFenceV1,
+    phase_cancelled: Arc<AtomicBool>,
+) -> Result<PreparedNativeVideoOutputCandidate, OutputLeaseCandidateCommitFailure> {
+    let label = video_output_window_label(output.id, false);
+    let window = app.windows().get(&label).cloned().ok_or_else(|| {
+        OutputLeaseCandidateCommitFailure::safe(format!(
+            "Native video output window {label} disappeared before activation"
+        ))
+    })?;
+    let metrics = Arc::new(Mutex::new(NativeVideoOutputMetrics::default()));
+    let teardown_lease = NativeVideoOutputWorker::new_teardown_lease_slot();
+    let worker = (|| {
+        apply_native_video_output_window_shell_with_monitor(&window, output, false, Some(monitor))?;
+        start_native_video_live_output(
+            window.clone(),
+            state.engine.clone(),
+            output.id,
+            Arc::clone(&metrics),
+            #[cfg(feature = "ndi")]
+            Arc::clone(&state.ndi_inputs),
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            Arc::clone(&state.spout_inputs),
+            Arc::clone(&state.capture_inputs),
+            Some((output.width, output.height)),
+            Some(unpublished_snapshot),
+            true,
+            Some(expected_fence.clone()),
+            Some(phase_cancelled),
+            true,
+            label.clone(),
+            Arc::clone(&teardown_lease),
+        )
+    })()
+    .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+    Ok(PreparedNativeVideoOutputCandidate {
+        label,
+        output_id: output.id,
+        metrics,
+        worker,
+    })
+}
+
+/// Resolve a physical monitor only when both its current in-process index and
+/// its stable device identity match. The index alone is deliberately not a
+/// routing key: Windows can reuse it after unplug/reorder.
+fn authoritative_video_display_monitor(
+    app: &tauri::AppHandle,
+    monitor_index: u32,
+    monitor_identity: &str,
+) -> Result<VideoDisplayMonitor, String> {
+    if monitor_identity.trim().is_empty() {
+        return Err("Display output monitor identity is missing; re-add the display".to_string());
+    }
     let monitors = app
         .available_monitors()
         .map_err(|error| format!("Display enumeration failed: {error}"))?;
-    let monitor = monitors
-        .get(spec.monitor_index as usize)
-        .ok_or_else(|| "Display output monitor index is not available".to_string())?;
-    let size = monitor.size();
-    let position = monitor.position();
-    let scale_factor = monitor.scale_factor();
-    if size.width == 0 || size.height == 0 || !scale_factor.is_finite() || scale_factor <= 0.0 {
-        return Err("Display output monitor reported invalid geometry".to_string());
-    }
-    let name = monitor
-        .name()
+    let monitors = video_display_monitors_from_available(monitors)?;
+    authoritative_video_display_monitor_from_descriptors(&monitors, monitor_index, monitor_identity)
+}
+
+fn authoritative_video_display_monitor_from_descriptors(
+    monitors: &[VideoDisplayMonitor],
+    monitor_index: u32,
+    monitor_identity: &str,
+) -> Result<VideoDisplayMonitor, String> {
+    monitors
+        .iter()
+        .find(|monitor| monitor.index == monitor_index && monitor.identity == monitor_identity)
         .cloned()
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| format!("Display {}", spec.monitor_index + 1));
-    let identity_material = format!(
-        "syndocal.display-monitor.v1\0{name}\0{}\0{}\0{}\0{}\0{}",
-        position.x,
-        position.y,
-        size.width,
-        size.height,
-        scale_factor.to_bits(),
-    );
-    if spec.monitor_identity != sha256_hex(identity_material.as_bytes()) {
-        return Err("Display output monitor identity is stale".to_string());
+        .ok_or_else(|| "Display output monitor identity is stale; re-add the display".to_string())
+}
+
+fn exact_video_display_monitor_matches(
+    current: &VideoDisplayMonitor,
+    expected: &VideoDisplayMonitor,
+) -> bool {
+    current.index == expected.index
+        && current.identity == expected.identity
+        && current.name == expected.name
+        && current.physical_width == expected.physical_width
+        && current.physical_height == expected.physical_height
+        && current.position_x == expected.position_x
+        && current.position_y == expected.position_y
+        && current.scale_factor.to_bits() == expected.scale_factor.to_bits()
+        && current.primary == expected.primary
+}
+
+fn authoritative_video_display_monitor_for_output(
+    app: &tauri::AppHandle,
+    output: &VideoOutputSummary,
+) -> Result<VideoDisplayMonitor, String> {
+    if output.kind != VideoOutputKind::Display {
+        return Err("Only Display outputs have a physical monitor target".to_string());
     }
-    if spec.width != size.width || spec.height != size.height {
-        return Err(
-            "Display output dimensions must match the selected monitor exactly".to_string(),
-        );
-    }
-    Ok(())
+    let monitor_index = output
+        .monitor_id
+        .ok_or_else(|| "Display output monitor index is missing; re-add the display".to_string())?;
+    let monitor_identity = output.monitor_identity.as_deref().ok_or_else(|| {
+        "Display output monitor identity is missing; re-add the display".to_string()
+    })?;
+    authoritative_video_display_monitor(app, monitor_index, monitor_identity)
+}
+
+/// Build the authored project candidate for one new Display output. Persistence
+/// snapshots carry a separate authored-video image while the normal `video`
+/// field may be a rendered projection; mutate the authored image explicitly or
+/// `project_file_for_save_from_parts` will correctly replace the rendered field
+/// and the successful physical creation would have no project/fence delta.
+fn display_output_candidate_snapshot(
+    mut snapshot: EngineSnapshot,
+    output: VideoOutputSummary,
+) -> EngineSnapshot {
+    use_authored_video_snapshot(&mut snapshot);
+    snapshot.video.outputs.push(output);
+    synchronize_derived_video_compositions(&mut snapshot.video);
+    snapshot
 }
 
 fn add_display_output_with_output_control_fence(
     app: &tauri::AppHandle,
+    editor_window: &WebviewWindow,
     state: &AppState,
-    spec: &DisplayOutputSpecV1,
+    spec: &DisplayOutputSpecV2,
     expected_fence: &OutputControlFenceV1,
     lease_request: &OutputLeaseRequest,
     _lease_now_ms: u64,
+    expected_owner_principal: &str,
+    expected_owner_window_label: &str,
+    expected_owner_incarnation: u64,
 ) -> Result<
     (
         bool,
@@ -49620,17 +51377,90 @@ fn add_display_output_with_output_control_fence(
     ),
     String,
 > {
+    add_display_output_with_output_control_fence_core(
+        state,
+        spec,
+        expected_fence,
+        lease_request,
+        _lease_now_ms,
+        expected_owner_principal,
+        expected_owner_window_label,
+        expected_owner_incarnation,
+        TauriDisplayOutputNativeOperations {
+            app: app.clone(),
+            editor_window: editor_window.clone(),
+        },
+    )
+}
+
+fn add_display_output_with_output_control_fence_core<NativeOps>(
+    state: &AppState,
+    spec: &DisplayOutputSpecV2,
+    expected_fence: &OutputControlFenceV1,
+    lease_request: &OutputLeaseRequest,
+    _lease_now_ms: u64,
+    expected_owner_principal: &str,
+    expected_owner_window_label: &str,
+    expected_owner_incarnation: u64,
+    native_ops: NativeOps,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+>
+where
+    NativeOps: DisplayOutputNativeOperations,
+{
     spec.validate()
         .map_err(|_| "Display output specification is invalid".to_string())?;
-    let _lifecycle_guard = state
-        .standby_sync_lifecycle
-        .lock()
-        .map_err(|_| "Standby synchronization lifecycle lock was poisoned".to_string())?;
-    let _external_admission = lock_project_external_command_admission(state)?;
-    let mut coordinator = lock_project_coordinator(state)?;
-    let _transition_guard = lock_output_ownership_transition(state)?;
-    let (output_epoch_after, output_generation_after) = {
+    native_ops.validate_editor_monitor()?;
+    let initial_monitor =
+        native_ops.authoritative_monitor(spec.monitor_index, &spec.monitor_identity)?;
+    validate_display_monitor_dimensions(
+        spec.width,
+        spec.height,
+        initial_monitor.physical_width,
+        initial_monitor.physical_height,
+    )?;
+
+    // Phase 1: build every in-memory authority/project candidate and persist
+    // durable Pending. Nothing externally visible exists yet.
+    let (
+        output_epoch_after,
+        output_generation_after,
+        output,
+        candidate_snapshot,
+        expected_candidate_checkpoint_hash,
+        project_hash_ancillary,
+        project_hash_mappings,
+        mut project_plan,
+        mut creation_lease,
+        prepared_lease,
+    ) = {
+        let _lifecycle_guard = state
+            .standby_sync_lifecycle
+            .lock()
+            .map_err(|_| "Standby synchronization lifecycle lock was poisoned".to_string())?;
+        let _owner_rotation = state
+            .project_transaction_owner_rotation
+            .lock()
+            .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+        let _external_admission = lock_project_external_command_admission(state)?;
+        let mut coordinator = lock_project_coordinator(state)?;
+        let _transition_guard = lock_output_ownership_transition(state)?;
+        let lease_registry = state.output_lease_registry.lock().map_err(|_| {
+            "Output lease registry lock was poisoned before Display output preparation".to_string()
+        })?;
         if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+            || !control_plane_runtime::exact_output_control_owner_matches(
+                state,
+                expected_owner_principal,
+                expected_owner_window_label,
+                expected_owner_incarnation,
+            )
             || !control_plane_runtime::exact_output_control_fence_matches(
                 state,
                 &coordinator,
@@ -49638,151 +51468,637 @@ fn add_display_output_with_output_control_fence(
             )
             || ensure_no_pending_project_transaction(&coordinator).is_err()
         {
-            return Err("Output control fence changed before Display output creation".to_string());
+            return Err(
+                "Output control fence changed before Display output preparation".to_string(),
+            );
         }
-        validate_display_output_monitor_snapshot(app, spec)?;
-        if state.engine.snapshot().video.outputs.iter().any(|output| {
-            output.kind == VideoOutputKind::Display && output.monitor_id == Some(spec.monitor_index)
-        }) {
+        if state
+            .engine
+            .snapshot()
+            .video
+            .outputs
+            .iter()
+            .any(|candidate| {
+                candidate.kind == VideoOutputKind::Display
+                    && (candidate.monitor_id == Some(spec.monitor_index)
+                        || candidate.monitor_identity.as_deref()
+                            == Some(spec.monitor_identity.as_str()))
+            })
+        {
             return Err("A Display output already targets this monitor".to_string());
         }
-        // Display creation does not change the Engine's output-ownership
-        // role. Capture the projection from that real authority instead
-        // of manufacturing a successor pair that exact fence matching
-        // could never observe after this resource-only mutation.
-        let output_authority = state.engine.output_ownership_status();
-        let output_epoch_after = output_authority
+        let ownership = state.engine.output_ownership_status();
+        if !ownership.video_allowed {
+            return Err("Video output ownership is not active".to_string());
+        }
+        let output_epoch_after = ownership
             .epoch
             .checked_add(1)
             .filter(|value| *value <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
             .ok_or_else(|| "Output ownership epoch is exhausted".to_string())?;
-        let output_generation_after = output_authority
+        let output_generation_after = ownership
             .generation
             .checked_add(1)
             .filter(|value| *value <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
             .ok_or_else(|| "Output ownership generation is exhausted".to_string())?;
-        (output_epoch_after, output_generation_after)
-    };
-    {
-        let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
-            "Output lease registry lock was poisoned before Display output publication".to_string()
-        })?;
-        let final_lease_now_ms = state.output_lease_now_ms()?;
-        let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
-            state,
-            &mut lease_registry,
-            lease_request,
-            final_lease_now_ms,
-            "Display output creation",
-            || {
-                // The consent and lease may have waited while the native
-                // topology changed. Re-query immediately before allocating
-                // an output ID or publishing the authored project image.
-                validate_display_output_monitor_snapshot(app, spec)?;
-                if !state.engine.output_ownership_status().video_allowed {
-                    return Err("Video output ownership is not active".to_string());
-                }
-                let output_id = state.engine.allocate_video_output_id();
-                let output = VideoOutputSummary {
-                    id: output_id,
-                    label: spec.label.trim().to_string(),
-                    kind: VideoOutputKind::Display,
-                    enabled: true,
-                    composition_id: 1,
-                    fullscreen: spec.fullscreen,
-                    monitor_id: Some(spec.monitor_index),
-                    width: spec.width,
-                    height: spec.height,
-                    endpoint_name: None,
-                    opacity: 1.0,
-                    blackout: false,
-                    mapping: VideoOutputMapping::default(),
-                };
-                let before_snapshot = match state.engine.persistence_snapshot() {
-                    Ok(snapshot) => snapshot,
-                    Err(error) => {
-                        let _ = state.engine.release_video_output_id_if_last(output_id);
-                        return Err(error);
-                    }
-                };
-                let before_project = project_file_for_save_from_parts(
-                    before_snapshot.clone(),
+        let output_id = state.engine.allocate_video_output_id();
+        let output = VideoOutputSummary {
+            id: output_id,
+            label: spec.label.trim().to_string(),
+            kind: VideoOutputKind::Display,
+            enabled: true,
+            composition_id: 1,
+            fullscreen: spec.fullscreen,
+            monitor_id: Some(spec.monitor_index),
+            monitor_identity: Some(spec.monitor_identity.clone()),
+            width: spec.width,
+            height: spec.height,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: VideoOutputMapping::default(),
+        };
+        let prepared = (|| -> Result<_, String> {
+            let before_snapshot = state.engine.persistence_snapshot()?;
+            let before_project =
+                project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
+            let before = ProjectCheckpoint {
+                hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+                project: before_project,
+                mappings: coordinator.mappings.clone(),
+                epoch: coordinator.epoch,
+                revision: coordinator.revision,
+            };
+            let candidate_snapshot =
+                display_output_candidate_snapshot(before_snapshot, output.clone());
+            let after = ProjectCheckpoint {
+                project: project_file_for_save_from_parts(
+                    candidate_snapshot.clone(),
                     &coordinator.ancillary,
-                );
-                let before = ProjectCheckpoint {
-                    hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
-                    project: before_project,
-                    mappings: coordinator.mappings.clone(),
-                    epoch: coordinator.epoch,
-                    revision: coordinator.revision,
-                };
-                let mut candidate_snapshot = before_snapshot;
-                candidate_snapshot.video.outputs.push(output.clone());
-                let after_project =
-                    project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
-                let after = ProjectCheckpoint {
-                    project: after_project,
-                    mappings: coordinator.mappings.clone(),
-                    epoch: coordinator.epoch,
-                    revision: coordinator.revision,
-                    hash: String::new(),
-                };
-                let plan = match prepare_internal_media_asset_commit(
-                    &coordinator,
-                    "Add Display Output",
-                    "",
-                    before,
-                    after,
-                    current_unix_ms().min(u64::MAX as u128) as u64,
-                ) {
-                    Ok(plan) => plan,
+                ),
+                mappings: coordinator.mappings.clone(),
+                epoch: coordinator.epoch,
+                revision: coordinator.revision,
+                hash: String::new(),
+            };
+            let plan = prepare_internal_media_asset_commit(
+                &coordinator,
+                "Add Display Output",
+                "",
+                before,
+                after,
+                current_unix_ms().min(u64::MAX as u128) as u64,
+            )?;
+            let expected_candidate_checkpoint_hash = plan
+                .next_checkpoint_hash
+                .clone()
+                .ok_or_else(|| "Display output candidate did not change the project".to_string())?;
+            let activation = state
+                .engine
+                .admit_output_activation(ownership.effective_role)?;
+            let creation_lease = activation.admit_resource_creation()?;
+            let lease_now_ms = state.output_lease_now_ms()?;
+            let prepared_lease = prepare_display_output_lease_candidate(
+                state,
+                &lease_registry,
+                lease_request,
+                lease_now_ms,
+            )?;
+            Ok((
+                candidate_snapshot,
+                expected_candidate_checkpoint_hash,
+                coordinator.ancillary.clone(),
+                coordinator.mappings.clone(),
+                plan,
+                creation_lease,
+                prepared_lease,
+            ))
+        })();
+        let (
+            candidate_snapshot,
+            expected_candidate_checkpoint_hash,
+            project_hash_ancillary,
+            project_hash_mappings,
+            plan,
+            creation_lease,
+            prepared_lease,
+        ) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let _ = state.engine.release_video_output_id_if_last(output_id);
+                return Err(error);
+            }
+        };
+        (
+            output_epoch_after,
+            output_generation_after,
+            output,
+            candidate_snapshot,
+            expected_candidate_checkpoint_hash,
+            project_hash_ancillary,
+            project_hash_mappings,
+            Some(plan),
+            Some(creation_lease),
+            prepared_lease,
+        )
+    };
+
+    // Phases 2/3 run through the production transaction core. The hidden
+    // shell and GPU/first-frame workers are deadline-bounded, while the
+    // intervening admission closure owns every short authority guard.
+    let hidden_ops = native_ops.clone();
+    let hidden_output = output.clone();
+    let hidden_monitor = initial_monitor.clone();
+    let hidden_creation_lease = creation_lease
+        .take()
+        .expect("Display creation lease was prepared before the hidden shell phase");
+    let late_hidden_ops = native_ops.clone();
+    let hidden_phase_timeout = native_ops.hidden_phase_timeout();
+    let admitted_initial_monitor = initial_monitor.clone();
+    let admit_ops = native_ops.clone();
+    let gpu_ops = native_ops.clone();
+    let gpu_output = output.clone();
+    let gpu_output_id = output.id;
+    let gpu_initial_monitor = initial_monitor.clone();
+    let gpu_fence = expected_fence.clone();
+    let gpu_monitor_index = spec.monitor_index;
+    let gpu_monitor_identity = spec.monitor_identity.clone();
+    let gpu_phase_timeout = native_ops.gpu_phase_timeout();
+    let native_transaction = run_unpublished_display_native_transaction(
+        move || {
+            run_bounded_display_native_phase(
+                "syndocal-display-hidden-shell",
+                hidden_phase_timeout,
+                move |_phase_cancelled| match hidden_ops
+                    .prepare_hidden_candidate(&hidden_output, &hidden_monitor)
+                {
+                    Ok(candidate) => Ok((candidate, hidden_creation_lease)),
                     Err(error) => {
-                        let _ = state.engine.release_video_output_id_if_last(output_id);
-                        return Err(error);
-                    }
-                };
-                match run_admitted_internal_media_asset_transaction(
-                    &state.project_transaction_active,
-                    &mut coordinator,
-                    plan,
-                    || state.engine.add_video_output_published(output),
-                ) {
-                    Ok(()) => Ok(true),
-                    Err(error) => {
-                        // The Published command either never entered the
-                        // queue or definitively rolled back before this
-                        // error returned. Reclaim only the unused tail;
-                        // concurrent allocations remain monotonic.
-                        let _ = state.engine.release_video_output_id_if_last(output_id);
+                        if matches!(error, OutputLeaseCandidateCommitFailure::SafeAbort(_)) {
+                            hidden_creation_lease.retire();
+                        } else {
+                            std::mem::forget(hidden_creation_lease);
+                        }
                         Err(error)
                     }
-                }
-            },
-        )?;
-        let fence_after = if !applied {
-            expected_fence.clone()
-        } else {
-            let output_authority = state.engine.output_ownership_status();
-            let actual_output_epoch = output_authority
-                .epoch
-                .checked_add(1)
-                .filter(|value| *value <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
-                .ok_or_else(|| "Output ownership epoch is exhausted".to_string())?;
-            let actual_output_generation = output_authority
-                .generation
-                .checked_add(1)
-                .filter(|value| *value <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
-                .ok_or_else(|| "Output ownership generation is exhausted".to_string())?;
-            if (actual_output_epoch, actual_output_generation)
-                != (output_epoch_after, output_generation_after)
-            {
-                return Err(
-                    "Output ownership authority changed during Display output publication"
-                        .to_string(),
-                );
+                },
+                move |(candidate, lease)| {
+                    if late_hidden_ops.cleanup_hidden_candidate(candidate).is_ok() {
+                        lease.retire();
+                    } else {
+                        std::mem::forget(lease);
+                    }
+                },
+            )
+        },
+        |_| {
+            let final_monitor = admit_ops
+                .authoritative_monitor(spec.monitor_index, &spec.monitor_identity)
+                .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+            if !exact_video_display_monitor_matches(&final_monitor, &admitted_initial_monitor) {
+                return Err(OutputLeaseCandidateCommitFailure::safe(
+                    "Display output monitor topology changed before physical admission",
+                ));
             }
+            let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+                OutputLeaseCandidateCommitFailure::safe(
+                    "Standby synchronization lifecycle lock was poisoned",
+                )
+            })?;
+            let _owner_rotation =
+                state
+                    .project_transaction_owner_rotation
+                    .lock()
+                    .map_err(|_| {
+                        OutputLeaseCandidateCommitFailure::safe(
+                            "Project transaction owner rotation lock was poisoned",
+                        )
+                    })?;
+            let _external_admission = lock_project_external_command_admission(state)
+                .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+            let mut coordinator =
+                lock_project_coordinator(state).map_err(OutputLeaseCandidateCommitFailure::safe)?;
+            let _transition_guard = lock_output_ownership_transition(state)
+                .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+            let lease_registry = state.output_lease_registry.lock().map_err(|_| {
+                OutputLeaseCandidateCommitFailure::safe(
+                    "Output lease registry lock was poisoned before Display physical admission",
+                )
+            })?;
+            if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+                || !control_plane_runtime::exact_output_control_owner_matches(
+                    state,
+                    expected_owner_principal,
+                    expected_owner_window_label,
+                    expected_owner_incarnation,
+                )
+                || !control_plane_runtime::exact_output_control_fence_matches(
+                    state,
+                    &coordinator,
+                    expected_fence,
+                )
+                || ensure_no_pending_project_transaction(&coordinator).is_err()
+                || *lease_registry != prepared_lease.baseline
+                || state
+                    .engine
+                    .snapshot()
+                    .video
+                    .outputs
+                    .iter()
+                    .any(|candidate| {
+                        candidate.kind == VideoOutputKind::Display
+                            && (candidate.monitor_id == Some(spec.monitor_index)
+                                || candidate.monitor_identity.as_deref()
+                                    == Some(spec.monitor_identity.as_str()))
+                    })
+            {
+                return Err(OutputLeaseCandidateCommitFailure::safe(
+                    "Display output authority changed before physical admission",
+                ));
+            }
+            state
+                .project_transaction_active
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .map_err(|_| {
+                    OutputLeaseCandidateCommitFailure::safe(
+                        "Another project transaction is active; retry Display creation",
+                    )
+                })?;
+            Ok(())
+        },
+        move |(hidden_candidate, gpu_creation_lease)| {
+            let admitted_monitor =
+                match gpu_ops.authoritative_monitor(gpu_monitor_index, &gpu_monitor_identity) {
+                    Ok(monitor)
+                        if exact_video_display_monitor_matches(&monitor, &gpu_initial_monitor) =>
+                    {
+                        monitor
+                    }
+                    monitor_result => {
+                        let error = match monitor_result {
+                            Ok(_) => "Display output monitor topology changed before first frame"
+                                .to_string(),
+                            Err(error) => error,
+                        };
+                        let cleanup = gpu_ops.cleanup_hidden_candidate(hidden_candidate);
+                        let failure = OutputLeaseCandidateCommitFailure::safe(error)
+                            .with_cleanup("Display hidden-shell cleanup", cleanup);
+                        if matches!(failure, OutputLeaseCandidateCommitFailure::SafeAbort(_)) {
+                            state
+                                .project_transaction_active
+                                .store(false, Ordering::Release);
+                            gpu_creation_lease.retire();
+                            let _ = state.engine.release_video_output_id_if_last(gpu_output_id);
+                        } else {
+                            std::mem::forget(gpu_creation_lease);
+                        }
+                        return Err(failure);
+                    }
+                };
+
+            // Authority is reserved, but every mutex guard is gone. GPU
+            // initialization, exact first-frame permit/show/present, and worker
+            // creation therefore cannot hold the coordinator.
+            let worker_ops = gpu_ops.clone();
+            let worker_output = gpu_output.clone();
+            let worker_monitor = admitted_monitor.clone();
+            let worker_fence = gpu_fence.clone();
+            let late_gpu_ops = gpu_ops.clone();
+            let phase_result = run_bounded_display_native_phase(
+                "syndocal-display-gpu-first-frame",
+                gpu_phase_timeout,
+                move |phase_cancelled| match worker_ops.prepare_native_candidate(
+                    hidden_candidate,
+                    &worker_output,
+                    &worker_monitor,
+                    candidate_snapshot,
+                    &worker_fence,
+                    phase_cancelled,
+                ) {
+                    Ok(candidate) => Ok((candidate, gpu_creation_lease)),
+                    Err((hidden, error)) => {
+                        let cleanup = worker_ops.cleanup_hidden_candidate(hidden);
+                        let failure = error.with_cleanup("Display first-frame cleanup", cleanup);
+                        if matches!(failure, OutputLeaseCandidateCommitFailure::SafeAbort(_)) {
+                            gpu_creation_lease.retire();
+                        } else {
+                            std::mem::forget(gpu_creation_lease);
+                        }
+                        Err(failure)
+                    }
+                },
+                move |(candidate, lease)| {
+                    if late_gpu_ops.cleanup_native_candidate(candidate).is_ok() {
+                        lease.retire();
+                    } else {
+                        std::mem::forget(lease);
+                    }
+                },
+            );
+            if let Err(failure) = &phase_result {
+                if matches!(failure, OutputLeaseCandidateCommitFailure::SafeAbort(_)) {
+                    state
+                        .project_transaction_active
+                        .store(false, Ordering::Release);
+                    let _ = state.engine.release_video_output_id_if_last(gpu_output_id);
+                }
+            }
+            phase_result
+        },
+    );
+    let native_candidate = match native_transaction {
+        Ok(((candidate, lease), ())) => {
+            creation_lease = Some(lease);
+            candidate
+        }
+        Err((hidden_candidate, error)) => {
+            let cleanup = hidden_candidate
+                .map(|(candidate, lease)| {
+                    let cleanup = native_ops.cleanup_hidden_candidate(candidate);
+                    if cleanup.is_ok() {
+                        lease.retire();
+                    } else {
+                        std::mem::forget(lease);
+                    }
+                    cleanup
+                })
+                .unwrap_or(Ok(()));
+            let failure = error.with_cleanup("Display native transaction cleanup", cleanup);
+            if matches!(failure, OutputLeaseCandidateCommitFailure::SafeAbort(_)) {
+                state
+                    .project_transaction_active
+                    .store(false, Ordering::Release);
+                let _ = state.engine.release_video_output_id_if_last(output.id);
+            }
+            return Err(abort_prepared_display_output_lease_candidate(
+                state,
+                lease_request,
+                failure,
+            ));
+        }
+    };
+
+    // The Engine ACK may wait on its worker, so authorize it at a short exact
+    // boundary and release every guard before sending. The armed project fence
+    // prevents owner/project/output authority from changing in that gap; S0
+    // remains priority-authoritative and was also checked at first present.
+    let engine_commit_monitor =
+        native_ops.authoritative_monitor(spec.monitor_index, &spec.monitor_identity);
+    let engine_commit_authorized = (|| -> Result<(), OutputLeaseCandidateCommitFailure> {
+        let engine_commit_monitor =
+            engine_commit_monitor.map_err(OutputLeaseCandidateCommitFailure::safe)?;
+        if !exact_video_display_monitor_matches(&engine_commit_monitor, &initial_monitor) {
+            return Err(OutputLeaseCandidateCommitFailure::safe(
+                "Display output monitor topology changed before Engine publication",
+            ));
+        }
+        let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+            OutputLeaseCandidateCommitFailure::safe(
+                "Standby synchronization lifecycle lock was poisoned",
+            )
+        })?;
+        let _owner_rotation = state
+            .project_transaction_owner_rotation
+            .lock()
+            .map_err(|_| {
+                OutputLeaseCandidateCommitFailure::safe(
+                    "Project transaction owner rotation lock was poisoned",
+                )
+            })?;
+        let _external_admission =
+            lock_project_external_command_admission_for_display_finalize(state)
+                .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+        let mut coordinator =
+            lock_project_coordinator(state).map_err(OutputLeaseCandidateCommitFailure::safe)?;
+        let _transition_guard = lock_output_ownership_transition(state)
+            .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+        let lease_registry = state.output_lease_registry.lock().map_err(|_| {
+            OutputLeaseCandidateCommitFailure::safe(
+                "Output lease registry lock was poisoned before Display Engine publication",
+            )
+        })?;
+        if !state.project_transaction_active.load(Ordering::Acquire)
+            || reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+            || !control_plane_runtime::exact_output_control_owner_matches(
+                state,
+                expected_owner_principal,
+                expected_owner_window_label,
+                expected_owner_incarnation,
+            )
+            || !control_plane_runtime::exact_output_control_fence_matches(
+                state,
+                &coordinator,
+                expected_fence,
+            )
+            || ensure_no_pending_project_transaction(&coordinator).is_err()
+            || *lease_registry != prepared_lease.baseline
+            || state
+                .engine
+                .snapshot()
+                .video
+                .outputs
+                .iter()
+                .any(|candidate| {
+                    candidate.kind == VideoOutputKind::Display
+                        && (candidate.monitor_id == output.monitor_id
+                            || candidate.monitor_identity == output.monitor_identity)
+                })
+        {
+            return Err(OutputLeaseCandidateCommitFailure::safe(
+                "Display output authority changed before Engine publication",
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(error) = engine_commit_authorized {
+        let cleanup = native_ops.cleanup_native_candidate(native_candidate);
+        let failure = error.with_cleanup("Display pre-Engine cleanup", cleanup);
+        if matches!(failure, OutputLeaseCandidateCommitFailure::SafeAbort(_)) {
+            state
+                .project_transaction_active
+                .store(false, Ordering::Release);
+            if let Some(lease) = creation_lease.take() {
+                lease.retire();
+            }
+            let _ = state.engine.release_video_output_id_if_last(output.id);
+        } else if let Some(lease) = creation_lease.take() {
+            std::mem::forget(lease);
+        }
+        return Err(abort_prepared_display_output_lease_candidate(
+            state,
+            lease_request,
+            failure,
+        ));
+    }
+    if let Err(error) = state.engine.add_video_output_published(output.clone()) {
+        let cleanup = cleanup_display_candidate_after_engine_attempt(
+            &native_ops,
+            state,
+            output.id,
+            native_candidate,
+        );
+        let failure = match cleanup {
+            Ok(()) => OutputLeaseCandidateCommitFailure::safe(format!(
+                "Display output engine publication failed and was definitively removed: {error}"
+            )),
+            Err(cleanup) => OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                "Display output engine publication acknowledgement is indeterminate: {error}; Display output engine/native cleanup: {cleanup}"
+            )),
+        };
+        if matches!(failure, OutputLeaseCandidateCommitFailure::SafeAbort(_)) {
+            state
+                .project_transaction_active
+                .store(false, Ordering::Release);
+            if let Some(lease) = creation_lease.take() {
+                lease.retire();
+            }
+            let _ = state.engine.release_video_output_id_if_last(output.id);
+        } else if let Some(lease) = creation_lease.take() {
+            std::mem::forget(lease);
+        }
+        return Err(abort_prepared_display_output_lease_candidate(
+            state,
+            lease_request,
+            failure,
+        ));
+    }
+
+    // The acknowledged Engine candidate is already part of its persistence
+    // image, so compare that complete B image with the preflighted candidate
+    // hash. This potentially blocking Engine request and all serialization run
+    // before the short final authority boundary; the active reservation keeps
+    // ordinary project mutations closed until the terminal durable record.
+    let final_candidate_checkpoint_hash =
+        state.engine.persistence_snapshot().and_then(|snapshot| {
+            let project = project_file_for_save_from_parts(snapshot, &project_hash_ancillary);
+            project_checkpoint_hash(&project, &project_hash_mappings)
+        });
+    let final_monitor =
+        native_ops.authoritative_monitor(spec.monitor_index, &spec.monitor_identity);
+    let mut native_candidate = Some(native_candidate);
+    let final_commit = (|| -> Result<
+        (
+            OutputControlFenceV1,
+            output_lease::OutputLeaseRequestReceipt,
+        ),
+        OutputLeaseCandidateCommitFailure,
+    > {
+        let final_monitor = final_monitor.map_err(OutputLeaseCandidateCommitFailure::safe)?;
+        let final_candidate_checkpoint_hash = final_candidate_checkpoint_hash
+            .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+        if !exact_video_display_monitor_matches(&final_monitor, &initial_monitor) {
+            return Err(OutputLeaseCandidateCommitFailure::safe(
+                "Display output monitor topology changed before final publication",
+            ));
+        }
+        let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+            OutputLeaseCandidateCommitFailure::safe(
+                "Standby synchronization lifecycle lock was poisoned",
+            )
+        })?;
+        let _owner_rotation = state
+            .project_transaction_owner_rotation
+            .lock()
+            .map_err(|_| {
+                OutputLeaseCandidateCommitFailure::safe(
+                    "Project transaction owner rotation lock was poisoned",
+                )
+            })?;
+        let _external_admission = lock_project_external_command_admission_for_display_finalize(
+            state,
+        )
+        .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+        let mut coordinator =
+            lock_project_coordinator(state).map_err(OutputLeaseCandidateCommitFailure::safe)?;
+        let _transition_guard = lock_output_ownership_transition(state)
+            .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+        let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
+            OutputLeaseCandidateCommitFailure::safe(
+                "Output lease registry lock was poisoned before Display final publication",
+            )
+        })?;
+        if !state.project_transaction_active.load(Ordering::Acquire) {
+            return Err(OutputLeaseCandidateCommitFailure::safe(
+                "Display project reservation ended before final publication",
+            ));
+        }
+        if !control_plane_runtime::exact_output_control_owner_matches(
+            state,
+            expected_owner_principal,
+            expected_owner_window_label,
+            expected_owner_incarnation,
+        )
+        {
+            return Err(OutputLeaseCandidateCommitFailure::safe(
+                "Display output owner changed before final publication",
+            ));
+        }
+        if !control_plane_runtime::exact_output_control_fence_matches(
+            state,
+            &coordinator,
+            expected_fence,
+        ) {
+            return Err(OutputLeaseCandidateCommitFailure::safe(
+                "Display output fence changed before final publication",
+            ));
+        }
+        ensure_no_pending_project_transaction(&coordinator)
+            .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+        if *lease_registry != prepared_lease.baseline {
+            return Err(OutputLeaseCandidateCommitFailure::safe(
+                "Display output lease generation changed before final publication",
+            ));
+        }
+        if final_candidate_checkpoint_hash != expected_candidate_checkpoint_hash {
+            return Err(OutputLeaseCandidateCommitFailure::safe(
+                "Display project candidate changed before final publication",
+            ));
+        }
+        let snapshot = state.engine.snapshot();
+        let exact_engine_candidate = snapshot.video.outputs.iter().any(|candidate| {
+            candidate.id == output.id
+                && candidate.kind == VideoOutputKind::Display
+                && candidate.monitor_id == output.monitor_id
+                && candidate.monitor_identity == output.monitor_identity
+                && candidate.width == output.width
+                && candidate.height == output.height
+        });
+        let competing_target = snapshot.video.outputs.iter().any(|candidate| {
+            candidate.id != output.id
+                && candidate.kind == VideoOutputKind::Display
+                && (candidate.monitor_id == output.monitor_id
+                    || candidate.monitor_identity == output.monitor_identity)
+        });
+        if !exact_engine_candidate || competing_target {
+            return Err(OutputLeaseCandidateCommitFailure::safe(
+                "Display output Engine candidate changed before final publication",
+            ));
+        }
+        let candidate = native_candidate.take().ok_or_else(|| {
+            OutputLeaseCandidateCommitFailure::safe("Display native candidate is missing")
+        })?;
+        match native_ops.publish_native_candidate_after_preflight(candidate, || {
+            let lease = creation_lease.take().ok_or_else(|| {
+                OutputLeaseCandidateCommitFailure::in_doubt(
+                    "Display output creation lease is missing before publication",
+                )
+            })?;
+            if let Err(lease) = lease.publish() {
+                creation_lease = Some(lease);
+                return Err(OutputLeaseCandidateCommitFailure::safe(
+                    "Display output ownership fence changed before publication",
+                ));
+            }
+            apply_internal_media_asset_transaction_after_preflight(
+                &mut coordinator,
+                project_plan
+                    .take()
+                    .expect("Display project plan is consumed exactly once"),
+            );
+            let receipt = prepared_lease.receipt.clone();
+            *lease_registry = prepared_lease.candidate.clone();
             let safety = state.engine.safety_blackout_authority();
-            control_plane_runtime::committed_output_control_fence(
+            let fence_after = control_plane_runtime::committed_output_control_fence(
                 expected_fence,
                 coordinator.epoch,
                 coordinator.revision,
@@ -49792,14 +52108,60 @@ fn add_display_output_with_output_control_fence(
                 output_generation_after,
                 safety.epoch,
                 safety.generation,
+            );
+            Ok((fence_after, receipt))
+        }) {
+            Ok(committed) => Ok(committed),
+            Err((candidate, error)) => {
+                native_candidate = Some(candidate);
+                Err(error)
+            }
+        }
+    })();
+
+    match final_commit {
+        Ok((fence_after, receipt)) => {
+            record_published_display_output_terminal(
+                &state.output_lease_durable_receipts,
+                &state.project_transaction_active,
+                &receipt,
             )
-        };
-        Ok((applied, fence_after, lease_receipt))
+            .map_err(OutputLeaseCandidateCommitFailure::into_message)?;
+            Ok((true, fence_after, receipt))
+        }
+        Err(error) if native_candidate.is_none() => Err(error.into_message()),
+        Err(error) => {
+            let cleanup = cleanup_display_candidate_after_engine_attempt(
+                &native_ops,
+                state,
+                output.id,
+                native_candidate
+                    .take()
+                    .expect("unpublished Display candidate must remain available for cleanup"),
+            );
+            let failure = error.with_cleanup("Display final-boundary cleanup", cleanup);
+            if matches!(failure, OutputLeaseCandidateCommitFailure::SafeAbort(_)) {
+                state
+                    .project_transaction_active
+                    .store(false, Ordering::Release);
+                if let Some(lease) = creation_lease.take() {
+                    lease.retire();
+                }
+                let _ = state.engine.release_video_output_id_if_last(output.id);
+            } else if let Some(lease) = creation_lease.take() {
+                std::mem::forget(lease);
+            }
+            Err(abort_prepared_display_output_lease_candidate(
+                state,
+                lease_request,
+                failure,
+            ))
+        }
     }
 }
 
 /// Apply an authenticated R4 Arm while retaining the same lifecycle and
-/// project admission boundary that was used to validate its consent fence.
+/// project admission boundary that was used to validate its authorization fence.
 /// The output transition lock is acquired in the global order after the
 /// coordinator, then the fence is checked again while that same guard remains
 /// live through physical route activation and the terminal-fence capture.
@@ -49914,9 +52276,38 @@ fn apply_output_ownership_role_with_output_control_fence(
     )
 }
 
+/// Canonical normal-path output enable.  The lease request is an Acquire for
+/// the exact Lighting+Video resource set and the callback arms the engine's
+/// Both role while the same transition/project fences remain held.  This is
+/// intentionally one candidate/commit transaction, never public Acquire then
+/// public Arm.
+pub(crate) fn enable_output_with_output_control_fence(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    expected_fence: &OutputControlFenceV1,
+    lease_request: &OutputLeaseRequest,
+    lease_now_ms: u64,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
+    apply_output_ownership_role_with_output_control_fence(
+        app,
+        state,
+        MachineOutputRole::Both,
+        expected_fence,
+        lease_request,
+        lease_now_ms,
+    )
+}
+
 /// Release only the safety blackout latch that was named by the authenticated
 /// R4 fence. Project admission remains held while the engine consumes that
-/// fence, so a project swap cannot turn a consent for one project into a
+/// fence, so a project swap cannot turn an authorization for one project into a
 /// release on the next project.
 fn release_safety_blackout_with_output_control_fence(
     state: &AppState,
@@ -50240,6 +52631,12 @@ fn apply_output_ownership_role_with_transition_guard(
     role: MachineOutputRole,
     _transition_guard: &std::sync::MutexGuard<'_, ()>,
 ) -> Result<OutputOwnershipStatus, String> {
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err(
+            "Display output publication is active; retry the output ownership transition"
+                .to_string(),
+        );
+    }
     validate_output_role_change_for_standby_sync(state, role)?;
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
@@ -50296,8 +52693,15 @@ fn apply_output_ownership_role_with_transition_guard(
 }
 
 #[tauri::command]
-fn get_output_ownership_status(state: State<'_, AppState>) -> OutputOwnershipStatus {
-    state.engine.output_ownership_status()
+async fn get_output_ownership_status(
+    app: tauri::AppHandle,
+) -> Result<OutputOwnershipStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        Ok::<OutputOwnershipStatus, String>(state.engine.output_ownership_status())
+    })
+    .await
+    .map_err(|error| format!("Output ownership status query worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -52494,9 +54898,10 @@ struct VideoOutputWindowStatus {
     performance: Option<NativeVideoOutputPerformance>,
 }
 
-/// Physical display targets exposed to the local setup UI.  The index is the
-/// stable-in-process position used by the existing native output window path;
-/// geometry intentionally keeps signed coordinates because Windows monitor
+/// Physical display targets exposed to the local setup UI.  Windows dimensions
+/// and identity come from the active QueryDisplayConfig source/target pair;
+/// the index remains the in-process position used by the native output window
+/// path. Geometry intentionally keeps signed coordinates because monitor
 /// topologies may extend left/up from the primary display.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -52509,6 +54914,25 @@ struct VideoDisplayMonitor {
     position_x: i32,
     position_y: i32,
     scale_factor: f64,
+    primary: bool,
+    is_editor_monitor: bool,
+}
+
+pub(crate) fn validate_display_monitor_dimensions(
+    requested_width: u32,
+    requested_height: u32,
+    detected_width: u32,
+    detected_height: u32,
+) -> Result<(), String> {
+    if detected_width == 0 || detected_height == 0 {
+        return Err("Display output monitor reported an empty physical size".to_string());
+    }
+    if requested_width != detected_width || requested_height != detected_height {
+        return Err(
+            "Display output dimensions must match the selected monitor exactly".to_string(),
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -52654,6 +55078,29 @@ fn apply_native_video_output_window_shell(
     output: &VideoOutputSummary,
     test_pattern: bool,
 ) -> Result<(), String> {
+    let monitor = if output.kind == VideoOutputKind::Display {
+        Some(authoritative_video_display_monitor_for_output(app, output)?)
+    } else {
+        None
+    };
+    apply_native_video_output_window_shell_with_monitor(
+        window,
+        output,
+        test_pattern,
+        monitor.as_ref(),
+    )
+}
+
+/// Apply shell geometry from a descriptor captured before the authoritative
+/// project/lease locks are taken. This variant is intentionally free of
+/// monitor enumeration and Webview/Runtime RPCs, so AddDisplay cannot create
+/// an event-loop circular wait while its commit guards are held.
+fn apply_native_video_output_window_shell_with_monitor(
+    window: &tauri::Window,
+    output: &VideoOutputSummary,
+    test_pattern: bool,
+    monitor: Option<&VideoDisplayMonitor>,
+) -> Result<(), String> {
     window
         .set_title(&format!(
             "Syndocal {} - {}",
@@ -52665,15 +55112,16 @@ fn apply_native_video_output_window_shell(
             output.label
         ))
         .map_err(|error| error.to_string())?;
-    if let Some(monitor_id) = output.monitor_id {
-        let monitors = app
-            .available_monitors()
+    if output.kind == VideoOutputKind::Display {
+        let monitor = monitor.ok_or_else(|| {
+            "Display output shell is missing its authoritative monitor descriptor".to_string()
+        })?;
+        window
+            .set_position(tauri::PhysicalPosition::new(
+                monitor.position_x,
+                monitor.position_y,
+            ))
             .map_err(|error| error.to_string())?;
-        if let Some(monitor) = monitors.get(monitor_id as usize) {
-            window
-                .set_position(monitor.position().clone())
-                .map_err(|error| error.to_string())?;
-        }
     }
     window
         .set_fullscreen(output.fullscreen)
@@ -53187,7 +55635,18 @@ fn prepare_native_video_output(
     width: u32,
     height: u32,
     follow_last_valid: &mut Option<NativeTimelineFollowLastValidFrame>,
+    unpublished_snapshot: Option<&EngineSnapshot>,
 ) -> Result<NativeVideoOutputFrame, String> {
+    if let Some(snapshot) = unpublished_snapshot {
+        follow_last_valid.take();
+        renderer
+            .frame_provider_mut()
+            .set_bpm(Some(snapshot.clock.bpm));
+        return renderer
+            .prepare_output_frames(&snapshot.video, output_id, width.max(1), height.max(1))
+            .map(NativeVideoOutputFrame::Prepared)
+            .map_err(|error| format!("{error:?}"));
+    }
     if let Some((context, follow)) = capture_native_timeline_follow_video_render_snapshot(engine) {
         renderer
             .frame_provider_mut()
@@ -53234,6 +55693,18 @@ fn record_native_video_output_metrics(
     }
 }
 
+fn exact_display_first_frame_fence_matches(
+    engine: &EngineHandle,
+    expected: &OutputControlFenceV1,
+) -> bool {
+    let output = engine.output_ownership_status();
+    let safety = engine.safety_blackout_authority();
+    output.epoch.checked_add(1) == Some(expected.output_epoch)
+        && output.generation.checked_add(1) == Some(expected.output_generation)
+        && safety.epoch == expected.safety_blackout_epoch
+        && safety.generation == expected.safety_blackout_generation
+}
+
 fn start_native_video_live_output(
     window: tauri::Window,
     engine: EngineHandle,
@@ -53243,6 +55714,12 @@ fn start_native_video_live_output(
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_inputs: spout_transport::SpoutInputRegistry,
     capture_inputs: capture_transport::CaptureInputRegistry,
+    initial_size_override: Option<(u32, u32)>,
+    unpublished_snapshot: Option<EngineSnapshot>,
+    gate_render_loop_until_publication: bool,
+    first_frame_fence: Option<OutputControlFenceV1>,
+    phase_cancelled: Option<Arc<AtomicBool>>,
+    show_before_first_frame: bool,
     label: String,
     teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
 ) -> Result<NativeVideoOutputWorker, String> {
@@ -53254,14 +55731,17 @@ fn start_native_video_live_output(
         );
         return Err(error);
     }
-    let initial_size = window.inner_size().map_err(|error| error.to_string())?;
+    let initial_size = match initial_size_override {
+        Some((width, height)) => (width.max(1), height.max(1)),
+        None => {
+            let size = window.inner_size().map_err(|error| error.to_string())?;
+            (size.width.max(1), size.height.max(1))
+        }
+    };
     let window = Arc::new(window);
-    let mut presenter = video::GpuSurfacePresenter::new(
-        Arc::clone(&window),
-        initial_size.width.max(1),
-        initial_size.height.max(1),
-    )
-    .map_err(|error| format!("Native video output initialization failed: {error:?}"))?;
+    let mut presenter =
+        video::GpuSurfacePresenter::new(Arc::clone(&window), initial_size.0, initial_size.1)
+            .map_err(|error| format!("Native video output initialization failed: {error:?}"))?;
     let decoder =
         ndi_transport::NdiAwareVideoFrameDecoder::from_env().with_capture_inputs(capture_inputs);
     #[cfg(feature = "ndi")]
@@ -53278,19 +55758,36 @@ fn start_native_video_live_output(
         &mut renderer,
         &engine,
         output_id,
-        initial_size.width,
-        initial_size.height,
+        initial_size.0,
+        initial_size.1,
         &mut initial_follow_last_valid,
+        unpublished_snapshot.as_ref(),
     )
     .and_then(|first_output| {
+        if phase_cancelled
+            .as_ref()
+            .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+        {
+            return Err(
+                "Display output native phase expired before first physical frame".to_string(),
+            );
+        }
+        if let Some(expected) = first_frame_fence.as_ref() {
+            if !exact_display_first_frame_fence_matches(&engine, expected) {
+                return Err(
+                    "Display output authority changed before first physical frame".to_string(),
+                );
+            }
+        }
         let _video_permit = engine.acquire_video_output()?;
+        if show_before_first_frame {
+            window
+                .show()
+                .map_err(|error| format!("Native video output first-frame show failed: {error}"))?;
+        }
         match first_output {
             NativeVideoOutputFrame::Prepared(prepared) => presenter
-                .present_prepared_output(
-                    &prepared,
-                    initial_size.width.max(1),
-                    initial_size.height.max(1),
-                )
+                .present_prepared_output(&prepared, initial_size.0, initial_size.1)
                 .map_err(|error| format!("Native video output first frame failed: {error:?}")),
             NativeVideoOutputFrame::Follow {
                 frame,
@@ -53305,8 +55802,8 @@ fn start_native_video_live_output(
     });
     record_native_video_output_metrics(
         &metrics,
-        initial_size.width,
-        initial_size.height,
+        initial_size.0,
+        initial_size.1,
         first_started,
         presenter.buffer_stats(),
         renderer.frame_provider().decoder().diagnostics(),
@@ -53336,40 +55833,54 @@ fn start_native_video_live_output(
         }
     });
     let worker_stop = Arc::clone(&stop);
+    let start_gate = gate_render_loop_until_publication.then(|| Arc::new(AtomicBool::new(false)));
+    let worker_start_gate = start_gate.clone();
     let worker_teardown_lease = Arc::clone(&teardown_lease);
+    let fixed_size = initial_size_override;
     let join = std::thread::Builder::new()
         .name(format!("syndocal-video-output-{output_id}"))
         .spawn(move || -> Result<(), String> {
+            if let Some(start_gate) = worker_start_gate {
+                while !start_gate.load(Ordering::Acquire) && !worker_stop.load(Ordering::Acquire) {
+                    std::thread::park_timeout(Duration::from_millis(1));
+                }
+                if worker_stop.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+            }
             let target_interval = Duration::from_nanos(1_000_000_000 / 60);
             while !worker_stop.load(Ordering::Acquire) {
                 let frame_started = Instant::now();
-                let size = match window.inner_size() {
-                    Ok(size) => size,
-                    Err(error) => {
-                        let error = format!("Native video output window size failed: {error}");
-                        let result = native_video_output_worker_result(
-                            &worker_stop,
-                            engine.output_ownership_status().state,
-                            Err(error),
-                        );
-                        if let Err(error) = &result {
-                            arm_native_video_output_failure_fence(
-                                &engine,
-                                &worker_teardown_lease,
-                                &label,
-                                error.clone(),
+                let (width, height) = match fixed_size {
+                    Some((width, height)) => (width, height),
+                    None => match window.inner_size() {
+                        Ok(size) => (size.width, size.height),
+                        Err(error) => {
+                            let error = format!("Native video output window size failed: {error}");
+                            let result = native_video_output_worker_result(
+                                &worker_stop,
+                                engine.output_ownership_status().state,
+                                Err(error),
                             );
-                            let _ = window.close();
+                            if let Err(error) = &result {
+                                arm_native_video_output_failure_fence(
+                                    &engine,
+                                    &worker_teardown_lease,
+                                    &label,
+                                    error.clone(),
+                                );
+                                let _ = window.close();
+                            }
+                            return result;
                         }
-                        return result;
-                    }
+                    },
                 };
-                if size.width > 0 && size.height > 0 {
+                if width > 0 && height > 0 {
                     let result = native_video_output_live_frame_with_permit(
                         &mut presenter,
                         || engine.acquire_video_output(),
                         |presenter| {
-                            presenter.resize(size.width, size.height).map_err(|error| {
+                            presenter.resize(width, height).map_err(|error| {
                                 format!("Native video output resize failed: {error:?}")
                             })
                         },
@@ -53378,14 +55889,15 @@ fn start_native_video_live_output(
                                 &mut renderer,
                                 &engine,
                                 output_id,
-                                size.width,
-                                size.height,
+                                width,
+                                height,
                                 &mut follow_last_valid,
+                                None,
                             )
                         },
                         |presenter, output| match output {
                             NativeVideoOutputFrame::Prepared(prepared) => presenter
-                                .present_prepared_output(&prepared, size.width, size.height)
+                                .present_prepared_output(&prepared, width, height)
                                 .map_err(|error| {
                                     format!("Native video output present failed: {error:?}")
                                 }),
@@ -53433,8 +55945,8 @@ fn start_native_video_live_output(
                     );
                     record_native_video_output_metrics(
                         &metrics,
-                        size.width,
-                        size.height,
+                        width,
+                        height,
                         frame_started,
                         presenter.buffer_stats(),
                         renderer.frame_provider().decoder().diagnostics(),
@@ -53488,10 +56000,11 @@ fn start_native_video_live_output(
             Ok(())
         })
         .map_err(|error| format!("Native video output thread failed: {error}"))?;
-    Ok(NativeVideoOutputWorker::with_teardown_lease(
+    Ok(NativeVideoOutputWorker::with_teardown_lease_and_start_gate(
         stop,
         join,
         teardown_lease,
+        start_gate,
     ))
 }
 
@@ -53557,6 +56070,16 @@ async fn sync_open_video_output_windows(
         error
     })?;
     let snapshot = state.engine.snapshot();
+    for output in snapshot
+        .video
+        .outputs
+        .iter()
+        .filter(|output| output.kind == VideoOutputKind::Display)
+    {
+        // Validate every persisted target before retiring or mutating any
+        // native window. Reordered/hot-unplugged topology fails closed.
+        authoritative_video_display_monitor_for_output(&app, output)?;
+    }
     let summary = VideoOutputWindowSyncSummary {
         synced_live: 0,
         synced_test_pattern: 0,
@@ -53736,6 +56259,7 @@ async fn sync_video_output_window(
             )),
         };
     }
+    authoritative_video_display_monitor_for_output(&app, &output)?;
     if !state.engine.output_ownership_status().video_allowed {
         let _ =
             retire_native_video_output_window(&app, &state.native_video_output_workers, &label)?;
@@ -54015,6 +56539,10 @@ async fn open_video_output_window(
     if output.kind != VideoOutputKind::Display {
         return Err("Only Display video outputs can be opened as windows".to_string());
     }
+    // Resolve the persisted index and stable device identity before touching
+    // an existing window or creating a native one. A stale index must never
+    // be allowed to retarget a different physical display.
+    let _monitor = authoritative_video_display_monitor_for_output(&app, &output)?;
 
     let label = video_output_window_label(output_id, test_pattern);
     if !state.engine.output_ownership_status().video_allowed {
@@ -54082,15 +56610,8 @@ async fn open_video_output_window(
             .resizable(true)
             .decorations(!output.fullscreen)
             .fullscreen(output.fullscreen);
-        if let Some(monitor_id) = output.monitor_id {
-            let monitors = app
-                .available_monitors()
-                .map_err(|error| error.to_string())?;
-            if let Some(monitor) = monitors.get(monitor_id as usize) {
-                let position = monitor.position();
-                builder = builder.position(position.x as f64, position.y as f64);
-            }
-        }
+        let monitor = authoritative_video_display_monitor_for_output(&app, &output)?;
+        builder = builder.position(monitor.position_x as f64, monitor.position_y as f64);
         let label_for_retire = label.clone();
         let create_app = app.clone();
         let retire_app = app.clone();
@@ -54131,13 +56652,28 @@ async fn open_video_output_window(
                         );
                     }
                 };
-                if let Err((error, worker)) =
+                if let Err(insertion_error) =
                     insert_native_video_output_worker(native_workers, label.clone(), worker)
                 {
-                    return output_resource_creation_after_cleanup(
-                        error,
-                        retire_unregistered_native_video_output_worker(&create_app, &label, worker),
-                    );
+                    let occupied = insertion_error.is_occupied();
+                    let error = insertion_error.message();
+                    let worker = insertion_error.into_worker();
+                    let cleanup = if occupied {
+                        retire_unregistered_native_video_output_worker_without_window(
+                            &create_app,
+                            native_workers,
+                            &label,
+                            worker,
+                        )
+                    } else {
+                        retire_unregistered_native_video_output_worker(
+                            &create_app,
+                            native_workers,
+                            &label,
+                            worker,
+                        )
+                    };
+                    return output_resource_creation_after_cleanup(error, cleanup);
                 }
                 OutputResourceCreation::Ready(())
             },
@@ -54183,15 +56719,8 @@ async fn open_video_output_window(
         .decorations(!output.fullscreen)
         .fullscreen(output.fullscreen);
 
-    if let Some(monitor_id) = output.monitor_id {
-        let monitors = app
-            .available_monitors()
-            .map_err(|error| error.to_string())?;
-        if let Some(monitor) = monitors.get(monitor_id as usize) {
-            let position = monitor.position();
-            builder = builder.position(position.x as f64, position.y as f64);
-        }
-    }
+    let monitor = authoritative_video_display_monitor_for_output(&app, &output)?;
+    builder = builder.position(monitor.position_x as f64, monitor.position_y as f64);
 
     let label_for_retire = label.clone();
     let create_app = app.clone();
@@ -54224,6 +56753,12 @@ async fn open_video_output_window(
                     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
                     Arc::clone(&state.spout_inputs),
                     Arc::clone(&state.capture_inputs),
+                    None,
+                    None,
+                    false,
+                    None,
+                    None,
+                    false,
                     label.clone(),
                     Arc::clone(&teardown_lease),
                 )
@@ -54236,16 +56771,31 @@ async fn open_video_output_window(
                     };
                 }
             };
-            if let Err((error, worker)) =
+            if let Err(insertion_error) =
                 insert_native_video_output_worker(native_workers, label.clone(), worker)
             {
                 if let Ok(mut active_metrics) = native_metrics.lock() {
                     active_metrics.remove(&output_id);
                 }
-                return output_resource_creation_after_cleanup(
-                    error,
-                    retire_unregistered_native_video_output_worker(&create_app, &label, worker),
-                );
+                let occupied = insertion_error.is_occupied();
+                let error = insertion_error.message();
+                let worker = insertion_error.into_worker();
+                let cleanup = if occupied {
+                    retire_unregistered_native_video_output_worker_without_window(
+                        &create_app,
+                        native_workers,
+                        &label,
+                        worker,
+                    )
+                } else {
+                    retire_unregistered_native_video_output_worker(
+                        &create_app,
+                        native_workers,
+                        &label,
+                        worker,
+                    )
+                };
+                return output_resource_creation_after_cleanup(error, cleanup);
             }
             OutputResourceCreation::Ready(())
         },
@@ -58300,8 +60850,6 @@ pub(crate) mod tests {
                 authored_control_plane: authored_control_plane::AuthoredControlPlaneState::default(
                 ),
                 runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState::default(),
-                control_plane_security: control_plane_security::ControlPlaneSecurityState::default(
-                ),
                 output_lease_registry: Mutex::new(output_lease_registry),
                 output_lease_durable_receipts: Mutex::new(
                     OutputLeaseDurableReceiptJournal::in_memory(),
@@ -58806,6 +61354,32 @@ pub(crate) mod tests {
             .expect("record valid durable receipt");
         let valid = serde_json::to_value(&journal.state).expect("encode valid durable state");
 
+        let mut unguarded_high_water = valid.clone();
+        unguarded_high_water["origins"][0]["high_water_request_id"] = Value::from(2_u64);
+        unguarded_high_water["origins"][0]["replay_guard"] = Value::Bool(false);
+        fs::write(&path, serde_json::to_vec(&unguarded_high_water).unwrap()).unwrap();
+        assert!(load_output_lease_receipt_state_from_path(&path).is_err());
+
+        let mut unguarded_without_receipt = valid.clone();
+        unguarded_without_receipt["receipts"] = serde_json::json!([]);
+        unguarded_without_receipt["origins"][0]["replay_guard"] = Value::Bool(false);
+        fs::write(
+            &path,
+            serde_json::to_vec(&unguarded_without_receipt).unwrap(),
+        )
+        .unwrap();
+        assert!(load_output_lease_receipt_state_from_path(&path).is_err());
+
+        let pending_request = durable_output_lease_acquire_request(2);
+        journal
+            .prepare(&pending_request)
+            .expect("prepare pending validation request");
+        let mut unguarded_pending =
+            serde_json::to_value(&journal.state).expect("encode pending validation state");
+        unguarded_pending["origins"][0]["replay_guard"] = Value::Bool(false);
+        fs::write(&path, serde_json::to_vec(&unguarded_pending).unwrap()).unwrap();
+        assert!(load_output_lease_receipt_state_from_path(&path).is_err());
+
         let mut unknown = valid.clone();
         unknown
             .as_object_mut()
@@ -59108,6 +61682,544 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn published_display_terminal_record_fault_keeps_one_truth_and_pending_replay_barrier() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let directory = unique_test_directory("display-terminal-record-fault");
+        let active_parent = directory.join("active");
+        let saved_parent = directory.join("saved-pending");
+        fs::create_dir_all(&active_parent)
+            .expect("create Display terminal-fault active journal directory");
+        let active_path = active_parent.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("Display terminal-fault journal lock")
+            .install_path(active_path)
+            .expect("install Display terminal-fault journal");
+
+        let authority = prepare_fake_display_add_authority(&state, "fake-display-terminal-owner");
+        let monitor = native_output_qa_monitors()
+            .into_iter()
+            .find(|monitor| monitor.name == "DISPLAY5")
+            .expect("fake terminal-fault DISPLAY5");
+        let (request, spec, lease_request, lease_now) =
+            build_fake_display_add_request(&state, &authority, &monitor, 2);
+        let native_ops =
+            FakeDisplayOutputNativeOperations::new(Arc::clone(&state), native_output_qa_monitors())
+                .with_terminal_fault(active_parent.clone(), saved_parent.clone());
+        let result = add_display_output_with_output_control_fence_core(
+            &state,
+            &spec,
+            &request.expected_fence,
+            &lease_request,
+            lease_now,
+            &authority.owner_principal,
+            "main",
+            authority.owner_incarnation,
+            native_ops.clone(),
+        );
+        let error = result.expect_err("terminal durable record fault must remain in doubt");
+        assert!(
+            error.contains("durable output commit is in doubt"),
+            "{error}"
+        );
+        assert!(state.project_transaction_active.load(Ordering::Acquire));
+        assert!(get_project_checkpoint_bundle_core(
+            &state,
+            request.expected_fence.project_epoch,
+            request.expected_fence.project_revision,
+            request.expected_fence.project_checkpoint_hash.clone(),
+        )
+        .is_err());
+
+        let engine_outputs = state.engine.snapshot().video.outputs;
+        assert_eq!(engine_outputs.len(), 1);
+        assert_eq!(engine_outputs[0].kind, VideoOutputKind::Display);
+        assert_eq!(
+            engine_outputs[0].monitor_identity.as_deref(),
+            Some(monitor.identity.as_str())
+        );
+        let coordinator = state
+            .project_coordinator
+            .lock()
+            .expect("query full-core terminal-fault project truth");
+        let checkpoint = project_checkpoint_for_coordinator(&state, &coordinator)
+            .expect("query full-core terminal-fault authored checkpoint");
+        assert_eq!(checkpoint.project.snapshot.video.outputs, engine_outputs);
+        drop(coordinator);
+        assert_eq!(native_ops.visible.load(Ordering::Acquire), 1);
+        assert_eq!(native_ops.presented.load(Ordering::Acquire), 1);
+        assert_eq!(native_ops.published.load(Ordering::Acquire), 1);
+        assert_eq!(native_ops.publication_state(), (1, 1, 1, 1));
+
+        assert_eq!(
+            state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("query full-core terminal-fault Pending")
+                .lookup(&lease_request),
+            Err(output_lease::OutputLeaseError::RequestCapacity)
+        );
+        let retry = add_display_output_with_output_control_fence_core(
+            &state,
+            &spec,
+            &request.expected_fence,
+            &lease_request,
+            lease_now,
+            &authority.owner_principal,
+            "main",
+            authority.owner_incarnation,
+            native_ops.clone(),
+        );
+        assert!(retry.is_err());
+        assert_eq!(
+            native_ops.prepared.load(Ordering::Acquire),
+            1,
+            "exact retry must execute zero second native callbacks"
+        );
+        assert_eq!(native_ops.visible.load(Ordering::Acquire), 1);
+        assert_eq!(native_ops.presented.load(Ordering::Acquire), 1);
+        assert_eq!(native_ops.published.load(Ordering::Acquire), 1);
+        assert_eq!(native_ops.publication_state(), (1, 1, 1, 1));
+        assert_eq!(state.engine.snapshot().video.outputs.len(), 1);
+
+        let mut restarted = OutputLeaseDurableReceiptJournal::in_memory();
+        restarted
+            .install_path(saved_parent.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE))
+            .expect("reload full-core Display Pending after restart");
+        assert_eq!(
+            restarted.lookup(&lease_request),
+            Err(output_lease::OutputLeaseError::RequestCapacity)
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn display_candidate_pending_marker_precedes_commit_and_failed_commit_cannot_replay() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let request = durable_output_lease_acquire_request(1);
+        let mut registry = OutputLeaseRegistry::fresh_process(41).expect("display registry");
+        let before = registry.clone();
+        let physical_calls = Arc::new(AtomicU64::new(0));
+        let calls = Arc::clone(&physical_calls);
+        assert!(submit_output_lease_candidate_with_commit(
+            &harness.state,
+            &mut registry,
+            &request,
+            1,
+            "display candidate rollback",
+            move || {
+                calls.fetch_add(1, Ordering::AcqRel);
+                Err::<(), String>("native candidate acknowledgement failed".to_string())
+            },
+        )
+        .is_err());
+        assert_eq!(physical_calls.load(Ordering::Acquire), 1);
+        assert_eq!(registry, before);
+        let journal = harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("display rollback journal lock");
+        assert_eq!(journal.receipt_count(), 0);
+        assert!(journal.state.pending.is_empty());
+        drop(journal);
+
+        let retry_calls = Arc::new(AtomicU64::new(0));
+        let calls = Arc::clone(&retry_calls);
+        assert!(submit_output_lease_candidate_with_commit(
+            &harness.state,
+            &mut registry,
+            &request,
+            1,
+            "display candidate replay",
+            move || {
+                calls.fetch_add(1, Ordering::AcqRel);
+                Ok::<(), String>(())
+            },
+        )
+        .is_err());
+        assert_eq!(retry_calls.load(Ordering::Acquire), 0);
+        assert_eq!(registry, before);
+    }
+
+    #[test]
+    fn display_candidate_uncertain_cleanup_retains_pending_and_blocks_every_retry() {
+        let injected_failures = [
+            "native close acknowledgement was lost",
+            "native worker retirement failed",
+            "engine output removal ACK was lost",
+            "candidate output lease cleanup was not acknowledged",
+        ];
+        for (index, failure) in injected_failures.into_iter().enumerate() {
+            let harness = MediaAssetA6CommandHarness::new();
+            let request = durable_output_lease_acquire_request(1);
+            let mut registry =
+                OutputLeaseRegistry::fresh_process(41).expect("display uncertain-cleanup registry");
+            let before = registry.clone();
+            let physical_calls = Arc::new(AtomicU64::new(0));
+            let calls = Arc::clone(&physical_calls);
+            let error = submit_output_lease_candidate_with_classified_commit(
+                &harness.state,
+                &mut registry,
+                &request,
+                1,
+                &format!("display uncertain cleanup {index}"),
+                move || {
+                    calls.fetch_add(1, Ordering::AcqRel);
+                    Err::<(), _>(OutputLeaseCandidateCommitFailure::in_doubt(
+                        failure.to_string(),
+                    ))
+                },
+            )
+            .expect_err("uncertain cleanup must reject the physical commit");
+            assert!(error.contains("pending receipt retained"));
+            assert_eq!(physical_calls.load(Ordering::Acquire), 1);
+            assert_eq!(registry, before);
+            {
+                let journal = harness
+                    .state
+                    .output_lease_durable_receipts
+                    .lock()
+                    .expect("uncertain cleanup journal lock");
+                assert_eq!(journal.receipt_count(), 0);
+                assert_eq!(journal.state.pending.len(), 1);
+            }
+
+            let higher_request = durable_output_lease_acquire_request(2);
+            let retry_calls = Arc::new(AtomicU64::new(0));
+            let calls = Arc::clone(&retry_calls);
+            assert!(submit_output_lease_candidate_with_classified_commit(
+                &harness.state,
+                &mut registry,
+                &higher_request,
+                1,
+                "display uncertain cleanup replay",
+                move || {
+                    calls.fetch_add(1, Ordering::AcqRel);
+                    Ok::<(), OutputLeaseCandidateCommitFailure>(())
+                },
+            )
+            .is_err());
+            assert_eq!(retry_calls.load(Ordering::Acquire), 0);
+            assert_eq!(registry, before);
+        }
+    }
+
+    #[test]
+    fn durable_output_lease_origin_gc_preserves_pending_and_allows_new_principals_after_reload() {
+        let directory = unique_test_directory("output-lease-origin-gc");
+        fs::create_dir_all(&directory).expect("create origin-gc directory");
+        let path = directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        let request_for = |index: usize| {
+            let principal = format!("origin-principal-{index}");
+            let owner = OutputLeaseOwner::new(principal.clone(), "origin-window", 41, 1)
+                .expect("origin-gc owner");
+            OutputLeaseRequest::from_action(
+                principal,
+                "output-control",
+                1,
+                OutputLeaseRequestAction::Acquire {
+                    owner,
+                    resources: OutputLeaseResources::new(&[OutputLeaseResource::Lighting])
+                        .expect("origin-gc resources"),
+                    project_identity: output_lease_project_identity(0),
+                    ttl_ms: 30_000,
+                },
+            )
+            .expect("origin-gc request")
+        };
+        let mut journal = OutputLeaseDurableReceiptJournal::in_memory();
+        journal
+            .install_path(path.clone())
+            .expect("install origin-gc journal");
+
+        for index in 0..129 {
+            let request = request_for(index);
+            let mut registry = OutputLeaseRegistry::fresh_process(41).expect("origin registry");
+            let receipt = registry
+                .submit_request(&request, 1)
+                .expect("origin receipt");
+            assert_eq!(
+                journal.prepare(&request).expect("prepare origin request"),
+                OutputLeaseDurablePrepareResult::Fresh
+            );
+            journal.record(&receipt).expect("record origin receipt");
+        }
+        assert_eq!(journal.receipt_count(), MAX_DURABLE_OUTPUT_LEASE_RECEIPTS);
+        assert_eq!(
+            journal.state.origins.len(),
+            MAX_DURABLE_OUTPUT_LEASE_RECEIPTS,
+            "old origins are pruned when their terminal receipt is evicted"
+        );
+
+        let mut reloaded = OutputLeaseDurableReceiptJournal::in_memory();
+        reloaded
+            .install_path(path.clone())
+            .expect("reload origin-gc journal");
+        let request = request_for(129);
+        let mut registry = OutputLeaseRegistry::fresh_process(41).expect("reloaded registry");
+        let receipt = registry
+            .submit_request(&request, 1)
+            .expect("post-reload origin receipt");
+        assert_eq!(
+            reloaded
+                .prepare(&request)
+                .expect("post-reload prepare must have a pending slot"),
+            OutputLeaseDurablePrepareResult::Fresh
+        );
+        assert_eq!(reloaded.state.pending.len(), 1);
+        reloaded.record(&receipt).expect("post-reload record");
+        assert_eq!(
+            reloaded.state.origins.len(),
+            MAX_DURABLE_OUTPUT_LEASE_RECEIPTS
+        );
+
+        let pending_request = request_for(130);
+        assert_eq!(
+            reloaded
+                .prepare(&pending_request)
+                .expect("prepare explicit pending origin"),
+            OutputLeaseDurablePrepareResult::Fresh
+        );
+        assert!(reloaded.lookup(&pending_request).is_err());
+        assert!(reloaded
+            .state
+            .origins
+            .iter()
+            .any(|origin| origin.principal == pending_request.key.principal));
+        reloaded
+            .abort(&pending_request)
+            .expect("abort pending origin");
+        assert!(reloaded
+            .state
+            .origins
+            .iter()
+            .any(|origin| origin.principal == pending_request.key.principal));
+
+        let mut final_reload = OutputLeaseDurableReceiptJournal::in_memory();
+        final_reload
+            .install_path(path.clone())
+            .expect("final reload origin-gc journal");
+        assert_eq!(
+            final_reload.state.origins.len(),
+            MAX_DURABLE_OUTPUT_LEASE_RECEIPTS + 1,
+            "a safe-aborted origin remains as an exact-request replay guard"
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn durable_output_lease_safe_abort_replay_guard_survives_terminal_receipt_eviction() {
+        let request_for = |principal: String, request_id| {
+            let owner = OutputLeaseOwner::new(principal.clone(), "safe-abort-window", 41, 1)
+                .expect("safe-abort owner");
+            OutputLeaseRequest::from_action(
+                principal,
+                "output-control",
+                request_id,
+                OutputLeaseRequestAction::Acquire {
+                    owner,
+                    resources: OutputLeaseResources::new(&[OutputLeaseResource::Lighting])
+                        .expect("safe-abort resources"),
+                    project_identity: output_lease_project_identity(0),
+                    ttl_ms: 30_000,
+                },
+            )
+            .expect("safe-abort request")
+        };
+        let mut journal = OutputLeaseDurableReceiptJournal::in_memory();
+        let first = request_for("safe-abort-principal".to_string(), 1);
+        let mut registry = OutputLeaseRegistry::fresh_process(41).expect("safe-abort registry");
+        let first_receipt = registry
+            .submit_request(&first, 1)
+            .expect("safe-abort first receipt");
+        assert_eq!(
+            journal.prepare(&first).expect("prepare first receipt"),
+            OutputLeaseDurablePrepareResult::Fresh
+        );
+        journal
+            .record(&first_receipt)
+            .expect("record first receipt");
+
+        let safe_aborted = request_for("safe-abort-principal".to_string(), 2);
+        assert_eq!(
+            journal
+                .prepare(&safe_aborted)
+                .expect("prepare safe-aborted request"),
+            OutputLeaseDurablePrepareResult::Fresh
+        );
+        journal
+            .abort(&safe_aborted)
+            .expect("safe-aborted request rollback");
+
+        for index in 0..MAX_DURABLE_OUTPUT_LEASE_RECEIPTS {
+            let request = request_for(format!("eviction-principal-{index}"), 1);
+            let mut registry = OutputLeaseRegistry::fresh_process(41).expect("eviction registry");
+            let receipt = registry
+                .submit_request(&request, 1)
+                .expect("eviction receipt");
+            assert_eq!(
+                journal.prepare(&request).expect("prepare eviction receipt"),
+                OutputLeaseDurablePrepareResult::Fresh
+            );
+            journal.record(&receipt).expect("record eviction receipt");
+        }
+        assert!(journal
+            .state
+            .origins
+            .iter()
+            .any(|origin| origin.principal == safe_aborted.key.principal));
+        assert!(
+            journal.prepare(&safe_aborted).is_err(),
+            "an exact SafeAbort request remains rejected after its older terminal receipt is evicted"
+        );
+    }
+
+    #[test]
+    fn durable_output_lease_explicit_safe_abort_guard_survives_reload_and_eviction() {
+        let directory = unique_test_directory("output-lease-replay-guard-reload");
+        fs::create_dir_all(&directory).expect("create replay-guard directory");
+        let path = directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        let request_for = |principal: String, request_id: u64| {
+            let owner = OutputLeaseOwner::new(principal.clone(), "replay-guard-window", 41, 1)
+                .expect("replay-guard owner");
+            OutputLeaseRequest::from_action(
+                principal,
+                "output-control",
+                request_id,
+                OutputLeaseRequestAction::Acquire {
+                    owner,
+                    resources: OutputLeaseResources::new(&[OutputLeaseResource::Lighting])
+                        .expect("replay-guard resources"),
+                    project_identity: output_lease_project_identity(0),
+                    ttl_ms: 30_000,
+                },
+            )
+            .expect("replay-guard request")
+        };
+        let first = request_for("reload-safe-abort".to_string(), 1);
+        let safe_aborted = request_for("reload-safe-abort".to_string(), 2);
+        let mut journal = OutputLeaseDurableReceiptJournal::in_memory();
+        journal
+            .install_path(path.clone())
+            .expect("install replay-guard journal");
+        let mut registry = OutputLeaseRegistry::fresh_process(41).expect("first registry");
+        let first_receipt = registry.submit_request(&first, 1).expect("first receipt");
+        assert_eq!(
+            journal.prepare(&first).expect("prepare first request"),
+            OutputLeaseDurablePrepareResult::Fresh
+        );
+        journal
+            .record(&first_receipt)
+            .expect("record first receipt");
+        assert_eq!(
+            journal
+                .prepare(&safe_aborted)
+                .expect("prepare safe-abort request"),
+            OutputLeaseDurablePrepareResult::Fresh
+        );
+        journal
+            .abort(&safe_aborted)
+            .expect("abort safe-abort request");
+
+        let mut reloaded = OutputLeaseDurableReceiptJournal::in_memory();
+        reloaded
+            .install_path(path.clone())
+            .expect("reload replay-guard journal");
+        assert!(reloaded.state.origins.iter().any(|origin| {
+            origin.principal == safe_aborted.key.principal
+                && origin.high_water_request_id == safe_aborted.key.request_id
+                && origin.replay_guard
+        }));
+
+        for index in 0..MAX_DURABLE_OUTPUT_LEASE_RECEIPTS {
+            let request = request_for(format!("reload-eviction-{index}"), 1);
+            let mut registry = OutputLeaseRegistry::fresh_process(41).expect("eviction registry");
+            let receipt = registry
+                .submit_request(&request, 1)
+                .expect("eviction receipt");
+            assert_eq!(
+                reloaded
+                    .prepare(&request)
+                    .expect("prepare eviction request"),
+                OutputLeaseDurablePrepareResult::Fresh
+            );
+            reloaded.record(&receipt).expect("record eviction receipt");
+        }
+        assert!(!reloaded
+            .state
+            .receipts
+            .iter()
+            .any(|receipt| receipt.key == first.key));
+        assert!(
+            reloaded.prepare(&safe_aborted).is_err(),
+            "explicit replay_guard must survive reload and eviction"
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn durable_output_lease_legacy_replay_guard_migration_uses_high_water_vs_retained_request() {
+        let directory = unique_test_directory("output-lease-replay-guard-migration");
+        fs::create_dir_all(&directory).expect("create migration directory");
+        let path = directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        let owner = OutputLeaseOwner::new("legacy-replay-guard", "migration-window", 41, 1)
+            .expect("migration owner");
+        let request = OutputLeaseRequest::from_action(
+            "legacy-replay-guard".to_string(),
+            "output-control",
+            1,
+            OutputLeaseRequestAction::Acquire {
+                owner,
+                resources: OutputLeaseResources::new(&[OutputLeaseResource::Lighting])
+                    .expect("migration resources"),
+                project_identity: output_lease_project_identity(0),
+                ttl_ms: 30_000,
+            },
+        )
+        .expect("migration request");
+        let mut journal = OutputLeaseDurableReceiptJournal::in_memory();
+        journal
+            .install_path(path.clone())
+            .expect("install migration journal");
+        let mut registry = OutputLeaseRegistry::fresh_process(41).expect("migration registry");
+        let receipt = registry
+            .submit_request(&request, 1)
+            .expect("migration receipt");
+        journal
+            .prepare(&request)
+            .expect("prepare migration request");
+        journal.record(&receipt).expect("record migration receipt");
+
+        let mut legacy = serde_json::to_value(&journal.state).expect("encode legacy state");
+        legacy["origins"][0]
+            .as_object_mut()
+            .expect("legacy origin object")
+            .remove("replay_guard");
+        fs::write(
+            &path,
+            serde_json::to_vec(&legacy).expect("encode legacy journal"),
+        )
+        .expect("write legacy journal");
+        let migrated =
+            load_output_lease_receipt_state_from_path(&path).expect("load legacy journal");
+        assert!(!migrated.origins[0].replay_guard);
+
+        legacy["origins"][0]["high_water_request_id"] = serde_json::Value::from(2_u64);
+        fs::write(
+            &path,
+            serde_json::to_vec(&legacy).expect("encode guarded legacy journal"),
+        )
+        .expect("write guarded legacy journal");
+        let guarded =
+            load_output_lease_receipt_state_from_path(&path).expect("load guarded legacy journal");
+        assert!(guarded.origins[0].replay_guard);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn output_lease_app_state_initializes_process_identity_and_snapshot_metadata() {
         let harness = MediaAssetA6CommandHarness::new();
         let snapshot = harness
@@ -59227,6 +62339,283 @@ pub(crate) mod tests {
             .expect("fake-clock owner query");
         assert!(at_deadline.is_empty(), "deadline equality is unavailable");
         assert_eq!(registry.audit().len(), 2, "read-only query adds no audit");
+    }
+
+    #[test]
+    fn display_add_query_exposes_natural_expiry_without_mutation_and_same_add_recovers() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let process_incarnation = state
+            .output_lease_registry
+            .lock()
+            .expect("display Add query registry lock")
+            .process_session_incarnation();
+        let query_state = ControlPlaneQueryState::for_process_incarnation(process_incarnation)
+            .expect("display Add query process identity");
+        let owner = OutputLeaseOwner::new(
+            MEDIA_ASSET_A6_OWNER,
+            "media-asset-a6",
+            process_incarnation,
+            1,
+        )
+        .expect("display Add query owner");
+        let both =
+            OutputLeaseResources::new(&[OutputLeaseResource::Lighting, OutputLeaseResource::Video])
+                .expect("display Add exact Both resources");
+        let project_identity = output_lease_project_identity(0);
+        {
+            let mut registry = state
+                .output_lease_registry
+                .lock()
+                .expect("display Add acquire lock");
+            let acquire = OutputLeaseRequest::from_action(
+                MEDIA_ASSET_A6_OWNER,
+                "output-control",
+                1,
+                OutputLeaseRequestAction::Acquire {
+                    owner: owner.clone(),
+                    resources: both,
+                    project_identity,
+                    ttl_ms: 1,
+                },
+            )
+            .expect("display Add acquire request");
+            registry
+                .submit_request(&acquire, 0)
+                .expect("display Add initial Both lease");
+        }
+        std::thread::sleep(Duration::from_millis(2));
+
+        let snapshot_before = state
+            .output_lease_registry_snapshot()
+            .expect("display Add pre-query registry snapshot");
+        let query =
+            query_display_add_lease_authority_for_window("media-asset-a6", &state, &query_state)
+                .expect("naturally expired exact Both lease is discoverable");
+        assert!(matches!(
+            query.status,
+            DisplayAddLeaseAuthorityStatusV1::ExpiredRecoverable
+        ));
+        let authority = query.authority.expect("recoverable authority identity");
+        assert_eq!(authority.lease_id, "lease-0000000000000001");
+        assert_eq!(authority.generation, 1);
+        assert_eq!(
+            query.resources,
+            vec![
+                protocol::control_plane_command::OutputControlTargetRoleV1::Lighting,
+                protocol::control_plane_command::OutputControlTargetRoleV1::Video,
+            ]
+        );
+        assert_eq!(
+            state
+                .output_lease_registry_snapshot()
+                .expect("display Add post-query registry snapshot"),
+            snapshot_before,
+            "read-only recoverable authority query changes no generation or audit truth"
+        );
+
+        let action = protocol::control_plane_command::OutputControlActionV2::AddDisplay {
+            spec: DisplayOutputSpecV2 {
+                label: "QA Display".to_string(),
+                monitor_identity: "d".repeat(64),
+                monitor_index: 1,
+                width: 1920,
+                height: 1080,
+                fullscreen: true,
+            },
+            lease: authority,
+        };
+        let (request, now_ms) = build_output_lease_authorization_request(
+            &state,
+            MEDIA_ASSET_A6_OWNER,
+            "media-asset-a6",
+            1,
+            2,
+            &action,
+            0,
+        )
+        .expect("build exact recoverable Add request");
+        let (_, receipt) = {
+            let mut registry = state
+                .output_lease_registry
+                .lock()
+                .expect("display Add candidate registry lock");
+            submit_output_lease_candidate_with_classified_commit(
+                &state,
+                &mut registry,
+                &request,
+                now_ms,
+                "display Add natural-expiry integration",
+                || Ok(false),
+            )
+            .expect("same Add candidate recovers exact expired Both authority")
+        };
+        assert_eq!(
+            receipt.outcome,
+            Ok(output_lease::OutputLeaseOperationOutcome::Authorized)
+        );
+        assert_eq!(receipt.generation_before, Some(1));
+        assert_eq!(receipt.generation_after, Some(3));
+    }
+
+    #[test]
+    fn display_add_query_contention_is_overloaded_bounded_and_read_only() {
+        const MAX_QUERY_CONTENTION_LATENCY: Duration = Duration::from_millis(100);
+        const OVERLOADED: &str = "Display Add authority query is busy";
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let process_incarnation = state
+            .output_lease_registry
+            .lock()
+            .expect("display Add contention registry identity lock")
+            .process_session_incarnation();
+        let query_state = ControlPlaneQueryState::for_process_incarnation(process_incarnation)
+            .expect("display Add contention query process identity");
+
+        macro_rules! assert_overloaded_without_mutation {
+            ($guard:expr, $label:literal) => {{
+                let before_registry = state
+                    .output_lease_registry_snapshot()
+                    .expect("display Add contention registry baseline");
+                let before_durable = serde_json::to_vec(
+                    &state
+                        .output_lease_durable_receipts
+                        .lock()
+                        .expect("display Add contention durable baseline lock")
+                        .state,
+                )
+                .expect("display Add contention durable baseline serialization");
+                let guard = $guard;
+                let started = Instant::now();
+                let error = query_display_add_lease_authority_for_window(
+                    "media-asset-a6",
+                    &state,
+                    &query_state,
+                )
+                .expect_err($label);
+                assert_eq!(error, OVERLOADED, "{}: exact overload sentinel", $label);
+                assert!(
+                    started.elapsed() < MAX_QUERY_CONTENTION_LATENCY,
+                    "{}: contention must fail within the UI responsiveness bound",
+                    $label
+                );
+                drop(guard);
+                assert_eq!(
+                    state
+                        .output_lease_registry_snapshot()
+                        .expect("display Add contention registry after-state"),
+                    before_registry,
+                    "{}: generation/audit/lease state must remain unchanged",
+                    $label
+                );
+                let after_durable = serde_json::to_vec(
+                    &state
+                        .output_lease_durable_receipts
+                        .lock()
+                        .expect("display Add contention durable after-state lock")
+                        .state,
+                )
+                .expect("display Add contention durable after-state serialization");
+                assert_eq!(
+                    after_durable, before_durable,
+                    "{}: durable receipts must remain unchanged",
+                    $label
+                );
+            }};
+        }
+
+        assert_overloaded_without_mutation!(
+            state
+                .project_transaction_owner_rotation
+                .lock()
+                .expect("hold owner rotation for display Add contention"),
+            "owner rotation contention must fail closed"
+        );
+        assert_overloaded_without_mutation!(
+            state
+                .output_lease_registry
+                .lock()
+                .expect("hold lease registry for display Add contention"),
+            "lease registry contention must fail closed"
+        );
+        assert_overloaded_without_mutation!(
+            state
+                .project_coordinator
+                .lock()
+                .expect("hold project coordinator for display Add contention"),
+            "project coordinator contention must fail closed"
+        );
+    }
+
+    #[test]
+    fn output_lease_owner_query_fails_overloaded_without_waiting_on_mutation_locks() {
+        const MAX_QUERY_CONTENTION_LATENCY: Duration = Duration::from_millis(100);
+        let harness = MediaAssetA6CommandHarness::new();
+        let process_incarnation = harness
+            .state
+            .output_lease_registry
+            .lock()
+            .expect("query contention registry lock")
+            .process_session_incarnation();
+        let query = ControlPlaneQueryState::for_process_incarnation(process_incarnation)
+            .expect("query test uses the backend registry process identity");
+
+        let owner_rotation = harness
+            .state
+            .project_transaction_owner_rotation
+            .lock()
+            .expect("hold owner rotation for contention test");
+        let started = Instant::now();
+        let error = query
+            .query_output_lease_authority_for_window("media-asset-a6", &harness.state)
+            .expect_err("owner rotation contention must fail closed");
+        assert_eq!(
+            error.code(),
+            protocol::control_plane_query::QueryErrorCode::Overloaded
+        );
+        assert!(
+            started.elapsed() < MAX_QUERY_CONTENTION_LATENCY,
+            "owner rotation contention must not block the Tauri event loop"
+        );
+        drop(owner_rotation);
+
+        let registry = harness
+            .state
+            .output_lease_registry
+            .lock()
+            .expect("hold lease registry for contention test");
+        let started = Instant::now();
+        let error = query
+            .query_output_lease_authority_for_window("media-asset-a6", &harness.state)
+            .expect_err("lease registry contention must fail closed");
+        assert_eq!(
+            error.code(),
+            protocol::control_plane_query::QueryErrorCode::Overloaded
+        );
+        assert!(
+            started.elapsed() < MAX_QUERY_CONTENTION_LATENCY,
+            "lease registry contention must not block the Tauri event loop"
+        );
+        drop(registry);
+
+        let coordinator = harness
+            .state
+            .project_coordinator
+            .lock()
+            .expect("hold project coordinator for contention test");
+        let started = Instant::now();
+        let error = query
+            .query_output_lease_authority_for_window("media-asset-a6", &harness.state)
+            .expect_err("project coordinator contention must fail closed");
+        assert_eq!(
+            error.code(),
+            protocol::control_plane_query::QueryErrorCode::Overloaded
+        );
+        assert!(
+            started.elapsed() < MAX_QUERY_CONTENTION_LATENCY,
+            "project coordinator contention must not block the Tauri event loop"
+        );
+        drop(coordinator);
     }
 
     #[test]
@@ -59457,6 +62846,1909 @@ pub(crate) mod tests {
         assert_eq!(expired_view.snapshot.phase, OutputLeasePhase::HeldOrphaned);
         assert_eq!(expired_view.snapshot.generation, 2);
         assert_eq!(expired_registry.audit().len(), 2);
+    }
+
+    #[test]
+    fn enable_output_builds_one_atomic_both_candidate_and_rolls_back_on_arm_failure() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let process_incarnation = harness
+            .state
+            .output_lease_registry
+            .lock()
+            .expect("enable output registry lock")
+            .process_session_incarnation();
+        let action = protocol::control_plane_command::OutputControlActionV2::EnableOutput;
+        let (failed_request, failed_now_ms) = build_output_lease_authorization_request(
+            &harness.state,
+            "enable-owner",
+            "main",
+            7,
+            700,
+            &action,
+            41,
+        )
+        .expect("enable output request shape");
+        let Some(OutputLeaseRequestAction::EnableAcquireOrRecover {
+            resources,
+            project_identity,
+            ..
+        }) = failed_request.action.as_ref()
+        else {
+            panic!("normal Enable Output must use the Enable acquire-or-recover candidate");
+        };
+        assert_eq!(
+            resources.as_slice(),
+            &[OutputLeaseResource::Lighting, OutputLeaseResource::Video]
+        );
+        assert_eq!(project_identity, &output_lease_project_identity(41));
+        let (rotated_request, _) = build_output_lease_authorization_request(
+            &harness.state,
+            "enable-owner",
+            "main",
+            7,
+            702,
+            &action,
+            42,
+        )
+        .expect("rotated enable output request shape");
+        let Some(OutputLeaseRequestAction::EnableAcquireOrRecover {
+            project_identity: rotated_identity,
+            ..
+        }) = rotated_request.action.as_ref()
+        else {
+            panic!("rotated normal Enable Output must use the Enable acquire-or-recover candidate");
+        };
+        assert_eq!(rotated_identity, &output_lease_project_identity(42));
+        assert_ne!(
+            failed_request.shape_hash, rotated_request.shape_hash,
+            "project fence rotation must produce a distinct durable request shape"
+        );
+
+        let mut registry = OutputLeaseRegistry::fresh_process(process_incarnation)
+            .expect("enable output candidate registry");
+        let before_arm_failure = registry.clone();
+        let failed_arm_calls = Arc::new(AtomicU64::new(0));
+        let failed_arm_calls_for_commit = Arc::clone(&failed_arm_calls);
+        assert!(submit_output_lease_candidate_with_commit(
+            &harness.state,
+            &mut registry,
+            &failed_request,
+            failed_now_ms,
+            "enable Both arm failure",
+            move || {
+                failed_arm_calls_for_commit.fetch_add(1, Ordering::AcqRel);
+                Err::<(), _>("injected Both arm failure".to_string())
+            },
+        )
+        .is_err());
+        assert_eq!(failed_arm_calls.load(Ordering::Acquire), 1);
+        assert_eq!(registry, before_arm_failure);
+        assert_eq!(registry.active_lease_count(), 0);
+
+        let (request, now_ms) = build_output_lease_authorization_request(
+            &harness.state,
+            "enable-owner",
+            "main",
+            7,
+            701,
+            &action,
+            41,
+        )
+        .expect("successful enable output request shape");
+        let successful_arm_calls = Arc::new(AtomicU64::new(0));
+        let successful_arm_calls_for_commit = Arc::clone(&successful_arm_calls);
+        let (_, receipt) = submit_output_lease_candidate_with_commit(
+            &harness.state,
+            &mut registry,
+            &request,
+            now_ms,
+            "enable Both arm success",
+            move || {
+                successful_arm_calls_for_commit.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        )
+        .expect("one Both candidate commit");
+        assert_eq!(successful_arm_calls.load(Ordering::Acquire), 1);
+        assert!(matches!(
+            &receipt.outcome,
+            Ok(output_lease::OutputLeaseOperationOutcome::Acquired)
+        ));
+        assert_eq!(
+            receipt
+                .resources
+                .as_ref()
+                .expect("Both receipt resources")
+                .as_slice(),
+            &[OutputLeaseResource::Lighting, OutputLeaseResource::Video]
+        );
+        assert_eq!(registry.active_lease_count(), 1);
+
+        let before_replay = registry.clone();
+        let replay_arm_calls = Arc::new(AtomicU64::new(0));
+        let replay_arm_calls_for_commit = Arc::clone(&replay_arm_calls);
+        assert!(submit_output_lease_candidate_with_commit(
+            &harness.state,
+            &mut registry,
+            &request,
+            now_ms,
+            "enable Both durable replay",
+            move || {
+                replay_arm_calls_for_commit.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        )
+        .is_err());
+        assert_eq!(replay_arm_calls.load(Ordering::Acquire), 0);
+        assert_eq!(registry, before_replay);
+
+        let pending_before = registry.clone();
+        let pending_calls = Arc::new(AtomicU64::new(0));
+        {
+            let mut durable = harness
+                .state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("enable pending durable journal lock");
+            assert_eq!(
+                durable
+                    .prepare(&rotated_request)
+                    .expect("prepare pending Enable Output request"),
+                OutputLeaseDurablePrepareResult::Fresh
+            );
+        }
+        let pending_calls_for_commit = Arc::clone(&pending_calls);
+        assert!(submit_output_lease_candidate_with_commit(
+            &harness.state,
+            &mut registry,
+            &rotated_request,
+            failed_now_ms,
+            "enable Both pending durable replay",
+            move || {
+                pending_calls_for_commit.fetch_add(1, Ordering::AcqRel);
+                Ok::<(), String>(())
+            },
+        )
+        .is_err());
+        assert_eq!(pending_calls.load(Ordering::Acquire), 0);
+        assert_eq!(registry, pending_before);
+        assert!(harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("enable pending durable journal final lock")
+            .state
+            .pending
+            .iter()
+            .any(|pending| pending.key == rotated_request.key));
+    }
+
+    #[test]
+    fn display_targets_require_exact_detected_dimensions_and_both_lease() {
+        let fixtures = [
+            ("DISPLAY1", 2560, 1440),
+            ("DISPLAY2", 1920, 1080),
+            ("DISPLAY3", 3840, 2160),
+            ("DISPLAY5", 1920, 1080),
+            ("DISPLAY6", 2560, 720),
+        ];
+        for (name, width, height) in fixtures {
+            assert!(validate_display_monitor_dimensions(width, height, width, height).is_ok());
+            assert!(validate_display_monitor_dimensions(width + 1, height, width, height).is_err());
+            assert!(validate_display_monitor_dimensions(width, height + 1, width, height).is_err());
+            assert!(
+                validate_display_monitor_dimensions(width, height, 0, height).is_err(),
+                "{name} with a vanished target must fail closed"
+            );
+        }
+
+        let action = protocol::control_plane_command::OutputControlActionV2::AddDisplay {
+            spec: DisplayOutputSpecV2 {
+                label: "DISPLAY5".to_string(),
+                monitor_identity: "d".repeat(64),
+                monitor_index: 3,
+                width: 1920,
+                height: 1080,
+                fullscreen: true,
+            },
+            lease: protocol::control_plane_command::OutputLeaseAuthorityV1 {
+                lease_id: "lease-0000000000000001".to_string(),
+                generation: 1,
+            },
+        };
+        assert_eq!(
+            output_lease_resources_for_control_action(&action)
+                .expect("Display add resource scope")
+                .as_slice(),
+            &[OutputLeaseResource::Lighting, OutputLeaseResource::Video],
+            "Display add accepts only the exact Both lease from normal Enable"
+        );
+    }
+
+    #[test]
+    fn standby_disclosure_queries_are_bounded_after_failed_add_and_expired_lease() {
+        // This is the backend-shaped equivalent of opening the Active/Standby
+        // disclosure immediately after a rejected AddDisplay.  The project
+        // coordinator is intentionally held to model the in-flight/expired
+        // lease cleanup window.  Read-only lease authority queries must fail
+        // closed at the try_lock boundary instead of waiting behind the
+        // mutation, while the two lightweight status projections remain
+        // independently readable.
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        register_project_transaction_owner_for_window_label(
+            &state,
+            "main",
+            "standby-disclosure-query".to_string(),
+        )
+        .expect("register disclosure query owner");
+
+        let request = durable_output_lease_acquire_request(1);
+        let mut registry = OutputLeaseRegistry::fresh_process(41).expect("query test registry");
+        let failed = submit_output_lease_candidate_with_classified_commit(
+            &state,
+            &mut registry,
+            &request,
+            1,
+            "failed AddDisplay before disclosure",
+            || {
+                Err::<(), _>(OutputLeaseCandidateCommitFailure::safe(
+                    "expired lease cleanup rejected the display candidate",
+                ))
+            },
+        );
+        assert!(failed.is_err(), "the preceding AddDisplay must be rejected");
+
+        let query = Arc::new(
+            ControlPlaneQueryState::new().expect("disclosure query state must initialize"),
+        );
+        let _coordinator_guard = state
+            .project_coordinator
+            .lock()
+            .expect("hold coordinator for failed-add contention model");
+
+        let start = Instant::now();
+        let mut query_threads = Vec::new();
+        for _ in 0..3 {
+            let state = Arc::clone(&state);
+            let query = Arc::clone(&query);
+            query_threads.push(std::thread::spawn(move || {
+                query.query_output_lease_authority_for_window("main", &state)
+            }));
+        }
+        for thread in query_threads {
+            let result = thread
+                .join()
+                .expect("lease authority query worker must not panic");
+            assert!(result.is_err(), "coordinator contention must fail closed");
+        }
+        assert!(
+            start.elapsed() < Duration::from_millis(100),
+            "three overlapping lease queries must fail within the UI responsiveness bound"
+        );
+
+        let status_start = Instant::now();
+        let _status = state
+            .standby_sync
+            .lock()
+            .expect("standby disclosure status lock")
+            .status
+            .lock()
+            .expect("standby disclosure status snapshot lock")
+            .clone();
+        let ownership = state.engine.output_ownership_status();
+        assert!(status_start.elapsed() < Duration::from_millis(100));
+        assert_eq!(ownership.effective_role, MachineOutputRole::Both);
+        assert!(
+            !state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("failed-add durable journal lock")
+                .state
+                .pending
+                .iter()
+                .any(|pending| pending.key.request_id == request.key.request_id),
+            "a safely rejected/expired AddDisplay must not leave a pending receipt"
+        );
+    }
+
+    #[test]
+    fn stalled_unpublished_display_phase_keeps_queries_bounded_and_cannot_publish_stale() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let authority = prepare_fake_display_add_authority(&state, "fake-display-stall-owner");
+        let monitor = native_output_qa_monitors()
+            .into_iter()
+            .find(|monitor| monitor.name == "DISPLAY5")
+            .expect("fake stalled DISPLAY5");
+        let (request, spec, lease_request, lease_now) =
+            build_fake_display_add_request(&state, &authority, &monitor, 2);
+        let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = mpsc::sync_channel(1);
+        let native_ops =
+            FakeDisplayOutputNativeOperations::new(Arc::clone(&state), native_output_qa_monitors())
+                .with_hidden_stall(entered_sender, release_receiver);
+        let worker_state = Arc::clone(&state);
+        let worker_ops = native_ops.clone();
+        let worker_owner = authority.owner_principal.clone();
+        let worker_incarnation = authority.owner_incarnation;
+        let worker_fence = request.expected_fence.clone();
+        let worker_lease = lease_request.clone();
+        let (result_sender, result_receiver) = mpsc::sync_channel(1);
+        let started = Instant::now();
+        let add_worker = std::thread::spawn(move || {
+            let result = add_display_output_with_output_control_fence_core(
+                &worker_state,
+                &spec,
+                &worker_fence,
+                &worker_lease,
+                lease_now,
+                &worker_owner,
+                "main",
+                worker_incarnation,
+                worker_ops,
+            );
+            result_sender
+                .send(result)
+                .expect("return stalled full-core Add result");
+        });
+        entered_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .expect("full Add core must enter the fake native stall");
+
+        let query_started = Instant::now();
+        let checkpoint = get_project_checkpoint_bundle_core(
+            &state,
+            request.expected_fence.project_epoch,
+            request.expected_fence.project_revision,
+            request.expected_fence.project_checkpoint_hash.clone(),
+        );
+        let authority_query = authority
+            .query_state
+            .issue_output_control_fence_for_window("main", &state);
+        let coordinator_available = state.project_coordinator.try_lock().is_ok();
+        assert!(checkpoint.is_ok() && authority_query.is_ok() && coordinator_available);
+        assert!(
+            query_started.elapsed() < Duration::from_millis(100),
+            "checkpoint/authority/event-loop proxy queries must settle during full-core native stall"
+        );
+
+        let busy_started = Instant::now();
+        let busy_attempts = {
+            let _held = state
+                .project_coordinator
+                .lock()
+                .expect("hold coordinator across recovery polling attempts");
+            [0_u64, 10, 20, 30]
+                .into_iter()
+                .filter(|_| {
+                    get_project_checkpoint_bundle_core(
+                        &state,
+                        request.expected_fence.project_epoch,
+                        request.expected_fence.project_revision,
+                        request.expected_fence.project_checkpoint_hash.clone(),
+                    )
+                    .is_err()
+                })
+                .count()
+        };
+        assert_eq!(busy_attempts, 4);
+        assert!(
+            busy_started.elapsed() < Duration::from_millis(100),
+            "every 30-second recovery-window attempt must settle Busy without worker buildup"
+        );
+
+        let first_result = result_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .expect("full Add core must return its bounded timeout");
+        assert!(first_result.is_err());
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert_eq!(native_ops.prepared.load(Ordering::Acquire), 1);
+        assert_eq!(native_ops.visible.load(Ordering::Acquire), 0);
+        assert_eq!(native_ops.presented.load(Ordering::Acquire), 0);
+        assert_eq!(native_ops.published.load(Ordering::Acquire), 0);
+        assert_eq!(native_ops.publication_state(), (0, 0, 0, 0));
+        assert_eq!(
+            state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("stalled full-core Pending")
+                .lookup(&lease_request),
+            Err(output_lease::OutputLeaseError::RequestCapacity)
+        );
+
+        let retry_started = Instant::now();
+        let retry = add_display_output_with_output_control_fence_core(
+            &state,
+            match &request.action {
+                protocol::control_plane_command::OutputControlActionV2::AddDisplay {
+                    spec, ..
+                } => spec,
+                _ => unreachable!(),
+            },
+            &request.expected_fence,
+            &lease_request,
+            lease_now,
+            &authority.owner_principal,
+            "main",
+            authority.owner_incarnation,
+            native_ops.clone(),
+        );
+        assert!(retry.is_err());
+        assert!(retry_started.elapsed() < Duration::from_millis(100));
+        assert_eq!(
+            native_ops.prepared.load(Ordering::Acquire),
+            1,
+            "retained Pending must prevent a second native worker"
+        );
+        assert!(state.engine.snapshot().video.outputs.is_empty());
+
+        release_sender
+            .send(())
+            .expect("release full-core hidden worker to its reaper");
+        add_worker
+            .join()
+            .expect("join full-core Add command worker");
+        let cleanup_deadline = Instant::now() + Duration::from_secs(1);
+        while native_ops.cleaned.load(Ordering::Acquire) == 0 && Instant::now() < cleanup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(native_ops.cleaned.load(Ordering::Acquire), 1);
+        assert_eq!(native_ops.publication_state(), (0, 0, 0, 0));
+
+        let late_harness = MediaAssetA6CommandHarness::new();
+        let late_state = Arc::clone(&late_harness.state);
+        let late_authority =
+            prepare_fake_display_add_authority(&late_state, "fake-display-late-owner");
+        let late_monitor = native_output_qa_monitors()
+            .into_iter()
+            .find(|monitor| monitor.name == "DISPLAY5")
+            .expect("fake late-reaper DISPLAY5");
+        let (late_request, late_spec, late_lease, late_now) =
+            build_fake_display_add_request(&late_state, &late_authority, &late_monitor, 2);
+        let (late_entered_sender, late_entered_receiver) = mpsc::sync_channel(1);
+        let (late_release_sender, late_release_receiver) = mpsc::sync_channel(1);
+        let late_ops = FakeDisplayOutputNativeOperations::new(
+            Arc::clone(&late_state),
+            native_output_qa_monitors(),
+        )
+        .with_native_stall(late_entered_sender, late_release_receiver);
+        let late_worker_state = Arc::clone(&late_state);
+        let late_worker_ops = late_ops.clone();
+        let late_worker_owner = late_authority.owner_principal.clone();
+        let late_worker_fence = late_request.expected_fence.clone();
+        let late_worker_lease = late_lease.clone();
+        let (late_result_sender, late_result_receiver) = mpsc::sync_channel(1);
+        let late_add_worker = std::thread::spawn(move || {
+            let result = add_display_output_with_output_control_fence_core(
+                &late_worker_state,
+                &late_spec,
+                &late_worker_fence,
+                &late_worker_lease,
+                late_now,
+                &late_worker_owner,
+                "main",
+                late_authority.owner_incarnation,
+                late_worker_ops,
+            );
+            late_result_sender
+                .send(result)
+                .expect("return late native-phase Add result");
+        });
+        late_entered_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .expect("full Add core must enter the fake GPU/native stall");
+        assert_eq!(late_ops.publication_state(), (0, 0, 1, 0));
+        assert_eq!(late_ops.visible.load(Ordering::Acquire), 0);
+        assert_eq!(late_ops.presented.load(Ordering::Acquire), 0);
+        assert!(late_result_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .expect("GPU/native stall must return its bounded timeout")
+            .is_err());
+        assert!(late_state
+            .project_transaction_active
+            .load(Ordering::Acquire));
+        late_release_sender
+            .send(())
+            .expect("release quarantined fake GPU/native candidate");
+        late_add_worker
+            .join()
+            .expect("join late native-phase Add command worker");
+        let late_cleanup_deadline = Instant::now() + Duration::from_secs(1);
+        while late_ops.cleaned.load(Ordering::Acquire) == 0
+            && Instant::now() < late_cleanup_deadline
+        {
+            std::thread::yield_now();
+        }
+        assert_eq!(late_ops.cleaned.load(Ordering::Acquire), 1);
+        assert_eq!(late_ops.publication_state(), (0, 0, 1, 0));
+        assert_eq!(late_ops.visible.load(Ordering::Acquire), 0);
+        assert_eq!(late_ops.presented.load(Ordering::Acquire), 0);
+        assert!(late_state.engine.snapshot().video.outputs.is_empty());
+
+        let stale_harness = MediaAssetA6CommandHarness::new();
+        let stale_state = Arc::clone(&stale_harness.state);
+        let stale_authority =
+            prepare_fake_display_add_authority(&stale_state, "fake-display-stale-owner");
+        let stale_monitor = native_output_qa_monitors()
+            .into_iter()
+            .find(|monitor| monitor.name == "DISPLAY5")
+            .expect("fake stale DISPLAY5");
+        let (stale_request, stale_spec, stale_lease, stale_now) =
+            build_fake_display_add_request(&stale_state, &stale_authority, &stale_monitor, 2);
+        let stale_ops = FakeDisplayOutputNativeOperations::new(
+            Arc::clone(&stale_state),
+            native_output_qa_monitors(),
+        )
+        .with_scenario(FakeDisplayNativeScenario::RotateBeforeAdmission);
+        let stale_result = add_display_output_with_output_control_fence_core(
+            &stale_state,
+            &stale_spec,
+            &stale_request.expected_fence,
+            &stale_lease,
+            stale_now,
+            &stale_authority.owner_principal,
+            "main",
+            stale_authority.owner_incarnation,
+            stale_ops.clone(),
+        );
+        assert!(stale_result.is_err());
+        assert_eq!(stale_ops.prepared.load(Ordering::Acquire), 1);
+        assert_eq!(stale_ops.visible.load(Ordering::Acquire), 0);
+        assert_eq!(stale_ops.presented.load(Ordering::Acquire), 0);
+        assert_eq!(stale_ops.published.load(Ordering::Acquire), 0);
+        assert_eq!(stale_ops.cleaned.load(Ordering::Acquire), 1);
+        assert_eq!(stale_ops.publication_state(), (0, 0, 0, 0));
+        assert!(stale_state.engine.snapshot().video.outputs.is_empty());
+
+        let reserved_harness = MediaAssetA6CommandHarness::new();
+        let reserved_state = Arc::clone(&reserved_harness.state);
+        let reserved_authority =
+            prepare_fake_display_add_authority(&reserved_state, "fake-display-reserved-owner");
+        let reserved_monitor = native_output_qa_monitors()
+            .into_iter()
+            .find(|monitor| monitor.name == "DISPLAY5")
+            .expect("fake reserved DISPLAY5");
+        let (reserved_request, reserved_spec, reserved_lease, reserved_now) =
+            build_fake_display_add_request(
+                &reserved_state,
+                &reserved_authority,
+                &reserved_monitor,
+                2,
+            );
+        let reserved_ops = FakeDisplayOutputNativeOperations::new(
+            Arc::clone(&reserved_state),
+            native_output_qa_monitors(),
+        )
+        .with_scenario(FakeDisplayNativeScenario::AdvanceSafetyBeforeFirstFrame);
+        let reserved_result = add_display_output_with_output_control_fence_core(
+            &reserved_state,
+            &reserved_spec,
+            &reserved_request.expected_fence,
+            &reserved_lease,
+            reserved_now,
+            &reserved_authority.owner_principal,
+            "main",
+            reserved_authority.owner_incarnation,
+            reserved_ops.clone(),
+        );
+        assert!(reserved_result.is_err());
+        assert_eq!(reserved_ops.prepared.load(Ordering::Acquire), 1);
+        assert_eq!(reserved_ops.visible.load(Ordering::Acquire), 0);
+        assert_eq!(reserved_ops.presented.load(Ordering::Acquire), 0);
+        assert_eq!(reserved_ops.published.load(Ordering::Acquire), 0);
+        assert_eq!(reserved_ops.cleaned.load(Ordering::Acquire), 1);
+        assert_eq!(reserved_ops.publication_state(), (0, 0, 0, 0));
+        assert!(!reserved_state
+            .project_transaction_active
+            .load(Ordering::Acquire));
+        assert!(reserved_state.engine.snapshot().video.outputs.is_empty());
+
+        let final_harness = MediaAssetA6CommandHarness::new();
+        let final_state = Arc::clone(&final_harness.state);
+        let final_authority =
+            prepare_fake_display_add_authority(&final_state, "fake-display-final-owner");
+        let final_monitor = native_output_qa_monitors()
+            .into_iter()
+            .find(|monitor| monitor.name == "DISPLAY5")
+            .expect("fake final-boundary DISPLAY5");
+        let (final_request, final_spec, final_lease, final_now) =
+            build_fake_display_add_request(&final_state, &final_authority, &final_monitor, 2);
+        let final_ops = FakeDisplayOutputNativeOperations::new(
+            Arc::clone(&final_state),
+            native_output_qa_monitors(),
+        )
+        .with_scenario(FakeDisplayNativeScenario::AdvanceSafetyBeforeFinalPublication);
+        let final_result = add_display_output_with_output_control_fence_core(
+            &final_state,
+            &final_spec,
+            &final_request.expected_fence,
+            &final_lease,
+            final_now,
+            &final_authority.owner_principal,
+            "main",
+            final_authority.owner_incarnation,
+            final_ops.clone(),
+        );
+        assert!(final_result.is_err());
+        assert_eq!(final_ops.visible.load(Ordering::Acquire), 1);
+        assert_eq!(final_ops.presented.load(Ordering::Acquire), 1);
+        assert_eq!(final_ops.published.load(Ordering::Acquire), 0);
+        assert_eq!(final_ops.cleaned.load(Ordering::Acquire), 1);
+        assert_eq!(final_ops.publication_state(), (0, 0, 1, 0));
+        assert!(!final_state
+            .project_transaction_active
+            .load(Ordering::Acquire));
+        assert!(final_state.engine.snapshot().video.outputs.is_empty());
+    }
+
+    #[test]
+    fn io_mount_query_commands_are_async_and_off_event_loop() {
+        let source = include_str!("main.rs");
+        for command in [
+            "standby_sync_status",
+            "get_output_ownership_status",
+            "get_engine_telemetry_report",
+            "remote_access_urls",
+            "list_show_lan_interfaces",
+            "remote_control_status",
+            "dmx_input_status",
+            "get_snapshot_delta",
+        ] {
+            let function_marker = format!("fn {command}(");
+            let function_start = source
+                .find(&function_marker)
+                .unwrap_or_else(|| panic!("missing Tauri query command {command}"));
+            let attribute_start = source[..function_start]
+                .rfind("#[tauri::command]")
+                .unwrap_or_else(|| panic!("missing Tauri command attribute {command}"));
+            let next_attribute = source[function_start + function_marker.len()..]
+                .find("\n#[tauri::command]")
+                .map(|offset| function_start + function_marker.len() + offset);
+            let body = &source[attribute_start..next_attribute.unwrap_or(source.len())];
+            assert!(
+                body.contains(&format!("async fn {command}(")),
+                "{command} must remain an async Tauri query"
+            );
+            assert!(
+                body.contains("spawn_blocking"),
+                "{command} must dispatch off the event loop"
+            );
+        }
+    }
+
+    #[derive(Default)]
+    struct NativeOutputQaRecorder {
+        confirmations: usize,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum FakeDisplayNativeScenario {
+        Normal,
+        StallHidden,
+        StallNative,
+        RotateBeforeAdmission,
+        AdvanceSafetyBeforeFirstFrame,
+        AdvanceSafetyBeforeFinalPublication,
+    }
+
+    #[derive(Debug)]
+    struct FakeDisplayHiddenCandidate {
+        output_id: VideoOutputId,
+    }
+
+    #[derive(Debug)]
+    struct FakeDisplayNativeWorker {
+        start_gate: Arc<AtomicBool>,
+    }
+
+    #[derive(Debug)]
+    struct FakeDisplayNativeMetrics;
+
+    #[derive(Debug)]
+    struct FakeDisplayNativeCandidate {
+        label: String,
+        output_id: VideoOutputId,
+        metrics: FakeDisplayNativeMetrics,
+        worker: FakeDisplayNativeWorker,
+    }
+
+    #[derive(Clone)]
+    struct FakeDisplayOutputNativeOperations {
+        state: Arc<AppState>,
+        monitors: Arc<Mutex<Vec<VideoDisplayMonitor>>>,
+        scenario: FakeDisplayNativeScenario,
+        monitor_queries: Arc<AtomicU64>,
+        hidden_entered: Option<mpsc::SyncSender<()>>,
+        hidden_release: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
+        terminal_fault_paths: Arc<Mutex<Option<(PathBuf, PathBuf)>>>,
+        prepared: Arc<AtomicU64>,
+        visible: Arc<AtomicU64>,
+        presented: Arc<AtomicU64>,
+        published: Arc<AtomicU64>,
+        cleaned: Arc<AtomicU64>,
+        published_workers: Arc<Mutex<HashMap<String, FakeDisplayNativeWorker>>>,
+        published_metrics: Arc<Mutex<HashMap<VideoOutputId, FakeDisplayNativeMetrics>>>,
+        start_gates: Arc<Mutex<HashMap<VideoOutputId, Arc<AtomicBool>>>>,
+    }
+
+    impl FakeDisplayOutputNativeOperations {
+        fn new(state: Arc<AppState>, monitors: Vec<VideoDisplayMonitor>) -> Self {
+            Self {
+                state,
+                monitors: Arc::new(Mutex::new(monitors)),
+                scenario: FakeDisplayNativeScenario::Normal,
+                monitor_queries: Arc::new(AtomicU64::new(0)),
+                hidden_entered: None,
+                hidden_release: Arc::new(Mutex::new(None)),
+                terminal_fault_paths: Arc::new(Mutex::new(None)),
+                prepared: Arc::new(AtomicU64::new(0)),
+                visible: Arc::new(AtomicU64::new(0)),
+                presented: Arc::new(AtomicU64::new(0)),
+                published: Arc::new(AtomicU64::new(0)),
+                cleaned: Arc::new(AtomicU64::new(0)),
+                published_workers: Arc::new(Mutex::new(HashMap::new())),
+                published_metrics: Arc::new(Mutex::new(HashMap::new())),
+                start_gates: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+
+        fn with_scenario(mut self, scenario: FakeDisplayNativeScenario) -> Self {
+            self.scenario = scenario;
+            self
+        }
+
+        fn with_hidden_stall(
+            mut self,
+            entered: mpsc::SyncSender<()>,
+            release: mpsc::Receiver<()>,
+        ) -> Self {
+            self.scenario = FakeDisplayNativeScenario::StallHidden;
+            self.hidden_entered = Some(entered);
+            self.hidden_release = Arc::new(Mutex::new(Some(release)));
+            self
+        }
+
+        fn with_native_stall(
+            mut self,
+            entered: mpsc::SyncSender<()>,
+            release: mpsc::Receiver<()>,
+        ) -> Self {
+            self.scenario = FakeDisplayNativeScenario::StallNative;
+            self.hidden_entered = Some(entered);
+            self.hidden_release = Arc::new(Mutex::new(Some(release)));
+            self
+        }
+
+        fn with_terminal_fault(mut self, active_parent: PathBuf, saved_parent: PathBuf) -> Self {
+            self.terminal_fault_paths = Arc::new(Mutex::new(Some((active_parent, saved_parent))));
+            self
+        }
+
+        fn publication_state(&self) -> (usize, usize, usize, usize) {
+            let workers = self
+                .published_workers
+                .lock()
+                .expect("fake Display published worker registry");
+            let metrics = self
+                .published_metrics
+                .lock()
+                .expect("fake Display published metrics registry");
+            let gates = self
+                .start_gates
+                .lock()
+                .expect("fake Display start-gate registry");
+            let released_gates = gates
+                .values()
+                .filter(|gate| gate.load(Ordering::Acquire))
+                .count();
+            (workers.len(), metrics.len(), gates.len(), released_gates)
+        }
+    }
+
+    impl DisplayOutputNativeOperations for FakeDisplayOutputNativeOperations {
+        type HiddenCandidate = FakeDisplayHiddenCandidate;
+        type NativeCandidate = FakeDisplayNativeCandidate;
+
+        fn hidden_phase_timeout(&self) -> Duration {
+            Duration::from_millis(50)
+        }
+
+        fn gpu_phase_timeout(&self) -> Duration {
+            Duration::from_millis(50)
+        }
+
+        fn validate_editor_monitor(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn authoritative_monitor(
+            &self,
+            monitor_index: u32,
+            monitor_identity: &str,
+        ) -> Result<VideoDisplayMonitor, String> {
+            let query = self.monitor_queries.fetch_add(1, Ordering::AcqRel) + 1;
+            if self.scenario == FakeDisplayNativeScenario::AdvanceSafetyBeforeFinalPublication
+                && query == 5
+            {
+                self.state
+                    .engine
+                    .safety_blackout_engage_published(Instant::now() + Duration::from_secs(2))?;
+            }
+            authoritative_video_display_monitor_from_descriptors(
+                &self
+                    .monitors
+                    .lock()
+                    .map_err(|_| "Fake Display monitor registry was poisoned".to_string())?,
+                monitor_index,
+                monitor_identity,
+            )
+        }
+
+        fn prepare_hidden_candidate(
+            &self,
+            output: &VideoOutputSummary,
+            _monitor: &VideoDisplayMonitor,
+        ) -> Result<Self::HiddenCandidate, OutputLeaseCandidateCommitFailure> {
+            self.prepared.fetch_add(1, Ordering::AcqRel);
+            match self.scenario {
+                FakeDisplayNativeScenario::StallHidden => {
+                    if let Some(entered) = self.hidden_entered.as_ref() {
+                        entered.send(()).map_err(|error| {
+                            OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                                "Fake Display stall entry failed: {error}"
+                            ))
+                        })?;
+                    }
+                    let release = self
+                        .hidden_release
+                        .lock()
+                        .map_err(|_| {
+                            OutputLeaseCandidateCommitFailure::in_doubt(
+                                "Fake Display stall release lock was poisoned",
+                            )
+                        })?
+                        .take()
+                        .ok_or_else(|| {
+                            OutputLeaseCandidateCommitFailure::in_doubt(
+                                "Fake Display stall release was missing",
+                            )
+                        })?;
+                    release.recv().map_err(|error| {
+                        OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                            "Fake Display stall release failed: {error}"
+                        ))
+                    })?;
+                }
+                FakeDisplayNativeScenario::RotateBeforeAdmission => {
+                    register_project_transaction_owner_for_window_label(
+                        &self.state,
+                        "main",
+                        "fake-display-owner-rotated".to_string(),
+                    )
+                    .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+                    self.state
+                        .engine
+                        .safety_blackout_engage_published(Instant::now() + Duration::from_secs(2))
+                        .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+                    self.state
+                        .project_coordinator
+                        .lock()
+                        .map_err(|_| {
+                            OutputLeaseCandidateCommitFailure::safe(
+                                "Fake Display project coordinator was poisoned",
+                            )
+                        })?
+                        .revision += 1;
+                }
+                FakeDisplayNativeScenario::Normal
+                | FakeDisplayNativeScenario::StallNative
+                | FakeDisplayNativeScenario::AdvanceSafetyBeforeFirstFrame
+                | FakeDisplayNativeScenario::AdvanceSafetyBeforeFinalPublication => {}
+            }
+            Ok(FakeDisplayHiddenCandidate {
+                output_id: output.id,
+            })
+        }
+
+        fn cleanup_hidden_candidate(
+            &self,
+            _candidate: Self::HiddenCandidate,
+        ) -> Result<(), String> {
+            self.cleaned.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+
+        fn prepare_native_candidate(
+            &self,
+            hidden: Self::HiddenCandidate,
+            output: &VideoOutputSummary,
+            _monitor: &VideoDisplayMonitor,
+            _unpublished_snapshot: EngineSnapshot,
+            expected_fence: &OutputControlFenceV1,
+            phase_cancelled: Arc<AtomicBool>,
+        ) -> Result<Self::NativeCandidate, (Self::HiddenCandidate, OutputLeaseCandidateCommitFailure)>
+        {
+            if self.scenario == FakeDisplayNativeScenario::AdvanceSafetyBeforeFirstFrame {
+                assert!(lock_project_external_command_admission(&self.state).is_err());
+                assert!(register_project_transaction_owner_for_window_label(
+                    &self.state,
+                    "main",
+                    "forbidden-post-admission-owner".to_string(),
+                )
+                .is_err());
+                let safety = self.state.engine.safety_blackout_authority();
+                let safety_result = if safety.engaged {
+                    self.state
+                        .engine
+                        .safety_blackout_release_published(
+                            safety.epoch,
+                            safety.generation,
+                            Instant::now() + Duration::from_secs(2),
+                        )
+                        .map(|_| ())
+                } else {
+                    self.state
+                        .engine
+                        .safety_blackout_engage_published(Instant::now() + Duration::from_secs(2))
+                        .map(|_| ())
+                };
+                safety_result.map_err(|error| {
+                    (
+                        FakeDisplayHiddenCandidate {
+                            output_id: hidden.output_id,
+                        },
+                        OutputLeaseCandidateCommitFailure::safe(error),
+                    )
+                })?;
+            }
+            if !exact_display_first_frame_fence_matches(&self.state.engine, expected_fence) {
+                return Err((
+                    hidden,
+                    OutputLeaseCandidateCommitFailure::safe(
+                        "Fake Display exact first-frame fence changed",
+                    ),
+                ));
+            }
+            let start_gate = Arc::new(AtomicBool::new(false));
+            self.start_gates
+                .lock()
+                .map_err(|_| {
+                    (
+                        FakeDisplayHiddenCandidate {
+                            output_id: hidden.output_id,
+                        },
+                        OutputLeaseCandidateCommitFailure::in_doubt(
+                            "Fake Display start-gate registry was poisoned",
+                        ),
+                    )
+                })?
+                .insert(output.id, Arc::clone(&start_gate));
+            if self.scenario == FakeDisplayNativeScenario::StallNative {
+                if let Some(entered) = self.hidden_entered.as_ref() {
+                    entered.send(()).map_err(|error| {
+                        (
+                            FakeDisplayHiddenCandidate {
+                                output_id: hidden.output_id,
+                            },
+                            OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                                "Fake Display native stall entry failed: {error}"
+                            )),
+                        )
+                    })?;
+                }
+                let release = self
+                    .hidden_release
+                    .lock()
+                    .map_err(|_| {
+                        (
+                            FakeDisplayHiddenCandidate {
+                                output_id: hidden.output_id,
+                            },
+                            OutputLeaseCandidateCommitFailure::in_doubt(
+                                "Fake Display native stall release lock was poisoned",
+                            ),
+                        )
+                    })?
+                    .take()
+                    .ok_or_else(|| {
+                        (
+                            FakeDisplayHiddenCandidate {
+                                output_id: hidden.output_id,
+                            },
+                            OutputLeaseCandidateCommitFailure::in_doubt(
+                                "Fake Display native stall release was missing",
+                            ),
+                        )
+                    })?;
+                release.recv().map_err(|error| {
+                    (
+                        FakeDisplayHiddenCandidate {
+                            output_id: hidden.output_id,
+                        },
+                        OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                            "Fake Display native stall release failed: {error}"
+                        )),
+                    )
+                })?;
+                if phase_cancelled.load(Ordering::Acquire) {
+                    return Ok(FakeDisplayNativeCandidate {
+                        label: video_output_window_label(output.id, false),
+                        output_id: output.id,
+                        metrics: FakeDisplayNativeMetrics,
+                        worker: FakeDisplayNativeWorker { start_gate },
+                    });
+                }
+            }
+            if let Some((active_parent, saved_parent)) = self
+                .terminal_fault_paths
+                .lock()
+                .map_err(|_| {
+                    (
+                        FakeDisplayHiddenCandidate {
+                            output_id: hidden.output_id,
+                        },
+                        OutputLeaseCandidateCommitFailure::in_doubt(
+                            "Fake Display terminal fault path lock was poisoned",
+                        ),
+                    )
+                })?
+                .take()
+            {
+                fs::rename(&active_parent, &saved_parent)
+                    .and_then(|_| fs::write(&active_parent, b"not a directory"))
+                    .map_err(|error| {
+                        (
+                            FakeDisplayHiddenCandidate {
+                                output_id: hidden.output_id,
+                            },
+                            OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                                "Fake Display terminal fault setup failed: {error}"
+                            )),
+                        )
+                    })?;
+            }
+            debug_assert_eq!(hidden.output_id, output.id);
+            self.visible.fetch_add(1, Ordering::AcqRel);
+            self.presented.fetch_add(1, Ordering::AcqRel);
+            Ok(FakeDisplayNativeCandidate {
+                label: video_output_window_label(output.id, false),
+                output_id: output.id,
+                metrics: FakeDisplayNativeMetrics,
+                worker: FakeDisplayNativeWorker { start_gate },
+            })
+        }
+
+        fn cleanup_native_candidate(
+            &self,
+            _candidate: Self::NativeCandidate,
+        ) -> Result<(), String> {
+            self.cleaned.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+
+        fn publish_native_candidate_after_preflight<T, Commit>(
+            &self,
+            candidate: Self::NativeCandidate,
+            commit: Commit,
+        ) -> Result<T, (Self::NativeCandidate, OutputLeaseCandidateCommitFailure)>
+        where
+            Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
+        {
+            let label = candidate.label.clone();
+            let output_id = candidate.output_id;
+            let start_gate = Some(Arc::clone(&candidate.worker.start_gate));
+            let result = publish_display_native_candidate_registry_state(
+                &self.published_workers,
+                &self.published_metrics,
+                candidate,
+                label,
+                output_id,
+                start_gate,
+                commit,
+                |candidate| (candidate.worker, candidate.metrics),
+            );
+            if result.is_ok() {
+                self.published.fetch_add(1, Ordering::AcqRel);
+            }
+            result
+        }
+    }
+
+    fn native_output_qa_monitors() -> Vec<VideoDisplayMonitor> {
+        let mut monitors = vec![
+            make_video_display_monitor(
+                0,
+                "DISPLAY1".to_string(),
+                "qa-editor".to_string(),
+                2560,
+                1440,
+                0,
+                0,
+                1.0,
+                true,
+            )
+            .unwrap(),
+            make_video_display_monitor(
+                1,
+                "DISPLAY2".to_string(),
+                "qa-2".to_string(),
+                1920,
+                1080,
+                2560,
+                0,
+                1.0,
+                false,
+            )
+            .unwrap(),
+            make_video_display_monitor(
+                2,
+                "DISPLAY3".to_string(),
+                "qa-3".to_string(),
+                3840,
+                2160,
+                4480,
+                0,
+                1.0,
+                false,
+            )
+            .unwrap(),
+            make_video_display_monitor(
+                3,
+                "DISPLAY5".to_string(),
+                "qa-5".to_string(),
+                1920,
+                1080,
+                8320,
+                0,
+                1.0,
+                false,
+            )
+            .unwrap(),
+            make_video_display_monitor(
+                4,
+                "DISPLAY6".to_string(),
+                "qa-6".to_string(),
+                2560,
+                720,
+                10240,
+                0,
+                1.0,
+                false,
+            )
+            .unwrap(),
+        ];
+        monitors[0].is_editor_monitor = true;
+        monitors
+    }
+
+    struct FakeDisplayAddAuthority {
+        query_state: ControlPlaneQueryState,
+        owner_principal: String,
+        owner_incarnation: u64,
+        lease: protocol::control_plane_command::OutputLeaseAuthorityV1,
+    }
+
+    fn prepare_fake_display_add_authority(
+        state: &Arc<AppState>,
+        owner_principal: &str,
+    ) -> FakeDisplayAddAuthority {
+        register_project_transaction_owner_for_window_label(
+            state,
+            "main",
+            owner_principal.to_string(),
+        )
+        .expect("register fake Display owner");
+        let process_incarnation = state
+            .output_lease_registry
+            .lock()
+            .expect("fake Display lease registry")
+            .process_session_incarnation();
+        let query_state = ControlPlaneQueryState::for_process_incarnation(process_incarnation)
+            .expect("fake Display query state");
+        let fence = query_state
+            .issue_output_control_fence_for_window("main", state)
+            .expect("fake Display Enable fence");
+        let owner_incarnation = *state
+            .project_transaction_owner_incarnations
+            .lock()
+            .expect("fake Display owner incarnation lock")
+            .get("main")
+            .expect("fake Display owner incarnation");
+        let action = protocol::control_plane_command::OutputControlActionV2::EnableOutput;
+        let (lease_request, lease_now) = build_output_lease_authorization_request(
+            state,
+            owner_principal,
+            "main",
+            owner_incarnation,
+            1,
+            &action,
+            fence.project_epoch,
+        )
+        .expect("build fake Display Enable lease request");
+        let receipt = {
+            let mut registry = state
+                .output_lease_registry
+                .lock()
+                .expect("fake Display Enable registry");
+            submit_output_lease_candidate_with_classified_commit(
+                state,
+                &mut registry,
+                &lease_request,
+                lease_now,
+                "fake Display Enable",
+                || {
+                    let status = state.engine.output_ownership_status();
+                    if status.effective_role == MachineOutputRole::Both
+                        && status.desired_role == MachineOutputRole::Both
+                    {
+                        Ok(false)
+                    } else {
+                        Err(OutputLeaseCandidateCommitFailure::safe(
+                            "Fake Display requires already armed Both authority",
+                        ))
+                    }
+                },
+            )
+            .expect("publish fake Display Enable lease")
+            .1
+        };
+        FakeDisplayAddAuthority {
+            query_state,
+            owner_principal: owner_principal.to_string(),
+            owner_incarnation,
+            lease: protocol::control_plane_command::OutputLeaseAuthorityV1 {
+                lease_id: receipt
+                    .lease_id
+                    .expect("fake Display Enable lease id")
+                    .encode(),
+                generation: receipt
+                    .generation_after
+                    .expect("fake Display Enable generation"),
+            },
+        }
+    }
+
+    fn build_fake_display_add_request(
+        state: &Arc<AppState>,
+        authority: &FakeDisplayAddAuthority,
+        monitor: &VideoDisplayMonitor,
+        request_id: u64,
+    ) -> (
+        OutputControlCommandRequestV2,
+        DisplayOutputSpecV2,
+        OutputLeaseRequest,
+        u64,
+    ) {
+        let fence = authority
+            .query_state
+            .issue_output_control_fence_for_window("main", state)
+            .expect("fake Display Add fence");
+        let spec = DisplayOutputSpecV2 {
+            label: format!("Display {}", monitor.index + 1),
+            monitor_identity: monitor.identity.clone(),
+            monitor_index: monitor.index,
+            width: monitor.physical_width,
+            height: monitor.physical_height,
+            fullscreen: true,
+        };
+        let request = OutputControlCommandRequestV2 {
+            operation_id: OUTPUT_DISPLAY_ADD_OPERATION_ID.to_string(),
+            request_id,
+            expected_fence: fence.clone(),
+            action: protocol::control_plane_command::OutputControlActionV2::AddDisplay {
+                spec: spec.clone(),
+                lease: authority.lease.clone(),
+            },
+        };
+        request
+            .validate()
+            .expect("canonical fake Display Add request");
+        let (lease_request, lease_now) = build_output_lease_authorization_request(
+            state,
+            &authority.owner_principal,
+            "main",
+            authority.owner_incarnation,
+            request_id,
+            &request.action,
+            fence.project_epoch,
+        )
+        .expect("build fake Display Add lease request");
+        (request, spec, lease_request, lease_now)
+    }
+
+    fn native_output_qa_receipt_response(
+        request: &OutputControlCommandRequestV2,
+        fence_after: OutputControlFenceV1,
+        lease_receipt: &output_lease::OutputLeaseRequestReceipt,
+        applied: bool,
+    ) -> OutputControlResponseV2 {
+        let shape_sha256 = control_plane_runtime::hex_sha256(
+            &request
+                .canonical_shape_bytes()
+                .expect("canonical QA request shape"),
+        );
+        let argument_fingerprint = control_plane_runtime::hex_sha256(
+            &request
+                .argument_fingerprint_bytes()
+                .expect("canonical QA request arguments"),
+        );
+        let lease_result =
+            control_plane_runtime::output_control_lease_result_from_registry_receipt(
+                &request.action,
+                lease_receipt,
+            )
+            .expect("QA lease receipt must map to v2 response");
+        let response = OutputControlResponseV2::Receipt(
+            protocol::control_plane_command::OutputControlReceiptV2 {
+                operation_id: request.operation_id.clone(),
+                request_id: request.request_id,
+                shape_sha256,
+                argument_fingerprint,
+                audit_sequence: lease_receipt.audit_sequence,
+                fence_before: request.expected_fence.clone(),
+                fence_after,
+                outcome: if applied {
+                    protocol::control_plane_command::OutputControlReceiptOutcomeV2::Applied
+                } else {
+                    protocol::control_plane_command::OutputControlReceiptOutcomeV2::NoOp
+                },
+                lease_result: Some(lease_result),
+            },
+        );
+        response.validate().expect("QA v2 response must validate");
+        response
+    }
+
+    /// This backend repetition driver builds the frontend's canonical v2
+    /// request and calls the production unpublished-native transaction core
+    /// with only shell/GPU work injected. It covers the four-display request,
+    /// lease, Engine, project, and response shape; the separate stalled-phase
+    /// regression is the proof that the same core releases every long-work
+    /// guard and rejects stale admission before visibility or presentation.
+    fn run_native_output_qa_driver_four_sub_displays() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let authority = prepare_fake_display_add_authority(&state, "renderer:native-output-qa");
+        let owner_principal = authority.owner_principal.clone();
+        let owner_incarnation = authority.owner_incarnation;
+        let query_state = &authority.query_state;
+        let monitors = native_output_qa_monitors();
+        let native_ops =
+            FakeDisplayOutputNativeOperations::new(Arc::clone(&state), monitors.clone());
+        let mut recorder = NativeOutputQaRecorder::default();
+
+        for (offset, monitor) in monitors
+            .iter()
+            .filter(|monitor| !monitor.is_editor_monitor)
+            .enumerate()
+        {
+            let fence = query_state
+                .issue_output_control_fence_for_window("main", &state)
+                .expect("issue canonical Add fence");
+            let action = protocol::control_plane_command::OutputControlActionV2::AddDisplay {
+                spec: DisplayOutputSpecV2 {
+                    label: format!("Display {}", monitor.index + 1),
+                    monitor_identity: monitor.identity.clone(),
+                    monitor_index: monitor.index,
+                    width: monitor.physical_width,
+                    height: monitor.physical_height,
+                    fullscreen: true,
+                },
+                lease: authority.lease.clone(),
+            };
+            let request = OutputControlCommandRequestV2 {
+                operation_id: OUTPUT_DISPLAY_ADD_OPERATION_ID.to_string(),
+                request_id: offset as u64 + 2,
+                expected_fence: fence.clone(),
+                action,
+            };
+            request.validate().expect("canonical Add request");
+            assert!(
+                control_plane_runtime::output_action_requires_native_danger_confirmation(
+                    &request.action
+                )
+            );
+            recorder.confirmations += 1;
+            let (lease_request, lease_now) = build_output_lease_authorization_request(
+                &state,
+                &owner_principal,
+                "main",
+                owner_incarnation,
+                request.request_id,
+                &request.action,
+                fence.project_epoch,
+            )
+            .expect("build canonical Add lease request");
+            let spec = match &request.action {
+                protocol::control_plane_command::OutputControlActionV2::AddDisplay {
+                    spec, ..
+                } => spec.clone(),
+                _ => unreachable!(),
+            };
+            let (applied, fence_after, lease_receipt) =
+                add_display_output_with_output_control_fence_core(
+                    &state,
+                    &spec,
+                    &request.expected_fence,
+                    &lease_request,
+                    lease_now,
+                    &owner_principal,
+                    "main",
+                    owner_incarnation,
+                    native_ops.clone(),
+                )
+                .expect("canonical QA Add production-core commit");
+            let response =
+                native_output_qa_receipt_response(&request, fence_after, &lease_receipt, applied);
+            assert!(matches!(response, OutputControlResponseV2::Receipt(_)));
+        }
+        assert_eq!(native_ops.prepared.load(Ordering::Acquire), 4);
+        assert_eq!(native_ops.visible.load(Ordering::Acquire), 4);
+        assert_eq!(native_ops.presented.load(Ordering::Acquire), 4);
+        assert_eq!(native_ops.published.load(Ordering::Acquire), 4);
+        assert_eq!(native_ops.publication_state(), (4, 4, 4, 4));
+        assert_eq!(recorder.confirmations, 4);
+        assert!(state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("QA durable journal")
+            .state
+            .pending
+            .is_empty());
+        assert_eq!(state.engine.snapshot().video.outputs.len(), 4);
+    }
+
+    /// Headless/native-QA driver seam. It deliberately constructs the same
+    /// v2 AddDisplay request that the frontend sends, walks the detected
+    /// editor+four-sub-display topology, and injects a Yes confirmation only
+    /// through this test callback. It is not a Tauri command and therefore
+    /// cannot be reached by release, remote, MIDI, OSC, or shortcut ingress.
+    #[test]
+    fn native_output_qa_driver_uses_canonical_v2_add_path_for_four_sub_displays() {
+        run_native_output_qa_driver_four_sub_displays();
+        let source = include_str!("main.rs");
+        let wrapper_start = source
+            .find("fn add_display_output_with_output_control_fence(")
+            .expect("release Add wrapper");
+        let core_start = source[wrapper_start..]
+            .find("fn add_display_output_with_output_control_fence_core")
+            .map(|offset| wrapper_start + offset)
+            .expect("full Add production core");
+        let release_wrapper = &source[wrapper_start..core_start];
+        assert!(release_wrapper.contains("add_display_output_with_output_control_fence_core("));
+        assert!(release_wrapper.contains("TauriDisplayOutputNativeOperations"));
+        let tauri_native_start = source
+            .find("impl DisplayOutputNativeOperations for TauriDisplayOutputNativeOperations")
+            .expect("release native-operation bundle");
+        let tauri_native_end = source[tauri_native_start..]
+            .find("fn retire_prepared_native_video_output_candidate")
+            .map(|offset| tauri_native_start + offset)
+            .expect("release native-operation bundle end");
+        assert!(source[tauri_native_start..tauri_native_end]
+            .contains("publish_display_native_candidate_registry_state("));
+        let fake_native_start = source
+            .find("impl DisplayOutputNativeOperations for FakeDisplayOutputNativeOperations")
+            .expect("fake native-operation bundle");
+        let fake_native_end = source[fake_native_start..]
+            .find("fn native_output_qa_monitors")
+            .map(|offset| fake_native_start + offset)
+            .expect("fake native-operation bundle end");
+        assert!(source[fake_native_start..fake_native_end]
+            .contains("publish_display_native_candidate_registry_state("));
+        let driver_start = source
+            .find("fn run_native_output_qa_driver_four_sub_displays()")
+            .expect("four-display production-core driver");
+        let driver_end = source[driver_start..]
+            .find("fn native_output_qa_driver_uses_canonical_v2_add_path_for_four_sub_displays")
+            .map(|offset| driver_start + offset)
+            .expect("four-display driver end");
+        let driver = &source[driver_start..driver_end];
+        assert!(driver.contains("add_display_output_with_output_control_fence_core("));
+        assert!(!driver.contains("prepare_internal_media_asset_commit("));
+        assert!(!driver.contains("submit_output_lease_candidate_with_classified_commit("));
+        assert!(!driver.contains("run_unpublished_display_native_transaction("));
+        let mut monitors = vec![
+            make_video_display_monitor(
+                0,
+                "DISPLAY1".to_string(),
+                "path-editor".to_string(),
+                2560,
+                1440,
+                0,
+                0,
+                1.0,
+                true,
+            )
+            .unwrap(),
+            make_video_display_monitor(
+                1,
+                "DISPLAY2".to_string(),
+                "path-2".to_string(),
+                1920,
+                1080,
+                2560,
+                0,
+                1.0,
+                false,
+            )
+            .unwrap(),
+            make_video_display_monitor(
+                2,
+                "DISPLAY3".to_string(),
+                "path-3".to_string(),
+                3840,
+                2160,
+                4480,
+                0,
+                1.0,
+                false,
+            )
+            .unwrap(),
+            make_video_display_monitor(
+                3,
+                "DISPLAY5".to_string(),
+                "path-5".to_string(),
+                1920,
+                1080,
+                8320,
+                0,
+                1.0,
+                false,
+            )
+            .unwrap(),
+            make_video_display_monitor(
+                4,
+                "DISPLAY6".to_string(),
+                "path-6".to_string(),
+                2560,
+                720,
+                10240,
+                0,
+                1.0,
+                false,
+            )
+            .unwrap(),
+        ];
+        monitors[0].is_editor_monitor = true;
+        let expected_fence = OutputControlFenceV1 {
+            process_incarnation: 1,
+            session_incarnation: 2,
+            project_epoch: 3,
+            project_revision: 4,
+            project_checkpoint_hash: "a".repeat(64),
+            project_publication_generation: 5,
+            output_epoch: 6,
+            output_generation: 7,
+            safety_blackout_epoch: 8,
+            safety_blackout_generation: 9,
+        };
+        let lease = protocol::control_plane_command::OutputLeaseAuthorityV1 {
+            lease_id: "lease-0000000000000001".to_string(),
+            generation: 1,
+        };
+        let mut confirmation_count = 0usize;
+        let mut phases = Vec::new();
+        for (request_id, monitor) in monitors
+            .iter()
+            .filter(|monitor| !monitor.is_editor_monitor)
+            .enumerate()
+        {
+            let action = protocol::control_plane_command::OutputControlActionV2::AddDisplay {
+                spec: DisplayOutputSpecV2 {
+                    label: format!("Display {}", monitor.index + 1),
+                    monitor_identity: monitor.identity.clone(),
+                    monitor_index: monitor.index,
+                    width: monitor.physical_width,
+                    height: monitor.physical_height,
+                    fullscreen: true,
+                },
+                lease: lease.clone(),
+            };
+            assert_eq!(action.operation_id(), OUTPUT_DISPLAY_ADD_OPERATION_ID);
+            assert!(
+                control_plane_runtime::output_action_requires_native_danger_confirmation(&action)
+            );
+            confirmation_count += 1; // injected Yes in this test-only driver
+            let request = OutputControlCommandRequestV2 {
+                operation_id: OUTPUT_DISPLAY_ADD_OPERATION_ID.to_string(),
+                request_id: request_id as u64 + 1,
+                expected_fence: expected_fence.clone(),
+                action,
+            };
+            request.validate().expect("QA request must be canonical v2");
+            assert!(!request
+                .canonical_shape_bytes()
+                .expect("QA request shape")
+                .is_empty());
+            phases.push((
+                request.request_id,
+                monitor.identity.clone(),
+                monitor.physical_width,
+                monitor.physical_height,
+            ));
+        }
+        assert_eq!(
+            phases.len(),
+            4,
+            "editor monitor must be excluded from QA adds"
+        );
+        assert_eq!(
+            confirmation_count,
+            phases.len(),
+            "each add gets one injected Yes"
+        );
+        assert_eq!(
+            phases
+                .iter()
+                .map(|phase| phase.1.clone())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            4,
+            "each QA add must retain a distinct monitor identity"
+        );
+        assert_eq!(
+            phases
+                .iter()
+                .map(|phase| (phase.2, phase.3))
+                .collect::<Vec<_>>(),
+            vec![(1920, 1080), (3840, 2160), (1920, 1080), (2560, 720)],
+            "QA requests must preserve each authoritative physical size"
+        );
+    }
+
+    #[test]
+    fn editor_monitor_mapping_requires_authoritative_name_geometry_and_scale() {
+        let descriptors = [
+            make_video_display_monitor(
+                0,
+                "DISPLAY1".to_string(),
+                "path-1".to_string(),
+                2560,
+                1440,
+                -2560,
+                0,
+                1.0,
+                false,
+            )
+            .unwrap(),
+            make_video_display_monitor(
+                1,
+                "DISPLAY2".to_string(),
+                "path-2".to_string(),
+                1920,
+                1080,
+                0,
+                0,
+                1.0,
+                true,
+            )
+            .unwrap(),
+            make_video_display_monitor(
+                2,
+                "DISPLAY5".to_string(),
+                "path-5".to_string(),
+                1920,
+                1080,
+                1920,
+                0,
+                1.25,
+                false,
+            )
+            .unwrap(),
+        ];
+        assert_eq!(
+            video_display_monitor_index_for_fingerprint(
+                Some("DISPLAY5"),
+                1920,
+                1080,
+                1920,
+                0,
+                1.25,
+                &descriptors,
+            )
+            .unwrap(),
+            2
+        );
+        assert!(video_display_monitor_index_for_fingerprint(
+            Some("DISPLAY5"),
+            1920,
+            1080,
+            0,
+            0,
+            1.25,
+            &descriptors,
+        )
+        .is_err());
+        assert!(video_display_monitor_index_for_fingerprint(
+            Some("DISPLAY5"),
+            1920,
+            1080,
+            1920,
+            0,
+            1.0,
+            &descriptors,
+        )
+        .is_err());
+
+        let mut ambiguous = descriptors.to_vec();
+        ambiguous.push(
+            make_video_display_monitor(
+                3,
+                "DISPLAY5".to_string(),
+                "path-5-reused".to_string(),
+                1920,
+                1080,
+                1920,
+                0,
+                1.25,
+                false,
+            )
+            .unwrap(),
+        );
+        assert!(video_display_monitor_index_for_fingerprint(
+            Some("DISPLAY5"),
+            1920,
+            1080,
+            1920,
+            0,
+            1.25,
+            &ambiguous,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn display_output_candidate_mutates_the_authored_project_image() {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.authored_video = Some(snapshot.video.clone());
+        let before = project_file_for_save_from_parts(
+            snapshot.clone(),
+            &ProjectSwapAncillaryState::default(),
+        );
+        let output = VideoOutputSummary {
+            id: 1,
+            label: "Display 1".to_string(),
+            kind: VideoOutputKind::Display,
+            enabled: true,
+            composition_id: 1,
+            fullscreen: true,
+            monitor_id: Some(3),
+            monitor_identity: Some("d".repeat(64)),
+            width: 1920,
+            height: 1080,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: VideoOutputMapping::default(),
+        };
+        let candidate = display_output_candidate_snapshot(snapshot, output.clone());
+        let after =
+            project_file_for_save_from_parts(candidate, &ProjectSwapAncillaryState::default());
+        assert_ne!(before, after, "Display creation must advance project truth");
+        assert_eq!(after.snapshot.video.outputs, vec![output]);
+    }
+
+    #[test]
+    fn authoritative_display_descriptor_serializes_identity_and_primary_without_fallback() {
+        let descriptor = make_video_display_monitor(
+            3,
+            r"\\.\DISPLAY5".to_string(),
+            r"\\?\DISPLAY#AUTHORITY#DISPLAY5".to_string(),
+            1920,
+            1080,
+            1920,
+            0,
+            1.25,
+            false,
+        )
+        .expect("authoritative display descriptor");
+        let json = serde_json::to_value(&descriptor).expect("display descriptor JSON");
+        assert_eq!(json["index"], 3);
+        assert_eq!(json["name"], r"\\.\DISPLAY5");
+        assert_eq!(json["physicalWidth"], 1920);
+        assert_eq!(json["physicalHeight"], 1080);
+        assert_eq!(json["primary"], false);
+        assert_eq!(json["isEditorMonitor"], false);
+        assert_eq!(descriptor.identity.len(), 64);
+
+        let changed_path = make_video_display_monitor(
+            3,
+            r"\\.\DISPLAY5".to_string(),
+            r"\\?\DISPLAY#REPLACED#DISPLAY5".to_string(),
+            1920,
+            1080,
+            1920,
+            0,
+            1.25,
+            false,
+        )
+        .expect("changed authoritative display descriptor");
+        assert_ne!(descriptor.identity, changed_path.identity);
+
+        let primary = make_video_display_monitor(
+            1,
+            r"\\.\DISPLAY2".to_string(),
+            r"\\?\DISPLAY#AUTHORITY#DISPLAY2".to_string(),
+            1920,
+            1080,
+            0,
+            0,
+            1.0,
+            true,
+        )
+        .expect("primary authoritative display descriptor");
+        assert!(primary.primary);
+        assert_ne!(descriptor.identity, primary.identity);
+    }
+
+    #[test]
+    fn authoritative_display_descriptor_selection_requires_index_and_identity_for_five_targets() {
+        let fixtures = [
+            ("DISPLAY1", 2560, 1440),
+            ("DISPLAY2", 1920, 1080),
+            ("DISPLAY3", 3840, 2160),
+            ("DISPLAY5", 1920, 1080),
+            ("DISPLAY6", 2560, 720),
+        ];
+        let descriptors = fixtures
+            .iter()
+            .enumerate()
+            .map(|(index, (name, width, height))| {
+                make_video_display_monitor(
+                    index as u32,
+                    format!(r"\\.\{name}"),
+                    format!(r"\\?\DISPLAY#AUTHORITY#{name}"),
+                    *width,
+                    *height,
+                    index as i32 * 100,
+                    0,
+                    1.0,
+                    index == 1,
+                )
+                .expect("five-display authoritative descriptor")
+            })
+            .collect::<Vec<_>>();
+        for (descriptor, (_, width, height)) in descriptors.iter().zip(fixtures) {
+            let selected = authoritative_video_display_monitor_from_descriptors(
+                &descriptors,
+                descriptor.index,
+                &descriptor.identity,
+            )
+            .expect("exact index and identity selection");
+            assert_eq!(
+                (selected.physical_width, selected.physical_height),
+                (width, height)
+            );
+        }
+        let reused_index = descriptors[3].index;
+        let replacement_identity = "f".repeat(64);
+        assert!(authoritative_video_display_monitor_from_descriptors(
+            &descriptors,
+            reused_index,
+            &replacement_identity,
+        )
+        .is_err());
+        assert!(authoritative_video_display_monitor_from_descriptors(
+            &descriptors,
+            99,
+            &descriptors[0].identity,
+        )
+        .is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_display_config_query_returns_unique_active_source_dimensions() {
+        let records = query_windows_display_config().expect("active Windows display topology");
+        assert!(!records.is_empty());
+        let mut source_names = BTreeSet::new();
+        let mut device_paths = BTreeSet::new();
+        for record in records {
+            assert!(record.width > 0 && record.height > 0);
+            assert!(source_names.insert(normalized_display_name(&record.source_name)));
+            assert!(device_paths.insert(record.monitor_device_path));
+        }
     }
 
     #[test]
@@ -65379,7 +70671,7 @@ pub(crate) mod tests {
         assert_eq!(local_latest.generation, expected.generation + 1);
 
         // Exact control-plane mode validates the latest observed manifest
-        // against the consent-bound identity and rejects the advance instead
+        // against the authorization-bound identity and rejects the advance instead
         // of applying either the newer image or silently falling back to old.
         assert!(validate_exact_standby_takeover_manifest(&local_latest, &expected).is_err());
         assert!(validate_exact_standby_takeover_manifest(&old_manifest, &expected).is_ok());
@@ -65402,7 +70694,7 @@ pub(crate) mod tests {
             role: Some(StandbySyncRole::Standby),
             directory: Some(directory.to_string_lossy().into_owned()),
             session_id: Some("primary-a".to_string()),
-            // The polling worker advanced after consent captured generation 10.
+            // The polling worker advanced after authorization captured generation 10.
             generation: Some(11),
             heartbeat_stale: true,
             ..StandbySyncStatus::default()
@@ -65439,7 +70731,10 @@ pub(crate) mod tests {
             },
         );
 
-        assert!(result.is_err(), "stale Exact consent must be rejected");
+        assert!(
+            result.is_err(),
+            "stale Exact authorization must be rejected"
+        );
         assert!(
             result.unwrap_err().contains("stale"),
             "the exact generation advance is the rejection reason"
@@ -65755,6 +71050,90 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn native_video_output_worker_registry_never_overwrites_an_active_or_quarantined_label() {
+        let label = "video-output-41".to_string();
+        let workers = Mutex::new(HashMap::new());
+        assert!(
+            insert_native_video_output_worker(&workers, label.clone(), 41_u64).is_ok(),
+            "first worker owns the vacant label"
+        );
+
+        let error = insert_native_video_output_worker(&workers, label.clone(), 99_u64)
+            .expect_err("an active or quarantined label must never be overwritten");
+        assert!(error.is_occupied());
+        assert_eq!(
+            error.message(),
+            "Native video output worker registry already contains active or quarantined video-output-41"
+        );
+        assert_eq!(error.into_worker(), 99, "the losing worker remains owned");
+        assert_eq!(
+            workers.lock().unwrap().get(&label),
+            Some(&41),
+            "the incumbent worker/failure fence remains byte-for-byte reachable"
+        );
+    }
+
+    #[test]
+    fn occupied_candidate_cleanup_closes_only_the_candidate_shell_and_preserves_incumbent() {
+        use std::cell::Cell;
+
+        let label = "video-output-42".to_string();
+        let workers = Mutex::new(HashMap::from([(label.clone(), 42_u64)]));
+        let metrics = Mutex::new(HashMap::<VideoOutputId, u64>::new());
+        let start_gate = Arc::new(AtomicBool::new(false));
+        let commit_calls = Cell::new(0_u8);
+        let (losing_candidate, publication_error) =
+            publish_display_native_candidate_registry_state(
+                &workers,
+                &metrics,
+                99_u64,
+                label.clone(),
+                42,
+                Some(Arc::clone(&start_gate)),
+                || {
+                    commit_calls.set(commit_calls.get() + 1);
+                    Ok(())
+                },
+                |candidate| (candidate, candidate),
+            )
+            .expect_err("occupied native identity must reject before commit/publication");
+        assert_eq!(losing_candidate, 99);
+        assert!(matches!(
+            publication_error,
+            OutputLeaseCandidateCommitFailure::SafeAbort(ref message)
+                if message == "Display native candidate identity is already published"
+        ));
+        assert_eq!(commit_calls.get(), 0);
+        assert!(metrics.lock().unwrap().is_empty());
+        assert!(!start_gate.load(Ordering::Acquire));
+
+        let shell_only_calls = Cell::new(0_u8);
+        let registered_cleanup_calls = Cell::new(0_u8);
+
+        cleanup_native_video_output_candidate_after_start_failure(
+            true,
+            || {
+                shell_only_calls.set(shell_only_calls.get() + 1);
+                Ok(())
+            },
+            || {
+                registered_cleanup_calls.set(registered_cleanup_calls.get() + 1);
+                workers.lock().unwrap().remove(&label);
+                Ok(())
+            },
+        )
+        .expect("candidate shell cleanup succeeds");
+
+        assert_eq!(shell_only_calls.get(), 1);
+        assert_eq!(registered_cleanup_calls.get(), 0);
+        assert_eq!(
+            workers.lock().unwrap().get(&label),
+            Some(&42),
+            "the incumbent worker/failure fence remains registered"
+        );
+    }
+
+    #[test]
     fn native_video_output_transition_retry_stop_allows_bounded_join() {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
@@ -65884,6 +71263,31 @@ pub(crate) mod tests {
         release_tx.send(()).unwrap();
         retirement.join().unwrap().unwrap();
         assert!(transition.try_lock().is_ok());
+    }
+
+    #[test]
+    fn native_video_output_worker_join_deadline_keeps_handle_for_quarantine() {
+        let mut worker = NativeVideoOutputWorker::new(
+            Arc::new(AtomicBool::new(false)),
+            std::thread::spawn(|| -> Result<(), String> {
+                std::thread::sleep(Duration::from_millis(150));
+                Ok(())
+            }),
+        );
+        let started = Instant::now();
+        let error = worker
+            .join_with_deadline("video-output-quarantine", Duration::from_millis(20))
+            .unwrap_err();
+        assert!(error.contains("did not stop within 20 ms"));
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(
+            worker.join.is_some(),
+            "timed out worker must remain reapable"
+        );
+        std::thread::sleep(Duration::from_millis(180));
+        worker
+            .join("video-output-quarantine")
+            .expect("quarantined worker must be joinable later");
     }
 
     #[test]
@@ -71879,6 +77283,7 @@ f 1 2 3
                 composition_id: 5,
                 fullscreen: false,
                 monitor_id: Some(0),
+                monitor_identity: None,
                 width: 1280,
                 height: 720,
                 endpoint_name: None,
@@ -72303,6 +77708,7 @@ f 1 2 3
                     composition_id: 1,
                     fullscreen: true,
                     monitor_id: Some(0),
+                    monitor_identity: None,
                     width: 1920,
                     height: 1080,
                     endpoint_name: None,
@@ -74138,6 +79544,7 @@ f 1 2 3
             composition_id,
             fullscreen: true,
             monitor_id: Some(0),
+            monitor_identity: None,
             width: 1920,
             height: 1080,
             endpoint_name: None,
@@ -77107,6 +82514,7 @@ f 1 2 3
             composition_id: 1,
             fullscreen: true,
             monitor_id: Some(0),
+            monitor_identity: None,
             width: 1920,
             height: 1080,
             endpoint_name: None,
@@ -91088,6 +96496,7 @@ mod video_recording_runtime_tests {
             composition_id: 3,
             fullscreen: false,
             monitor_id: None,
+            monitor_identity: None,
             width: 1280,
             height: 720,
             endpoint_name: None,
@@ -91556,11 +96965,6 @@ fn main() {
                 *configured_directory = Some(directory);
             }
             let state = app.state::<AppState>();
-            if let Err(error) = state.control_plane_security.start_physical_input_monitor() {
-                // R4/R5 preparation remains fail-closed, while the local S0
-                // safety path and Standby controls stay available.
-                eprintln!("physical consent remains unavailable: {error}");
-            }
             // Install the single media-operation reaper up front so expired
             // prepared handles are released at TTL for the whole session.
             install_media_asset_operation_reaper(
@@ -91628,7 +97032,6 @@ fn main() {
             media_asset_operations: Arc::new(MediaAssetOperationRegistry::default()),
             authored_control_plane: authored_control_plane::AuthoredControlPlaneState::default(),
             runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState::default(),
-            control_plane_security: control_plane_security::ControlPlaneSecurityState::default(),
             output_lease_registry: Mutex::new(output_lease_registry),
             output_lease_durable_receipts: Mutex::new(OutputLeaseDurableReceiptJournal::in_memory()),
             output_lease_clock_origin: Instant::now(),
@@ -91755,6 +97158,7 @@ fn main() {
             query_control_plane_runtime_generations,
             query_control_plane_output_ownership,
             query_output_lease_authority_v1,
+            query_display_add_lease_authority_v1,
             poll_control_plane_observation_events,
             get_application_update_configuration,
             check_application_update,
@@ -92098,17 +97502,16 @@ fn main() {
             query_timeline_follow_abort_authority_v1,
             abort_timeline_follow_runtime_v1,
             query_output_control_authority_v1,
-            prepare_output_consent_v1,
-            query_output_consent_status_v1,
-            release_blackout_output_control_v1,
-            arm_output_control_v1,
-            take_over_output_control_v1,
-            add_display_output_v1,
-            acquire_output_lease_v1,
-            renew_output_lease_v1,
-            recover_output_lease_v1,
-            relinquish_output_lease_v1,
-            force_transfer_output_lease_v1,
+            release_blackout_output_control_v2,
+            arm_output_control_v2,
+            enable_output_control_v2,
+            take_over_output_control_v2,
+            add_display_output_v2,
+            acquire_output_lease_v2,
+            renew_output_lease_v2,
+            recover_output_lease_v2,
+            relinquish_output_lease_v2,
+            force_transfer_output_lease_v2,
             safety_blackout_engage_v1,
             set_effect_video_target_position,
             move_effect,

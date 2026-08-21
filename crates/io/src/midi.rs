@@ -2952,6 +2952,7 @@ mod tests {
                     composition_id: 1,
                     fullscreen: true,
                     monitor_id: None,
+                    monitor_identity: None,
                     width: 1920,
                     height: 1080,
                     endpoint_name: None,

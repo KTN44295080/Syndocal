@@ -2,7 +2,7 @@
 //!
 //! Pure/process-local AI3 output-lease authority, registry, exact receipts,
 //! bounded admission, rate limits, and audit truth. This layer deliberately
-//! has no Engine, output-worker, Blackout, role, consent, AppState, or Tauri
+//! has no Engine, output-worker, Blackout, role, confirmation UI, AppState, or Tauri
 //! dependency. The main/runtime integration submits only through the registry
 //! request boundary and owns physical-output commit ordering separately.
 
@@ -128,6 +128,14 @@ impl OutputLeaseId {
 pub(crate) struct OutputLeaseGrant {
     pub(crate) lease_id: OutputLeaseId,
     pub(crate) snapshot: OutputLeaseSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OutputLeaseEnableTransition {
+    lease_id: OutputLeaseId,
+    snapshot: OutputLeaseSnapshot,
+    before: Option<OutputLeaseSnapshot>,
+    recovered: bool,
 }
 
 impl OutputLeaseOwner {
@@ -557,6 +565,28 @@ pub(crate) enum OutputLeaseRequestAction {
         project_identity: String,
         ttl_ms: u64,
     },
+    /// The normal one-click Enable path is allowed to reclaim one exact
+    /// expired lease owned by the same renderer/project. This is deliberately
+    /// separate from public Acquire and Recover so lifecycle semantics and
+    /// their caller-selected identities cannot be broadened accidentally.
+    EnableAcquireOrRecover {
+        owner: OutputLeaseOwner,
+        resources: OutputLeaseResources,
+        project_identity: String,
+        ttl_ms: u64,
+    },
+    /// AddDisplay is allowed to re-use the exact Both authority established
+    /// for the same owner/project after its TTL elapsed.  This is an
+    /// internal action: public Acquire and Recover retain their explicit
+    /// lifecycle semantics and never gain implicit recovery.
+    AuthorizeOrRecoverDisplay {
+        lease_id: OutputLeaseId,
+        owner: OutputLeaseOwner,
+        expected_generation: u64,
+        exact_resources: OutputLeaseResources,
+        project_identity: String,
+        ttl_ms: u64,
+    },
     Renew {
         lease_id: OutputLeaseId,
         owner: OutputLeaseOwner,
@@ -604,6 +634,8 @@ impl OutputLeaseRequestAction {
     fn operation(&self) -> &'static str {
         match self {
             Self::Acquire { .. } => "acquire",
+            Self::EnableAcquireOrRecover { .. } => "enable_acquire_or_recover",
+            Self::AuthorizeOrRecoverDisplay { .. } => "authorize_or_recover_display",
             Self::Renew { .. } => "renew",
             #[cfg(test)]
             Self::ObserveExpiry { .. } => "observe_expiry",
@@ -624,9 +656,30 @@ impl OutputLeaseRequestAction {
                 resources,
                 project_identity,
                 ttl_ms,
+            }
+            | Self::EnableAcquireOrRecover {
+                owner,
+                resources,
+                project_identity,
+                ttl_ms,
             } => {
                 shape.owner = Some(owner.clone());
                 shape.resources = Some(resources.clone());
+                shape.project_identity = Some(project_identity.clone());
+                shape.ttl_ms = Some(*ttl_ms);
+            }
+            Self::AuthorizeOrRecoverDisplay {
+                lease_id,
+                owner,
+                expected_generation,
+                exact_resources,
+                project_identity,
+                ttl_ms,
+            } => {
+                shape.lease_id = Some(*lease_id);
+                shape.owner = Some(owner.clone());
+                shape.expected_generation = Some(*expected_generation);
+                shape.resources = Some(exact_resources.clone());
                 shape.project_identity = Some(project_identity.clone());
                 shape.ttl_ms = Some(*ttl_ms);
             }
@@ -1029,6 +1082,22 @@ pub(crate) struct OutputLeaseLeaseView {
     pub(crate) snapshot: OutputLeaseSnapshot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DisplayAddLeaseAuthorityStatus {
+    HeldActive,
+    ExpiredRecoverable,
+    HeldOrphaned,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DisplayAddLeaseAuthorityView {
+    pub(crate) lease_id: OutputLeaseId,
+    pub(crate) generation: u64,
+    pub(crate) status: DisplayAddLeaseAuthorityStatus,
+    pub(crate) resources: OutputLeaseResources,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum OutputLeaseRequestAdmission {
     Terminal(OutputLeaseRequestReceipt),
@@ -1348,6 +1417,141 @@ impl OutputLeaseRegistry {
         Ok(OutputLeaseGrant { lease_id, snapshot })
     }
 
+    fn enable_acquire_or_recover(
+        &mut self,
+        owner: OutputLeaseOwner,
+        resources: OutputLeaseResources,
+        project_identity: impl Into<String>,
+        now_ms: u64,
+        ttl_ms: u64,
+    ) -> Result<OutputLeaseEnableTransition, OutputLeaseError> {
+        let mut candidate = self.clone();
+        let result = candidate.enable_acquire_or_recover_inner(
+            owner,
+            resources,
+            project_identity.into(),
+            now_ms,
+            ttl_ms,
+        );
+        match result {
+            Ok(transition) => {
+                *self = candidate;
+                Ok(transition)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn enable_acquire_or_recover_inner(
+        &mut self,
+        owner: OutputLeaseOwner,
+        resources: OutputLeaseResources,
+        project_identity: String,
+        now_ms: u64,
+        ttl_ms: u64,
+    ) -> Result<OutputLeaseEnableTransition, OutputLeaseError> {
+        self.advance_now(now_ms)?;
+        checked_deadline(now_ms, ttl_ms)?;
+        if owner.process_session_incarnation != self.process_session_incarnation {
+            return Err(OutputLeaseError::StaleOwner);
+        }
+        if !bounded_nonempty(&project_identity, MAX_OUTPUT_LEASE_PROJECT_BYTES) {
+            return Err(OutputLeaseError::InvalidProject);
+        }
+        let resources = OutputLeaseResources::new(resources.as_slice())?;
+        let both = OutputLeaseResources::new(&[
+            OutputLeaseResource::Lighting,
+            OutputLeaseResource::Video,
+        ])?;
+        if resources != both {
+            return Err(OutputLeaseError::ResourceConflict);
+        }
+
+        // A deadline race is resolved on the private candidate before the
+        // overlap decision. The visible transition is either one exact
+        // orphan->active recovery or no mutation at all.
+        self.orphan_expired_overlapping_leases(&resources, now_ms)?;
+        let overlapping = self
+            .leases
+            .iter()
+            .filter_map(|(&lease_id, record)| {
+                record
+                    .state
+                    .snapshot
+                    .resources
+                    .as_ref()
+                    .filter(|lease_resources| lease_resources.overlaps(&resources))
+                    .map(|_| lease_id)
+            })
+            .collect::<Vec<_>>();
+        if overlapping.len() > 1 {
+            return Err(OutputLeaseError::ResourceConflict);
+        }
+
+        if let Some(lease_id) = overlapping.first().copied() {
+            let record = self.lookup_mut(lease_id)?;
+            if record.state.snapshot.phase != OutputLeasePhase::HeldOrphaned
+                || record.project_identity != project_identity
+                || record.state.snapshot.owner.as_ref() != Some(&owner)
+                || record.state.snapshot.resources.as_ref() != Some(&resources)
+            {
+                // An orphan belonging to a different owner/project/resource
+                // scope must not be silently replaced by Enable. That would
+                // turn stale authority into a fresh takeover.
+                return Err(OutputLeaseError::ResourceConflict);
+            }
+            let before = record.state.snapshot();
+            let snapshot = record
+                .state
+                .recover(&owner, before.generation, now_ms, ttl_ms)?;
+            record.last_touched_ms = now_ms;
+            return Ok(OutputLeaseEnableTransition {
+                lease_id,
+                snapshot,
+                before: Some(before),
+                recovered: true,
+            });
+        }
+
+        let grant = self.acquire_inner(owner, resources, project_identity, now_ms, ttl_ms)?;
+        Ok(OutputLeaseEnableTransition {
+            lease_id: grant.lease_id,
+            snapshot: grant.snapshot,
+            before: None,
+            recovered: false,
+        })
+    }
+
+    fn orphan_expired_overlapping_leases(
+        &mut self,
+        resources: &OutputLeaseResources,
+        now_ms: u64,
+    ) -> Result<(), OutputLeaseError> {
+        let ids = self
+            .leases
+            .iter()
+            .filter_map(|(&lease_id, record)| {
+                record
+                    .state
+                    .snapshot
+                    .resources
+                    .as_ref()
+                    .filter(|lease_resources| lease_resources.overlaps(resources))
+                    .map(|_| lease_id)
+            })
+            .collect::<Vec<_>>();
+        for lease_id in ids {
+            let record = self.lookup_mut(lease_id)?;
+            if record.state.snapshot.phase == OutputLeasePhase::HeldActive
+                && now_ms >= record.state.snapshot.expires_at_monotonic_ms.unwrap_or(0)
+            {
+                record.state.orphan_without_owner_check()?;
+                record.last_touched_ms = now_ms;
+            }
+        }
+        Ok(())
+    }
+
     fn renew(
         &mut self,
         lease_id: OutputLeaseId,
@@ -1517,6 +1721,94 @@ impl OutputLeaseRegistry {
             return Err(OutputLeaseError::Expired);
         }
         Ok(record.state.snapshot())
+    }
+
+    /// Authorize the canonical AddDisplay operation against the exact Both
+    /// authority.  Unlike public `authorize_ordinary`, this action resolves a
+    /// deadline race on a private candidate: an exact same-owner/project
+    /// active lease at its deadline is orphaned and immediately recovered.
+    /// No other lease, owner, project, resource scope, or generation may be
+    /// adopted.
+    fn authorize_or_recover_display(
+        &mut self,
+        lease_id: OutputLeaseId,
+        owner: &OutputLeaseOwner,
+        expected_generation: u64,
+        exact_resources: &OutputLeaseResources,
+        project_identity: &str,
+        now_ms: u64,
+        ttl_ms: u64,
+    ) -> Result<OutputLeaseSnapshot, OutputLeaseError> {
+        let mut candidate = self.clone();
+        candidate.advance_now(now_ms)?;
+        checked_deadline(now_ms, ttl_ms)?;
+        if owner.process_session_incarnation != candidate.process_session_incarnation {
+            return Err(OutputLeaseError::StaleOwner);
+        }
+        if !bounded_nonempty(project_identity, MAX_OUTPUT_LEASE_PROJECT_BYTES) {
+            return Err(OutputLeaseError::InvalidProject);
+        }
+        let exact_resources = OutputLeaseResources::new(exact_resources.as_slice())?;
+        let both = OutputLeaseResources::new(&[
+            OutputLeaseResource::Lighting,
+            OutputLeaseResource::Video,
+        ])?;
+        if exact_resources != both {
+            return Err(OutputLeaseError::ResourceConflict);
+        }
+
+        let overlapping = candidate
+            .leases
+            .iter()
+            .filter_map(|(&candidate_id, record)| {
+                record
+                    .state
+                    .snapshot
+                    .resources
+                    .as_ref()
+                    .filter(|resources| resources.overlaps(&exact_resources))
+                    .map(|_| candidate_id)
+            })
+            .collect::<Vec<_>>();
+        if overlapping.len() != 1 || overlapping[0] != lease_id {
+            return Err(OutputLeaseError::ResourceConflict);
+        }
+
+        let record = candidate.lookup_mut(lease_id)?;
+        if record.project_identity != project_identity
+            || record.state.snapshot.resources.as_ref() != Some(&exact_resources)
+        {
+            return Err(OutputLeaseError::ResourceConflict);
+        }
+        record.state.require_current_process(owner)?;
+        record.state.require_generation(expected_generation)?;
+        record.state.require_owner(owner)?;
+
+        match record.state.snapshot.phase {
+            OutputLeasePhase::HeldActive => {
+                if now_ms < record.state.snapshot.expires_at_monotonic_ms.unwrap_or(0) {
+                    let snapshot = record.state.snapshot();
+                    *self = candidate;
+                    return Ok(snapshot);
+                }
+                record.state.orphan_without_owner_check()?;
+                record.last_touched_ms = now_ms;
+                let generation = record.state.snapshot.generation;
+                let snapshot = record.state.recover(owner, generation, now_ms, ttl_ms)?;
+                record.last_touched_ms = now_ms;
+                *self = candidate;
+                Ok(snapshot)
+            }
+            OutputLeasePhase::HeldOrphaned => {
+                let snapshot = record
+                    .state
+                    .recover(owner, expected_generation, now_ms, ttl_ms)?;
+                record.last_touched_ms = now_ms;
+                *self = candidate;
+                Ok(snapshot)
+            }
+            OutputLeasePhase::Unclaimed => Err(OutputLeaseError::InvalidTransition),
+        }
     }
 
     fn resources_overlap(&self, resources: &OutputLeaseResources) -> bool {
@@ -1994,9 +2286,8 @@ impl OutputLeaseRegistry {
     }
 
     /// Check admission and identity on a private candidate. A fresh request
-    /// reserves nothing in live authority; this seam exists so outer consent
-    /// code can reject cross-operation request laundering before consuming a
-    /// physical consent token.
+    /// reserves nothing in live authority; this seam lets the OutputControl
+    /// lane reject cross-operation request laundering before any mutation.
     pub(crate) fn preflight_request(
         &self,
         request: &OutputLeaseRequest,
@@ -2040,6 +2331,86 @@ impl OutputLeaseRegistry {
                     Err(error) => {
                         OutputLeaseApplyResult::error(Vec::new(), None, None, Vec::new(), error)
                     }
+                }
+            }
+            OutputLeaseRequestAction::EnableAcquireOrRecover {
+                owner,
+                resources,
+                project_identity,
+                ttl_ms,
+            } => {
+                let result = self.enable_acquire_or_recover(
+                    owner.clone(),
+                    resources.clone(),
+                    project_identity.clone(),
+                    now_ms,
+                    *ttl_ms,
+                );
+                match result {
+                    Ok(transition) => OutputLeaseApplyResult::success(
+                        vec![transition.lease_id],
+                        Some(owner.clone()),
+                        Some(resources.clone()),
+                        vec![OutputLeaseChange {
+                            lease_id: transition.lease_id,
+                            before: transition.before,
+                            after: Some(transition.snapshot),
+                        }],
+                        if transition.recovered {
+                            OutputLeaseOperationOutcome::Recovered
+                        } else {
+                            OutputLeaseOperationOutcome::Acquired
+                        },
+                    ),
+                    Err(error) => {
+                        OutputLeaseApplyResult::error(Vec::new(), None, None, Vec::new(), error)
+                    }
+                }
+            }
+            OutputLeaseRequestAction::AuthorizeOrRecoverDisplay {
+                lease_id,
+                owner,
+                expected_generation,
+                exact_resources,
+                project_identity,
+                ttl_ms,
+            } => {
+                let before = self.lease_view(*lease_id).ok();
+                let result = self.authorize_or_recover_display(
+                    *lease_id,
+                    owner,
+                    *expected_generation,
+                    exact_resources,
+                    project_identity,
+                    now_ms,
+                    *ttl_ms,
+                );
+                let after = self.lease_view(*lease_id).ok();
+                let mut changes = generation_change(*lease_id, before.as_ref(), after.as_ref());
+                if changes.is_empty() && result.is_ok() {
+                    if let (Some(before), Some(after)) = (before.as_ref(), after.as_ref()) {
+                        changes.push(OutputLeaseChange {
+                            lease_id: *lease_id,
+                            before: Some(before.snapshot.clone()),
+                            after: Some(after.snapshot.clone()),
+                        });
+                    }
+                }
+                match result {
+                    Ok(_) => OutputLeaseApplyResult::success(
+                        vec![*lease_id],
+                        Some(owner.clone()),
+                        Some(exact_resources.clone()),
+                        changes,
+                        OutputLeaseOperationOutcome::Authorized,
+                    ),
+                    Err(error) => OutputLeaseApplyResult::error(
+                        vec![*lease_id],
+                        Some(owner.clone()),
+                        Some(exact_resources.clone()),
+                        changes,
+                        error,
+                    ),
                 }
             }
             OutputLeaseRequestAction::Renew {
@@ -2402,6 +2773,69 @@ fn generation_changes(
         .collect()
 }
 
+/// Dedicated read-only authority for the AddDisplay path. It exposes the
+/// exact expired lease needed for the atomic Add candidate without
+/// changing the public lifecycle query semantics. Any split, foreign,
+/// subset, or multiple overlapping lease is unavailable.
+impl OutputLeaseRegistry {
+    pub(crate) fn query_display_add_authority(
+        &self,
+        owner: &OutputLeaseOwner,
+        project_identity: &str,
+        now_ms: u64,
+    ) -> Result<DisplayAddLeaseAuthorityView, OutputLeaseError> {
+        self.ensure_now(now_ms)?;
+        if owner.process_session_incarnation != self.process_session_incarnation {
+            return Err(OutputLeaseError::StaleOwner);
+        }
+        if !bounded_nonempty(project_identity, MAX_OUTPUT_LEASE_PROJECT_BYTES) {
+            return Err(OutputLeaseError::InvalidProject);
+        }
+        let both = OutputLeaseResources::new(&[
+            OutputLeaseResource::Lighting,
+            OutputLeaseResource::Video,
+        ])?;
+        let overlapping = self
+            .leases
+            .iter()
+            .filter_map(|(&lease_id, record)| {
+                let resources = record.state.snapshot.resources.as_ref()?;
+                resources.overlaps(&both).then_some((lease_id, record))
+            })
+            .collect::<Vec<_>>();
+        if overlapping.len() != 1 {
+            return Err(OutputLeaseError::ResourceConflict);
+        }
+        let (lease_id, record) = overlapping[0];
+        if record.project_identity != project_identity
+            || record.state.snapshot.owner.as_ref() != Some(owner)
+            || record.state.snapshot.resources.as_ref() != Some(&both)
+        {
+            return Err(OutputLeaseError::ResourceConflict);
+        }
+        let status = match record.state.snapshot.phase {
+            OutputLeasePhase::HeldActive => {
+                if now_ms < record.state.snapshot.expires_at_monotonic_ms.unwrap_or(0) {
+                    DisplayAddLeaseAuthorityStatus::HeldActive
+                } else {
+                    DisplayAddLeaseAuthorityStatus::ExpiredRecoverable
+                }
+            }
+            OutputLeasePhase::HeldOrphaned => DisplayAddLeaseAuthorityStatus::HeldOrphaned,
+            OutputLeasePhase::Unclaimed => DisplayAddLeaseAuthorityStatus::Unavailable,
+        };
+        if status == DisplayAddLeaseAuthorityStatus::Unavailable {
+            return Err(OutputLeaseError::InvalidTransition);
+        }
+        Ok(DisplayAddLeaseAuthorityView {
+            lease_id,
+            generation: record.state.snapshot.generation,
+            status,
+            resources: both,
+        })
+    }
+}
+
 fn unclaimed_retention_elapsed(last_touched_ms: u64, now_ms: u64) -> bool {
     last_touched_ms
         .checked_add(OUTPUT_LEASE_UNCLAIMED_RETENTION_MS)
@@ -2624,6 +3058,175 @@ mod tests {
         .unwrap()
     }
 
+    fn enable_request(
+        request_id: u64,
+        owner: OutputLeaseOwner,
+        project_identity: &str,
+        ttl_ms: u64,
+    ) -> OutputLeaseRequest {
+        OutputLeaseRequest::from_action(
+            "local-ui",
+            "output-control",
+            request_id,
+            OutputLeaseRequestAction::EnableAcquireOrRecover {
+                owner,
+                resources: both(),
+                project_identity: project_identity.to_string(),
+                ttl_ms,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn output_lease_enable_acquires_fresh_then_recovers_exact_expired_authority() {
+        let mut registry = registry(40);
+        let current_owner = owner(40, 1);
+        let acquired = registry
+            .submit_request(
+                &enable_request(1, current_owner.clone(), "project-40", 10),
+                0,
+            )
+            .unwrap();
+        assert_eq!(acquired.outcome, Ok(OutputLeaseOperationOutcome::Acquired));
+        let lease_id = acquired.lease_id.unwrap();
+        assert_eq!(acquired.changes.len(), 1);
+        assert!(acquired.changes[0].before.is_none());
+        assert_eq!(
+            acquired.changes[0].after.as_ref().unwrap().phase,
+            OutputLeasePhase::HeldActive
+        );
+
+        // now == deadline is the exact expiry boundary. Enable privately
+        // orphans then recovers the same authority without publishing the
+        // intermediate orphaned candidate.
+        let recovered = registry
+            .submit_request(
+                &enable_request(2, current_owner.clone(), "project-40", 10),
+                10,
+            )
+            .unwrap();
+        assert_eq!(recovered.lease_id, Some(lease_id));
+        assert_eq!(
+            recovered.outcome,
+            Ok(OutputLeaseOperationOutcome::Recovered)
+        );
+        assert_eq!(recovered.changes.len(), 1);
+        let change = &recovered.changes[0];
+        assert_eq!(
+            change.before.as_ref().unwrap().phase,
+            OutputLeasePhase::HeldOrphaned
+        );
+        assert_eq!(change.before.as_ref().unwrap().generation, 2);
+        assert_eq!(
+            change.after.as_ref().unwrap().phase,
+            OutputLeasePhase::HeldActive
+        );
+        assert_eq!(change.after.as_ref().unwrap().generation, 3);
+        assert_eq!(
+            change.after.as_ref().unwrap().owner.as_ref(),
+            Some(&current_owner)
+        );
+        assert_eq!(
+            change.after.as_ref().unwrap().resources.as_ref(),
+            Some(&both())
+        );
+        assert_eq!(registry.active_lease_count(), 1);
+
+        let replay = registry
+            .submit_request(&enable_request(2, current_owner, "project-40", 10), 10)
+            .unwrap();
+        assert_eq!(replay, recovered);
+        assert_eq!(registry.active_lease_count(), 1);
+    }
+
+    #[test]
+    fn output_lease_enable_recovery_rejects_active_foreign_project_and_scope_without_mutation() {
+        let mut active = registry(41);
+        let current_owner = owner(41, 1);
+        active
+            .acquire(current_owner.clone(), both(), "project-41", 0, 10)
+            .unwrap();
+        let before_active = active.clone();
+        assert_eq!(
+            active.enable_acquire_or_recover(current_owner.clone(), both(), "project-41", 9, 10,),
+            Err(OutputLeaseError::ResourceConflict)
+        );
+        assert_eq!(active, before_active);
+
+        for (candidate_owner, project_identity, resources) in [
+            (owner(41, 2), "project-41", both()),
+            (current_owner.clone(), "project-other", both()),
+            (current_owner.clone(), "project-41", lighting()),
+            (current_owner.clone(), "project-41", video()),
+        ] {
+            let mut candidate = before_active.clone();
+            let before = candidate.clone();
+            assert_eq!(
+                candidate.enable_acquire_or_recover(
+                    candidate_owner,
+                    resources,
+                    project_identity,
+                    10,
+                    10,
+                ),
+                Err(OutputLeaseError::ResourceConflict)
+            );
+            assert_eq!(candidate, before);
+        }
+
+        let mut stale_process = before_active.clone();
+        let before_stale = stale_process.clone();
+        assert_eq!(
+            stale_process.enable_acquire_or_recover(owner(99, 1), both(), "project-41", 10, 10,),
+            Err(OutputLeaseError::StaleOwner)
+        );
+        assert_eq!(stale_process, before_stale);
+    }
+
+    #[test]
+    fn output_lease_enable_rejects_ambiguous_split_leases_and_preserves_public_semantics() {
+        let mut split = registry(42);
+        split
+            .acquire(owner(42, 1), lighting(), "project-42", 0, 10)
+            .unwrap();
+        split
+            .acquire(owner(42, 1), video(), "project-42", 0, 10)
+            .unwrap();
+        let before_split = split.clone();
+        assert_eq!(
+            split.enable_acquire_or_recover(owner(42, 1), both(), "project-42", 10, 10,),
+            Err(OutputLeaseError::ResourceConflict)
+        );
+        assert_eq!(split, before_split);
+
+        // Public Acquire remains strict and does not silently adopt expired
+        // authority. Public Recover still requires the explicit lease id and
+        // generation after an observed expiry.
+        let mut public = registry(43);
+        let grant = public
+            .acquire(owner(43, 1), both(), "project-43", 0, 10)
+            .unwrap();
+        let before_acquire = public.clone();
+        assert_eq!(
+            public.acquire(owner(43, 1), both(), "project-43", 10, 10),
+            Err(OutputLeaseError::ResourceConflict)
+        );
+        assert_eq!(public, before_acquire);
+        assert!(public.observe_expiry(grant.lease_id, 10).unwrap());
+        assert_eq!(
+            public.recover(grant.lease_id, &owner(43, 1), 1, 10, 10),
+            Err(OutputLeaseError::StaleGeneration)
+        );
+        assert_eq!(
+            public
+                .recover(grant.lease_id, &owner(43, 1), 2, 10, 10)
+                .unwrap()
+                .phase,
+            OutputLeasePhase::HeldActive
+        );
+    }
+
     #[test]
     fn output_lease_registry_authorize_ordinary_is_exact_and_deadline_fenced() {
         let mut registry = registry(19);
@@ -2683,6 +3286,145 @@ mod tests {
         assert_eq!(
             registry.lease_view(grant.lease_id).unwrap().snapshot.phase,
             OutputLeasePhase::HeldOrphaned
+        );
+    }
+
+    #[test]
+    fn add_display_authorization_recovers_only_exact_expired_both_authority() {
+        let mut lease_registry = registry(24);
+        let current_owner = owner(24, 1);
+        let grant = lease_registry
+            .acquire(current_owner.clone(), both(), "project-24", 0, 10)
+            .unwrap();
+
+        let request = |request_id: u64, owner: OutputLeaseOwner, generation: u64, project: &str| {
+            OutputLeaseRequest::from_action(
+                "local-ui",
+                "output-control",
+                request_id,
+                OutputLeaseRequestAction::AuthorizeOrRecoverDisplay {
+                    lease_id: grant.lease_id,
+                    owner,
+                    expected_generation: generation,
+                    exact_resources: both(),
+                    project_identity: project.to_string(),
+                    ttl_ms: 10,
+                },
+            )
+            .unwrap()
+        };
+
+        // The AddDisplay operation sees the active lease exactly at its
+        // deadline and resolves active->orphaned->active on its private
+        // candidate. The public Acquire route remains unchanged.
+        let recovered = lease_registry
+            .submit_request(&request(1, current_owner.clone(), 1, "project-24"), 10)
+            .unwrap();
+        assert_eq!(
+            recovered.outcome,
+            Ok(OutputLeaseOperationOutcome::Authorized)
+        );
+        assert_eq!(recovered.lease_id, Some(grant.lease_id));
+        assert_eq!(recovered.generation_before, Some(1));
+        assert_eq!(recovered.generation_after, Some(3));
+        assert_eq!(
+            lease_registry
+                .lease_view(grant.lease_id)
+                .unwrap()
+                .snapshot
+                .phase,
+            OutputLeasePhase::HeldActive
+        );
+
+        // An already-orphaned exact lease is also recoverable when the
+        // caller supplies the current generation; no stale generation is
+        // guessed or accepted.
+        lease_registry
+            .observe_expiry(grant.lease_id, 20)
+            .expect("active lease should expire");
+        let orphaned_generation = lease_registry
+            .lease_view(grant.lease_id)
+            .unwrap()
+            .snapshot
+            .generation;
+        let recovered_again = lease_registry
+            .submit_request(
+                &request(2, current_owner.clone(), orphaned_generation, "project-24"),
+                20,
+            )
+            .unwrap();
+        assert_eq!(
+            recovered_again.outcome,
+            Ok(OutputLeaseOperationOutcome::Authorized)
+        );
+        assert_eq!(recovered_again.generation_before, Some(orphaned_generation));
+        assert_eq!(
+            recovered_again.generation_after,
+            Some(orphaned_generation + 1)
+        );
+
+        let query_before_add = lease_registry
+            .query_display_add_authority(&current_owner, "project-24", 30)
+            .unwrap();
+        assert_eq!(
+            query_before_add.status,
+            DisplayAddLeaseAuthorityStatus::ExpiredRecoverable
+        );
+        let query_snapshot = lease_registry.lease_view(grant.lease_id).unwrap();
+        let recovered_from_query = lease_registry
+            .submit_request(
+                &request(
+                    3,
+                    current_owner.clone(),
+                    query_before_add.generation,
+                    "project-24",
+                ),
+                30,
+            )
+            .unwrap();
+        assert_eq!(
+            recovered_from_query.outcome,
+            Ok(OutputLeaseOperationOutcome::Authorized)
+        );
+        assert_eq!(
+            lease_registry
+                .lease_view(grant.lease_id)
+                .unwrap()
+                .snapshot
+                .phase,
+            OutputLeasePhase::HeldActive
+        );
+        assert_eq!(query_snapshot.snapshot.phase, OutputLeasePhase::HeldActive);
+
+        let before_reject = lease_registry.lease_view(grant.lease_id).unwrap();
+        let rejected = lease_registry
+            .submit_request(
+                &request(
+                    4,
+                    owner(24, 2),
+                    query_before_add.generation + 2,
+                    "project-24",
+                ),
+                30,
+            )
+            .unwrap();
+        assert_eq!(rejected.outcome, Err(OutputLeaseError::StaleOwner));
+        assert_eq!(
+            lease_registry.lease_view(grant.lease_id).unwrap(),
+            before_reject
+        );
+
+        let mut public = registry(25);
+        let public_grant = public
+            .acquire(owner(25, 1), both(), "project-25", 0, 10)
+            .unwrap();
+        assert_eq!(
+            public.acquire(owner(25, 1), both(), "project-25", 10, 10),
+            Err(OutputLeaseError::ResourceConflict)
+        );
+        assert_eq!(
+            public.recover(public_grant.lease_id, &owner(25, 1), 1, 10, 10),
+            Err(OutputLeaseError::InvalidTransition)
         );
     }
 

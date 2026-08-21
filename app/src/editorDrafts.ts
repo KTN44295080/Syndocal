@@ -23,6 +23,7 @@ export interface VideoOutputConfigDraft {
   height: number;
   fullscreen: boolean;
   monitor_id: number;
+  monitor_identity: string | null;
   endpoint_name: string;
 }
 
@@ -88,6 +89,7 @@ export const videoOutputConfigDraftFromSummary = (output: VideoOutputSummary): V
   height: output.height,
   fullscreen: output.fullscreen,
   monitor_id: output.monitor_id ?? 0,
+  monitor_identity: output.monitor_identity ?? null,
   endpoint_name: output.endpoint_name ?? "",
 });
 

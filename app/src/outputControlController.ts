@@ -4,19 +4,19 @@ export const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID =
   "syndocal.query.output.control.authority.v1";
 export const OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID =
   "syndocal.output.lease.authority.query.v1";
-export const OUTPUT_CONSENT_PREPARE_OPERATION_ID = "syndocal.output.consent.prepare.v1";
-export const OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID =
-  "syndocal.query.output.consent.status.v1";
-export const OUTPUT_OWNERSHIP_ARM_OPERATION_ID = "syndocal.output.ownership.arm.v1";
-export const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID = "syndocal.output.blackout.release.v1";
-export const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID = "syndocal.output.standby.takeover.v1";
-export const OUTPUT_DISPLAY_ADD_OPERATION_ID = "syndocal.output.display.add.v1";
-export const OUTPUT_LEASE_ACQUIRE_OPERATION_ID = "syndocal.output.lease.acquire.v1";
-export const OUTPUT_LEASE_RENEW_OPERATION_ID = "syndocal.output.lease.renew.v1";
-export const OUTPUT_LEASE_RECOVER_OPERATION_ID = "syndocal.output.lease.recover.v1";
-export const OUTPUT_LEASE_RELINQUISH_OPERATION_ID = "syndocal.output.lease.relinquish.v1";
+export const OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID =
+  "syndocal.query.output.display.add.authority.v1";
+export const OUTPUT_OWNERSHIP_ARM_OPERATION_ID = "syndocal.output.ownership.arm.v2";
+export const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID = "syndocal.output.blackout.release.v2";
+export const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID = "syndocal.output.standby.takeover.v2";
+export const OUTPUT_DISPLAY_ADD_OPERATION_ID = "syndocal.output.display.add.v2";
+export const OUTPUT_ENABLE_OPERATION_ID = "syndocal.output.enable.v2";
+export const OUTPUT_LEASE_ACQUIRE_OPERATION_ID = "syndocal.output.lease.acquire.v2";
+export const OUTPUT_LEASE_RENEW_OPERATION_ID = "syndocal.output.lease.renew.v2";
+export const OUTPUT_LEASE_RECOVER_OPERATION_ID = "syndocal.output.lease.recover.v2";
+export const OUTPUT_LEASE_RELINQUISH_OPERATION_ID = "syndocal.output.lease.relinquish.v2";
 export const OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID =
-  "syndocal.output.lease.force_transfer.v1";
+  "syndocal.output.lease.force_transfer.v2";
 
 const MAX_LEASE_QUERY_STATUSES = 64;
 const MAX_SAFE_REQUEST_ID = Number.MAX_SAFE_INTEGER;
@@ -62,6 +62,19 @@ export interface OutputLeaseAuthorityQuery {
   statuses: OutputLeaseAuthorityQueryStatus[];
 }
 
+export type DisplayAddLeaseAuthorityStatus =
+  | "held_active"
+  | "expired_recoverable"
+  | "held_orphaned"
+  | "unavailable";
+
+export interface DisplayAddLeaseAuthorityQuery {
+  operationId: typeof OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID;
+  status: DisplayAddLeaseAuthorityStatus;
+  authority: OutputLeaseAuthority | null;
+  resources: OutputLeaseResource[];
+}
+
 export interface DisplayOutputSpec {
   label: string;
   monitor_identity: string;
@@ -77,7 +90,10 @@ export type OutputDisplayAction = {
   lease: OutputLeaseAuthority;
 };
 
+export type OutputEnableAction = { kind: "enable_output" };
+
 export type OutputControlAction =
+  | OutputEnableAction
   | { kind: "arm"; role: OutputControlTargetRole; lease: OutputLeaseAuthority }
   | { kind: "release_blackout"; lease: OutputLeaseAuthority }
   | {
@@ -97,12 +113,6 @@ export type OutputLeaseLifecycleAction =
   | { kind: "force_transfer_lease"; lease: OutputLeaseAuthority };
 
 export type OutputControlOperationAction = OutputControlAction | OutputLeaseLifecycleAction;
-
-export interface OutputControlChallengeNotice {
-  action: OutputControlOperationAction;
-  displayCode: string;
-  expiresAtUnixMs: number;
-}
 
 export type OutputLeaseReceiptPhase = "unclaimed" | "held_active" | "held_orphaned";
 export type OutputLeaseReceiptOutcome =
@@ -164,6 +174,7 @@ const allocateRequestId = (): number => {
 
 const operationIdForAction = (action: OutputControlOperationAction): string => {
   switch (action.kind) {
+    case "enable_output": return OUTPUT_ENABLE_OPERATION_ID;
     case "arm": return OUTPUT_OWNERSHIP_ARM_OPERATION_ID;
     case "release_blackout": return OUTPUT_BLACKOUT_RELEASE_OPERATION_ID;
     case "take_over_standby": return OUTPUT_STANDBY_TAKEOVER_OPERATION_ID;
@@ -178,21 +189,18 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
 
 const commandForAction = (action: OutputControlOperationAction): string => {
   switch (action.kind) {
-    case "arm": return "arm_output_control_v1";
-    case "release_blackout": return "release_blackout_output_control_v1";
-    case "take_over_standby": return "take_over_output_control_v1";
-    case "add_display": return "add_display_output_v1";
-    case "acquire_lease": return "acquire_output_lease_v1";
-    case "renew_lease": return "renew_output_lease_v1";
-    case "recover_lease": return "recover_output_lease_v1";
-    case "relinquish_output_lease": return "relinquish_output_lease_v1";
-    case "force_transfer_lease": return "force_transfer_output_lease_v1";
+    case "enable_output": return "enable_output_control_v2";
+    case "arm": return "arm_output_control_v2";
+    case "release_blackout": return "release_blackout_output_control_v2";
+    case "take_over_standby": return "take_over_output_control_v2";
+    case "add_display": return "add_display_output_v2";
+    case "acquire_lease": return "acquire_output_lease_v2";
+    case "renew_lease": return "renew_output_lease_v2";
+    case "recover_lease": return "recover_output_lease_v2";
+    case "relinquish_output_lease": return "relinquish_output_lease_v2";
+    case "force_transfer_lease": return "force_transfer_output_lease_v2";
   }
 };
-
-const wait = (milliseconds: number): Promise<void> => new Promise((resolve) => {
-  globalThis.setTimeout(resolve, milliseconds);
-});
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object";
@@ -205,9 +213,6 @@ const isLowerHexSha256 = (value: unknown): value is string =>
 const isLeaseId = (value: unknown): value is string =>
   typeof value === "string" && /^lease-[0-9a-f]{16}$/.test(value)
     && !/^lease-0{16}$/.test(value);
-const isCanonicalChallengeToken = (value: unknown): value is string =>
-  typeof value === "string" && /^[A-Za-z0-9_-]{22}$/.test(value);
-
 const hasExactKeys = (value: Record<string, unknown>, expected: readonly string[]): boolean => {
   const actual = Object.keys(value).sort();
   const required = [...expected].sort();
@@ -264,6 +269,35 @@ const assertResources = (value: unknown, errorMessage: string): OutputLeaseResou
 const sameResources = (left: readonly string[], right: readonly string[]): boolean =>
   left.length === right.length && left.every((resource, index) => resource === right[index]);
 
+const assertDisplayAddLeaseAuthorityQuery = (value: unknown): DisplayAddLeaseAuthorityQuery => {
+  const errorMessage = "Display Add lease authority response was invalid; nothing was applied.";
+  if (!isObject(value) || !hasExactKeys(value, ["operationId", "status", "authority", "resources"])
+    || value.operationId !== OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID
+    || value.status !== "held_active" && value.status !== "expired_recoverable"
+      && value.status !== "held_orphaned" && value.status !== "unavailable"
+    || !Array.isArray(value.resources)) {
+    throw new Error(errorMessage);
+  }
+  if (value.status === "unavailable") {
+    if (value.authority !== null || value.resources.length !== 0) throw new Error(errorMessage);
+    return {
+      operationId: OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
+      status: "unavailable",
+      authority: null,
+      resources: [],
+    };
+  }
+  if (value.authority === null || !sameResources(value.resources, ["lighting", "video"])) {
+    throw new Error(errorMessage);
+  }
+  return {
+    operationId: OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
+    status: value.status,
+    authority: assertLeaseAuthority(value.authority, errorMessage),
+    resources: ["lighting", "video"],
+  };
+};
+
 const resourcesForRole = (role: OutputControlTargetRole): OutputLeaseResource[] => {
   switch (role) {
     case "lighting": return ["lighting"];
@@ -311,6 +345,14 @@ export async function queryOutputLeaseAuthority(
   return assertOutputLeaseAuthorityQuery(await invoke<unknown>("query_output_lease_authority_v1"));
 }
 
+export async function queryDisplayAddLeaseAuthority(
+  invoke: FrontendTauriInvoke,
+): Promise<DisplayAddLeaseAuthorityQuery> {
+  return assertDisplayAddLeaseAuthorityQuery(
+    await invoke<unknown>("query_display_add_lease_authority_v1"),
+  );
+}
+
 const activeStatuses = (query: OutputLeaseAuthorityQuery): OutputLeaseAuthorityQueryHeld[] =>
   query.statuses.filter((status): status is OutputLeaseAuthorityQueryHeld => status.status === "held_active");
 
@@ -339,8 +381,37 @@ export function selectOnlyActiveOutputLease(
   return { ...matches[0].authority };
 }
 
+/**
+ * Stable display-add adapter: the backend's durable Add path receives exactly
+ * one Both authority that is either currently active or recoverable from the
+ * same owner/project. The backend performs the orphan recovery and Add in one
+ * durable candidate; the renderer never performs an Enable-then-Add sequence.
+ */
+export function selectExactBothLeaseForDisplayAdd(
+  query: DisplayAddLeaseAuthorityQuery,
+): OutputLeaseAuthority {
+  const validated = assertDisplayAddLeaseAuthorityQuery(query);
+  if (validated.status === "unavailable" || !validated.authority) {
+    throw new Error("Exactly one active or recoverable Both output lease is required; nothing was applied.");
+  }
+  return { ...validated.authority };
+}
+
+export function hasOnlyActiveOutputLease(
+  query: OutputLeaseAuthorityQuery,
+  expectedResources: OutputLeaseResources,
+): boolean {
+  return activeStatuses(query).filter(
+    (status) => sameResources(status.resources, expectedResources),
+  ).length === 1;
+}
+
 const assertAction = (action: OutputControlOperationAction): void => {
   const record = action as unknown as Record<string, unknown>;
+  if (action.kind === "enable_output") {
+    if (!hasExactKeys(record, ["kind"])) throw new Error("Output enable action was invalid; nothing was applied.");
+    return;
+  }
   if (action.kind === "acquire_lease") {
     if (!hasExactKeys(record, ["kind", "role"]) || !["lighting", "video", "both"].includes(action.role)) {
       throw new Error("Output lease acquire action was invalid; nothing was applied.");
@@ -385,52 +456,6 @@ const assertAuthority = (value: unknown): { operation_id: string; fence: OutputC
   };
 };
 
-interface OutputConsentChallenge {
-  operation_id: typeof OUTPUT_CONSENT_PREPARE_OPERATION_ID;
-  request_id: number;
-  target_operation_id: string;
-  challenge_id: string;
-  consent_token: string;
-  display_code: string;
-  argument_fingerprint: string;
-  expires_at_unix_ms: number;
-}
-
-interface OutputConsentStatus {
-  operation_id: typeof OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID;
-  request_id: number;
-  challenge_id: string;
-  state: "pending_physical_input" | "ready";
-  expires_at_unix_ms: number;
-}
-
-const OUTPUT_CONSENT_READY_HANDOFF_MS = 5_000;
-
-const assertChallenge = (value: unknown, operationId: string, requestId: number): OutputConsentChallenge => {
-  if (!isObject(value) || !hasExactKeys(value, [
-    "operation_id", "request_id", "target_operation_id", "challenge_id", "consent_token",
-    "display_code", "argument_fingerprint", "expires_at_unix_ms",
-  ]) || value.operation_id !== OUTPUT_CONSENT_PREPARE_OPERATION_ID || value.request_id !== requestId
-    || value.target_operation_id !== operationId || !isCanonicalChallengeToken(value.challenge_id)
-    || !isCanonicalChallengeToken(value.consent_token) || typeof value.display_code !== "string"
-    || !/^\d{6}$/.test(value.display_code) || !isLowerHexSha256(value.argument_fingerprint)
-    || !isPositiveSafeInteger(value.expires_at_unix_ms)) throw new Error("OutputControl physical-confirmation challenge was invalid; nothing was applied.");
-  return value as unknown as OutputConsentChallenge;
-};
-
-const assertStatus = (value: unknown, challenge: OutputConsentChallenge, requestId: number): OutputConsentStatus => {
-  if (!isObject(value) || !hasExactKeys(value, ["operation_id", "request_id", "challenge_id", "state", "expires_at_unix_ms"])
-    || value.operation_id !== OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID || value.request_id !== requestId
-    || value.challenge_id !== challenge.challenge_id || value.state !== "pending_physical_input" && value.state !== "ready"
-    || !isPositiveSafeInteger(value.expires_at_unix_ms)
-    || value.state === "pending_physical_input" && value.expires_at_unix_ms !== challenge.expires_at_unix_ms
-    || value.state === "ready" && (value.expires_at_unix_ms < challenge.expires_at_unix_ms
-      || value.expires_at_unix_ms > challenge.expires_at_unix_ms + OUTPUT_CONSENT_READY_HANDOFF_MS)) {
-    throw new Error("OutputControl physical-confirmation status was invalid; nothing was applied.");
-  }
-  return value as unknown as OutputConsentStatus;
-};
-
 const assertPhase = (value: unknown, errorMessage: string): OutputLeaseReceiptPhase => {
   if (value !== "unclaimed" && value !== "held_active" && value !== "held_orphaned") throw new Error(errorMessage);
   return value;
@@ -473,8 +498,18 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
   const terminalPhase = afterPhase ?? beforePhase;
   const terminalResources = outcome === "relinquished" ? beforeResources : afterResources;
   if (terminalGeneration !== authority.generation || terminalPhase !== phase || !sameResources(resources, terminalResources)) throw new Error(errorMessage);
-  if (action.kind !== "acquire_lease" && authority.lease_id !== action.lease.lease_id) throw new Error(errorMessage);
+  if (action.kind !== "acquire_lease" && action.kind !== "enable_output"
+    && authority.lease_id !== action.lease.lease_id) throw new Error(errorMessage);
   switch (action.kind) {
+    case "enable_output":
+      if ((outcome !== "acquired" && outcome !== "recovered")
+        || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
+      if (outcome === "acquired"
+        && (beforeGeneration !== null || beforePhase !== null || beforeResources.length !== 0)) throw new Error(errorMessage);
+      if (outcome === "recovered"
+        && (beforeGeneration === null || afterGeneration === null || afterGeneration <= beforeGeneration
+          || beforePhase !== "held_orphaned" || !sameResources(beforeResources, ["lighting", "video"]))) throw new Error(errorMessage);
+      break;
     case "arm":
       if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, resourcesForRole(action.role))) throw new Error(errorMessage);
       break;
@@ -485,7 +520,7 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
       if (!(outcome === "authorized" && phase === "held_active" || outcome === "project_orphaned" && phase === "held_orphaned") || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
     case "add_display":
-      if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["video"])) throw new Error(errorMessage);
+      if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
     case "acquire_lease":
       if (outcome !== "acquired" || phase !== "held_active" || !sameResources(resources, resourcesForRole(action.role))) throw new Error(errorMessage);
@@ -522,8 +557,7 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
 };
 
 const knownPreActionRejections = new Set([
-  "invalid_request", "forbidden", "stale_fence", "consent_missing", "consent_expired", "consent_pending",
-  "consent_replayed", "consent_wrong_binding", "consent_device_removed", "busy", "overloaded",
+  "invalid_request", "forbidden", "stale_fence", "busy", "overloaded",
 ]);
 
 const deepFreeze = <T>(value: T): T => {
@@ -540,7 +574,6 @@ const assertResponse = (
   operationId: string,
   requestId: number,
   expectedFence: OutputControlFence,
-  expectedArgumentFingerprint: string,
 ): OutputControlReceipt => {
   if (!isObject(value) || value.type !== "receipt" && value.type !== "rejected") throw new Error("OutputControl terminal response was invalid; physical output state is unknown.");
   if (!hasExactKeys(value, value.type === "receipt" ? ["type", "receipt"] : ["type", "rejection"])) throw new Error("OutputControl terminal response was invalid; physical output state is unknown.");
@@ -548,13 +581,13 @@ const assertResponse = (
   if (!isObject(result) || result.operation_id !== operationId || result.request_id !== requestId) throw new Error("OutputControl terminal response identity did not match the request; physical output state is unknown.");
   if (value.type === "rejected") {
     if (!hasExactKeys(result, ["operation_id", "request_id", "error"]) || typeof result.error !== "string") throw new Error("OutputControl rejection was invalid; physical output state is unknown.");
-    if (result.error === "forbidden" || result.error === "consent_expired") throw new Error(`OutputControl rejected (${result.error}); output was not applied; refresh lease state.`);
+    if (result.error === "forbidden") throw new Error(`OutputControl rejected (${result.error}); output was not applied; refresh lease state.`);
     if (knownPreActionRejections.has(result.error)) throw new Error(`OutputControl rejected (${result.error}); nothing was applied.`);
     throw new Error(`OutputControl rejected (${result.error}); physical output state is unknown.`);
   }
   if (!hasExactKeys(result, ["operation_id", "request_id", "shape_sha256", "argument_fingerprint", "audit_sequence", "fence_before", "fence_after", "outcome", "lease_result"])
     || !isLowerHexSha256(result.shape_sha256) || !isLowerHexSha256(result.argument_fingerprint)
-    || result.argument_fingerprint !== expectedArgumentFingerprint || !isPositiveSafeInteger(result.audit_sequence)
+    || !isPositiveSafeInteger(result.audit_sequence)
     || result.outcome !== "applied" && result.outcome !== "no_op") throw new Error("OutputControl receipt was invalid; physical output state is unknown.");
   const fenceBefore = assertFence(result.fence_before, "OutputControl receipt was invalid; physical output state is unknown.");
   const fenceAfter = assertFence(result.fence_after, "OutputControl receipt was invalid; physical output state is unknown.");
@@ -573,14 +606,15 @@ const assertResponse = (
 };
 
 const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: OutputControlOperationAction): void => {
-  if (action.kind === "acquire_lease") return;
+  if (action.kind === "acquire_lease" || action.kind === "enable_output") return;
   const selected = query.statuses.filter((status): status is OutputLeaseAuthorityQueryHeld =>
     status.status !== "unavailable" && status.authority.lease_id === action.lease.lease_id);
   if (selected.length !== 1 || selected[0].authority.generation !== action.lease.generation
     || action.kind === "arm" && selected[0].status !== "held_active"
     || action.kind === "release_blackout" && selected[0].status !== "held_active"
     || action.kind === "take_over_standby" && selected[0].status !== "held_active"
-    || action.kind === "add_display" && selected[0].status !== "held_active"
+    || action.kind === "add_display"
+      && selected[0].status !== "held_active" && selected[0].status !== "held_orphaned"
     || action.kind === "renew_lease" && selected[0].status !== "held_active"
     || action.kind === "recover_lease" && selected[0].status !== "held_orphaned") {
     throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
@@ -591,55 +625,34 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
       : ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   } else if (action.kind === "add_display") {
-    const expectedResources = ["video"] as const;
+    const expectedResources = ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   }
+};
+
+type OutputControlExecutionOptions = {
+  skipPublicLeaseQuery?: boolean;
 };
 
 const executeOutputControlOperation = async (
   invoke: FrontendTauriInvoke,
   action: OutputControlOperationAction,
-  onChallenge?: (notice: OutputControlChallengeNotice) => void,
+  options: OutputControlExecutionOptions = {},
 ): Promise<OutputControlReceipt> => {
-  if (!onChallenge) throw new Error("OutputControl requires a visible, nonblocking physical-confirmation challenge surface; nothing was applied.");
   const requestId = allocateRequestId();
   const operationId = operationIdForAction(action);
   assertAction(action);
   const authority = assertAuthority(await invoke<unknown>("query_output_control_authority_v1"));
-  const leaseQuery = await queryOutputLeaseAuthority(invoke);
-  assertSelectedLeaseIsUsable(leaseQuery, action);
-  const prepareArgs = deepFreeze({
-    request: { operation_id: OUTPUT_CONSENT_PREPARE_OPERATION_ID, request_id: requestId, expected_fence: authority.fence, action },
-  });
-  const challenge = assertChallenge(await invoke<unknown>("prepare_output_consent_v1", prepareArgs), operationId, requestId);
-  onChallenge({ action, displayCode: challenge.display_code, expiresAtUnixMs: challenge.expires_at_unix_ms });
-  // The backend accepts digits only during the original challenge window.
-  // One final status query may cross that boundary when the sixth physical
-  // digit completed immediately before expiry; Ready then carries a single,
-  // bounded five-second handoff to the one-shot consume path.  Pending input
-  // still expires in the backend at the original deadline.
-  const deadline = Math.min(
-    challenge.expires_at_unix_ms + OUTPUT_CONSENT_READY_HANDOFF_MS,
-    Date.now() + 20_000,
-  );
-  let statusRequestId = allocateRequestId();
-  let ready = false;
-  while (!ready) {
-    if (Date.now() >= deadline) throw new Error("Physical confirmation expired or was not received; nothing was applied.");
-    const status = assertStatus(await invoke<unknown>("query_output_consent_status_v1", {
-      request: { operation_id: OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID, request_id: statusRequestId, challenge_id: challenge.challenge_id },
-    }), challenge, statusRequestId);
-    ready = status.state === "ready";
-    if (ready && status.expires_at_unix_ms !== challenge.expires_at_unix_ms) {
-      onChallenge({ action, displayCode: challenge.display_code, expiresAtUnixMs: status.expires_at_unix_ms });
+  if (options.skipPublicLeaseQuery) {
+    if (action.kind !== "add_display") {
+      throw new Error("Only the canonical display Add path may bypass the public lease query; nothing was applied.");
     }
-    if (!ready) {
-      await wait(100);
-      statusRequestId = allocateRequestId();
-    }
+  } else {
+    const leaseQuery = await queryOutputLeaseAuthority(invoke);
+    assertSelectedLeaseIsUsable(leaseQuery, action);
   }
   const executeArgs = deepFreeze({
-    request: { operation_id: operationId, request_id: requestId, expected_fence: authority.fence, consent_token: challenge.consent_token, action },
+    request: { operation_id: operationId, request_id: requestId, expected_fence: authority.fence, action },
   });
   let terminal: unknown;
   const command = commandForAction(action) as Parameters<FrontendTauriInvoke>[0];
@@ -652,23 +665,45 @@ const executeOutputControlOperation = async (
       throw new Error(`OutputControl execution reply was lost (${String(firstError)}); physical output state is unknown.`);
     }
   }
-  return assertResponse(terminal, action, operationId, requestId, authority.fence, challenge.argument_fingerprint);
+  return assertResponse(terminal, action, operationId, requestId, authority.fence);
 };
 
 /** Execute an ordinary action with a caller-selected exact active lease. */
 export async function executeOutputControl(
   invoke: FrontendTauriInvoke,
   action: OutputControlAction,
-  onChallenge?: (notice: OutputControlChallengeNotice) => void,
 ): Promise<OutputControlReceipt> {
-  return executeOutputControlOperation(invoke, action, onChallenge);
+  return executeOutputControlOperation(invoke, action);
 }
 
-/** Execute a lease lifecycle action through the same consent and receipt lane. */
+/**
+ * Execute AddDisplay using the dedicated read-only authority query. The
+ * backend v2 command owns same-owner orphan recovery and Add atomically, so
+ * this lane deliberately does not fall back to the public lifecycle query.
+ */
+export async function executeDisplayAddOutputControl(
+  invoke: FrontendTauriInvoke,
+  action: OutputDisplayAction,
+  authorityQuery: DisplayAddLeaseAuthorityQuery,
+): Promise<OutputControlReceipt> {
+  const authority = selectExactBothLeaseForDisplayAdd(authorityQuery);
+  if (authority.lease_id !== action.lease.lease_id || authority.generation !== action.lease.generation) {
+    throw new Error("Display Add lease authority changed before execution; nothing was applied.");
+  }
+  return executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: true });
+}
+
+/** Normal one-step output path; no lease selection or six-digit code is shown. */
+export async function enableOutput(
+  invoke: FrontendTauriInvoke,
+): Promise<OutputControlReceipt> {
+  return executeOutputControl(invoke, { kind: "enable_output" });
+}
+
+/** Execute a lease lifecycle action through the same fenced receipt lane. */
 export async function executeOutputLeaseLifecycle(
   invoke: FrontendTauriInvoke,
   action: OutputLeaseLifecycleAction,
-  onChallenge?: (notice: OutputControlChallengeNotice) => void,
 ): Promise<OutputControlReceipt> {
-  return executeOutputControlOperation(invoke, action, onChallenge);
+  return executeOutputControlOperation(invoke, action);
 }
