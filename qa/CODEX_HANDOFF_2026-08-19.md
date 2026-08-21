@@ -697,3 +697,8 @@ did not report a process id`; no PowerShell/UIAutomation or synthetic-input bypa
 was used. Maximize, Raw Input, five fullscreen origins, and the final three-screen
 state therefore remain unverified and must be resumed through Computer Use or one
 explicit human handoff.
+
+The reviewed implementation checkpoint is commit
+`262b8c0f43035ee44ff23cdfc195f4ac1a08b374`, pushed successfully to
+`origin/codex/syndocal-v1.2`. The branch and upstream were equal immediately after
+push.

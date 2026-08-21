@@ -644,3 +644,6 @@ The sole exact-path process was responsive, but Computer Use could not bind its
 window (`foreground window did not report a process id`) on two attempts. This is
 an automation blocker, not evidence of maximize, Raw Input, or display acceptance;
 those hardware gates remain open without an alternate UI-automation bypass.
+The reviewed implementation is commit
+`262b8c0f43035ee44ff23cdfc195f4ac1a08b374`, pushed to
+`origin/codex/syndocal-v1.2`.
