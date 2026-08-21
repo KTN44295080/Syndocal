@@ -72,14 +72,19 @@ export function OscControlMappingPanel(props: OscControlMappingPanelProps) {
           <span class={`ioConnectionState ${props.running ? "ok" : "idle"}`}><i aria-hidden="true" />{props.running ? "Listening" : "Stopped"}</span>
         </header>
         <div class="ioConnectionControls">
-          <label>
-            Bind IP
-            <input data-io-control="osc-bind-ip" value={props.bindIp} disabled={props.running} onInput={(event) => props.onBindIp(event.currentTarget.value)} />
-          </label>
-          <label>
-            Port
-            <input data-io-control="osc-port" type="number" min="1" value={props.port} disabled={props.running} onInput={(event) => props.onPort(Number(event.currentTarget.value))} />
-          </label>
+          <details class="ioDisclosure" data-io-disclosure="osc-connection-settings">
+            <summary>Connection settings</summary>
+            <div class="ioDisclosureBody">
+              <label>
+                Bind IP
+                <input data-io-control="osc-bind-ip" value={props.bindIp} disabled={props.running} onInput={(event) => props.onBindIp(event.currentTarget.value)} />
+              </label>
+              <label>
+                Port
+                <input data-io-control="osc-port" type="number" min="1" value={props.port} disabled={props.running} onInput={(event) => props.onPort(Number(event.currentTarget.value))} />
+              </label>
+            </div>
+          </details>
           <Show when={props.running} fallback={
             <button data-io-control="osc-start" class="primary" onClick={() => void props.onStart()}>Start OSC</button>
           }>

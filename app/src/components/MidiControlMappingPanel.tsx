@@ -122,18 +122,23 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           </div>
         </header>
         <div class="ioConnectionControls">
-          <label>
-            MIDI input
-            <select
-              data-io-control="midi-input"
-              value={props.selectedMidiInput ?? ""}
-              onInput={(event) => props.onSelectedMidiInput(Number(event.currentTarget.value))}
-            >
-              <option value="">Select input</option>
-              <For each={props.midiInputs}>{(input) => <option data-no-localize value={input.index}>{input.name}</option>}</For>
-            </select>
-          </label>
-          <button data-io-control="midi-refresh" onClick={() => void props.onRefreshMidi()}>Scan MIDI</button>
+          <details class="ioDisclosure" data-io-disclosure="midi-connection-settings">
+            <summary>Device settings</summary>
+            <div class="ioDisclosureBody">
+              <label>
+                MIDI input
+                <select
+                  data-io-control="midi-input"
+                  value={props.selectedMidiInput ?? ""}
+                  onInput={(event) => props.onSelectedMidiInput(Number(event.currentTarget.value))}
+                >
+                  <option value="">Select input</option>
+                  <For each={props.midiInputs}>{(input) => <option data-no-localize value={input.index}>{input.name}</option>}</For>
+                </select>
+              </label>
+              <button data-io-control="midi-refresh" onClick={() => void props.onRefreshMidi()}>Scan MIDI</button>
+            </div>
+          </details>
           <Show when={props.clockConnected} fallback={
             <button data-io-control="midi-clock-connect" class="primary" disabled={props.midiInputs.length === 0} onClick={() => void props.onConnectClock()}>Connect MIDI Clock / MTC</button>
           }>

@@ -50,6 +50,48 @@ pub fn absolute_timeline_loop_bounds(
     Ok((region.a_ms, target))
 }
 
+/// Compute one absolute authored-grid beat jump without mutating runtime
+/// state.  The DJ Link lane uses this preflight before the worker publishes a
+/// position, so identity, finite BPM, and overflow/underflow failures are
+/// all side-effect free.
+pub fn dj_link_authored_bar_jump_target(
+    current_ms: u64,
+    duration_ms: u64,
+    bpm: f32,
+    bars: i8,
+) -> Result<u64, String> {
+    if !matches!(bars, -4 | 4) {
+        return Err("DJ Link beat jump must be exactly -4 or 4 bars".to_string());
+    }
+    if !bpm.is_finite() || bpm <= 0.0 {
+        return Err("DJ Link authored bar grid is unavailable".to_string());
+    }
+    if current_ms > duration_ms {
+        return Err("DJ Link current position exceeds the authored timeline".to_string());
+    }
+    let bar_ms =
+        (60_000.0_f64 / f64::from(bpm) * f64::from(protocol::DJ_LINK_BEATS_PER_BAR)).round();
+    if !bar_ms.is_finite() || bar_ms < 1.0 || bar_ms > u64::MAX as f64 {
+        return Err("DJ Link authored bar grid is invalid".to_string());
+    }
+    let delta_ms = (bar_ms as u64)
+        .checked_mul(u64::from(bars.unsigned_abs()))
+        .ok_or_else(|| "DJ Link beat jump overflowed the authored grid".to_string())?;
+    let target = if bars < 0 {
+        current_ms
+            .checked_sub(delta_ms)
+            .ok_or_else(|| "DJ Link beat jump underflowed the authored grid".to_string())?
+    } else {
+        current_ms
+            .checked_add(delta_ms)
+            .ok_or_else(|| "DJ Link beat jump overflowed the authored grid".to_string())?
+    };
+    if target > duration_ms {
+        return Err("DJ Link beat jump exceeds the authored timeline".to_string());
+    }
+    Ok(target)
+}
+
 use crossbeam_queue::ArrayQueue;
 use io::{
     artnet::ArtNetSender,
@@ -1935,6 +1977,16 @@ define_engine_command! {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Dedicated empty-scene creation for the Bank UI. This is intentionally
+    /// separate from capture so the normal "must have a target" guard cannot
+    /// be weakened for ordinary cue creation.
+    CreateEmptyCuePublished {
+        cue_id: CueId,
+        cue_list_id: CueListId,
+        label: String,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     UpdateCue {
         cue_id: CueId,
         label: String,
@@ -2052,6 +2104,22 @@ define_engine_command! {
     UpsertCueList {
         cue_list_id: CueListId,
         label: String,
+    },
+    /// Acknowledgement-bearing authored bank reorder. The complete ordered
+    /// ID set is validated and published as one image; no cue membership or
+    /// active-cue state is inferred from the order.
+    ReorderCueListsPublished {
+        cue_list_ids: Vec<CueListId>,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// Delete one authored Bank and all of its Scenes as one published image.
+    /// Every Bank ID, including the historical first ID, follows the same
+    /// last-Bank invariant enforced by the authoritative mutation path.
+    DeleteCueListPublished {
+        cue_list_id: CueListId,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     RemoveCueList(CueListId),
     SetCueList {
@@ -2358,6 +2426,14 @@ define_engine_command! {
     DjLinkSetTimelineLoopAbsolute {
         division: u8,
         enabled: bool,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// Authored-grid absolute beat jump used by the DJ Link timeline lane.
+    /// The worker validates the active authored Timeline identity and returns
+    /// only after the canonical runtime publication has completed.
+    DjLinkTimelineBeatJump {
+        timeline_id: TimelineId,
+        bars: i8,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     /// One queue item for DJ Link RELEASE: disable the loop and resume the
@@ -2726,6 +2802,14 @@ define_engine_command! {
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     AddVideoOutput(VideoOutputSummary),
+    /// Authenticated display creation. Unlike the legacy enqueue form this
+    /// waits for the complete runtime snapshot publication and restores the
+    /// prior output image if that publication cannot be made visible.
+    AddVideoOutputPublished {
+        output: VideoOutputSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     RemoveVideoOutput(VideoOutputId),
     SetVideoOutputConfig {
         output_id: VideoOutputId,
@@ -2825,6 +2909,10 @@ impl EngineCommand {
                 | EngineCommand::ReportLiveAudioOnset { .. }
                 | EngineCommand::SetTimelinePlaying(_)
                 | EngineCommand::SetTimelinePlayingPublished { .. }
+                | EngineCommand::DjLinkStartTimeline { .. }
+                | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+                | EngineCommand::DjLinkTimelineBeatJump { .. }
+                | EngineCommand::DjLinkRelease { .. }
                 | EngineCommand::SeekTimeline(_)
                 | EngineCommand::SetTimelineLoopEnabled(_)
                 | EngineCommand::ToggleTimelineLoop
@@ -3482,6 +3570,21 @@ impl EngineHandle {
         self.allocate_u64_id(&self.next_cue_id, AllocatorDomain::Cues)
     }
 
+    /// Reclaim a cue identity only while it is still the allocator tail. A
+    /// concurrent reservation intentionally makes the allocation monotonic.
+    pub fn release_cue_id_if_last(&self, cue_id: CueId) -> bool {
+        let Some(next) = cue_id.checked_add(1) else {
+            return false;
+        };
+        let _allocator_guard = self
+            .allocator_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.next_cue_id
+            .compare_exchange(next, cue_id, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    }
+
     pub fn allocate_cue_list_id(&self) -> CueListId {
         self.allocate_u64_id(&self.next_cue_list_id, AllocatorDomain::CueLists)
     }
@@ -3562,6 +3665,23 @@ impl EngineHandle {
 
     pub fn allocate_video_output_id(&self) -> VideoOutputId {
         self.allocate_u64_id(&self.next_video_output_id, AllocatorDomain::VideoOutputs)
+    }
+
+    /// Reclaim a Display identity only when it is still the allocator tail.
+    /// This is used by the authenticated creation transaction after a
+    /// preflight/engine rejection; a concurrent reservation deliberately
+    /// keeps the allocator monotonic instead of risking ABA reuse.
+    pub fn release_video_output_id_if_last(&self, output_id: VideoOutputId) -> bool {
+        let Some(next) = output_id.checked_add(1) else {
+            return false;
+        };
+        let _allocator_guard = self
+            .allocator_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.next_video_output_id
+            .compare_exchange(next, output_id, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
     }
 
     pub fn allocate_video_effect_chain_id(&self) -> VideoEffectChainId {
@@ -3767,6 +3887,26 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("DJ Link absolute loop acknowledgement failed: {error}"))?
+    }
+
+    /// Publish a bounded authored-grid beat jump and wait for the worker
+    /// acknowledgement.  This is intentionally distinct from the legacy
+    /// fire-and-forget `SeekTimelineBeat` command.
+    pub fn dj_link_timeline_beat_jump(
+        &self,
+        timeline_id: TimelineId,
+        bars: i8,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::DjLinkTimelineBeatJump {
+            timeline_id,
+            bars,
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("DJ Link beat jump acknowledgement failed: {error}"))?
     }
 
     /// Submit the atomic DJ Link RELEASE publication.  Disable-loop and
@@ -4443,6 +4583,72 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Cue create acknowledgement failed: {error}"))?
+    }
+
+    /// Publish an intentionally empty Bank scene. The backend owns the
+    /// project/history preflight; the engine only provides the definitive
+    /// create-or-rollback acknowledgement.
+    pub fn create_empty_cue_published(
+        &self,
+        cue_id: CueId,
+        cue_list_id: CueListId,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::CreateEmptyCuePublished {
+            cue_id,
+            cue_list_id,
+            label: "New Scene".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Empty Cue create acknowledgement failed: {error}"))?
+    }
+
+    pub fn reorder_cue_lists_published(&self, cue_list_ids: Vec<CueListId>) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::ReorderCueListsPublished {
+            cue_list_ids,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Cue List reorder acknowledgement failed: {error}"))?
+    }
+
+    /// Delete one authored Bank, including every authored Scene it owns, and
+    /// wait for the definitive engine snapshot acknowledgement.
+    pub fn delete_cue_list_published(&self, cue_list_id: CueListId) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::DeleteCueListPublished {
+            cue_list_id,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Cue List delete acknowledgement failed: {error}"))?
+    }
+
+    /// Publish one Display output and wait for the definitive engine
+    /// snapshot acknowledgement. The caller must perform the external
+    /// monitor/lease/project-fence checks before enqueueing this command.
+    pub fn add_video_output_published(&self, output: VideoOutputSummary) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::AddVideoOutputPublished {
+            output,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Display output acknowledgement failed: {error}"))?
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6326,6 +6532,14 @@ impl EngineHandle {
                 maxima.observe_u64(AllocatorDomain::CueLists, *cue_list_id);
                 observe_effect_target_allocator_sources(&mut maxima, effect_targets);
             }
+            EngineCommand::CreateEmptyCuePublished {
+                cue_id,
+                cue_list_id,
+                ..
+            } => {
+                maxima.observe_u64(AllocatorDomain::Cues, *cue_id);
+                maxima.observe_u64(AllocatorDomain::CueLists, *cue_list_id);
+            }
             EngineCommand::SetCueEffectTargetsPublished { effect_targets, .. } => {
                 observe_effect_target_allocator_sources(&mut maxima, effect_targets);
             }
@@ -6343,9 +6557,11 @@ impl EngineHandle {
                 maxima.observe_u64(AllocatorDomain::Cues, *cue_id);
             }
             EngineCommand::UpsertCueList { cue_list_id, .. }
-            | EngineCommand::SetCueList { cue_list_id, .. } => {
+            | EngineCommand::SetCueList { cue_list_id, .. }
+            | EngineCommand::DeleteCueListPublished { cue_list_id, .. } => {
                 maxima.observe_u64(AllocatorDomain::CueLists, *cue_list_id);
             }
+            EngineCommand::ReorderCueListsPublished { .. } => {}
             EngineCommand::UpsertPalette(palette) => {
                 maxima.observe_u64(AllocatorDomain::Palettes, palette.id);
             }
@@ -6575,7 +6791,8 @@ impl EngineHandle {
                 }
                 maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
             }
-            EngineCommand::AddVideoOutput(output) => {
+            EngineCommand::AddVideoOutput(output)
+            | EngineCommand::AddVideoOutputPublished { output, .. } => {
                 maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
             }
             EngineCommand::UpsertStageObject(object) => {
@@ -6731,6 +6948,7 @@ impl EngineHandle {
             | EngineCommand::SetTimelineLoopEnabled(_)
             | EngineCommand::SetTimelineLoopAbsolute { .. }
             | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+            | EngineCommand::DjLinkTimelineBeatJump { .. }
             | EngineCommand::DjLinkRelease { .. }
             | EngineCommand::ToggleTimelineLoop
             | EngineCommand::ScaleTimelineLoop(_)
@@ -14061,6 +14279,38 @@ enum PendingCommandRollback {
         stage_map_presets: Vec<StageMapPresetSummary>,
         last_error: Option<String>,
     },
+    RestoreCueLists {
+        cue_lists: Vec<CueListSummary>,
+        last_error: Option<String>,
+    },
+    RestoreCueListDeletion {
+        cues: Vec<RuntimeCue>,
+        cue_lists: Vec<CueListSummary>,
+        playback_executors: Vec<PlaybackExecutorSummary>,
+        cue_list_effect_activation_cues: HashMap<CueListId, CueId>,
+        active_group_cue_ids: HashMap<String, CueId>,
+        cue_live_modifier_overrides: HashMap<CueId, CueLiveModifierSettings>,
+        pending_manual_cue_direction: Option<(CueId, CueLiveDirection)>,
+        cue_release_values: HashMap<CueId, HashMap<(FixtureId, String), u16>>,
+        values: HashMap<(FixtureId, String), u16>,
+        cue_value_origins: HashMap<(FixtureId, String), CueListId>,
+        timeline_events: Vec<RuntimeTimelineEvent>,
+        timeline_due_cues: Vec<TimelineCueOccurrence>,
+        active_cue_id: Option<CueId>,
+        active_fade: Option<RuntimeFade>,
+        pending_cues: VecDeque<PendingCueTrigger>,
+        child_transports: Vec<RuntimeChildTransport>,
+        child_transport_by_parent_event: Vec<Option<usize>>,
+        direct_child_transports: Vec<RuntimeChildTransport>,
+        direct_child_transport_by_cue: Vec<Option<usize>>,
+        direct_child_count_in: Option<RuntimeDirectChildCountIn>,
+        nested_child_transports: Vec<RuntimeChildTransport>,
+        timeline_position_ms: u64,
+        timeline_playhead_boundary_armed: bool,
+        timeline_evaluated_boundary_position_ms: Option<u64>,
+        timeline_jump_landed_event_id: Option<TimelineEventId>,
+        last_error: Option<String>,
+    },
     RestoreCueRemoval {
         cues: Vec<RuntimeCue>,
         cue_lists: Vec<CueListSummary>,
@@ -14225,6 +14475,8 @@ impl PendingCommandRollback {
                 | Self::RestoreAutoVj { .. }
                 | Self::RestoreFixturePatchBatch { .. }
                 | Self::RestoreStageMapPresets { .. }
+                | Self::RestoreCueLists { .. }
+                | Self::RestoreCueListDeletion { .. }
                 | Self::RestoreCueRemoval { .. }
                 | Self::RestoreTimelineEvents { .. }
                 | Self::RestoreTimelineItems { .. }
@@ -16257,6 +16509,8 @@ impl EngineRuntime {
                     | EngineCommand::SetNodeGraphEnabledPublished { .. }
                     | EngineCommand::RemoveNodeGraphPublished { .. }
                     | EngineCommand::CreateCuePublished { .. }
+                    | EngineCommand::CreateEmptyCuePublished { .. }
+                    | EngineCommand::DeleteCueListPublished { .. }
                     | EngineCommand::UpdateCuePublished { .. }
                     | EngineCommand::SetCueEffectTargetsPublished { .. }
                     | EngineCommand::SetCueStepsPublished { .. }
@@ -16267,6 +16521,7 @@ impl EngineRuntime {
                     | EngineCommand::ApplyTimelineBankPublished { .. }
                     | EngineCommand::AbortTimelineFollow { .. }
                     | EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
+                    | EngineCommand::AddVideoOutputPublished { .. }
             );
             if queued_command.command.requests_low_latency_dmx_tick() {
                 self.low_latency_dmx_tick_request_count =
@@ -18752,6 +19007,69 @@ impl EngineRuntime {
                     publication_error: "Engine snapshot was busy; Cue create was rolled back",
                 });
             }
+            EngineCommand::CreateEmptyCuePublished {
+                cue_id,
+                cue_list_id,
+                label,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Empty Cue create expired before engine execution".to_string())
+                } else if label != "New Scene" {
+                    Err("Empty Cue creation requires the New Scene label".to_string())
+                } else {
+                    self.create_cue_state(
+                        cue_id,
+                        cue_list_id,
+                        None,
+                        RecallMode::Coexist,
+                        None,
+                        CueBody {
+                            label,
+                            fade_ms: 0,
+                            targets: Vec::new(),
+                            video_targets: Vec::new(),
+                            video_output_targets: Vec::new(),
+                            node_graph_targets: Vec::new(),
+                            effect_targets: Vec::new(),
+                        },
+                        false,
+                    )
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Empty Cue create could not publish an acknowledged snapshot",
+                });
+            }
             EngineCommand::UpdateCue {
                 cue_id,
                 label,
@@ -19442,6 +19760,10 @@ impl EngineRuntime {
                     self.last_error = Some("Cue List ID must be greater than zero".to_string());
                 } else if label.is_empty() {
                     self.last_error = Some("Cue List label is required".to_string());
+                } else if self.cue_lists.iter().any(|cue_list| {
+                    cue_list.id != cue_list_id && cue_list.label.trim().eq_ignore_ascii_case(&label)
+                }) {
+                    self.last_error = Some(format!("Cue List label '{}' is already in use", label));
                 } else if let Some(cue_list) = self
                     .cue_lists
                     .iter_mut()
@@ -19458,53 +19780,90 @@ impl EngineRuntime {
                     self.last_error = None;
                 }
             }
-            EngineCommand::RemoveCueList(cue_list_id) => {
-                if cue_list_id == DEFAULT_CUE_LIST_ID {
-                    self.last_error = Some("The Main Cue List cannot be removed".to_string());
-                } else if !self
-                    .cue_lists
-                    .iter()
-                    .any(|cue_list| cue_list.id == cue_list_id)
-                {
-                    self.last_error = Some(format!("Cue List {cue_list_id} was not found"));
+            EngineCommand::ReorderCueListsPublished {
+                cue_list_ids,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueLists {
+                    cue_lists: self.cue_lists.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Cue List reorder expired before engine execution".to_string())
                 } else {
-                    let active_moved = self.active_cue_id.is_some_and(|active_cue_id| {
-                        self.cues
-                            .iter()
-                            .any(|cue| cue.id == active_cue_id && cue.cue_list_id == cue_list_id)
-                    });
-                    let moved_effect_activation =
-                        self.cue_list_effect_activation_cues.remove(&cue_list_id);
-                    self.cue_lists.retain(|cue_list| cue_list.id != cue_list_id);
-                    for cue in &mut self.cues {
-                        if cue.cue_list_id == cue_list_id {
-                            cue.cue_list_id = DEFAULT_CUE_LIST_ID;
-                        }
-                    }
-                    for executor in &mut self.playback_executors {
-                        if executor.cue_list_id == cue_list_id {
-                            executor.cue_list_id = DEFAULT_CUE_LIST_ID;
-                        }
-                    }
-                    for origin in self.cue_value_origins.values_mut() {
-                        if *origin == cue_list_id {
-                            *origin = DEFAULT_CUE_LIST_ID;
-                        }
-                    }
-                    if let Some(active_cue_id) = self.active_cue_id.filter(|_| active_moved) {
-                        if let Some(main) = self
-                            .cue_lists
-                            .iter_mut()
-                            .find(|cue_list| cue_list.id == DEFAULT_CUE_LIST_ID)
-                        {
-                            main.active_cue_id = Some(active_cue_id);
-                        }
-                        if moved_effect_activation == Some(active_cue_id) {
-                            self.cue_list_effect_activation_cues
-                                .insert(DEFAULT_CUE_LIST_ID, active_cue_id);
-                        }
-                    }
-                    self.last_error = None;
+                    self.reorder_cue_lists_state(cue_list_ids)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Cue List reorder could not publish an acknowledged snapshot",
+                });
+            }
+            EngineCommand::DeleteCueListPublished {
+                cue_list_id,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueListDeletion {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    playback_executors: self.playback_executors.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_live_modifier_overrides: self.cue_live_modifier_overrides.clone(),
+                    pending_manual_cue_direction: self.pending_manual_cue_direction,
+                    cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    timeline_due_cues: self.timeline_due_cues.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    child_transports: self.child_transports.clone(),
+                    child_transport_by_parent_event: self.child_transport_by_parent_event.clone(),
+                    direct_child_transports: self.direct_child_transports.clone(),
+                    direct_child_transport_by_cue: self.direct_child_transport_by_cue.clone(),
+                    direct_child_count_in: self.direct_child_count_in,
+                    nested_child_transports: self.nested_child_transports.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
+                    last_error: self.last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Cue List delete expired before engine execution".to_string())
+                } else {
+                    self.delete_cue_list_state(cue_list_id)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Cue List delete could not publish an acknowledged snapshot",
+                });
+            }
+            EngineCommand::RemoveCueList(cue_list_id) => {
+                match self.delete_cue_list_state(cue_list_id) {
+                    Ok(()) => self.last_error = None,
+                    Err(error) => self.last_error = Some(error),
                 }
             }
             EngineCommand::SetCueList {
@@ -20882,6 +21241,15 @@ impl EngineRuntime {
                 self.last_error = result.clone().err();
                 let _ = ack.send(result);
             }
+            EngineCommand::DjLinkTimelineBeatJump {
+                timeline_id,
+                bars,
+                ack,
+            } => {
+                let result = self.dj_link_timeline_beat_jump_state(timeline_id, bars);
+                self.last_error = result.clone().err();
+                let _ = ack.send(result);
+            }
             EngineCommand::DjLinkRelease { ack } => {
                 let rollback = self.timeline_transport_rollback();
                 let result = (|| {
@@ -22135,6 +22503,34 @@ impl EngineRuntime {
                     .push(RuntimeVideoOutput { summary: output });
                 self.last_error = None;
             }
+            EngineCommand::AddVideoOutputPublished {
+                output,
+                expires_at,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreMediaAssetTransaction {
+                    media_assets: self.media_assets.clone(),
+                    video_layers: self.video_layers.clone(),
+                    video_compositions: self.video_compositions.clone(),
+                    video_layer_fades: self.video_layer_fades.clone(),
+                    video_outputs: self.video_outputs.clone(),
+                    video_output_fades: self.video_output_fades.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Display output creation expired before engine execution".to_string())
+                } else {
+                    self.add_video_output_published_state(output)
+                };
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Display output could not publish an acknowledged engine snapshot",
+                });
+            }
             EngineCommand::RemoveVideoOutput(output_id) => {
                 self.video_outputs
                     .retain(|output| output.summary.id != output_id);
@@ -22718,6 +23114,69 @@ impl EngineRuntime {
                 last_error,
             } => {
                 self.stage_map_presets = stage_map_presets;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreCueLists {
+                cue_lists,
+                last_error,
+            } => {
+                self.cue_lists = cue_lists;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreCueListDeletion {
+                cues,
+                cue_lists,
+                playback_executors,
+                cue_list_effect_activation_cues,
+                active_group_cue_ids,
+                cue_live_modifier_overrides,
+                pending_manual_cue_direction,
+                cue_release_values,
+                values,
+                cue_value_origins,
+                timeline_events,
+                timeline_due_cues,
+                active_cue_id,
+                active_fade,
+                pending_cues,
+                child_transports,
+                child_transport_by_parent_event,
+                direct_child_transports,
+                direct_child_transport_by_cue,
+                direct_child_count_in,
+                nested_child_transports,
+                timeline_position_ms,
+                timeline_playhead_boundary_armed,
+                timeline_evaluated_boundary_position_ms,
+                timeline_jump_landed_event_id,
+                last_error,
+            } => {
+                self.cues = cues;
+                self.cue_lists = cue_lists;
+                self.playback_executors = playback_executors;
+                self.cue_list_effect_activation_cues = cue_list_effect_activation_cues;
+                self.active_group_cue_ids = active_group_cue_ids;
+                self.cue_live_modifier_overrides = cue_live_modifier_overrides;
+                self.pending_manual_cue_direction = pending_manual_cue_direction;
+                self.cue_release_values = cue_release_values;
+                self.values = values;
+                self.cue_value_origins = cue_value_origins;
+                self.timeline_events = timeline_events;
+                self.timeline_due_cues = timeline_due_cues;
+                self.active_cue_id = active_cue_id;
+                self.active_fade = active_fade;
+                self.pending_cues = pending_cues;
+                self.child_transports = child_transports;
+                self.child_transport_by_parent_event = child_transport_by_parent_event;
+                self.direct_child_transports = direct_child_transports;
+                self.direct_child_transport_by_cue = direct_child_transport_by_cue;
+                self.direct_child_count_in = direct_child_count_in;
+                self.nested_child_transports = nested_child_transports;
+                self.timeline_position_ms = timeline_position_ms;
+                self.timeline_playhead_boundary_armed = timeline_playhead_boundary_armed;
+                self.timeline_evaluated_boundary_position_ms =
+                    timeline_evaluated_boundary_position_ms;
+                self.timeline_jump_landed_event_id = timeline_jump_landed_event_id;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreCueRemoval {
@@ -28706,6 +29165,145 @@ impl EngineRuntime {
         })
     }
 
+    fn reorder_cue_lists_state(&mut self, cue_list_ids: Vec<CueListId>) -> Result<(), String> {
+        if cue_list_ids.is_empty() {
+            return Err("Cue List reorder must contain every Cue List".to_string());
+        }
+        if cue_list_ids.len() != self.cue_lists.len() {
+            return Err(format!(
+                "Cue List reorder must contain all {} Cue Lists exactly once",
+                self.cue_lists.len()
+            ));
+        }
+        let mut seen = HashSet::with_capacity(cue_list_ids.len());
+        for cue_list_id in &cue_list_ids {
+            if !seen.insert(*cue_list_id) {
+                return Err(format!(
+                    "Cue List reorder contains duplicate ID {cue_list_id}"
+                ));
+            }
+            if !self
+                .cue_lists
+                .iter()
+                .any(|cue_list| cue_list.id == *cue_list_id)
+            {
+                return Err(format!("Cue List {cue_list_id} was not found"));
+            }
+        }
+
+        let previous = std::mem::take(&mut self.cue_lists);
+        let mut remaining = previous
+            .into_iter()
+            .map(|cue_list| (cue_list.id, cue_list))
+            .collect::<HashMap<_, _>>();
+        let mut reordered = Vec::with_capacity(cue_list_ids.len());
+        for cue_list_id in cue_list_ids {
+            reordered.push(
+                remaining
+                    .remove(&cue_list_id)
+                    .expect("validated Cue List reorder ID must exist"),
+            );
+        }
+        self.cue_lists = reordered;
+        Ok(())
+    }
+
+    fn delete_cue_list_state(&mut self, cue_list_id: CueListId) -> Result<(), String> {
+        if self.cue_lists.len() <= 1 {
+            return Err("At least one Cue List must remain".to_string());
+        }
+        if !self
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.id == cue_list_id)
+        {
+            return Err(format!("Cue List {cue_list_id} was not found"));
+        }
+
+        self.apply_active_fade(Instant::now());
+        let removed_cue_ids = self
+            .cues
+            .iter()
+            .filter(|cue| cue.cue_list_id == cue_list_id)
+            .map(|cue| cue.id)
+            .collect::<HashSet<_>>();
+        let mut release_plan = CueValueReleasePlan::default();
+        for cue_id in &removed_cue_ids {
+            let cue_release = self.cue_value_release_plan(*cue_id);
+            release_plan.target_values.extend(cue_release.target_values);
+            release_plan
+                .attribute_timings
+                .extend(cue_release.attribute_timings);
+            self.stop_direct_child_transport_for_cue(*cue_id, Instant::now());
+            self.deactivate_cue_effect_activations(*cue_id);
+        }
+        if self
+            .direct_child_count_in
+            .is_some_and(|count_in| removed_cue_ids.contains(&count_in.cue_id))
+        {
+            self.direct_child_count_in = None;
+        }
+
+        self.cue_lists.retain(|cue_list| cue_list.id != cue_list_id);
+        self.cues.retain(|cue| cue.cue_list_id != cue_list_id);
+        self.playback_executors
+            .retain(|executor| executor.cue_list_id != cue_list_id);
+        self.cue_list_effect_activation_cues
+            .retain(|list_id, cue_id| *list_id != cue_list_id && !removed_cue_ids.contains(cue_id));
+        self.active_group_cue_ids
+            .retain(|_, cue_id| !removed_cue_ids.contains(cue_id));
+        self.cue_live_modifier_overrides
+            .retain(|cue_id, _| !removed_cue_ids.contains(cue_id));
+        if self
+            .pending_manual_cue_direction
+            .is_some_and(|(cue_id, _)| removed_cue_ids.contains(&cue_id))
+        {
+            self.pending_manual_cue_direction = None;
+        }
+        self.cue_release_values
+            .retain(|cue_id, _| !removed_cue_ids.contains(cue_id));
+        self.cue_value_origins
+            .retain(|_, source_list_id| *source_list_id != cue_list_id);
+        self.pending_cues
+            .retain(|pending| !removed_cue_ids.contains(&pending.cue_id));
+        self.timeline_events
+            .retain(|event| !removed_cue_ids.contains(&event.cue_id));
+        let remaining_event_ids = self
+            .timeline_events
+            .iter()
+            .map(|event| event.id)
+            .collect::<HashSet<_>>();
+        for event in &mut self.timeline_events {
+            if event
+                .jump_to_event_id
+                .is_some_and(|target_id| !remaining_event_ids.contains(&target_id))
+            {
+                event.jump_to_event_id = None;
+            }
+        }
+        self.timeline_jump_landed_event_id = self
+            .timeline_jump_landed_event_id
+            .filter(|event_id| remaining_event_ids.contains(event_id));
+        if self
+            .active_cue_id
+            .is_some_and(|cue_id| removed_cue_ids.contains(&cue_id))
+        {
+            self.active_cue_id = None;
+            self.active_fade = None;
+        } else {
+            for cue_id in &removed_cue_ids {
+                self.remove_cue_from_active_fade(*cue_id);
+            }
+        }
+        self.timeline_due_cues.clear();
+        self.sort_timeline_events();
+        self.clamp_timeline_position_after_edit();
+        self.apply_cue_value_release_plan_immediately(release_plan);
+        self.rebuild_cue_value_origins();
+        self.rebuild_effect_activations(Instant::now());
+        Ok(())
+    }
+
     fn rebuild_derived_timeline_audio_clip(&mut self) {
         let Some(audio) = self.timeline_audio.as_ref() else {
             self.timeline_audio_clips.clear();
@@ -34420,6 +35018,46 @@ impl EngineRuntime {
         Ok(())
     }
 
+    fn dj_link_timeline_beat_jump_state(
+        &mut self,
+        timeline_id: TimelineId,
+        bars: i8,
+    ) -> Result<(), String> {
+        if timeline_id != self.timeline_id {
+            return Err("DJ Link beat jump timeline identity is stale".to_string());
+        }
+        if !matches!(bars, -4 | 4) {
+            return Err("DJ Link beat jump must be exactly -4 or 4 bars".to_string());
+        }
+        let duration = self.timeline_duration_ms();
+        let current = self.timeline_position_ms;
+        let target = dj_link_authored_bar_jump_target(current, duration, self.clock.bpm, bars)?;
+        self.preflight_timeline_transport_authority_invalidation()?;
+        let rollback = self.timeline_transport_rollback();
+        let now = Instant::now();
+        if self.timeline_follow_is_abortable() {
+            self.abort_timeline_follow(protocol::TimelineFollowAbortReason::ManualSeek, now);
+        }
+        self.deactivate_all_timeline_effect_activations();
+        self.deactivate_all_child_transports();
+        self.timeline_jump_landed_event_id = None;
+        self.timeline_external_sync_source = None;
+        self.timeline_position_ms = target;
+        self.timeline_follow_natural_boundary_armed = target < duration;
+        self.timeline_last_announced_phase_id = None;
+        self.refresh_timeline_loop_runtime_status();
+        self.announce_timeline_phase_at(target);
+        self.establish_child_transports_at_position(now);
+        self.apply_child_timeline_automations();
+        self.timeline_audio_transport_revision =
+            self.timeline_audio_transport_revision.wrapping_add(1);
+        if let Err(error) = self.invalidate_timeline_transport_authority() {
+            self.rollback_pending_command(rollback);
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn set_timeline_loop_enabled_state(&mut self, enabled: bool) {
         let was_enabled = !matches!(
             self.timeline_loop_runtime.status,
@@ -35932,6 +36570,38 @@ impl EngineRuntime {
                 .video_compositions
                 .iter()
                 .any(|composition| composition.summary.id == composition_id)
+    }
+
+    fn add_video_output_published_state(
+        &mut self,
+        output: VideoOutputSummary,
+    ) -> Result<(), String> {
+        if output.id == 0 {
+            return Err("Video output ID must be greater than zero".to_string());
+        }
+        if output.kind != VideoOutputKind::Display {
+            return Err("Display creation can only publish a Display output".to_string());
+        }
+        if output.monitor_id.is_none() {
+            return Err("Display output requires a monitor identity".to_string());
+        }
+        if output.composition_id == 0 || !self.video_composition_exists(output.composition_id) {
+            return Err(format!(
+                "Video composition {} was not found",
+                output.composition_id
+            ));
+        }
+        if self
+            .video_outputs
+            .iter()
+            .any(|candidate| candidate.summary.id == output.id)
+        {
+            return Err(format!("Video output {} already exists", output.id));
+        }
+        self.video_outputs.push(RuntimeVideoOutput {
+            summary: sanitize_video_output(output),
+        });
+        Ok(())
     }
 
     fn next_runtime_legacy_media_asset_id(&self) -> Result<MediaAssetId, String> {
@@ -39479,10 +40149,21 @@ fn sanitize_cue_lists(cue_lists: &[CueListSummary], cues: &[RuntimeCue]) -> Vec<
             continue;
         }
         let label = cue_list.label.trim().chars().take(64).collect::<String>();
+        let label = if cue_list.id == DEFAULT_CUE_LIST_ID
+            && (label.eq_ignore_ascii_case("main") || label.eq_ignore_ascii_case("cue list 1"))
+        {
+            "Bank 1".to_string()
+        } else {
+            label
+        };
         sanitized.push(CueListSummary {
             id: cue_list.id,
             label: if label.is_empty() {
-                format!("Cue List {}", cue_list.id)
+                if cue_list.id == DEFAULT_CUE_LIST_ID {
+                    "Bank 1".to_string()
+                } else {
+                    format!("Cue List {}", cue_list.id)
+                }
             } else {
                 label
             },
@@ -39491,10 +40172,6 @@ fn sanitize_cue_lists(cue_lists: &[CueListSummary], cues: &[RuntimeCue]) -> Vec<
                     .any(|cue| cue.id == *cue_id && cue.cue_list_id == cue_list.id)
             }),
         });
-    }
-    if !seen.contains(&DEFAULT_CUE_LIST_ID) {
-        sanitized.insert(0, CueListSummary::default());
-        seen.insert(DEFAULT_CUE_LIST_ID);
     }
     for cue in cues {
         if seen.insert(cue.cue_list_id) {
@@ -39505,7 +40182,6 @@ fn sanitize_cue_lists(cue_lists: &[CueListSummary], cues: &[RuntimeCue]) -> Vec<
             });
         }
     }
-    sanitized.sort_by_key(|cue_list| (cue_list.id != DEFAULT_CUE_LIST_ID, cue_list.id));
     sanitized
 }
 
@@ -39560,7 +40236,20 @@ fn sanitize_playback_executors(
         }
     }
     if sanitized.is_empty() {
-        sanitized.push(PlaybackExecutorSummary::default());
+        if let Some(cue_list) = cue_lists.first() {
+            sanitized.push(PlaybackExecutorSummary {
+                id: 1,
+                label: if cue_list.label.trim().is_empty() {
+                    "Bank 1".to_string()
+                } else {
+                    cue_list.label.trim().to_string()
+                },
+                cue_list_id: cue_list.id,
+                page: 1,
+                slot: 1,
+                level: 1.0,
+            });
+        }
     }
     sanitized.sort_by_key(|executor| (executor.page, executor.slot, executor.id));
     sanitized
@@ -52797,6 +53486,32 @@ mod tests {
     const _: () = assert!(RELEASE_GATE_HZ == 44);
 
     #[test]
+    fn dj_link_authored_bar_jump_is_bounded_and_non_cumulative() {
+        assert_eq!(
+            dj_link_authored_bar_jump_target(0, 20_000, 120.0, 4).unwrap(),
+            8_000
+        );
+        assert_eq!(
+            dj_link_authored_bar_jump_target(8_000, 20_000, 120.0, 4).unwrap(),
+            16_000
+        );
+        assert_eq!(
+            dj_link_authored_bar_jump_target(16_000, 20_000, 120.0, -4).unwrap(),
+            8_000
+        );
+        assert!(dj_link_authored_bar_jump_target(0, 20_000, 120.0, 1).is_err());
+        assert!(dj_link_authored_bar_jump_target(0, 1_000, 120.0, -4).is_err());
+        assert!(dj_link_authored_bar_jump_target(19_000, 20_000, 120.0, 4).is_err());
+        assert!(dj_link_authored_bar_jump_target(0, 20_000, 0.0, 4).is_err());
+        assert!(!EngineCommand::DjLinkTimelineBeatJump {
+            timeline_id: TimelineId(1),
+            bars: 4,
+            ack: mpsc::sync_channel(1).0,
+        }
+        .mutates_persistence_snapshot());
+    }
+
+    #[test]
     fn external_command_persistence_classification_is_conservative() {
         // Continuous input/transport traffic must not make a read-only
         // authority poll retry forever.
@@ -65963,7 +66678,7 @@ mod tests {
     }
 
     #[test]
-    fn cue_lists_keep_independent_executor_positions_and_migrate_on_remove() {
+    fn cue_lists_keep_independent_active_positions_and_legacy_remove_deletes_bank_and_scenes() {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -65971,7 +66686,7 @@ mod tests {
         engine
             .send(EngineCommand::UpsertCueList {
                 cue_list_id: 2,
-                label: "Video".to_string(),
+                label: "Bank 2".to_string(),
             })
             .unwrap();
         for cue_id in 1..=3 {
@@ -66004,10 +66719,10 @@ mod tests {
 
         let mut snapshot = engine.snapshot();
         for _ in 0..20 {
-            let main = snapshot.cue_lists.iter().find(|list| list.id == 1);
-            let video = snapshot.cue_lists.iter().find(|list| list.id == 2);
-            if main.and_then(|list| list.active_cue_id) == Some(1)
-                && video.and_then(|list| list.active_cue_id) == Some(2)
+            let first = snapshot.cue_lists.iter().find(|list| list.id == 1);
+            let second = snapshot.cue_lists.iter().find(|list| list.id == 2);
+            if first.and_then(|list| list.active_cue_id) == Some(1)
+                && second.and_then(|list| list.active_cue_id) == Some(2)
             {
                 break;
             }
@@ -66058,8 +66773,621 @@ mod tests {
         }
         assert_eq!(snapshot.cue_lists.len(), 1);
         assert_eq!(snapshot.cue_lists[0].id, DEFAULT_CUE_LIST_ID);
-        assert_eq!(snapshot.cue_lists[0].active_cue_id, Some(3));
+        assert_eq!(snapshot.cue_lists[0].active_cue_id, Some(1));
+        assert_eq!(snapshot.active_cue_id, None);
         assert!(snapshot.cues.iter().all(|cue| cue.cue_list_id == 1));
+        assert!(snapshot.cues.iter().all(|cue| cue.id == 1));
+    }
+
+    #[test]
+    fn legacy_remove_cue_list_deletes_id_one_without_scene_migration() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.cue_lists.push(CueListSummary {
+            id: 2,
+            label: "Bank 2".to_string(),
+            active_cue_id: None,
+        });
+        runtime.cues.extend([
+            runtime_cue_from_summary(&CueSummary {
+                id: 11,
+                cue_list_id: 1,
+                cue_number: "1".to_string(),
+                label: "Bank 1 Scene".to_string(),
+                ..CueSummary::default()
+            }),
+            runtime_cue_from_summary(&CueSummary {
+                id: 22,
+                cue_list_id: 2,
+                cue_number: "1".to_string(),
+                label: "Bank 2 Scene".to_string(),
+                ..CueSummary::default()
+            }),
+        ]);
+
+        runtime.apply_command(EngineCommand::RemoveCueList(1));
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(
+            runtime
+                .cue_lists
+                .iter()
+                .map(|cue_list| cue_list.id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert!(runtime
+            .cues
+            .iter()
+            .all(|cue| cue.cue_list_id == 2 && cue.id == 22));
+        assert!(!runtime.cue_lists.iter().any(|cue_list| cue_list.id == 1));
+
+        let after_id_one_delete = runtime.build_persistence_snapshot();
+        assert!(after_id_one_delete
+            .playback_executors
+            .iter()
+            .all(|executor| {
+                after_id_one_delete
+                    .cue_lists
+                    .iter()
+                    .any(|cue_list| cue_list.id == executor.cue_list_id)
+            }));
+        let before_last_delete_cues = after_id_one_delete.cues.clone();
+        let before_last_delete_cue_lists = after_id_one_delete.cue_lists.clone();
+
+        runtime.apply_command(EngineCommand::RemoveCueList(2));
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("At least one Cue List must remain")
+        );
+        let after_last_delete = runtime.build_persistence_snapshot();
+        assert_eq!(after_last_delete.cues, before_last_delete_cues);
+        assert_eq!(after_last_delete.cue_lists, before_last_delete_cue_lists);
+    }
+
+    #[test]
+    fn published_cue_list_reorder_requires_full_set_and_is_atomic_without_special_bank_pin() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.cue_lists.extend([
+            CueListSummary {
+                id: 2,
+                label: "Video".to_string(),
+                active_cue_id: Some(22),
+            },
+            CueListSummary {
+                id: 3,
+                label: "FX".to_string(),
+                active_cue_id: Some(33),
+            },
+        ]);
+        let before_cues = runtime.cues.iter().map(cue_summary).collect::<Vec<_>>();
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ReorderCueListsPublished {
+            cue_list_ids: vec![1, 3, 2],
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            runtime
+                .cue_lists
+                .iter()
+                .map(|cue_list| cue_list.id)
+                .collect::<Vec<_>>(),
+            vec![1, 3, 2]
+        );
+        assert_eq!(runtime.cue_lists[1].active_cue_id, Some(33));
+        assert_eq!(runtime.cue_lists[2].active_cue_id, Some(22));
+        assert_eq!(
+            runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+            before_cues
+        );
+        assert_eq!(
+            published
+                .read()
+                .unwrap()
+                .cue_lists
+                .iter()
+                .map(|cue_list| cue_list.id)
+                .collect::<Vec<_>>(),
+            vec![1, 3, 2]
+        );
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ReorderCueListsPublished {
+            cue_list_ids: vec![2, 1, 3],
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            runtime
+                .cue_lists
+                .iter()
+                .map(|cue_list| cue_list.id)
+                .collect::<Vec<_>>(),
+            vec![2, 1, 3]
+        );
+
+        let after_valid = runtime.cue_lists.clone();
+        for cue_list_ids in [vec![2, 1, 1], vec![2, 1, 99], vec![2, 1]] {
+            let (ack, receiver) = mpsc::sync_channel(1);
+            runtime.apply_command(EngineCommand::ReorderCueListsPublished {
+                cue_list_ids,
+                expires_at: Instant::now() + Duration::from_secs(1),
+                ack,
+            });
+            runtime.publish_pending_command_acks(0, &published);
+            assert!(receiver.recv().unwrap().is_err());
+            assert_eq!(runtime.cue_lists, after_valid);
+            assert_eq!(
+                runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+                before_cues
+            );
+        }
+
+        let snapshot_guard = published.read().unwrap();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ReorderCueListsPublished {
+            cue_list_ids: vec![1, 2, 3],
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        drop(snapshot_guard);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.cue_lists, after_valid);
+    }
+
+    fn published_display_output(id: VideoOutputId) -> VideoOutputSummary {
+        VideoOutputSummary {
+            id,
+            label: format!("Display {id}"),
+            kind: VideoOutputKind::Display,
+            enabled: true,
+            composition_id: 1,
+            fullscreen: false,
+            monitor_id: Some(7),
+            width: 1_920,
+            height: 1_080,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: Default::default(),
+        }
+    }
+
+    #[test]
+    fn published_display_output_ack_is_definitive_and_rolls_back_on_failure() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let output = published_display_output(41);
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddVideoOutputPublished {
+            output: output.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(runtime.video_outputs.len(), 1);
+        assert_eq!(runtime.video_outputs[0].summary, output);
+        assert_eq!(
+            published.read().unwrap().video.outputs,
+            vec![output.clone()]
+        );
+
+        let before_runtime = runtime
+            .video_outputs
+            .iter()
+            .map(|output| output.summary.clone())
+            .collect::<Vec<_>>();
+        let before_published = published.read().unwrap().video.outputs.clone();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddVideoOutputPublished {
+            output: published_display_output(42),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(
+            runtime
+                .video_outputs
+                .iter()
+                .map(|output| output.summary.clone())
+                .collect::<Vec<_>>(),
+            before_runtime
+        );
+        assert_eq!(published.read().unwrap().video.outputs, before_published);
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddVideoOutputPublished {
+            output: published_display_output(41),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(
+            runtime
+                .video_outputs
+                .iter()
+                .map(|output| output.summary.clone())
+                .collect::<Vec<_>>(),
+            before_runtime
+        );
+        assert_eq!(published.read().unwrap().video.outputs, before_published);
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddVideoOutputPublished {
+            output: VideoOutputSummary {
+                monitor_id: None,
+                ..published_display_output(43)
+            },
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(
+            runtime
+                .video_outputs
+                .iter()
+                .map(|output| output.summary.clone())
+                .collect::<Vec<_>>(),
+            before_runtime
+        );
+        assert_eq!(published.read().unwrap().video.outputs, before_published);
+    }
+
+    #[test]
+    fn published_empty_cue_ack_is_definitive_and_rejects_non_empty_contracts() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let before_cues = runtime.cues.iter().map(cue_summary).collect::<Vec<_>>();
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::CreateEmptyCuePublished {
+            cue_id: 41,
+            cue_list_id: DEFAULT_CUE_LIST_ID,
+            label: "New Scene".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        let created = runtime.cues.iter().find(|cue| cue.id == 41).unwrap();
+        assert_eq!(created.label, "New Scene");
+        assert!(created.targets.is_empty());
+        assert!(created.video_targets.is_empty());
+        assert!(created.video_output_targets.is_empty());
+        assert!(created.effect_targets.is_empty());
+        assert!(published
+            .read()
+            .unwrap()
+            .cues
+            .iter()
+            .any(|cue| cue.id == 41));
+
+        let before_runtime = runtime.cues.iter().map(cue_summary).collect::<Vec<_>>();
+        let before_published = published.read().unwrap().cues.clone();
+        for (cue_id, cue_list_id, label) in [
+            (42, DEFAULT_CUE_LIST_ID, "Not New Scene"),
+            (43, 999, "New Scene"),
+            (41, DEFAULT_CUE_LIST_ID, "New Scene"),
+        ] {
+            let (ack, receiver) = mpsc::sync_channel(1);
+            runtime.apply_command(EngineCommand::CreateEmptyCuePublished {
+                cue_id,
+                cue_list_id,
+                label: label.to_string(),
+                expires_at: Instant::now() + Duration::from_secs(1),
+                ack,
+            });
+            runtime.publish_pending_command_acks(0, &published);
+            assert!(receiver.recv().unwrap().is_err());
+            assert_eq!(
+                runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+                before_runtime
+            );
+            assert_eq!(published.read().unwrap().cues, before_published);
+        }
+
+        assert_ne!(
+            runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+            before_cues
+        );
+    }
+
+    #[test]
+    fn published_cue_list_delete_removes_scenes_and_restores_atomically() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.cue_lists.push(CueListSummary {
+            id: 2,
+            label: "Video".to_string(),
+            active_cue_id: Some(20),
+        });
+        runtime.cues.push(runtime_cue_from_summary(&CueSummary {
+            id: 20,
+            cue_list_id: 2,
+            cue_number: "1".to_string(),
+            label: "Scene to delete".to_string(),
+            ..CueSummary::default()
+        }));
+        runtime.playback_executors.push(PlaybackExecutorSummary {
+            id: 2,
+            label: "Video executor".to_string(),
+            cue_list_id: 2,
+            page: 1,
+            slot: 1,
+            level: 1.0,
+        });
+        runtime.active_cue_id = Some(20);
+        runtime.active_group_cue_ids.insert("video".to_string(), 20);
+        runtime.cue_list_effect_activation_cues.insert(2, 20);
+        runtime.timeline_events = vec![test_scene_block(10, 20, 0, 100, 1, 1.0)];
+        runtime.recompute_timeline_event_layers().unwrap();
+        let before = runtime.build_persistence_snapshot();
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::DeleteCueListPublished {
+            cue_list_id: 2,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+        assert!(published
+            .read()
+            .unwrap()
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.id == 2));
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::DeleteCueListPublished {
+            cue_list_id: 2,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(runtime.cue_lists.len(), 1);
+        assert!(runtime.cue_lists.iter().all(|cue_list| cue_list.id != 2));
+        assert!(runtime.cues.iter().all(|cue| cue.cue_list_id != 2));
+        assert!(runtime
+            .playback_executors
+            .iter()
+            .all(|executor| executor.cue_list_id != 2));
+        assert!(runtime
+            .timeline_events
+            .iter()
+            .all(|event| event.cue_id != 20));
+        assert_eq!(runtime.active_cue_id, None);
+        assert!(!runtime
+            .active_group_cue_ids
+            .values()
+            .any(|cue_id| *cue_id == 20));
+        assert!(!runtime.cue_list_effect_activation_cues.contains_key(&2));
+        assert!(published
+            .read()
+            .unwrap()
+            .cues
+            .iter()
+            .all(|cue| cue.cue_list_id != 2));
+
+        let before_last = runtime.build_persistence_snapshot();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::DeleteCueListPublished {
+            cue_list_id: 1,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.build_persistence_snapshot(), before_last);
+    }
+
+    #[test]
+    fn published_cue_list_delete_clears_direct_child_count_in_before_next_tick() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
+        runtime.cue_lists.push(CueListSummary {
+            id: 2,
+            label: "Bank 2".to_string(),
+            active_cue_id: None,
+        });
+        runtime
+            .cues
+            .iter_mut()
+            .find(|cue| cue.id == 1)
+            .expect("direct child owner")
+            .cue_list_id = 2;
+        runtime.clock.bpm = 120.0;
+        runtime.direct_child_transports[0].metronome_enabled = true;
+        runtime.direct_child_transports[0].count_in_beats = 4;
+        let started_at = Instant::now();
+        runtime.set_direct_child_timeline_playing(1, true, started_at);
+        let count_in = runtime
+            .direct_child_count_in
+            .expect("direct child count-in should be pending");
+
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::DeleteCueListPublished {
+            cue_list_id: 2,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert!(runtime.direct_child_count_in.is_none());
+        assert!(runtime.cues.iter().all(|cue| cue.id != 1));
+
+        runtime.advance_timeline(count_in.until);
+        assert!(runtime.direct_child_count_in.is_none());
+        assert!(runtime
+            .direct_child_transports
+            .iter()
+            .all(|transport| { !transport.active || transport.direct_parent_cue_id != Some(1) }));
+        assert!(runtime.last_error.is_none());
+    }
+
+    #[test]
+    fn published_cue_list_delete_publication_failure_restores_direct_child_count_in_exactly() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
+        runtime.cue_lists.push(CueListSummary {
+            id: 2,
+            label: "Bank 2".to_string(),
+            active_cue_id: None,
+        });
+        runtime
+            .cues
+            .iter_mut()
+            .find(|cue| cue.id == 1)
+            .expect("direct child owner")
+            .cue_list_id = 2;
+        runtime.clock.bpm = 120.0;
+        runtime.direct_child_transports[0].metronome_enabled = true;
+        runtime.direct_child_transports[0].count_in_beats = 4;
+        let started_at = Instant::now();
+        runtime.set_direct_child_timeline_playing(1, true, started_at);
+        let before_count_in = runtime
+            .direct_child_count_in
+            .expect("direct child count-in should be pending");
+        let before_snapshot = runtime.build_snapshot(0);
+        let before_persistence = runtime.build_persistence_snapshot();
+        let published = RwLock::new(before_snapshot.clone());
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::DeleteCueListPublished {
+            cue_list_id: 2,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.build_snapshot(0), before_snapshot);
+        assert_eq!(runtime.build_persistence_snapshot(), before_persistence);
+        let after_count_in = runtime
+            .direct_child_count_in
+            .expect("publication rollback must restore count-in");
+        assert_eq!(after_count_in.cue_id, before_count_in.cue_id);
+        assert_eq!(after_count_in.until, before_count_in.until);
+        assert_eq!(after_count_in.generation, before_count_in.generation);
+        assert_eq!(*published.read().unwrap(), before_snapshot);
+        assert!(runtime.last_error.is_none());
+    }
+
+    #[test]
+    fn published_cue_list_delete_id_one_survives_persistence_reload_without_default_bank_revival() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.cue_lists.push(CueListSummary {
+            id: 2,
+            label: "Bank 2".to_string(),
+            active_cue_id: None,
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::DeleteCueListPublished {
+            cue_list_id: DEFAULT_CUE_LIST_ID,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+
+        let persisted = runtime.build_persistence_snapshot();
+        assert_eq!(
+            persisted
+                .cue_lists
+                .iter()
+                .map(|cue_list| cue_list.id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert!(persisted
+            .cue_lists
+            .iter()
+            .all(|cue_list| cue_list.id != DEFAULT_CUE_LIST_ID));
+        assert!(persisted.playback_executors.iter().all(|executor| persisted
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.id == executor.cue_list_id)));
+        assert!(persisted.playback_executors.is_empty());
+
+        let mut reloaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        reloaded
+            .load_project_snapshot_checked(persisted.clone())
+            .unwrap();
+        let reloaded_persisted = reloaded.build_persistence_snapshot();
+        assert_eq!(reloaded_persisted.cue_lists, persisted.cue_lists);
+        assert!(reloaded
+            .cue_lists
+            .iter()
+            .all(|cue_list| cue_list.id != DEFAULT_CUE_LIST_ID));
+        assert!(reloaded.playback_executors.iter().all(|executor| reloaded
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.id == executor.cue_list_id)));
+        assert_eq!(reloaded.playback_executors.len(), 1);
+        assert_eq!(reloaded.playback_executors[0].cue_list_id, 2);
+        assert_eq!(reloaded.playback_executors[0].label, "Bank 2");
+        assert_eq!(
+            reloaded
+                .cue_lists
+                .iter()
+                .map(|cue_list| cue_list.id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
+    #[test]
+    fn failed_reserved_display_and_cue_ids_can_only_reclaim_the_allocator_tail() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let output_id = engine.allocate_video_output_id();
+        assert!(engine.release_video_output_id_if_last(output_id));
+        assert_eq!(engine.allocate_video_output_id(), output_id);
+        let concurrent_output_id = engine.allocate_video_output_id();
+        assert!(!engine.release_video_output_id_if_last(output_id));
+        assert!(engine.release_video_output_id_if_last(concurrent_output_id));
+
+        let cue_id = engine.allocate_cue_id();
+        assert!(engine.release_cue_id_if_last(cue_id));
+        assert_eq!(engine.allocate_cue_id(), cue_id);
     }
 
     #[test]
@@ -104123,7 +105451,7 @@ mod tests {
     }
 
     #[test]
-    fn activation_scoped_manual_recall_tracks_cue_list_moves() {
+    fn activation_scoped_manual_recall_clears_deleted_cue_list_scenes() {
         let mut runtime = runtime_with_lfo_effects(&[]);
         create_effect_only_cue(
             &mut runtime,
@@ -104161,19 +105489,12 @@ mod tests {
         ));
 
         runtime.apply_command(EngineCommand::RemoveCueList(2));
-        assert!(matches!(
-            runtime.effect_activations[runtime.active_effect_activation_indices[0]].key,
-            Some(RuntimeEffectActivationKey::CueList {
-                cue_list_id: DEFAULT_CUE_LIST_ID,
-                cue_id: 1
-            })
-        ));
-        assert_eq!(
-            runtime
-                .cue_list_effect_activation_cues
-                .get(&DEFAULT_CUE_LIST_ID),
-            Some(&1)
-        );
+        assert!(runtime.cues.iter().all(|cue| cue.id != 1));
+        assert!(runtime.active_effect_activation_indices.is_empty());
+        assert!(runtime
+            .cue_list_effect_activation_cues
+            .values()
+            .all(|cue_id| *cue_id != 1));
     }
 
     #[test]

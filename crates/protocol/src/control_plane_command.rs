@@ -17,6 +17,9 @@ use crate::EffectId;
 /// without losing its identity.
 pub const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = 9_007_199_254_740_991;
 pub const SET_EFFECT_ENABLED_OPERATION_ID: &str = "syndocal.effects.set_enabled.v1";
+pub const CUE_LIST_REORDER_OPERATION_ID: &str = "syndocal.cue_lists.reorder.v1";
+pub const CUE_LIST_DELETE_OPERATION_ID: &str = "syndocal.cue_lists.delete.v1";
+pub const EMPTY_CUE_CREATE_OPERATION_ID: &str = "syndocal.cues.empty.create.v1";
 pub const SET_EFFECT_ENABLED_SHAPE_DOMAIN_V1: &[u8] =
     b"syndocal.authored-control-plane.set-effect-enabled.shape.v1\0";
 
@@ -1645,6 +1648,7 @@ pub const OUTPUT_LEASE_RECOVER_OPERATION_ID: &str = "syndocal.output.lease.recov
 pub const OUTPUT_LEASE_RELINQUISH_OPERATION_ID: &str = "syndocal.output.lease.relinquish.v1";
 pub const OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID: &str =
     "syndocal.output.lease.force_transfer.v1";
+pub const OUTPUT_DISPLAY_ADD_OPERATION_ID: &str = "syndocal.output.display.add.v1";
 pub const OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID: &str =
     "syndocal.output.lease.authority.query.v1";
 pub const OUTPUT_LEASE_TTL_MS: u64 = 60_000;
@@ -1652,6 +1656,59 @@ pub const MAX_OUTPUT_LEASE_QUERY_STATUSES: usize = 64;
 pub const OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V1: &[u8] =
     b"syndocal.output-control.argument-fingerprint.v1\0";
 pub const OUTPUT_CONTROL_SHAPE_DOMAIN_V1: &[u8] = b"syndocal.output-control.command-shape.v1\0";
+
+/// Minimal, display-only payload for the local R4 output-creation lane.
+///
+/// The monitor index is resolved against the current native monitor snapshot
+/// at both consent preparation and final commit.  Width/height stay on the
+/// wire so the consent fingerprint covers every output-affecting choice, but
+/// the UI may simply populate them from the detected display descriptor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DisplayOutputSpecV1 {
+    pub label: String,
+    pub monitor_identity: String,
+    pub monitor_index: u32,
+    pub width: u32,
+    pub height: u32,
+    pub fullscreen: bool,
+}
+
+impl DisplayOutputSpecV1 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        let label = self.label.trim();
+        if label.is_empty()
+            || label.len() > 128
+            || !label.is_ascii()
+            || label
+                .bytes()
+                .any(|byte| byte.is_ascii_control() || matches!(byte, b'/' | b'\\'))
+            || validate_lower_hex_sha256(&self.monitor_identity).is_err()
+            || self.monitor_index > 255
+            || !(1..=16_384).contains(&self.width)
+            || !(1..=16_384).contains(&self.height)
+        {
+            return Err(OutputControlValidationErrorV1::InvalidDisplayOutputSpec);
+        }
+        Ok(())
+    }
+
+    fn append_canonical_bytes(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<(), OutputControlValidationErrorV1> {
+        self.validate()?;
+        append_ascii(output, self.label.trim())
+            .map_err(|_| OutputControlValidationErrorV1::InvalidDisplayOutputSpec)?;
+        append_ascii(output, &self.monitor_identity)
+            .map_err(|_| OutputControlValidationErrorV1::InvalidDisplayOutputSpec)?;
+        append_u64(output, u64::from(self.monitor_index));
+        append_u64(output, u64::from(self.width));
+        append_u64(output, u64::from(self.height));
+        output.push(u8::from(self.fullscreen));
+        Ok(())
+    }
+}
 
 /// Safer-direction-only emergency request. Intentionally no `enabled`,
 /// `target`, or other payload field exists on the wire.
@@ -1974,6 +2031,7 @@ pub enum OutputControlValidationErrorV1 {
     InvalidStandbyIdentity,
     InvalidReceiptOutcome,
     InvalidLeaseAuthority,
+    InvalidDisplayOutputSpec,
 }
 
 impl fmt::Display for OutputControlValidationErrorV1 {
@@ -1988,6 +2046,7 @@ impl fmt::Display for OutputControlValidationErrorV1 {
             Self::InvalidStandbyIdentity => "standby takeover identity is invalid",
             Self::InvalidReceiptOutcome => "output-control receipt outcome is invalid",
             Self::InvalidLeaseAuthority => "output lease authority is not canonical",
+            Self::InvalidDisplayOutputSpec => "display output specification is invalid",
         })
     }
 }
@@ -2233,6 +2292,10 @@ pub enum OutputControlActionV1 {
     ForceTransferLease {
         lease: OutputLeaseAuthorityV1,
     },
+    AddDisplay {
+        spec: DisplayOutputSpecV1,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2266,6 +2329,10 @@ enum OutputControlActionV1Wire {
     ForceTransferLease {
         lease: OutputLeaseAuthorityV1,
     },
+    AddDisplay {
+        spec: DisplayOutputSpecV1,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 impl OutputControlActionV1 {
@@ -2279,6 +2346,7 @@ impl OutputControlActionV1 {
             Self::RecoverLease { .. } => OUTPUT_LEASE_RECOVER_OPERATION_ID,
             Self::RelinquishOutputLease { .. } => OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
             Self::ForceTransferLease { .. } => OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
+            Self::AddDisplay { .. } => OUTPUT_DISPLAY_ADD_OPERATION_ID,
         }
     }
 
@@ -2310,6 +2378,10 @@ impl OutputControlActionV1 {
             | Self::RecoverLease { lease }
             | Self::RelinquishOutputLease { lease }
             | Self::ForceTransferLease { lease } => lease.validate()?,
+            Self::AddDisplay { spec, lease } => {
+                spec.validate()?;
+                lease.validate()?;
+            }
             Self::TakeOverStandby { .. } | Self::AcquireLease { .. } => {}
         }
         Ok(())
@@ -2348,6 +2420,10 @@ impl OutputControlActionV1 {
                 }
             }
             Self::ForceTransferLease { lease } => OutputControlActionV1Wire::ForceTransferLease {
+                lease: lease.clone(),
+            },
+            Self::AddDisplay { spec, lease } => OutputControlActionV1Wire::AddDisplay {
+                spec: spec.clone(),
                 lease: lease.clone(),
             },
         }
@@ -2416,6 +2492,12 @@ impl OutputControlActionV1 {
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
+            Self::AddDisplay { spec, lease } => {
+                output.push(8);
+                spec.append_canonical_bytes(output)?;
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
         }
         Ok(())
     }
@@ -2459,6 +2541,9 @@ impl<'de> Deserialize<'de> for OutputControlActionV1 {
             }
             OutputControlActionV1Wire::ForceTransferLease { lease } => {
                 Self::ForceTransferLease { lease }
+            }
+            OutputControlActionV1Wire::AddDisplay { spec, lease } => {
+                Self::AddDisplay { spec, lease }
             }
         };
         value.validate().map_err(D::Error::custom)?;
@@ -2735,6 +2820,7 @@ impl OutputConsentChallengeV1 {
                     | OUTPUT_LEASE_RECOVER_OPERATION_ID
                     | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                     | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
+                    | OUTPUT_DISPLAY_ADD_OPERATION_ID
             )
         {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -3174,6 +3260,7 @@ impl OutputControlLeaseResultV1 {
             OUTPUT_LEASE_RECOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Recovered,
             OUTPUT_LEASE_RELINQUISH_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Relinquished,
             OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Transferred,
+            OUTPUT_DISPLAY_ADD_OPERATION_ID => OutputLeaseReceiptOutcomeV1::Authorized,
             _ => return Err(OutputControlValidationErrorV1::UnexpectedOperationId),
         };
         let takeover_project_orphan = operation_id == OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
@@ -3319,6 +3406,7 @@ impl OutputControlReceiptV1 {
                 | OUTPUT_LEASE_RECOVER_OPERATION_ID
                 | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
+                | OUTPUT_DISPLAY_ADD_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
         }
@@ -3417,6 +3505,7 @@ impl OutputControlRejectionV1 {
                 | OUTPUT_LEASE_RECOVER_OPERATION_ID
                 | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
+                | OUTPUT_DISPLAY_ADD_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
         }

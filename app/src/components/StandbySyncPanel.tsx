@@ -142,6 +142,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const [actionError, setActionError] = createSignal<string | null>(null);
   const [forceConfirmed, setForceConfirmed] = createSignal(false);
   const [challengeNotice, setChallengeNotice] = createSignal<OutputControlChallengeNotice | null>(null);
+  const [challengeClockUnixMs, setChallengeClockUnixMs] = createSignal(Date.now());
   let takeoverDialog!: HTMLDialogElement;
 
   const effectiveError = createMemo(() => actionError() ?? status().last_error);
@@ -157,6 +158,11 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const selectedLeaseStatus = createMemo<OutputLeaseAuthorityQueryHeld | null>(() =>
     heldLeases().find((candidate) => candidate.authority.lease_id === selectedLeaseId()) ?? null,
   );
+  const challengeRemainingSeconds = createMemo(() => {
+    const challenge = challengeNotice();
+    if (!challenge) return 0;
+    return Math.max(0, Math.ceil((challenge.expiresAtUnixMs - challengeClockUnixMs()) / 1000));
+  });
   const statusLabel = createMemo(() => {
     const current = status();
     if (!props.backendAvailable) return "Desktop required";
@@ -190,8 +196,12 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   onMount(() => {
     if (!props.backendAvailable) return;
     void pollStatus();
-    const timer = window.setInterval(() => void pollStatus(), 1000);
-    onCleanup(() => window.clearInterval(timer));
+    const statusTimer = window.setInterval(() => void pollStatus(), 1000);
+    const challengeTimer = window.setInterval(() => setChallengeClockUnixMs(Date.now()), 250);
+    onCleanup(() => {
+      window.clearInterval(statusTimer);
+      window.clearInterval(challengeTimer);
+    });
   });
 
   const chooseDirectory = async () => {
@@ -507,6 +517,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         <aside class="standbyLeaseChallenge" aria-live="polite" aria-label="Backend physical confirmation">
           <strong>Backend physical confirmation required</strong>
           <span>Type challenge code <code>{challengeNotice()?.displayCode}</code> on the physical keyboard.</span>
+          <small>{challengeRemainingSeconds()} s remaining. Only backend Raw Input counts; digits may also appear in the focused text field.</small>
         </aside>
       </Show>
 
@@ -602,6 +613,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
             <aside class="standbyLeaseChallenge" aria-live="polite" aria-label="Backend physical confirmation">
               <strong>Backend physical confirmation required</strong>
               <span>Type challenge code <code>{challengeNotice()?.displayCode}</code> on the physical keyboard.</span>
+              <small>{challengeRemainingSeconds()} s remaining. Only backend Raw Input counts; digits may also appear in the focused text field.</small>
             </aside>
           </Show>
           <Show when={actionError()}>

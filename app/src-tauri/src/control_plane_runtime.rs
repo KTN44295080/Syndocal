@@ -117,6 +117,7 @@ pub(crate) fn prepare_output_consent(
             &binding.principal,
         )?;
         validate_output_action_current(state, &request.action)?;
+        validate_display_output_monitor(window, &request.action)?;
     }
 
     let argument_fingerprint = hex_sha256(
@@ -325,7 +326,9 @@ pub(crate) fn execute_output_control(
             output_control_rejection(&request, OutputControlErrorCodeV1::Forbidden),
         );
     }
-    if validate_output_action_current(state, &request.action).is_err() {
+    if validate_output_action_current(state, &request.action).is_err()
+        || validate_display_output_monitor(window, &request.action).is_err()
+    {
         return retain_output_control_rejection(
             state,
             key,
@@ -482,6 +485,16 @@ pub(crate) fn execute_output_control(
             )
             .map(|(_load_result, fence_after, receipt)| (true, fence_after, receipt))
         }
+        OutputControlActionV1::AddDisplay { spec, .. } => {
+            super::add_display_output_with_output_control_fence(
+                app,
+                state,
+                spec,
+                &request.expected_fence,
+                &lease_request,
+                lease_now_ms,
+            )
+        }
         OutputControlActionV1::AcquireLease { .. }
         | OutputControlActionV1::RenewLease { .. }
         | OutputControlActionV1::RecoverLease { .. }
@@ -628,6 +641,16 @@ fn validate_output_action_current(
 ) -> Result<(), String> {
     match action {
         OutputControlActionV1::Arm { .. } | OutputControlActionV1::ReleaseBlackout { .. } => Ok(()),
+        OutputControlActionV1::AddDisplay { spec, .. } => {
+            let snapshot = state.engine.snapshot();
+            if snapshot.video.outputs.iter().any(|output| {
+                output.kind == protocol::VideoOutputKind::Display
+                    && output.monitor_id == Some(spec.monitor_index)
+            }) {
+                return Err("A Display output already targets this monitor".to_string());
+            }
+            Ok(())
+        }
         OutputControlActionV1::TakeOverStandby {
             force,
             standby_session_id,
@@ -660,6 +683,49 @@ fn validate_output_action_current(
         | OutputControlActionV1::RelinquishOutputLease { .. }
         | OutputControlActionV1::ForceTransferLease { .. } => Ok(()),
     }
+}
+
+fn validate_display_output_monitor(
+    window: &WebviewWindow,
+    action: &OutputControlActionV1,
+) -> Result<(), String> {
+    let OutputControlActionV1::AddDisplay { spec, .. } = action else {
+        return Ok(());
+    };
+    spec.validate()
+        .map_err(|_| "Display output specification is invalid".to_string())?;
+    let monitors = window
+        .available_monitors()
+        .map_err(|error| format!("Display enumeration failed: {error}"))?;
+    let Some(monitor) = monitors.get(spec.monitor_index as usize) else {
+        return Err("Display output monitor index is not available".to_string());
+    };
+    let size = monitor.size();
+    if size.width == 0 || size.height == 0 {
+        return Err("Display output monitor reported an empty physical size".to_string());
+    }
+    let name = monitor
+        .name()
+        .cloned()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| format!("Display {}", spec.monitor_index + 1));
+    let identity_material = format!(
+        "syndocal.display-monitor.v1\0{name}\0{}\0{}\0{}\0{}\0{}",
+        monitor.position().x,
+        monitor.position().y,
+        size.width,
+        size.height,
+        monitor.scale_factor().to_bits(),
+    );
+    if spec.monitor_identity != hex_sha256(identity_material.as_bytes()) {
+        return Err("Display output monitor identity is stale".to_string());
+    }
+    if spec.width != size.width || spec.height != size.height {
+        return Err(
+            "Display output dimensions must match the selected monitor exactly".to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// Dispatch one operation-specific Tauri ingress into the shared local
@@ -1251,7 +1317,8 @@ fn output_control_lease_result_from_registry_receipt(
     let expected_outcome = match action {
         OutputControlActionV1::Arm { .. }
         | OutputControlActionV1::ReleaseBlackout { .. }
-        | OutputControlActionV1::TakeOverStandby { .. } => OutputLeaseReceiptOutcomeV1::Authorized,
+        | OutputControlActionV1::TakeOverStandby { .. }
+        | OutputControlActionV1::AddDisplay { .. } => OutputLeaseReceiptOutcomeV1::Authorized,
         OutputControlActionV1::AcquireLease { .. } => OutputLeaseReceiptOutcomeV1::Acquired,
         OutputControlActionV1::RenewLease { .. } => OutputLeaseReceiptOutcomeV1::Renewed,
         OutputControlActionV1::RecoverLease { .. } => OutputLeaseReceiptOutcomeV1::Recovered,

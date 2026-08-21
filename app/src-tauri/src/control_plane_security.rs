@@ -22,6 +22,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "windows")]
+use std::sync::Condvar;
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use getrandom::getrandom;
 
@@ -114,11 +117,27 @@ struct ConsentTombstone {
     expires_at: Instant,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct ConsentDiagnostics {
+    generation: u64,
+    prepared_at: Option<Instant>,
+    status_polls: u32,
+    wm_input_packets: u32,
+    accepted_digits: u32,
+    reject_message: u32,
+    reject_packet: u32,
+    reject_device: u32,
+    reject_key: u32,
+    ready: bool,
+    reported: bool,
+}
+
 #[derive(Debug, Default)]
 struct SecurityInner {
     active: Option<ConsentRecord>,
     tombstones: VecDeque<ConsentTombstone>,
     removed_devices: HashMap<usize, Instant>,
+    diagnostics: ConsentDiagnostics,
 }
 
 pub(crate) struct ControlPlaneSecurityState {
@@ -151,6 +170,39 @@ impl ControlPlaneSecurityState {
         Ok(())
     }
 
+    #[cfg(all(target_os = "windows", not(test)))]
+    fn claim_physical_input_registration(&self) -> Result<(), String> {
+        let mut monitor = self
+            .monitor
+            .lock()
+            .map_err(|_| "Physical-input monitor lock was poisoned".to_string())?;
+        monitor
+            .as_mut()
+            .ok_or_else(|| "Physical-input monitor is unavailable".to_string())?
+            .claim_registration()
+    }
+
+    #[cfg(all(target_os = "windows", not(test)))]
+    fn ensure_physical_input_registration(&self) -> Result<(), String> {
+        let mut monitor = self
+            .monitor
+            .lock()
+            .map_err(|_| "Physical-input monitor lock was poisoned".to_string())?;
+        monitor
+            .as_mut()
+            .ok_or_else(|| "Physical-input monitor is unavailable".to_string())?
+            .ensure_registration()
+    }
+
+    #[cfg(all(target_os = "windows", not(test)))]
+    fn release_physical_input_registration(&self) {
+        if let Ok(mut monitor) = self.monitor.lock() {
+            if let Some(monitor) = monitor.as_mut() {
+                monitor.release_registration();
+            }
+        }
+    }
+
     pub(crate) fn prepare_consent(
         &self,
         binding: ConsentAuthorityBinding,
@@ -173,11 +225,27 @@ impl ControlPlaneSecurityState {
             .map(|digit| char::from(b'0' + *digit))
             .collect::<String>();
 
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| "Consent state lock was poisoned".to_string())?;
+        // Raw Input registration is process-wide per usage class. Claim the
+        // keyboard slot only after every fallible challenge value is ready,
+        // immediately before publishing the challenge. This prevents both a
+        // startup-time registration theft and a leaked claim on RNG failure.
+        #[cfg(all(target_os = "windows", not(test)))]
+        self.claim_physical_input_registration()?;
+
+        let mut inner = match self.inner.lock() {
+            Ok(inner) => inner,
+            Err(_) => {
+                #[cfg(all(target_os = "windows", not(test)))]
+                self.release_physical_input_registration();
+                return Err("Consent state lock was poisoned".to_string());
+            }
+        };
         prune_security_inner(&mut inner, now);
+        #[cfg(not(test))]
+        if inner.active.is_some() {
+            report_consent_diagnostic(&mut inner, "replacement", now);
+        }
+        reset_consent_diagnostics(&mut inner, now);
         // A removal invalidates the active challenge, but a newly prepared
         // challenge starts a new device-observation generation. The next Raw
         // Input packet must still carry a currently enumerated handle.
@@ -222,6 +290,7 @@ impl ControlPlaneSecurityState {
             .lock()
             .map_err(|_| ConsentConsumeError::Internal)?;
         prune_security_inner(&mut inner, now);
+        inner.diagnostics.status_polls = inner.diagnostics.status_polls.saturating_add(1);
         let Some(record) = inner.active.as_ref() else {
             return Err(ConsentConsumeError::Missing);
         };
@@ -229,17 +298,68 @@ impl ControlPlaneSecurityState {
             return Err(ConsentConsumeError::WrongBinding);
         }
         if consent_record_deadline(record) <= now {
+            #[cfg(not(test))]
+            report_consent_diagnostic(&mut inner, "expired", now);
+            #[cfg(all(target_os = "windows", not(test)))]
+            drop(inner);
+            #[cfg(all(target_os = "windows", not(test)))]
+            self.release_physical_input_registration();
             return Err(ConsentConsumeError::Expired);
         }
-        let state = if record.matched_device.is_some() {
-            PreparedConsentState::Ready
-        } else {
-            PreparedConsentState::PendingPhysicalInput
+        // Validate the challenge identity before reclaiming the process-wide
+        // keyboard slot. A stale status caller must not influence the current
+        // challenge's registration owner.
+        drop(inner);
+        #[cfg(all(target_os = "windows", not(test)))]
+        if self.ensure_physical_input_registration().is_err() {
+            if let Ok(mut inner) = self.inner.lock() {
+                report_consent_diagnostic(&mut inner, "registration_lost", Instant::now());
+            }
+            return Err(ConsentConsumeError::Internal);
+        }
+
+        let now = Instant::now();
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ConsentConsumeError::Internal)?;
+        prune_security_inner(&mut inner, now);
+        let result = match inner.active.as_ref() {
+            None => Err(ConsentConsumeError::Missing),
+            Some(record)
+                if record.challenge_id != challenge_id || &record.binding.caller != caller =>
+            {
+                Err(ConsentConsumeError::WrongBinding)
+            }
+            Some(record) if consent_record_deadline(record) <= now => {
+                #[cfg(not(test))]
+                report_consent_diagnostic(&mut inner, "expired", now);
+                Err(ConsentConsumeError::Expired)
+            }
+            Some(record) => {
+                let state = if record.matched_device.is_some() {
+                    PreparedConsentState::Ready
+                } else {
+                    PreparedConsentState::PendingPhysicalInput
+                };
+                Ok(PreparedConsentStatus {
+                    state,
+                    expires_at_unix_ms: record.expires_at_unix_ms,
+                })
+            }
         };
-        Ok(PreparedConsentStatus {
-            state,
-            expires_at_unix_ms: record.expires_at_unix_ms,
-        })
+        #[cfg(all(target_os = "windows", not(test)))]
+        let release_registration = matches!(
+            result,
+            Err(ConsentConsumeError::Expired | ConsentConsumeError::Missing)
+        );
+        #[cfg(all(target_os = "windows", not(test)))]
+        drop(inner);
+        #[cfg(all(target_os = "windows", not(test)))]
+        if release_registration {
+            self.release_physical_input_registration();
+        }
+        result
     }
 
     pub(crate) fn consume_consent(
@@ -253,31 +373,61 @@ impl ControlPlaneSecurityState {
             .lock()
             .map_err(|_| ConsentConsumeError::Internal)?;
         prune_security_inner(&mut inner, now);
-        if inner
+        let result = if inner
             .tombstones
             .iter()
             .any(|entry| entry.consent_token == consent_token)
         {
-            return Err(ConsentConsumeError::Replayed);
-        }
-        let Some(record) = inner.active.as_ref() else {
-            return Err(ConsentConsumeError::Missing);
+            Err(ConsentConsumeError::Replayed)
+        } else {
+            let Some(record) = inner.active.as_ref() else {
+                #[cfg(all(target_os = "windows", not(test)))]
+                drop(inner);
+                #[cfg(all(target_os = "windows", not(test)))]
+                self.release_physical_input_registration();
+                return Err(ConsentConsumeError::Missing);
+            };
+            if consent_record_deadline(record) <= now {
+                Err(ConsentConsumeError::Expired)
+            } else if &record.binding != binding || record.consent_token != consent_token {
+                Err(ConsentConsumeError::WrongBinding)
+            } else {
+                let Some(device) = record.matched_device else {
+                    return Err(ConsentConsumeError::PhysicalInputPending);
+                };
+                if inner.removed_devices.contains_key(&device) {
+                    Err(ConsentConsumeError::DeviceRemoved)
+                } else {
+                    let consumed = inner.active.take().ok_or(ConsentConsumeError::Missing)?;
+                    push_tombstone(&mut inner, consumed.consent_token, now);
+                    Ok(())
+                }
+            }
         };
-        if consent_record_deadline(record) <= now {
-            return Err(ConsentConsumeError::Expired);
+        #[cfg(not(test))]
+        match result {
+            Ok(()) => report_consent_diagnostic(&mut inner, "consumed", now),
+            Err(ConsentConsumeError::Expired) => {
+                report_consent_diagnostic(&mut inner, "expired", now)
+            }
+            Err(ConsentConsumeError::DeviceRemoved) => {
+                report_consent_diagnostic(&mut inner, "device_removed", now)
+            }
+            _ => {}
         }
-        if &record.binding != binding || record.consent_token != consent_token {
-            return Err(ConsentConsumeError::WrongBinding);
+        #[cfg(all(target_os = "windows", not(test)))]
+        if matches!(
+            result,
+            Ok(())
+                | Err(ConsentConsumeError::Expired
+                    | ConsentConsumeError::DeviceRemoved
+                    | ConsentConsumeError::Replayed
+                    | ConsentConsumeError::Missing,)
+        ) {
+            drop(inner);
+            self.release_physical_input_registration();
         }
-        let Some(device) = record.matched_device else {
-            return Err(ConsentConsumeError::PhysicalInputPending);
-        };
-        if inner.removed_devices.contains_key(&device) {
-            return Err(ConsentConsumeError::DeviceRemoved);
-        }
-        let consumed = inner.active.take().ok_or(ConsentConsumeError::Missing)?;
-        push_tombstone(&mut inner, consumed.consent_token, now);
-        Ok(())
+        result
     }
 
     #[cfg(test)]
@@ -332,6 +482,99 @@ fn consent_record_deadline(record: &ConsentRecord) -> Instant {
     record.ready_expires_at.unwrap_or(record.expires_at)
 }
 
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy)]
+enum RawInputRejectClass {
+    Message,
+    Packet,
+    Device,
+    Key,
+}
+
+fn reset_consent_diagnostics(inner: &mut SecurityInner, now: Instant) {
+    inner.diagnostics.generation = inner.diagnostics.generation.saturating_add(1);
+    inner.diagnostics.prepared_at = Some(now);
+    inner.diagnostics.status_polls = 0;
+    inner.diagnostics.wm_input_packets = 0;
+    inner.diagnostics.accepted_digits = 0;
+    inner.diagnostics.reject_message = 0;
+    inner.diagnostics.reject_packet = 0;
+    inner.diagnostics.reject_device = 0;
+    inner.diagnostics.reject_key = 0;
+    inner.diagnostics.ready = false;
+    inner.diagnostics.reported = false;
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn note_raw_input_rejection(inner: &Arc<Mutex<SecurityInner>>, class: RawInputRejectClass) {
+    let Ok(mut inner) = inner.lock() else {
+        return;
+    };
+    if inner.active.is_none() {
+        return;
+    }
+    match class {
+        RawInputRejectClass::Message => {
+            inner.diagnostics.reject_message = inner.diagnostics.reject_message.saturating_add(1)
+        }
+        RawInputRejectClass::Packet => {
+            inner.diagnostics.reject_packet = inner.diagnostics.reject_packet.saturating_add(1)
+        }
+        RawInputRejectClass::Device => {
+            inner.diagnostics.reject_device = inner.diagnostics.reject_device.saturating_add(1)
+        }
+        RawInputRejectClass::Key => {
+            inner.diagnostics.reject_key = inner.diagnostics.reject_key.saturating_add(1)
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn note_raw_input_packet(inner: &Arc<Mutex<SecurityInner>>) {
+    let Ok(mut inner) = inner.lock() else {
+        return;
+    };
+    if inner.active.is_some() {
+        inner.diagnostics.wm_input_packets = inner.diagnostics.wm_input_packets.saturating_add(1);
+    }
+}
+
+#[cfg(not(test))]
+fn report_consent_diagnostic(inner: &mut SecurityInner, outcome: &str, now: Instant) {
+    if inner.diagnostics.reported {
+        return;
+    }
+    inner.diagnostics.reported = true;
+    let elapsed_ms = inner
+        .diagnostics
+        .prepared_at
+        .map(|prepared_at| now.saturating_duration_since(prepared_at).as_millis())
+        .unwrap_or(0);
+    let remaining_ms = inner
+        .active
+        .as_ref()
+        .map(|record| {
+            consent_record_deadline(record)
+                .saturating_duration_since(now)
+                .as_millis()
+        })
+        .unwrap_or(0);
+    eprintln!(
+        "physical-consent diagnostic outcome={outcome} generation={} elapsed_ms={} remaining_ms={} status_polls={} wm_input_packets={} accepted_digits={} reject_message={} reject_packet={} reject_device={} reject_key={} ready={}",
+        inner.diagnostics.generation,
+        elapsed_ms,
+        remaining_ms,
+        inner.diagnostics.status_polls,
+        inner.diagnostics.wm_input_packets,
+        inner.diagnostics.accepted_digits,
+        inner.diagnostics.reject_message,
+        inner.diagnostics.reject_packet,
+        inner.diagnostics.reject_device,
+        inner.diagnostics.reject_key,
+        inner.diagnostics.ready,
+    );
+}
+
 fn push_tombstone(inner: &mut SecurityInner, consent_token: String, now: Instant) {
     while inner.tombstones.len() >= MAX_CONSENT_RECORDS {
         inner.tombstones.pop_front();
@@ -359,40 +602,49 @@ fn record_physical_digit(
     if inner.removed_devices.contains_key(&device) {
         return;
     }
-    let Some(record) = inner.active.as_mut() else {
-        return;
-    };
-    if consent_record_deadline(record) <= now || record.matched_device.is_some() {
-        return;
-    }
-    if let Some(bound_device) = record.bound_device {
-        if bound_device != device {
+    let became_ready = {
+        let Some(record) = inner.active.as_mut() else {
+            return;
+        };
+        if consent_record_deadline(record) <= now || record.matched_device.is_some() {
             return;
         }
-    } else {
-        record.bound_device = Some(device);
-    }
-    if record.display_code[record.progress] == digit {
-        record.progress += 1;
-        if record.progress == CHALLENGE_DIGITS {
-            record.matched_device = Some(device);
-            // A code entered early remains usable only until the original
-            // challenge expiry.  A code completed at the boundary receives
-            // one bounded five-second handoff.  The public deadline is
-            // monotonic so the renderer can distinguish this one transition
-            // from an attacker-controlled repeated extension.
-            let ready_expires_at = (now + CONSENT_READY_HANDOFF_TTL).max(record.expires_at);
-            record.ready_expires_at = Some(ready_expires_at);
-            // Publish the same one-shot handoff deadline that status and
-            // consume enforce. Keeping the public expiry at the original
-            // pending-input deadline would make a valid Ready response look
-            // stale to the renderer and discard the handoff window.
-            record.expires_at_unix_ms = record.expires_at_unix_ms.max(
-                current_unix_ms().saturating_add(CONSENT_READY_HANDOFF_TTL.as_millis() as u64),
-            );
+        if let Some(bound_device) = record.bound_device {
+            if bound_device != device {
+                return;
+            }
+        } else {
+            record.bound_device = Some(device);
         }
-    } else {
-        record.progress = usize::from(record.display_code[0] == digit);
+        let mut became_ready = false;
+        if record.display_code[record.progress] == digit {
+            record.progress += 1;
+            if record.progress == CHALLENGE_DIGITS {
+                record.matched_device = Some(device);
+                became_ready = true;
+                // A code entered early remains usable only until the original
+                // challenge expiry.  A code completed at the boundary receives
+                // one bounded five-second handoff.  The public deadline is
+                // monotonic so the renderer can distinguish this one transition
+                // from an attacker-controlled repeated extension.
+                let ready_expires_at = (now + CONSENT_READY_HANDOFF_TTL).max(record.expires_at);
+                record.ready_expires_at = Some(ready_expires_at);
+                // Publish the same one-shot handoff deadline that status and
+                // consume enforce. Keeping the public expiry at the original
+                // pending-input deadline would make a valid Ready response look
+                // stale to the renderer and discard the handoff window.
+                record.expires_at_unix_ms = record.expires_at_unix_ms.max(
+                    current_unix_ms().saturating_add(CONSENT_READY_HANDOFF_TTL.as_millis() as u64),
+                );
+            }
+        } else {
+            record.progress = usize::from(record.display_code[0] == digit);
+        }
+        became_ready
+    };
+    inner.diagnostics.accepted_digits = inner.diagnostics.accepted_digits.saturating_add(1);
+    if became_ready {
+        inner.diagnostics.ready = true;
     }
 }
 
@@ -439,6 +691,37 @@ fn current_unix_ms() -> u64 {
 struct PhysicalInputMonitor {
     hwnd: isize,
     worker: Option<std::thread::JoinHandle<()>>,
+    registration: RawInputRegistrationManager,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy)]
+struct RawInputRegistrationLease {
+    previous: Option<RawInputRegistrationSnapshot>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct RawInputRegistrationState {
+    active: Option<RawInputRegistrationLease>,
+    deadline: Option<Instant>,
+    shutdown: bool,
+}
+
+#[cfg(target_os = "windows")]
+struct RawInputRegistrationManager {
+    hwnd: isize,
+    shared: Arc<(Mutex<RawInputRegistrationState>, Condvar)>,
+    reaper: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy)]
+struct RawInputRegistrationSnapshot {
+    usage_page: u16,
+    usage: u16,
+    flags: u32,
+    hwnd_target: isize,
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -449,6 +732,7 @@ impl PhysicalInputMonitor {
     fn start(inner: Arc<Mutex<SecurityInner>>) -> Result<Self, String> {
         use std::sync::mpsc::sync_channel;
         let (ready_tx, ready_rx) = sync_channel(1);
+        let registration_inner = Arc::clone(&inner);
         let worker = std::thread::Builder::new()
             .name("syndocal-raw-input-consent".to_string())
             .spawn(move || raw_input_thread(inner, ready_tx))
@@ -456,11 +740,467 @@ impl PhysicalInputMonitor {
         let hwnd = ready_rx
             .recv()
             .map_err(|_| "Raw Input monitor exited during startup".to_string())??;
+        let registration = match RawInputRegistrationManager::start(hwnd, registration_inner) {
+            Ok(registration) => registration,
+            Err(error) => {
+                use windows::Win32::{
+                    Foundation::{HWND, LPARAM, WPARAM},
+                    UI::WindowsAndMessaging::{PostMessageW, WM_APP},
+                };
+                unsafe {
+                    let _ = PostMessageW(
+                        Some(HWND(hwnd as *mut _)),
+                        WM_APP + 0x51,
+                        WPARAM(0),
+                        LPARAM(0),
+                    );
+                }
+                let _ = worker.join();
+                return Err(error);
+            }
+        };
         Ok(Self {
             hwnd,
             worker: Some(worker),
+            registration,
         })
     }
+
+    #[cfg(not(test))]
+    fn claim_registration(&mut self) -> Result<(), String> {
+        self.registration.claim()
+    }
+
+    #[cfg(not(test))]
+    fn ensure_registration(&mut self) -> Result<(), String> {
+        self.registration.ensure()
+    }
+
+    fn release_registration(&mut self) {
+        self.registration.release();
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl RawInputRegistrationManager {
+    fn start(hwnd: isize, inner: Arc<Mutex<SecurityInner>>) -> Result<Self, String> {
+        let shared = Arc::new((
+            Mutex::new(RawInputRegistrationState::default()),
+            Condvar::new(),
+        ));
+        let reaper_shared = Arc::clone(&shared);
+        let reaper = std::thread::Builder::new()
+            .name("syndocal-raw-input-registration-reaper".to_string())
+            .spawn(move || raw_input_registration_reaper(hwnd, reaper_shared, inner))
+            .map_err(|error| format!("Unable to start Raw Input registration reaper: {error}"))?;
+        Ok(Self {
+            hwnd,
+            shared,
+            reaper: Some(reaper),
+        })
+    }
+
+    #[cfg(not(test))]
+    fn claim(&mut self) -> Result<(), String> {
+        let (lock, wake) = &*self.shared;
+        let mut state = lock
+            .lock()
+            .map_err(|_| "Physical Raw Input registration lock was poisoned".to_string())?;
+        release_registration_if_owned(self.hwnd, state.active)?;
+        state.active = None;
+        state.deadline = None;
+        let previous = query_registered_keyboard_registration()?;
+        register_keyboard_for_window(self.hwnd)?;
+        if !registered_keyboard_targets_window(self.hwnd)? {
+            // A different same-process window registered after our claim.
+            // Never overwrite that newer owner, including with the predecessor
+            // snapshot captured above.
+            return Err("Physical Raw Input keyboard registration was not retained".to_string());
+        }
+        state.active = Some(RawInputRegistrationLease { previous });
+        state.deadline = Some(Instant::now() + CONSENT_CHALLENGE_TTL + CONSENT_READY_HANDOFF_TTL);
+        wake.notify_all();
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn ensure(&mut self) -> Result<(), String> {
+        let (lock, _) = &*self.shared;
+        let state = lock
+            .lock()
+            .map_err(|_| "Physical Raw Input registration lock was poisoned".to_string())?;
+        if state.active.is_none() {
+            return Err("Physical Raw Input keyboard registration is not claimed".to_string());
+        }
+        if !registered_keyboard_targets_window(self.hwnd)? {
+            // The last registration wins process-wide. A later owner is an
+            // explicit ownership change, not permission to steal the slot
+            // back on every status poll.
+            return Err("Physical Raw Input keyboard registration was replaced".to_string());
+        }
+        Ok(())
+    }
+
+    fn release(&mut self) {
+        let (lock, wake) = &*self.shared;
+        if let Ok(mut state) = lock.lock() {
+            match release_registration_if_owned(self.hwnd, state.active) {
+                Ok(()) => {
+                    state.active = None;
+                    state.deadline = None;
+                }
+                Err(_) => eprintln!("physical-consent registration_restore_failed"),
+            }
+            wake.notify_all();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for RawInputRegistrationManager {
+    fn drop(&mut self) {
+        self.release();
+        let (lock, wake) = &*self.shared;
+        if let Ok(mut state) = lock.lock() {
+            state.shutdown = true;
+            wake.notify_all();
+        }
+        if let Some(reaper) = self.reaper.take() {
+            let _ = reaper.join();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn release_registration_if_owned(
+    hwnd: isize,
+    lease: Option<RawInputRegistrationLease>,
+) -> Result<(), String> {
+    let Some(lease) = lease else {
+        return Ok(());
+    };
+    if !registered_keyboard_targets_window(hwnd)? {
+        // A newer owner won after this lease. Retire our bookkeeping without
+        // mutating that owner's registration.
+        debug_assert_eq!(
+            classify_registration_release(false, true),
+            RawInputRegistrationReleaseDecision::LeaveNewerOwner
+        );
+        return Ok(());
+    }
+    let restored = restore_keyboard_registration(lease.previous);
+    match classify_registration_release(true, restored.is_ok()) {
+        RawInputRegistrationReleaseDecision::Restored => restored,
+        RawInputRegistrationReleaseDecision::RestoreFailed => restored,
+        RawInputRegistrationReleaseDecision::LeaveNewerOwner => unreachable!(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn raw_input_registration_reaper(
+    hwnd: isize,
+    shared: Arc<(Mutex<RawInputRegistrationState>, Condvar)>,
+    _diagnostic_inner: Arc<Mutex<SecurityInner>>,
+) {
+    let (lock, wake) = &*shared;
+    let Ok(mut state) = lock.lock() else {
+        return;
+    };
+    loop {
+        if state.shutdown {
+            return;
+        }
+        let Some(deadline) = state.deadline else {
+            state = match wake.wait(state) {
+                Ok(state) => state,
+                Err(_) => return,
+            };
+            continue;
+        };
+        let now = Instant::now();
+        if deadline <= now {
+            match release_registration_if_owned(hwnd, state.active) {
+                Ok(()) => {
+                    state.active = None;
+                    state.deadline = None;
+                }
+                Err(_) => {
+                    state.deadline = None;
+                    eprintln!("physical-consent registration_restore_failed");
+                }
+            }
+            #[cfg(not(test))]
+            if let Ok(mut inner) = _diagnostic_inner.lock() {
+                report_consent_diagnostic(&mut inner, "abandoned", now);
+            }
+            continue;
+        }
+        state = match wake.wait_timeout(state, deadline.saturating_duration_since(now)) {
+            Ok((state, _)) => state,
+            Err(_) => return,
+        };
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+const RAW_INPUT_REGISTRATION_QUERY_SENTINEL: u32 = u32::MAX;
+
+#[cfg(any(target_os = "windows", test))]
+const RAW_INPUT_REGISTRATION_ERROR_SUCCESS: u32 = 0;
+
+#[cfg(any(target_os = "windows", test))]
+const RAW_INPUT_REGISTRATION_ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+
+#[cfg(any(target_os = "windows", test))]
+const MAX_RAW_INPUT_REGISTRATIONS: u32 = 64;
+
+#[cfg(any(target_os = "windows", test))]
+const RAW_INPUT_REGISTRATION_QUERY_ATTEMPTS: u32 = 4;
+
+#[cfg(any(target_os = "windows", test))]
+fn registration_query_count_failure(result: u32, count: u32, error: u32) -> String {
+    format!(
+        "Physical Raw Input registration query failed (phase=count result={result} count={count} error={error})"
+    )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn registration_query_fill_failure(result: u32, count: u32, capacity: u32, error: u32) -> String {
+    format!(
+        "Physical Raw Input registration query failed (phase=fill result={result} count={count} capacity={capacity} error={error})"
+    )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn registration_query_stabilize_failure(
+    attempts: u32,
+    result: u32,
+    count: u32,
+    capacity: u32,
+    error: u32,
+) -> String {
+    format!(
+        "Physical Raw Input registration query did not stabilize (phase=stabilize attempts={attempts} last_result={result} last_count={count} last_capacity={capacity} last_error={error})"
+    )
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawInputRegistrationCountDecision {
+    Empty,
+    Fill { count: u32 },
+    Reject,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn classify_registration_count_call(
+    returned: u32,
+    count: u32,
+    error: u32,
+) -> RawInputRegistrationCountDecision {
+    if returned == 0 && count == 0 && error == RAW_INPUT_REGISTRATION_ERROR_SUCCESS {
+        RawInputRegistrationCountDecision::Empty
+    } else if (returned == RAW_INPUT_REGISTRATION_QUERY_SENTINEL
+        && error == RAW_INPUT_REGISTRATION_ERROR_INSUFFICIENT_BUFFER
+        || returned == 0 && error == RAW_INPUT_REGISTRATION_ERROR_SUCCESS)
+        && (1..=MAX_RAW_INPUT_REGISTRATIONS).contains(&count)
+    {
+        RawInputRegistrationCountDecision::Fill { count }
+    } else {
+        RawInputRegistrationCountDecision::Reject
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawInputRegistrationFillDecision {
+    Complete { copied: u32 },
+    Retry { count: u32 },
+    Reject,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn classify_registration_fill_call(
+    returned: u32,
+    reported_count: u32,
+    capacity: u32,
+    error: u32,
+) -> RawInputRegistrationFillDecision {
+    if returned != RAW_INPUT_REGISTRATION_QUERY_SENTINEL && returned <= capacity {
+        RawInputRegistrationFillDecision::Complete { copied: returned }
+    } else if error == RAW_INPUT_REGISTRATION_ERROR_INSUFFICIENT_BUFFER
+        && (1..=MAX_RAW_INPUT_REGISTRATIONS).contains(&reported_count)
+    {
+        RawInputRegistrationFillDecision::Retry {
+            count: reported_count.max(if returned == RAW_INPUT_REGISTRATION_QUERY_SENTINEL {
+                0
+            } else {
+                returned.min(MAX_RAW_INPUT_REGISTRATIONS)
+            }),
+        }
+    } else {
+        RawInputRegistrationFillDecision::Reject
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn query_registered_keyboard_registration() -> Result<Option<RawInputRegistrationSnapshot>, String>
+{
+    use std::mem::size_of;
+    use windows::Win32::Foundation::{GetLastError, SetLastError, ERROR_SUCCESS};
+    use windows::Win32::UI::Input::{GetRegisteredRawInputDevices, RAWINPUTDEVICE};
+
+    unsafe {
+        // A NULL first query can return either the documented
+        // UINT_MAX/ERROR_INSUFFICIENT_BUFFER shape or, on Windows builds
+        // observed in the field, result=0 with a non-zero count and
+        // ERROR_SUCCESS. Both publish a required count; other numeric
+        // combinations remain fail-closed. Device registrations can change
+        // between the count and fill calls, so retry a bounded number of
+        // times and fail closed if the snapshot never stabilizes.
+        let mut last_fill = (0, 0, 0, RAW_INPUT_REGISTRATION_ERROR_SUCCESS);
+        for _ in 0..RAW_INPUT_REGISTRATION_QUERY_ATTEMPTS {
+            let mut count = 0u32;
+            SetLastError(ERROR_SUCCESS);
+            let first =
+                GetRegisteredRawInputDevices(None, &mut count, size_of::<RAWINPUTDEVICE>() as u32);
+            let first_error = GetLastError();
+            // Windows returns a normal zero result when this process has no
+            // registrations. The documented UINT_MAX/INSUFFICIENT_BUFFER path
+            // applies once a non-empty buffer is required.
+            let count_decision = classify_registration_count_call(first, count, first_error.0);
+            let RawInputRegistrationCountDecision::Fill { mut count } = count_decision else {
+                if count_decision == RawInputRegistrationCountDecision::Empty {
+                    return Ok(None);
+                }
+                return Err(registration_query_count_failure(
+                    first,
+                    count,
+                    first_error.0,
+                ));
+            };
+            let mut devices = vec![RAWINPUTDEVICE::default(); count as usize];
+            let capacity = count;
+            SetLastError(ERROR_SUCCESS);
+            let copied = GetRegisteredRawInputDevices(
+                Some(devices.as_mut_ptr()),
+                &mut count,
+                size_of::<RAWINPUTDEVICE>() as u32,
+            );
+            let fill_error = GetLastError();
+            last_fill = (copied, count, capacity, fill_error.0);
+            match classify_registration_fill_call(copied, count, capacity, fill_error.0) {
+                RawInputRegistrationFillDecision::Complete { copied } => {
+                    return Ok(devices
+                        .into_iter()
+                        .take(copied as usize)
+                        .find(|device| device.usUsagePage == 0x01 && device.usUsage == 0x06)
+                        .map(|device| RawInputRegistrationSnapshot {
+                            usage_page: device.usUsagePage,
+                            usage: device.usUsage,
+                            flags: device.dwFlags.0,
+                            hwnd_target: device.hwndTarget.0 as isize,
+                        }));
+                }
+                RawInputRegistrationFillDecision::Retry { .. } => continue,
+                RawInputRegistrationFillDecision::Reject => {
+                    return Err(registration_query_fill_failure(
+                        copied,
+                        count,
+                        capacity,
+                        fill_error.0,
+                    ));
+                }
+            }
+        }
+        Err(registration_query_stabilize_failure(
+            RAW_INPUT_REGISTRATION_QUERY_ATTEMPTS,
+            last_fill.0,
+            last_fill.1,
+            last_fill.2,
+            last_fill.3,
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn registered_keyboard_targets_window(hwnd: isize) -> Result<bool, String> {
+    Ok(raw_input_registration_owner_matches(
+        query_registered_keyboard_registration()?.map(|device| device.hwnd_target),
+        hwnd,
+    ))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn raw_input_registration_owner_matches(current_owner: Option<isize>, ours: isize) -> bool {
+    current_owner == Some(ours)
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawInputRegistrationReleaseDecision {
+    LeaveNewerOwner,
+    Restored,
+    RestoreFailed,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn classify_registration_release(
+    owned_by_us: bool,
+    restore_succeeded: bool,
+) -> RawInputRegistrationReleaseDecision {
+    if !owned_by_us {
+        RawInputRegistrationReleaseDecision::LeaveNewerOwner
+    } else if restore_succeeded {
+        RawInputRegistrationReleaseDecision::Restored
+    } else {
+        RawInputRegistrationReleaseDecision::RestoreFailed
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[cfg(not(test))]
+fn register_keyboard_for_window(hwnd: isize) -> Result<(), String> {
+    use std::ffi::c_void;
+    use std::mem::size_of;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Input::{
+        RegisterRawInputDevices, RAWINPUTDEVICE, RIDEV_DEVNOTIFY, RIDEV_INPUTSINK,
+    };
+
+    let devices = [RAWINPUTDEVICE {
+        usUsagePage: 0x01,
+        usUsage: 0x06,
+        dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+        hwndTarget: HWND(hwnd as *mut c_void),
+    }];
+    unsafe { RegisterRawInputDevices(&devices, size_of::<RAWINPUTDEVICE>() as u32) }
+        .map_err(|_| "Physical Raw Input keyboard registration failed".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn restore_keyboard_registration(
+    previous: Option<RawInputRegistrationSnapshot>,
+) -> Result<(), String> {
+    use std::mem::size_of;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Input::{RegisterRawInputDevices, RAWINPUTDEVICE, RIDEV_REMOVE};
+
+    let device = previous
+        .map(|previous| RAWINPUTDEVICE {
+            usUsagePage: previous.usage_page,
+            usUsage: previous.usage,
+            dwFlags: windows::Win32::UI::Input::RAWINPUTDEVICE_FLAGS(previous.flags),
+            hwndTarget: HWND(previous.hwnd_target as *mut std::ffi::c_void),
+        })
+        .unwrap_or(RAWINPUTDEVICE {
+            usUsagePage: 0x01,
+            usUsage: 0x06,
+            dwFlags: RIDEV_REMOVE,
+            hwndTarget: HWND::default(),
+        });
+    unsafe { RegisterRawInputDevices(&[device], size_of::<RAWINPUTDEVICE>() as u32) }
+        .map_err(|_| "Physical Raw Input keyboard registration restore failed".to_string())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -473,6 +1213,7 @@ impl PhysicalInputMonitor {
 #[cfg(target_os = "windows")]
 impl Drop for PhysicalInputMonitor {
     fn drop(&mut self) {
+        self.release_registration();
         use windows::Win32::{
             Foundation::{HWND, LPARAM, WPARAM},
             UI::WindowsAndMessaging::{PostMessageW, WM_APP},
@@ -496,15 +1237,12 @@ fn raw_input_thread(
     inner: Arc<Mutex<SecurityInner>>,
     ready: std::sync::mpsc::SyncSender<Result<isize, String>>,
 ) {
-    use std::{ffi::c_void, mem::size_of};
+    use std::ffi::c_void;
     use windows::{
         core::w,
-        Win32::UI::{
-            Input::{RegisterRawInputDevices, RAWINPUTDEVICE, RIDEV_DEVNOTIFY, RIDEV_INPUTSINK},
-            WindowsAndMessaging::{
-                CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassW, TranslateMessage,
-                HWND_MESSAGE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
-            },
+        Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassW, TranslateMessage,
+            HWND_MESSAGE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
         },
     };
     unsafe {
@@ -539,19 +1277,6 @@ fn raw_input_thread(
                 return;
             }
         };
-        let devices = [RAWINPUTDEVICE {
-            usUsagePage: 0x01,
-            usUsage: 0x06,
-            dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-            hwndTarget: hwnd,
-        }];
-        if let Err(error) = RegisterRawInputDevices(&devices, size_of::<RAWINPUTDEVICE>() as u32) {
-            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
-            let _ = ready.send(Err(format!(
-                "Unable to register physical keyboard input: {error}"
-            )));
-            return;
-        }
         let _ = ready.send(Ok(hwnd.0 as isize));
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -599,6 +1324,7 @@ unsafe extern "system" fn raw_input_window_proc(
             // The accepted evidence is the bounded system WM_INPUT packet,
             // its keyboard type, and its currently enumerated device handle.
             if !raw_input_wparam_is_acceptable(wparam.0) {
+                note_raw_input_rejection(inner, RawInputRejectClass::Message);
                 return DefWindowProcW(hwnd, message, wparam, lparam);
             }
             if !inner
@@ -608,6 +1334,7 @@ unsafe extern "system" fn raw_input_window_proc(
             {
                 return DefWindowProcW(hwnd, message, wparam, lparam);
             }
+            note_raw_input_packet(inner);
             let mut size = 0u32;
             let raw_handle = windows::Win32::UI::Input::HRAWINPUT(lparam.0 as *mut c_void);
             GetRawInputData(
@@ -618,6 +1345,7 @@ unsafe extern "system" fn raw_input_window_proc(
                 size_of::<RAWINPUTHEADER>() as u32,
             );
             if !raw_input_size_is_acceptable(size, size_of::<RAWINPUT>() as u32) {
+                note_raw_input_rejection(inner, RawInputRejectClass::Packet);
                 return DefWindowProcW(hwnd, message, wparam, lparam);
             }
             // RAWINPUT contains a pointer-sized device handle. Keep the
@@ -633,6 +1361,7 @@ unsafe extern "system" fn raw_input_window_proc(
                 size_of::<RAWINPUTHEADER>() as u32,
             );
             if copied == u32::MAX || copied != size {
+                note_raw_input_rejection(inner, RawInputRejectClass::Packet);
                 return DefWindowProcW(hwnd, message, wparam, lparam);
             }
             let raw = &buffer[0];
@@ -642,12 +1371,15 @@ unsafe extern "system" fn raw_input_window_proc(
                 device,
                 raw_keyboard_device_is_enumerated(device),
             ) {
+                note_raw_input_rejection(inner, RawInputRejectClass::Device);
                 return DefWindowProcW(hwnd, message, wparam, lparam);
             }
             let keyboard = raw.data.keyboard;
             let digit = raw_keyboard_digit(keyboard.Message, keyboard.VKey);
             if let Some(digit) = digit {
                 record_physical_digit(inner, digit, device, Instant::now());
+            } else {
+                note_raw_input_rejection(inner, RawInputRejectClass::Key);
             }
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
@@ -721,22 +1453,29 @@ const RAW_WM_SYSKEYDOWN: u32 = 0x0104;
 unsafe fn raw_keyboard_device_is_enumerated(device: usize) -> bool {
     use std::mem::size_of;
     use windows::Win32::UI::Input::{GetRawInputDeviceList, RAWINPUTDEVICELIST, RIM_TYPEKEYBOARD};
-    let mut count = 0u32;
-    let first = GetRawInputDeviceList(None, &mut count, size_of::<RAWINPUTDEVICELIST>() as u32);
-    if first == u32::MAX || count == 0 || count > 4_096 {
-        return false;
+    for _ in 0..4 {
+        let mut count = 0u32;
+        let first = GetRawInputDeviceList(None, &mut count, size_of::<RAWINPUTDEVICELIST>() as u32);
+        if first == u32::MAX || count == 0 || count > 4_096 {
+            return false;
+        }
+        let mut entries = vec![RAWINPUTDEVICELIST::default(); count as usize];
+        let capacity = count;
+        let copied = GetRawInputDeviceList(
+            Some(entries.as_mut_ptr()),
+            &mut count,
+            size_of::<RAWINPUTDEVICELIST>() as u32,
+        );
+        if copied != u32::MAX && copied <= capacity {
+            return entries.into_iter().take(copied as usize).any(|entry| {
+                entry.dwType == RIM_TYPEKEYBOARD && entry.hDevice.0 as usize == device
+            });
+        }
+        if count > 4_096 {
+            return false;
+        }
     }
-    let mut entries = vec![RAWINPUTDEVICELIST::default(); count as usize];
-    let copied = GetRawInputDeviceList(
-        Some(entries.as_mut_ptr()),
-        &mut count,
-        size_of::<RAWINPUTDEVICELIST>() as u32,
-    );
-    copied != u32::MAX
-        && entries
-            .into_iter()
-            .take(copied as usize)
-            .any(|entry| entry.dwType == RIM_TYPEKEYBOARD && entry.hDevice.0 as usize == device)
+    false
 }
 
 #[cfg(test)]
@@ -767,6 +1506,133 @@ mod tests {
         for digit in code.bytes() {
             state.observe_physical_digit_for_test(digit - b'0', device);
         }
+    }
+
+    #[test]
+    fn registration_count_query_seam_accepts_empty_and_observed_nonempty_shapes() {
+        assert_eq!(
+            classify_registration_count_call(0, 0, RAW_INPUT_REGISTRATION_ERROR_SUCCESS,),
+            RawInputRegistrationCountDecision::Empty
+        );
+        assert_eq!(
+            classify_registration_count_call(
+                RAW_INPUT_REGISTRATION_QUERY_SENTINEL,
+                2,
+                RAW_INPUT_REGISTRATION_ERROR_INSUFFICIENT_BUFFER,
+            ),
+            RawInputRegistrationCountDecision::Fill { count: 2 }
+        );
+        assert_eq!(
+            classify_registration_count_call(0, 1, RAW_INPUT_REGISTRATION_ERROR_SUCCESS,),
+            RawInputRegistrationCountDecision::Fill { count: 1 }
+        );
+        assert_eq!(
+            classify_registration_count_call(
+                RAW_INPUT_REGISTRATION_QUERY_SENTINEL,
+                MAX_RAW_INPUT_REGISTRATIONS + 1,
+                RAW_INPUT_REGISTRATION_ERROR_INSUFFICIENT_BUFFER,
+            ),
+            RawInputRegistrationCountDecision::Reject
+        );
+        assert_eq!(
+            classify_registration_count_call(1, 2, RAW_INPUT_REGISTRATION_ERROR_SUCCESS),
+            RawInputRegistrationCountDecision::Reject
+        );
+    }
+
+    #[test]
+    fn registration_fill_query_seam_retries_growth_and_rejects_other_errors() {
+        assert_eq!(
+            classify_registration_fill_call(
+                RAW_INPUT_REGISTRATION_QUERY_SENTINEL,
+                4,
+                2,
+                RAW_INPUT_REGISTRATION_ERROR_INSUFFICIENT_BUFFER,
+            ),
+            RawInputRegistrationFillDecision::Retry { count: 4 }
+        );
+        assert_eq!(
+            classify_registration_fill_call(1, 1, 2, 0x0000_0005,),
+            RawInputRegistrationFillDecision::Complete { copied: 1 }
+        );
+        assert_eq!(
+            classify_registration_fill_call(1, 1, 1, RAW_INPUT_REGISTRATION_ERROR_SUCCESS),
+            RawInputRegistrationFillDecision::Complete { copied: 1 }
+        );
+        assert_eq!(
+            classify_registration_fill_call(
+                RAW_INPUT_REGISTRATION_QUERY_SENTINEL,
+                2,
+                2,
+                RAW_INPUT_REGISTRATION_ERROR_INSUFFICIENT_BUFFER,
+            ),
+            RawInputRegistrationFillDecision::Retry { count: 2 }
+        );
+        assert_eq!(
+            classify_registration_fill_call(
+                RAW_INPUT_REGISTRATION_QUERY_SENTINEL,
+                2,
+                2,
+                0x0000_0005,
+            ),
+            RawInputRegistrationFillDecision::Reject
+        );
+    }
+
+    #[test]
+    fn registration_query_failures_return_one_safe_numeric_phase_record() {
+        let count = registration_query_count_failure(
+            RAW_INPUT_REGISTRATION_QUERY_SENTINEL,
+            1,
+            RAW_INPUT_REGISTRATION_ERROR_INSUFFICIENT_BUFFER,
+        );
+        assert_eq!(
+            count,
+            "Physical Raw Input registration query failed (phase=count result=4294967295 count=1 error=122)"
+        );
+
+        let fill = registration_query_fill_failure(5, 2, 1, 87);
+        assert_eq!(
+            fill,
+            "Physical Raw Input registration query failed (phase=fill result=5 count=2 capacity=1 error=87)"
+        );
+
+        let stabilize = registration_query_stabilize_failure(
+            RAW_INPUT_REGISTRATION_QUERY_ATTEMPTS,
+            1,
+            2,
+            1,
+            RAW_INPUT_REGISTRATION_ERROR_INSUFFICIENT_BUFFER,
+        );
+        assert_eq!(
+            stabilize,
+            "Physical Raw Input registration query did not stabilize (phase=stabilize attempts=4 last_result=1 last_count=2 last_capacity=1 last_error=122)"
+        );
+
+        for message in [count, fill, stabilize] {
+            assert!(!message.contains("hwnd"));
+            assert!(!message.contains("token"));
+            assert!(!message.contains("code"));
+        }
+    }
+
+    #[test]
+    fn registration_owner_and_restore_seams_are_fail_closed() {
+        assert!(raw_input_registration_owner_matches(Some(0x1000), 0x1000));
+        assert!(!raw_input_registration_owner_matches(Some(0x2000), 0x1000));
+        assert!(!raw_input_registration_owner_matches(None, 0x1000));
+        assert_eq!(
+            classify_registration_release(false, false),
+            RawInputRegistrationReleaseDecision::LeaveNewerOwner
+        );
+        assert_eq!(
+            classify_registration_release(true, true),
+            RawInputRegistrationReleaseDecision::Restored
+        );
+        assert_eq!(
+            classify_registration_release(true, false),
+            RawInputRegistrationReleaseDecision::RestoreFailed
+        );
     }
 
     #[test]

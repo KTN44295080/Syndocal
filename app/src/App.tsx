@@ -79,6 +79,7 @@ import {
 import { SetupMappingWorkspace } from "./components/SetupMappingWorkspace";
 import { MappingPersistentWorkspaceBand } from "./components/MappingPersistentWorkspaceBand";
 import { SetupVideoPanel } from "./components/SetupVideoPanel";
+import type { VideoDisplayMonitorDescriptor } from "./components/VideoOutputCreatePanel";
 import { StagePreview2D } from "./components/StagePreview2D";
 import { VideoControlPanel } from "./components/VideoControlPanel";
 import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspectorPanel";
@@ -558,6 +559,7 @@ import { stageObjectDefaultColor } from "./stageObjects";
 import { cueIdentityCss, type CueIdentitySource } from "./identityColor";
 import {
   applySceneMatrixCueMove,
+  applySceneMatrixCueListMove,
   sceneMatrixCueMetadataArgs,
 } from "./sceneMatrixBankMove";
 import {
@@ -817,6 +819,14 @@ const emptyTimelineFollowRuntime = (): TimelineFollowRuntimeSummary => ({
 
 const projectHistoryChangedEvent = "syndocal:project-history-changed";
 const authoritativeApplicationCurrentProperty = "__syndocalAuthoritativeApplicationCurrent";
+const cueListDisplayLabel = (cueList: CueListSummary): string =>
+  cueList.id === 1 && cueList.label.trim().toLowerCase() === "main"
+    ? "Bank 1"
+    : cueList.label;
+const playbackExecutorDisplay = (executor: PlaybackExecutorSummary): PlaybackExecutorSummary =>
+  executor.cue_list_id === 1 && executor.label.trim().toLowerCase() === "main"
+    ? { ...executor, label: "Bank 1" }
+    : executor;
 let activeOperatorLockMode: OperatorLockMode | null = null;
 let applyServerAuthoritativeProjectMutationResult: ((result: ProjectHistoryMutationResult) => boolean) | null = null;
 
@@ -853,7 +863,6 @@ const projectMutationCommands = new Set([
   "create_cue_from_current",
   "create_cue_list",
   "rename_cue_list",
-  "remove_cue_list",
   "set_cue_list",
   "create_reference_palette",
   "update_reference_palette",
@@ -930,6 +939,7 @@ const projectMutationCommands = new Set([
   "save_video_output_mapping_preset",
   "apply_video_output_mapping_preset",
   "remove_video_output_mapping_preset",
+  "reorder_cue_lists",
   "load_video_output_mapping_preset_file",
   "add_lfo_effect",
   "add_position_wave_effect",
@@ -1014,6 +1024,9 @@ const serverAuthoritativeProjectMutationCommands = new Set([
   "reset_video_layer_isf_effect",
   "set_video_layer_isf_control",
   "set_effect_enabled",
+  "create_empty_cue",
+  "delete_cue_list",
+  "reorder_cue_lists",
 ]);
 
 type AuthoredEffectAuthorityBundle = ProjectAuthorityBundle & {
@@ -1460,6 +1473,9 @@ type ViewportControlEditHistoryEntry = {
 type ViewportSceneMatrixBankMoveHistoryEntry = {
   beforeCues: CueSummary[];
   afterCues: CueSummary[];
+  beforeCueLists?: CueListSummary[];
+  afterCueLists?: CueListSummary[];
+  operation?: "move" | "reorder" | "delete";
 };
 
 interface LiveAudioInputLevels {
@@ -2206,7 +2222,7 @@ export default function App() {
     createSignal<ViewportControlEditHistoryEntry[]>([]);
   const [viewportSceneMatrixBankMoveUndo, setViewportSceneMatrixBankMoveUndo] =
     createSignal<ViewportSceneMatrixBankMoveHistoryEntry | null>(null);
-  const [cueListLabel, setCueListLabel] = createSignal("Main");
+  const [cueListLabel, setCueListLabel] = createSignal("Bank 1");
   const [cueMetadataDrafts, setCueMetadataDrafts] = createSignal<Record<number, CueMetadataDraft>>({});
   const [cuePadBank, setCuePadBank] = createSignal(0);
   const [cuePadFollowActive, setCuePadFollowActive] = createSignal(true);
@@ -2778,12 +2794,15 @@ export default function App() {
     setSceneSettingsSurface("contents");
     setSceneFxStagePreview(null);
   };
-  const openCueEditor = () => {
-    const cueId = selectedSceneCueId() ?? snapshot().active_cue_id ?? snapshot().cues[0]?.id ?? null;
-    if (cueId !== null) {
-      openTimelineSourceCue(cueId);
-      return;
+  const openCueEditor = (forceCreate = false) => {
+    if (!forceCreate) {
+      const cueId = selectedSceneCueId() ?? snapshot().active_cue_id ?? snapshot().cues[0]?.id ?? null;
+      if (cueId !== null) {
+        openTimelineSourceCue(cueId);
+        return;
+      }
     }
+    setSelectedSceneCueId(null);
     setTimelineDeskSurface("show");
     setTimelineContextDrawer("cue");
   };
@@ -3238,8 +3257,23 @@ export default function App() {
           }],
         }))
       : [viewportFixtureData.cueRecallCue];
+    const sceneMatrixBankLayout = [
+      { id: 1, label: "Bank 1", cueIds: [304] },
+      { id: 2, label: "Front", cueIds: [301, 302] },
+      { id: 3, label: "Back", cueIds: [303, 320] },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        id: index + 4,
+        label: `Bank ${index + 3}`,
+        cueIds: [305 + index],
+      })),
+    ];
+    const sceneMatrixCueListByCueId = new Map(
+      sceneMatrixBankLayout.flatMap((bank) => bank.cueIds.map((cueId) => [cueId, bank.id] as const)),
+    );
     const fixtureCues = sceneMatrixFixture
-      ? structuredClone(viewportFixtureData.sceneMatrixCues)
+      ? structuredClone(viewportFixtureData.sceneMatrixCues).map((cue) => viewportFixture === "scene-matrix"
+        ? { ...cue, cue_list_id: sceneMatrixCueListByCueId.get(cue.id) ?? 1 }
+        : cue)
       : cueFixtureCues;
     if (sceneMatrixFixture && fixtureCues[0]) {
       // T7: one persisted cue color so the harness can assert it wins the hash hue.
@@ -3460,7 +3494,9 @@ export default function App() {
           ? timelineFixtureCues
           : current.cues,
       cue_lists: cueFixture || timelineFixture || sceneMatrixFixture || touchComposedFixture
-        ? [{ id: 1, label: "Main", active_cue_id: activeCueId }]
+        ? viewportFixture === "scene-matrix"
+          ? sceneMatrixBankLayout.map((bank) => ({ id: bank.id, label: bank.label, active_cue_id: bank.cueIds.includes(activeCueId) ? activeCueId : null }))
+          : [{ id: 1, label: "Bank 1", active_cue_id: activeCueId }]
         : current.cue_lists,
       effects: cueFixture ? cueFixtureEffects : sceneMatrixFixture ? [viewportFixtureData.cueRecallEffect] : current.effects,
       node_graphs: cueFixture || cueNodeGraphFixture ? [viewportFixtureData.cueRecallNodeGraph] : current.node_graphs,
@@ -4873,7 +4909,9 @@ export default function App() {
     setMessage("Skipped fixture group registration.");
   };
   const sceneMatrixGroupIds = createMemo(() => {
-    // Cue group IDs are scene banks; fixture group IDs describe patch selections.
+    // Cue List is the persisted Scene Matrix Bank. group_id remains the
+    // existing within-bank column/ReplaceGroup identity; fixture group IDs
+    // describe patch selections and are unrelated.
     const groupIds: string[] = [];
     const seen = new Set<string>();
     for (const cue of snapshot().cues) {
@@ -7860,15 +7898,18 @@ export default function App() {
   const selectedCueList = createMemo<CueListSummary>(() =>
     snapshot().cue_lists.find((cueList) => cueList.id === selectedCueListId())
       ?? snapshot().cue_lists[0]
-      ?? { id: 1, label: "Main", active_cue_id: null },
+      ?? { id: 1, label: "Bank 1", active_cue_id: null },
   );
+  const selectedCueListDisplayLabel = createMemo(() => {
+    return cueListDisplayLabel(selectedCueList());
+  });
   const selectedCueListCues = createMemo(() =>
     snapshot().cues.filter((cue) => cue.cue_list_id === selectedCueList().id),
   );
   createEffect(() => {
     const selected = selectedCueList();
     if (selected.id !== selectedCueListId()) setSelectedCueListId(selected.id);
-    setCueListLabel(selected.label);
+    setCueListLabel(selectedCueListDisplayLabel());
   });
   const cueCaptureScopeErrorForEffectSelection = (hasEffectTargets: boolean) => {
     switch (cueCaptureScope()) {
@@ -10008,18 +10049,26 @@ export default function App() {
       setSnapshot((current) => ({
         ...current,
         cues: structuredClone(entry.beforeCues),
+        ...(entry.beforeCueLists ? { cue_lists: structuredClone(entry.beforeCueLists) } : {}),
       }));
-      setViewportSceneMatrixBankMoveUndo(null);
       setProjectHistoryStatus((current) => ({
         ...current,
         can_undo: false,
-        can_redo: false,
+        can_redo: true,
         undo_depth: 0,
-        redo_depth: 0,
+        redo_depth: 1,
         undo_label: null,
-        redo_label: null,
+        redo_label: entry.operation === "delete"
+          ? "Delete Scene Bank"
+          : entry.beforeCueLists ? "Reorder Scene Banks" : "Move Cue Between Scene Banks",
       }));
-      setMessage("Undid Move Cue Between Scene Banks.");
+      setMessage(
+        entry.operation === "delete"
+          ? "Undid Delete Scene Bank."
+          : entry.beforeCueLists
+            ? "Undid Reorder Scene Banks."
+            : "Undid Move Cue Between Scene Banks.",
+      );
       return;
     }
     if (viewportFixture === "edit-live") {
@@ -10078,6 +10127,34 @@ export default function App() {
     }
     if (!confirmDiscardTimelineEditorDrafts()) {
       setMessage("Redo canceled; unsaved Timeline edits were kept.");
+      return;
+    }
+    if (viewportFixture === "scene-matrix") {
+      const entry = viewportSceneMatrixBankMoveUndo();
+      if (!entry) return;
+      setSnapshot((current) => ({
+        ...current,
+        cues: structuredClone(entry.afterCues),
+        ...(entry.afterCueLists ? { cue_lists: structuredClone(entry.afterCueLists) } : {}),
+      }));
+      setProjectHistoryStatus((current) => ({
+        ...current,
+        can_undo: true,
+        can_redo: false,
+        undo_depth: 1,
+        redo_depth: 0,
+        undo_label: entry.operation === "delete"
+          ? "Delete Scene Bank"
+          : entry.afterCueLists ? "Reorder Scene Banks" : "Move Cue Between Scene Banks",
+        redo_label: null,
+      }));
+      setMessage(
+        entry.operation === "delete"
+          ? "Redid Delete Scene Bank."
+          : entry.afterCueLists
+            ? "Redid Reorder Scene Banks."
+            : "Redid Move Cue Between Scene Banks.",
+      );
       return;
     }
     if (viewportFixture === "edit-live") {
@@ -10253,16 +10330,53 @@ export default function App() {
     setMessage("Recent projects cleared.");
   };
 
-  const confirmDiscardProjectChanges = (actionLabel: string) => {
-    if (!projectDirty() && !timelineEditorDirty()) {
-      return true;
+  type ProjectDiscardRequest = {
+    actionLabel: string;
+    changeKind: "project" | "timeline" | "project-and-timeline";
+  };
+  const [projectDiscardRequest, setProjectDiscardRequest] = createSignal<ProjectDiscardRequest | null>(null);
+  let settleProjectDiscardRequest: ((confirmed: boolean) => void) | null = null;
+  const completeProjectDiscardRequest = (confirmed: boolean) => {
+    const settle = settleProjectDiscardRequest;
+    settleProjectDiscardRequest = null;
+    setProjectDiscardRequest(null);
+    settle?.(confirmed);
+  };
+  const projectDiscardDetail = () => {
+    const request = projectDiscardRequest();
+    if (request?.changeKind === "project-and-timeline") {
+      return translateUiText(
+        "Unsaved project changes and Timeline edits will be discarded before continuing.",
+        uiLocale(),
+      );
     }
-    const changeKind = projectDirty() && timelineEditorDirty()
-      ? "project changes and Timeline edits"
+    if (request?.changeKind === "timeline") {
+      return translateUiText("Unsaved Timeline edits will be discarded before continuing.", uiLocale());
+    }
+    return translateUiText("Unsaved project changes will be discarded before continuing.", uiLocale());
+  };
+  const projectDiscardTitle = () => translateUiText(
+    projectDiscardRequest()?.actionLabel === "create a new project"
+      ? "Create a new project?"
+      : "Discard unsaved changes?",
+    uiLocale(),
+  );
+  const confirmDiscardProjectChanges = (actionLabel: string): Promise<boolean> => {
+    if (!projectDirty() && !timelineEditorDirty()) {
+      return Promise.resolve(true);
+    }
+    if (projectDiscardRequest() || settleProjectDiscardRequest) {
+      return Promise.resolve(false);
+    }
+    const changeKind: ProjectDiscardRequest["changeKind"] = projectDirty() && timelineEditorDirty()
+      ? "project-and-timeline"
       : timelineEditorDirty()
-        ? "Timeline edits"
-        : "project changes";
-    return window.confirm(`Discard unsaved ${changeKind} and ${actionLabel}?`);
+        ? "timeline"
+        : "project";
+    setProjectDiscardRequest({ actionLabel, changeKind });
+    return new Promise<boolean>((resolve) => {
+      settleProjectDiscardRequest = resolve;
+    });
   };
 
   const applyEngineSnapshot = (
@@ -13778,7 +13892,7 @@ export default function App() {
   };
 
   const newProject = async () => {
-    if (!confirmDiscardProjectChanges("create a new project")) {
+    if (!await confirmDiscardProjectChanges("create a new project")) {
       setMessage("New project canceled.");
       return;
     }
@@ -13810,7 +13924,7 @@ export default function App() {
   };
 
   const loadUserTemplate = async () => {
-    if (!confirmDiscardProjectChanges("create a project from a user template")) {
+    if (!await confirmDiscardProjectChanges("create a project from a user template")) {
       setMessage("Template load canceled.");
       return;
     }
@@ -14255,7 +14369,7 @@ export default function App() {
     applyLoadedProjectResult(result, result.current_project_path);
 
   const loadProject = async () => {
-    if (!confirmDiscardProjectChanges("load another project")) {
+    if (!await confirmDiscardProjectChanges("load another project")) {
       setMessage("Project load canceled.");
       return;
     }
@@ -14275,7 +14389,7 @@ export default function App() {
     if (daslightProjectImportBusy()) {
       return;
     }
-    if (!confirmDiscardProjectChanges("import a Daslight Project (.dvc)")) {
+    if (!await confirmDiscardProjectChanges("import a Daslight Project (.dvc)")) {
       setMessage("Daslight Project import canceled.");
       return;
     }
@@ -14308,7 +14422,7 @@ export default function App() {
   };
 
   const loadProjectPath = async (path: string) => {
-    if (!confirmDiscardProjectChanges(`open ${path}`)) {
+    if (!await confirmDiscardProjectChanges(`open ${path}`)) {
       setMessage("Project open canceled.");
       return;
     }
@@ -14334,7 +14448,7 @@ export default function App() {
       setMessage("No recovery checkpoint is available.");
       return;
     }
-    if (!confirmDiscardProjectChanges("recover the autosaved project")) {
+    if (!await confirmDiscardProjectChanges("recover the autosaved project")) {
       setMessage("Project recovery canceled.");
       return;
     }
@@ -14457,7 +14571,7 @@ export default function App() {
   void initializeProjectRecoveryAuthority();
 
   const loadProjectBackup = async (backup: ProjectBackupSummary) => {
-    if (!confirmDiscardProjectChanges("restore a project backup")) {
+    if (!await confirmDiscardProjectChanges("restore a project backup")) {
       setMessage("Project backup restore canceled.");
       return;
     }
@@ -14524,7 +14638,7 @@ export default function App() {
   };
 
   const loadPhase1SampleProject = async () => {
-    if (!confirmDiscardProjectChanges("load the Phase 1 sample project")) {
+    if (!await confirmDiscardProjectChanges("load the Phase 1 sample project")) {
       setMessage("Sample project load canceled.");
       return;
     }
@@ -16481,6 +16595,32 @@ export default function App() {
       setMessage(authoredBeatsError);
       return;
     }
+    if (viewportFixture === "scene-matrix") {
+      const template = snapshot().cues[0];
+      if (!template) {
+        setMessage("Create a Cue List before creating a scene.");
+        return;
+      }
+      const cueId = Math.max(0, ...snapshot().cues.map((cue) => cue.id)) + 1;
+      const cue = {
+        ...structuredClone(template),
+        id: cueId,
+        cue_list_id: selectedCueList().id,
+        cue_number: String(snapshot().cues.length + 1),
+        label: cueLabel().trim() || `Cue ${cueId}`,
+        fade_ms: cueFadeMs(),
+        authored_beats: cueAuthoredBeats(),
+        group_id: null,
+        effect_targets: cueEffectCaptureTargets().map((target) => ({ ...target })),
+      };
+      setSnapshot((current) => ({ ...current, cues: [...current.cues, cue] }));
+      setCueLabel(`Cue ${cueId + 1}`);
+      setSelectedSceneCueId(cueId);
+      setSelectedSceneEffectId(null);
+      setSceneSettingsSurface("contents");
+      setMessage(`Created cue ${cueId}`);
+      return;
+    }
     try {
       const cueId = await invoke<number>("create_cue_from_current", {
         label: cueLabel(),
@@ -16501,11 +16641,25 @@ export default function App() {
     }
   };
 
-  const createCueList = async () => {
-    const label = cueListLabel().trim();
-    if (!label) {
-      setMessage("Cue List label is required.");
-      return;
+  const nextCueListLabel = () => {
+    const labels = new Set(snapshot().cue_lists.map((cueList) => cueListDisplayLabel(cueList).trim().toLowerCase()));
+    let index = 1;
+    while (labels.has(`bank ${index}`)) index += 1;
+    return `Bank ${index}`;
+  };
+
+  const createCueList = async (): Promise<boolean> => {
+    const label = cueListLabel().trim() || nextCueListLabel();
+    if (viewportFixture === "scene-matrix") {
+      const cueListId = Math.max(0, ...snapshot().cue_lists.map((cueList) => cueList.id)) + 1;
+      setSnapshot((current) => ({
+        ...current,
+        cue_lists: [...current.cue_lists, { id: cueListId, label, active_cue_id: null }],
+      }));
+      setSelectedCueListId(cueListId);
+      setCueListLabel(label);
+      setMessage(`Created Cue List ${label}`);
+      return true;
     }
     try {
       const cueListId = await invoke<number>("create_cue_list", { label });
@@ -16513,31 +16667,275 @@ export default function App() {
       setSelectedCueListId(cueListId);
       setCueListLabel(label);
       setMessage(`Created Cue List ${label}`);
+      return true;
     } catch (error) {
       setMessage(String(error));
+      return false;
     }
   };
 
-  const renameCueList = async () => {
+  const createSceneInCueList = async (cueListId: number): Promise<boolean> => {
+    const cueList = snapshot().cue_lists.find((candidate) => candidate.id === cueListId);
+    if (!cueList) {
+      setMessage(`Scene Bank ${cueListId} is no longer available.`);
+      return false;
+    }
+    setSelectedCueListId(cueListId);
+    if (viewportFixture === "scene-matrix") {
+      // The browser fixture deliberately supports an authored empty Scene so
+      // the bank action remains testable even when no fixture is patched. The
+      // native lane below remains the backend's exact create contract.
+      const template = snapshot().cues.find((cue) => cue.cue_list_id === cueListId)
+        ?? snapshot().cues[0]
+        ?? viewportFixtureData.cueRecallCue;
+      const cueId = Math.max(0, ...snapshot().cues.map((cue) => cue.id)) + 1;
+      const cue: CueSummary = {
+        ...structuredClone(template),
+        id: cueId,
+        cue_list_id: cueListId,
+        cue_number: String(snapshot().cues.length + 1),
+        label: "New Scene",
+        group_id: null,
+        recall_mode: "Coexist",
+        fade_ms: 0,
+        authored_beats: null,
+        pre_wait_ms: 0,
+        follow_ms: null,
+        parts: [],
+        mark: false,
+        mib_fixture_ids: [],
+        palette_targets: [],
+        tracking: false,
+        notes: "",
+        targets: [],
+        video_targets: [],
+        video_output_targets: [],
+        node_graph_targets: [],
+        effect_targets: [],
+        steps: [],
+        child_timeline: null,
+        live_modifiers: null,
+      };
+      setSnapshot((current) => ({ ...current, cues: [...current.cues, cue] }));
+      setCueLabel("New Scene");
+      setSelectedSceneCueId(cueId);
+      setSelectedSceneEffectId(null);
+      setSceneSettingsSurface("contents");
+      setMessage(`Created scene in ${cueListDisplayLabel(cueList)}`);
+      return true;
+    }
+    const beforeCueIds = new Set(snapshot().cues.map((cue) => cue.id));
+    try {
+      const flushedEpoch = await flushProjectControlMappingsBeforeMutation();
+      const currentAuthority = projectMappingsAuthority();
+      if (flushedEpoch !== currentAuthority.project_epoch) {
+        setMessage("Project changed while creating the Scene; nothing was applied.");
+        return false;
+      }
+      const result = await invoke<ProjectHistoryMutationResult>("create_empty_cue", {
+        cueListId,
+        expectedEpoch: currentAuthority.project_epoch,
+        expectedRevision: currentAuthority.project_revision,
+        expectedCheckpointHash: currentAuthority.checkpoint_hash,
+        ownerId: projectTransactionOwnerId,
+      });
+      if (!authoritativeApplicationIsCurrent(result)) {
+        setMessage("New Scene acknowledgement was stale; refresh before retrying.");
+        return false;
+      }
+      await refreshSnapshot();
+      const createdCue = snapshot().cues
+        .filter((cue) => cue.cue_list_id === cueListId && !beforeCueIds.has(cue.id))
+        .sort((left, right) => right.id - left.id)[0];
+      if (!createdCue) {
+        setMessage("New Scene was acknowledged, but the refreshed project did not contain it.");
+        return false;
+      }
+      setCueLabel("New Scene");
+      setSelectedSceneCueId(createdCue.id);
+      setSelectedSceneEffectId(null);
+      setSceneSettingsSurface("contents");
+      setMessage(`Created scene in ${cueListDisplayLabel(cueList)}`);
+      return true;
+    } catch (error) {
+      setMessage(String(error));
+      return false;
+    }
+  };
+
+  const renameCueList = async (): Promise<boolean> => {
+    if (viewportFixture === "scene-matrix") {
+      const label = cueListLabel().trim();
+      if (!label) {
+        setMessage("Cue List label is required.");
+        return false;
+      }
+      const cueListId = selectedCueList().id;
+      setSnapshot((current) => ({
+        ...current,
+        cue_lists: current.cue_lists.map((cueList) => cueList.id === cueListId
+          ? { ...cueList, label }
+          : cueList),
+      }));
+      setCueListLabel(label);
+      setMessage(`Renamed Cue List ${cueListId}`);
+      return true;
+    }
     try {
       await invoke("rename_cue_list", { cueListId: selectedCueList().id, label: cueListLabel() });
       setMessage(`Renamed Cue List ${selectedCueList().id}`);
       await refreshSnapshot();
+      return true;
     } catch (error) {
       setMessage(String(error));
+      return false;
     }
   };
 
-  const removeCueList = async () => {
-    const cueList = selectedCueList();
-    if (cueList.id === 1 || !confirmDestructiveAction("cue list", cueList.label)) return;
+  const removeCueList = async (cueListId?: number, confirmed = false): Promise<boolean> => {
+    const cueList = snapshot().cue_lists.find((candidate) => candidate.id === (cueListId ?? selectedCueList().id))
+      ?? selectedCueList();
+    if (snapshot().cue_lists.length <= 1) {
+      setMessage("At least one bank is required.");
+      return false;
+    }
+    if (!confirmed && !confirmDestructiveAction("cue list", cueListDisplayLabel(cueList))) return false;
+    if (viewportFixture === "scene-matrix") {
+      const beforeCues = structuredClone(snapshot().cues);
+      const beforeCueLists = structuredClone(snapshot().cue_lists);
+      const afterCueLists = beforeCueLists.filter((candidate) => candidate.id !== cueList.id);
+      const afterCues = beforeCues.filter((cue) => cue.cue_list_id !== cueList.id);
+      const remainingCueLists = afterCueLists;
+      const nextSelectedCueList = remainingCueLists[0] ?? null;
+      const deletingSelectedScene = selectedSceneCueId() !== null && beforeCues.some((cue) =>
+        cue.id === selectedSceneCueId() && cue.cue_list_id === cueList.id);
+      setSnapshot((current) => ({
+        ...current,
+        cue_lists: afterCueLists,
+        cues: afterCues,
+      }));
+      setViewportSceneMatrixBankMoveUndo({
+        beforeCues,
+        afterCues,
+        beforeCueLists,
+        afterCueLists,
+        operation: "delete",
+      });
+      setProjectHistoryStatus((current) => ({
+        ...current,
+        can_undo: true,
+        can_redo: false,
+        undo_depth: 1,
+        redo_depth: 0,
+        undo_label: "Delete Scene Bank",
+        redo_label: null,
+      }));
+      if (deletingSelectedScene) {
+        setSelectedSceneCueId(null);
+        setSelectedSceneEffectId(null);
+      }
+      if (nextSelectedCueList) {
+        setSelectedCueListId(nextSelectedCueList.id);
+        setCueListLabel(cueListDisplayLabel(nextSelectedCueList));
+      }
+      setMessage(`Removed Cue List ${cueListDisplayLabel(cueList)}; its scenes were deleted.`);
+      return true;
+    }
     try {
-      await invoke("remove_cue_list", { cueListId: cueList.id });
+      const flushedEpoch = await flushProjectControlMappingsBeforeMutation();
+      const currentAuthority = projectMappingsAuthority();
+      if (flushedEpoch !== currentAuthority.project_epoch) {
+        setMessage("Project changed while deleting the Bank; nothing was applied.");
+        return false;
+      }
+      const result = await invoke<ProjectHistoryMutationResult>("delete_cue_list", {
+        cueListId: cueList.id,
+        expectedEpoch: currentAuthority.project_epoch,
+        expectedRevision: currentAuthority.project_revision,
+        expectedCheckpointHash: currentAuthority.checkpoint_hash,
+        ownerId: projectTransactionOwnerId,
+      });
+      if (!authoritativeApplicationIsCurrent(result)) {
+        setMessage("Bank deletion acknowledgement was stale; refresh before retrying.");
+        return false;
+      }
       await refreshSnapshot();
-      setSelectedCueListId(1);
-      setMessage(`Removed Cue List ${cueList.label}; its cues moved to Main.`);
+      if (snapshot().cue_lists.some((candidate) => candidate.id === cueList.id)
+        || snapshot().cues.some((cue) => cue.cue_list_id === cueList.id)) {
+        setMessage("Bank deletion was acknowledged, but the refreshed project still contains it.");
+        return false;
+      }
+      const remainingCueLists = snapshot().cue_lists.filter((candidate) => candidate.id !== cueList.id);
+      const nextSelectedCueList = remainingCueLists[0] ?? null;
+      if (nextSelectedCueList) {
+        setSelectedCueListId(nextSelectedCueList.id);
+        setCueListLabel(cueListDisplayLabel(nextSelectedCueList));
+      }
+      if (selectedSceneCueId() !== null && !snapshot().cues.some((cue) => cue.id === selectedSceneCueId())) {
+        setSelectedSceneCueId(null);
+        setSelectedSceneEffectId(null);
+      }
+      setMessage(`Removed Cue List ${cueListDisplayLabel(cueList)}; its scenes were deleted.`);
+      return true;
     } catch (error) {
       setMessage(String(error));
+      return false;
+    }
+  };
+
+  const reorderCueLists = async (orderedCueListIds: number[]): Promise<boolean> => {
+    const beforeCueLists = structuredClone(snapshot().cue_lists);
+    const byId = new Map(beforeCueLists.map((cueList) => [cueList.id, cueList]));
+    const ordered = orderedCueListIds
+      .map((cueListId) => byId.get(cueListId))
+      .filter((cueList): cueList is CueListSummary => Boolean(cueList));
+    if (ordered.length !== beforeCueLists.length) return false;
+    const afterCueLists = structuredClone(ordered);
+    if (afterCueLists.every((cueList, index) => cueList.id === beforeCueLists[index]?.id)) return false;
+    if (!isTauriRuntime()) {
+      setSnapshot((current) => ({ ...current, cue_lists: afterCueLists }));
+      setViewportSceneMatrixBankMoveUndo({
+        beforeCues: structuredClone(snapshot().cues),
+        afterCues: structuredClone(snapshot().cues),
+        beforeCueLists,
+        afterCueLists,
+      });
+      setProjectHistoryStatus((current) => ({
+        ...current,
+        can_undo: true,
+        can_redo: false,
+        undo_depth: 1,
+        redo_depth: 0,
+        undo_label: "Reorder Scene Banks",
+        redo_label: null,
+      }));
+      setMessage("Reordered Scene Banks.");
+      return true;
+    }
+    try {
+      const flushedEpoch = await flushProjectControlMappingsBeforeMutation();
+      const currentAuthority = projectMappingsAuthority();
+      if (flushedEpoch !== currentAuthority.project_epoch) {
+        setMessage("Project changed while reordering Scene Banks; nothing was applied.");
+        return false;
+      }
+      const result = await invoke<ProjectHistoryMutationResult>("reorder_cue_lists", {
+        request: { cueListIds: orderedCueListIds },
+        expectedEpoch: currentAuthority.project_epoch,
+        expectedRevision: currentAuthority.project_revision,
+        expectedCheckpointHash: currentAuthority.checkpoint_hash,
+        ownerId: projectTransactionOwnerId,
+      });
+      if (!authoritativeApplicationIsCurrent(result)) {
+        setMessage("Scene Bank reorder acknowledgement was stale; refresh before retrying.");
+        return false;
+      }
+      await refreshSnapshot();
+      setMessage("Reordered Scene Banks.");
+      return true;
+    } catch (error) {
+      setMessage(String(error));
+      return false;
     }
   };
 
@@ -16906,6 +17304,7 @@ export default function App() {
 
   const runSceneMatrixBankMoveTransaction = async (
     cue: CueSummary,
+    cueListId: number,
     groupId: string | null,
     delta: -1 | 1,
     stepCount: number,
@@ -16926,6 +17325,9 @@ export default function App() {
       ownerId: projectTransactionOwnerId,
     });
     try {
+      if (cue.cue_list_id !== cueListId) {
+        await tauriInvoke("set_cue_list", { cueId: cue.id, cueListId });
+      }
       await tauriInvoke("set_cue_metadata", sceneMatrixCueMetadataArgs(cue, groupId));
       for (let step = 0; step < stepCount; step += 1) {
         await tauriInvoke("move_cue", { cueId: cue.id, delta });
@@ -16958,7 +17360,7 @@ export default function App() {
     sourceCueId: number,
     targetCueId: number | null,
     position: "before" | "after",
-    targetGroupId: string | null,
+    targetCueListId: number,
   ) => {
     if (sourceCueId === targetCueId) return;
     const cues = snapshot().cues;
@@ -16970,37 +17372,55 @@ export default function App() {
       setMessage("Drop the Cue on a scene cell, bank column, or Timeline lane.");
       return;
     }
-    const sourceGroupId = sourceCue.group_id?.trim() || null;
-    const normalizedTargetGroupId = targetGroupId?.trim() || null;
-    const crossesBank = sourceGroupId !== normalizedTargetGroupId;
+    const normalizedTargetGroupId = targetCue
+      ? targetCue.group_id?.trim() || null
+      : sourceCue.group_id?.trim() || null;
+    const crossesBank = sourceCue.cue_list_id !== targetCueListId;
     if (!crossesBank && !targetCue) {
       setMessage("Drop the Cue on another cell in this column or on a Timeline lane.");
       return;
     }
-    if (targetCue && sourceCue.cue_list_id !== targetCue.cue_list_id) {
-      setMessage("Cues must share a Cue List before they can be reordered.");
+    if (targetCue && targetCue.cue_list_id !== targetCueListId) {
+      setMessage("Drop the Cue inside the selected Scene Bank.");
       return;
     }
 
     const cueList = cues.filter((cue) => cue.cue_list_id === sourceCue.cue_list_id);
     const sourceIndex = cueList.findIndex((cue) => cue.id === sourceCueId);
-    const withoutSource = cueList.filter((cue) => cue.id !== sourceCueId);
-    const targetIndex = targetCue
-      ? withoutSource.findIndex((cue) => cue.id === targetCue.id)
-      : -1;
-    if (sourceIndex < 0 || (targetCue && targetIndex < 0)) return;
-    const insertionIndex = targetCue
-      ? targetIndex + (position === "after" ? 1 : 0)
-      : sourceIndex;
-    const moveCount = insertionIndex - sourceIndex;
-    if (!crossesBank && moveCount === 0) return;
-    const delta: -1 | 1 = moveCount < 0 ? -1 : 1;
-    const stepCount = Math.abs(moveCount);
+    if (sourceIndex < 0) return;
+    let delta: -1 | 1 = 1;
+    let stepCount = 0;
+    if (!crossesBank) {
+      const withoutSource = cueList.filter((cue) => cue.id !== sourceCueId);
+      const targetIndex = targetCue
+        ? withoutSource.findIndex((cue) => cue.id === targetCue.id)
+        : -1;
+      if (targetCue && targetIndex < 0) return;
+      const insertionIndex = targetCue
+        ? targetIndex + (position === "after" ? 1 : 0)
+        : sourceIndex;
+      const moveCount = insertionIndex - sourceIndex;
+      if (moveCount === 0) return;
+      delta = moveCount < 0 ? -1 : 1;
+      stepCount = Math.abs(moveCount);
+    } else {
+      const targetList = cues.filter((cue) => cue.cue_list_id === targetCueListId && cue.id !== sourceCueId);
+      const targetIndex = targetCue
+        ? targetList.findIndex((cue) => cue.id === targetCue.id)
+        : targetList.length;
+      if (targetCue && targetIndex < 0) return;
+      // set_cue_list appends the Cue to its destination list. Move it upward
+      // to the requested target; the local fixture uses the exact target
+      // insertion instead of depending on backend ordering details.
+      delta = -1;
+      stepCount = Math.max(0, targetList.length - targetIndex - (position === "after" ? 1 : 0));
+    }
 
     try {
       if (crossesBank) {
         await runSceneMatrixBankMoveTransaction(
           sourceCue,
+          targetCueListId,
           normalizedTargetGroupId,
           delta,
           stepCount,
@@ -17013,18 +17433,35 @@ export default function App() {
 
       if (viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator") {
         const beforeCues = structuredClone(cues);
-        const afterCues = applySceneMatrixCueMove(
-          cues,
-          sourceCueId,
-          normalizedTargetGroupId,
-          crossesBank,
-          delta,
-          stepCount,
-        );
+        const afterCues = crossesBank
+          ? applySceneMatrixCueListMove(
+            cues,
+            sourceCueId,
+            targetCueId,
+            targetCueListId,
+            normalizedTargetGroupId,
+            position,
+          )
+          : applySceneMatrixCueMove(
+            cues,
+            sourceCueId,
+            normalizedTargetGroupId,
+            false,
+            delta,
+            stepCount,
+          );
         setSnapshot((current) => ({ ...current, cues: structuredClone(afterCues) }));
         if (crossesBank && viewportFixture === "scene-matrix") {
-          setViewportSceneMatrixBankMoveUndo({ beforeCues, afterCues: structuredClone(afterCues) });
-          if (!isTauriRuntime()) {
+          setViewportSceneMatrixBankMoveUndo({
+            beforeCues,
+            afterCues: structuredClone(afterCues),
+            operation: "move",
+          });
+          // The focused browser harness injects a Tauri-shaped invoke bridge
+          // after App mount to exercise the same transaction callback path.
+          // Keep the fixture's local undo status authoritative in that mode;
+          // native Tauri receives the authoritative history event above.
+          if (viewportFixture === "scene-matrix") {
             setProjectHistoryStatus((current) => ({
               ...current,
               can_undo: true,
@@ -17483,12 +17920,32 @@ export default function App() {
         ? rawTargetCueId
         : null;
       const targetRect = matrixTarget?.getBoundingClientRect();
-      const columnId = matrixColumn.dataset.sceneMatrixColumn ?? "Show";
+      const targetScrollerRect = matrixTarget
+        ?.closest<HTMLElement>(".sceneMatrixCards")
+        ?.getBoundingClientRect();
+      const targetVisibleTop = targetRect && targetScrollerRect
+        ? Math.max(targetRect.top, targetScrollerRect.top)
+        : targetRect?.top;
+      const targetVisibleBottom = targetRect && targetScrollerRect
+        ? Math.min(targetRect.bottom, targetScrollerRect.bottom)
+        : targetRect?.bottom;
+      const targetVisibleMidpoint = targetVisibleTop !== undefined
+        && targetVisibleBottom !== undefined
+        && targetVisibleBottom > targetVisibleTop
+        ? targetVisibleTop + (targetVisibleBottom - targetVisibleTop) / 2
+        : targetRect
+          ? targetRect.top + targetRect.height / 2
+          : Number.POSITIVE_INFINITY;
+      const targetCueListId = Number(matrixColumn.dataset.sceneMatrixColumn);
+      if (!Number.isSafeInteger(targetCueListId) || targetCueListId <= 0) {
+        setMessage("Drop the Cue inside a valid Scene Bank.");
+        return;
+      }
       await reorderSceneMatrixCue(
         drag.cue_id,
         targetCueId,
-        targetRect && point.clientY < targetRect.top + targetRect.height / 2 ? "before" : "after",
-        columnId === "Show" ? null : columnId,
+        point.clientY < targetVisibleMidpoint ? "before" : "after",
+        targetCueListId,
       );
       return;
     }
@@ -19260,19 +19717,34 @@ export default function App() {
     void setVideoCompositionLayers(compositionId, nextLayerIds);
   };
 
-  const addVideoOutput = async () => {
+  const addDisplayVideoOutput = async (monitor: VideoDisplayMonitorDescriptor) => {
     try {
-      const outputId = await invoke<number>("add_video_output", {
-        label: videoOutputLabel(),
-        kind: videoOutputKind(),
-        width: videoOutputWidth(),
-        height: videoOutputHeight(),
-        fullscreen: videoOutputFullscreen(),
-        monitorId: videoOutputKind() === "Display" ? videoOutputMonitorId() : null,
-        endpointName: videoOutputKind() === "Display" ? null : videoOutputEndpoint(),
-      });
-      setVideoOutputLabel(`Video Output ${snapshot().video.outputs.length + 2}`);
-      setMessage(`Added video output ${outputId}`);
+      if (!isTauriRuntime()) {
+        setMessage(tauriBackendUnavailableMessage);
+        return;
+      }
+      const leaseQuery = await queryOutputLeaseAuthority(invoke);
+      const lease = selectOnlyActiveOutputLease(leaseQuery, ["video"]);
+      await executeOutputControl(
+        invoke,
+        {
+          kind: "add_display",
+          spec: {
+            label: videoOutputLabel().trim() || monitor.name.trim() || `Display ${monitor.index + 1}`,
+            monitor_identity: monitor.identity,
+            monitor_index: monitor.index,
+            width: Math.max(1, Math.round(monitor.physicalWidth)),
+            height: Math.max(1, Math.round(monitor.physicalHeight)),
+            fullscreen: videoOutputFullscreen(),
+          },
+          lease,
+        },
+        ({ displayCode }) => setMessage(
+          `Display output confirmation required: type ${displayCode} on the physical keyboard.`,
+        ),
+      );
+      setVideoOutputLabel(`Display ${snapshot().video.outputs.length + 1}`);
+      setMessage(`Added display output for ${monitor.name || `Display ${monitor.index + 1}`}.`);
       await refreshSnapshotAndVideoOutputRenderPlans();
     } catch (error) {
       setMessage(String(error));
@@ -22280,6 +22752,56 @@ export default function App() {
       <Show when={dvcImportReport()}>
         {(report) => <DvcImportReportPanel report={report()} onClose={() => setDvcImportReport(null)} />}
       </Show>
+      <Show when={projectDiscardRequest()}>
+        <dialog
+          ref={(dialog) => queueMicrotask(() => {
+            if (!dialog.open) dialog.showModal();
+            dialog.querySelector<HTMLButtonElement>("[data-project-discard-cancel]")?.focus();
+          })}
+          class="protectedCloseDialog"
+          data-project-discard-dialog
+          role="alertdialog"
+          aria-labelledby="project-discard-title"
+          aria-describedby="project-discard-detail"
+          onCancel={(event) => {
+            event.preventDefault();
+            completeProjectDiscardRequest(false);
+          }}
+        >
+          <section class="protectedCloseFrame">
+            <header>
+              <span>{translateUiText("UNSAVED CHANGES", uiLocale())}</span>
+              <strong>{translateUiText("SYNDOCAL", uiLocale())}</strong>
+            </header>
+            <div class="protectedCloseBody">
+              <div class="protectedCloseMark" aria-hidden="true">!</div>
+              <div>
+                <h2 id="project-discard-title" class="textBalance">
+                  {projectDiscardTitle()}
+                </h2>
+                <p id="project-discard-detail" class="textPretty">{projectDiscardDetail()}</p>
+              </div>
+            </div>
+            <div class="protectedCloseActions">
+              <button
+                type="button"
+                data-project-discard-cancel
+                onClick={() => completeProjectDiscardRequest(false)}
+              >
+                {translateUiText("Keep Editing", uiLocale())}
+              </button>
+              <button
+                type="button"
+                class="danger"
+                data-project-discard-confirm
+                onClick={() => completeProjectDiscardRequest(true)}
+              >
+                {translateUiText("Discard and Continue", uiLocale())}
+              </button>
+            </div>
+          </section>
+        </dialog>
+      </Show>
       <Show when={protectedCloseRequest()}>
         <dialog
           ref={(dialog) => queueMicrotask(() => {
@@ -22648,6 +23170,15 @@ export default function App() {
             <SceneMatrixPanel
               toolbar={liveDeskViewActions()}
               cues={snapshot().cues}
+              cueLists={snapshot().cue_lists}
+              selectedCueListId={selectedCueList().id}
+              onSelectCueList={setSelectedCueListId}
+              onCueListLabel={setCueListLabel}
+              onCreateCueList={createCueList}
+              onRenameCueList={renameCueList}
+              onRemoveCueList={removeCueList}
+              onCreateSceneForCueList={createSceneInCueList}
+              onReorderCueLists={reorderCueLists}
               groupColors={groupColors()}
               onSetGroupColor={setGroupColor}
               groupIds={sceneMatrixGroupIds()}
@@ -22663,7 +23194,7 @@ export default function App() {
               onTriggerCue={triggerCue}
               onSelectCue={selectSceneCue}
               onOpenSuperScene={(cueId) => void openOrCreateSuperScene(cueId)}
-              onOpenCueEditor={openCueEditor}
+              onOpenCueEditor={() => openCueEditor(true)}
               onBeginTimelineCueDrag={beginTimelineCueDrag}
               onMoveTimelineCueDrag={moveTimelineCueDrag}
               onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
@@ -23349,7 +23880,8 @@ export default function App() {
           onOutputMonitorId={setVideoOutputMonitorId}
           onOutputFullscreen={setVideoOutputFullscreen}
           onOutputEndpoint={setVideoOutputEndpoint}
-          onAddOutput={addVideoOutput}
+          invokeCommand={invoke}
+          onAddDisplayOutput={addDisplayVideoOutput}
           onConfigDraft={updateVideoOutputConfigDraft}
           onApplyConfig={setVideoOutputConfig}
           onSelectOutput={setSelectedVideoOutputId}
@@ -24264,7 +24796,7 @@ export default function App() {
               onRemove={removeReferencePalette}
             />
             <PlaybackExecutorPanel
-              executors={snapshot().playback_executors}
+              executors={snapshot().playback_executors.map(playbackExecutorDisplay)}
               cueLists={snapshot().cue_lists}
               cues={snapshot().cues}
               playbackMaster={snapshot().playback_master}
@@ -24429,7 +24961,7 @@ export default function App() {
             />
           </Show>
           </FaderAttributeEditorPanel>
-          <Show when={controlMode() === "live" && timelineContextDrawer() === "cue" && snapshot().cues.length === 0}>
+          <Show when={controlMode() === "live" && timelineContextDrawer() === "cue" && selectedSceneCueId() === null}>
           <aside
             class="timelineContextDrawer"
             data-timeline-context-drawer-panel="cue"
@@ -24438,7 +24970,7 @@ export default function App() {
             <header class="timelineContextDrawerHeader">
               <div>
                 <strong>Create scene</strong>
-                <span data-no-localize>{selectedCueList().label}</span>
+                <span data-no-localize>{selectedCueListDisplayLabel()}</span>
               </div>
               <button
                 type="button"

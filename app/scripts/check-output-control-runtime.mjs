@@ -239,12 +239,18 @@ const boundaryReadyHarness = createHarness({
   action: lifecycleActions[0],
   statusExpiryOffsetMs: 5_000,
 });
+const boundaryReadyNotices = [];
 await runtime.executeOutputLeaseLifecycle(
   boundaryReadyHarness.invoke,
   lifecycleActions[0],
-  () => {},
+  (notice) => boundaryReadyNotices.push(notice),
 );
 assert.equal(boundaryReadyHarness.executeCalls, 1);
+assert.equal(boundaryReadyNotices.length, 2);
+assert.equal(
+  boundaryReadyNotices[1].expiresAtUnixMs,
+  boundaryReadyNotices[0].expiresAtUnixMs + 5_000,
+);
 
 for (const invalidStatus of [
   { statusState: "pending_physical_input", statusExpiryOffsetMs: 1 },

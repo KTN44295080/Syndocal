@@ -11,7 +11,9 @@ import type {
 import { VideoCompositionSetupPanel } from "./VideoCompositionSetupPanel";
 import { LiveAudioInputRail } from "./LiveAudioInputRail";
 import { VideoOutputCreatePanel } from "./VideoOutputCreatePanel";
+import type { VideoDisplayMonitorDescriptor } from "./VideoOutputCreatePanel";
 import { VideoOutputListPanel } from "./VideoOutputListPanel";
+import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 
 type MaybePromise = void | Promise<unknown>;
 type VideoOutputPreviewMode = "output" | "test";
@@ -61,7 +63,8 @@ type SetupVideoPanelProps = {
   onOutputMonitorId: (value: number) => void;
   onOutputFullscreen: (value: boolean) => void;
   onOutputEndpoint: (value: string) => void;
-  onAddOutput: () => MaybePromise;
+  invokeCommand: FrontendTauriInvoke;
+  onAddDisplayOutput: (monitor: VideoDisplayMonitorDescriptor) => MaybePromise;
   onConfigDraft: (output: VideoOutputSummary, patch: Partial<VideoOutputConfigDraft>) => void;
   onApplyConfig: (output: VideoOutputSummary) => MaybePromise;
   onSelectOutput: (outputId: number) => void;
@@ -127,7 +130,8 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
                   onMonitorId={props.onOutputMonitorId}
                   onFullscreen={props.onOutputFullscreen}
                   onEndpoint={props.onOutputEndpoint}
-                  onAddOutput={props.onAddOutput}
+                  invokeCommand={props.invokeCommand}
+                  onAddDisplayOutput={props.onAddDisplayOutput}
                 />
                 <div
                   id="setup-output-audio-input"

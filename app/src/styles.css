@@ -3828,6 +3828,11 @@ h3 {
   padding: 7px;
 }
 
+.layoutSetup.setupMode-video .videoOutputCreateSurface > .videoSetupDisclosureHeading {
+  min-height: 30px;
+  padding: 7px;
+}
+
 .videoSetupMapPane {
   grid-template-rows: 46px 39px minmax(0, 1fr);
   overflow: hidden;
@@ -22190,6 +22195,15 @@ h3 {
   text-transform: uppercase;
 }
 
+.videoOutputCreateSurface > .videoSetupDisclosureHeading {
+  min-height: 29px;
+  color: #d8d0c9;
+  padding: 7px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .videoSetupDisclosure[open] > summary {
   border-bottom: 1px solid #3b3631;
   background: #292521;
@@ -36248,24 +36262,164 @@ a[href]:focus-visible,
 }
 
 .layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .sceneMatrixPanel {
-  grid-template-rows: 32px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .sceneMatrixSurfaceHeader {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  min-height: 32px;
+  min-height: 64px;
   overflow: hidden;
   border-bottom: 1px solid #343a3e;
   background: #1b2023;
 }
 
-.sceneMatrixSurfaceHeader > .sceneMatrixBankJumpStrip {
+.sceneMatrixCueListHeader {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 32px;
+  flex: 0 0 auto;
+  gap: 4px;
+  border-bottom: 1px solid #343a3e;
+}
+
+.sceneMatrixCueListTabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 3px;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+
+.sceneMatrixCueListTabs::-webkit-scrollbar {
+  display: none;
+}
+
+.sceneMatrixCueListTabs button,
+.sceneMatrixCueListActions > button,
+.sceneMatrixBankEditor button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-width: 28px;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #343a3e;
+  border-radius: 2px;
+  background: #191d20;
+  padding: 2px 7px;
+  color: #c2c9cd;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.sceneMatrixCueListTabs button {
+  min-width: 72px;
+}
+
+.sceneMatrixCueListTabs button span {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sceneMatrixCueListTabs button small {
+  color: #879097;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneMatrixCueListTabs button.active,
+.sceneMatrixCueListTabs button[aria-selected="true"] {
+  border-color: var(--ui-selection-line);
+  background: #292f33;
+  box-shadow: inset 0 -2px var(--ui-selection-line);
+  color: #f3f6f7;
+}
+
+.sceneMatrixCueListActions {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+  padding: 2px 3px 2px 0;
+}
+
+.sceneMatrixCueListActions > button:focus-visible,
+.sceneMatrixCueListTabs button:focus-visible,
+.sceneMatrixBankEditor button:focus-visible,
+.sceneMatrixBankEditor input:focus-visible {
+  outline: 2px solid var(--ui-selection-line);
+  outline-offset: 1px;
+}
+
+.sceneMatrixBankEditor {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.sceneMatrixBankEditor label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  color: #aeb6bc;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.sceneMatrixBankEditor input {
+  width: 120px;
+  min-width: 80px;
+  min-height: 28px;
+  border: 1px solid #485158;
+  border-radius: 2px;
+  background: #15191c;
+  padding: 3px 5px;
+  color: #edf1f2;
+  font-size: 11px;
+}
+
+.sceneMatrixBankEditor [role="alert"] {
+  max-width: 180px;
+  overflow: hidden;
+  color: #f0a3a3;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneMatrixGroupHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 32px;
+  flex: 0 0 32px;
+  overflow: hidden;
+}
+
+.sceneMatrixGroupHeader > .sceneMatrixBankJumpStrip {
   border-bottom: 0;
+  align-self: end;
 }
 
 .sceneMatrixSurfaceHeader > .liveDeskToolbarActions,
+.sceneMatrixGroupHeader > .liveDeskToolbarActions,
 .liveCuePadHeader > .liveDeskToolbarActions {
   align-self: center;
   padding: 0 2px;
@@ -37064,6 +37218,133 @@ a[href]:focus-visible,
   .videoMediaLibraryCardActions {
     flex-wrap: wrap;
   }
+}
+
+/* Scene matrix uses one horizontal control row. Banks remain a jump strip;
+   they do not pretend to be a single visible tab panel. The row may scroll at
+   narrow widths so controls keep their existing typography and hit targets. */
+.sceneMatrixSurfaceHeader {
+  flex-direction: row;
+  min-height: 32px;
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-width: thin;
+}
+
+.sceneMatrixCueListHeader.sceneMatrixBankToolbarRow {
+  width: max-content;
+  min-width: max-content;
+  min-height: 32px;
+  overflow: visible;
+  border-bottom: 0;
+}
+
+.sceneMatrixCueListHeader.sceneMatrixBankToolbarRow > .sceneMatrixCueListTabs {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+}
+
+.sceneMatrixCueListHeader.sceneMatrixBankToolbarRow > .liveDeskToolbarActions {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0 2px;
+}
+
+.sceneMatrixCueListTabs button.bankDropTarget {
+  border-color: var(--ui-selection-line);
+  box-shadow: inset 0 0 0 1px var(--ui-selection-line);
+}
+
+.sceneMatrixBankContextMenu {
+  position: fixed;
+  z-index: 100;
+  display: grid;
+  min-width: 160px;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--ui-border-strong, #59636a);
+  border-radius: var(--ui-radius-control, 3px);
+  background: var(--ui-surface-panel, #202529);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 35%);
+}
+
+.sceneMatrixBankContextMenu button {
+  min-width: 152px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--ui-radius-control, 3px);
+  background: transparent;
+  color: var(--ui-text-primary, #f0f3f4);
+  text-align: left;
+}
+
+.sceneMatrixBankContextMenu button:hover,
+.sceneMatrixBankContextMenu button:focus-visible {
+  background: var(--ui-surface-control, #31383d);
+}
+
+.sceneMatrixBankContextMenu button:disabled {
+  color: var(--ui-text-muted, #8e999f);
+  cursor: not-allowed;
+}
+
+.sceneMatrixContextMenuHint {
+  max-width: 180px;
+  padding: 5px 8px;
+  color: var(--ui-text-muted, #8e999f);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.sceneMatrixColumnHeaderIdentity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.sceneMatrixCreateScene {
+  flex: 0 0 auto;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 3px 7px;
+  border: 1px solid var(--ui-border, #485158);
+  border-radius: var(--ui-radius-control, 3px);
+  background: var(--ui-surface-control, #2c3338);
+  color: var(--ui-text-primary, #f0f3f4);
+  font-size: 11px;
+}
+
+.sceneMatrixColumnHeader:focus-visible,
+.sceneMatrixCreateScene:focus-visible {
+  outline: 2px solid var(--ui-selection-line);
+  outline-offset: 1px;
+}
+
+.videoOutputQuickCreate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+}
+
+.videoOutputQuickCreate > label,
+.videoOutputQuickCreate > .videoOutputQuickHint {
+  min-width: 0;
+}
+
+.videoOutputQuickCreate > .videoOutputQuickHint,
+.videoOutputQuickCreate > [data-video-output-monitor-status] {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.videoOutputQuickCreate > button {
+  min-height: 36px;
 }
 
 /* B4 shared Clip Slot bank.  The same eight-column, 16:9 contain grid is

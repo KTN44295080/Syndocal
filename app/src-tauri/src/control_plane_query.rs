@@ -2603,7 +2603,11 @@ mod tests {
     #[test]
     fn real_engine_handle_capture_is_observational_and_history_free() {
         let harness = crate::tests::MediaAssetA6CommandHarness::new();
-        let before_snapshot = harness.state.engine.snapshot();
+        // Compare the authored persistence image, not the live render snapshot:
+        // the engine clock and telemetry are expected to advance independently
+        // while this observational query is executing.
+        let before_snapshot =
+            crate::project_snapshot_for_save(harness.state.engine.persistence_snapshot().unwrap());
         let before_status = harness.state.engine.output_ownership_status();
         let before_authority = {
             let coordinator = harness.state.project_coordinator.lock().unwrap();
@@ -2628,7 +2632,10 @@ mod tests {
         assert_eq!(page.items[0].project_epoch, before_authority.0);
         assert_eq!(page.items[0].project_revision, before_authority.1);
         assert_eq!(page.items[0].project_history_generation, before_authority.2);
-        assert_eq!(harness.state.engine.snapshot(), before_snapshot);
+        assert_eq!(
+            crate::project_snapshot_for_save(harness.state.engine.persistence_snapshot().unwrap(),),
+            before_snapshot
+        );
         assert_eq!(
             harness.state.engine.output_ownership_status(),
             before_status

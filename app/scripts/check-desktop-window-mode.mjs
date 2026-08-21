@@ -391,7 +391,9 @@ assert.ok(
 const unknownCopyStart = protectedCloseCopySource.indexOf('if (request.reason === "output-state-unknown")');
 const runtimeOnlyCopyStart = protectedCloseCopySource.indexOf('if (request.reason === "runtime-only")');
 const dirtyAndRuntimeCopyStart = protectedCloseCopySource.indexOf('if (request.reason === "dirty-and-runtime")');
-const dirtyOnlyCopyStart = protectedCloseCopySource.indexOf('return {\n      eyebrow: translateUiText("UNSAVED CHANGES"');
+const dirtyOnlyCopyStart = protectedCloseCopySource.search(
+  /return\s*\{\s*eyebrow:\s*translateUiText\("UNSAVED CHANGES"/,
+);
 assert.ok(unknownCopyStart >= 0 && runtimeOnlyCopyStart > unknownCopyStart && dirtyAndRuntimeCopyStart > runtimeOnlyCopyStart && dirtyOnlyCopyStart > dirtyAndRuntimeCopyStart);
 const unknownCopySource = protectedCloseCopySource.slice(unknownCopyStart, runtimeOnlyCopyStart);
 const runtimeOnlyCopySource = protectedCloseCopySource.slice(runtimeOnlyCopyStart, dirtyAndRuntimeCopyStart);
@@ -429,6 +431,36 @@ assert.ok(
     styles.includes(".protectedCloseActions button.danger"),
   "protected close must use the dedicated console-style visual hierarchy",
 );
+assert.ok(
+  app.includes('const confirmDiscardProjectChanges = (actionLabel: string): Promise<boolean> => {') &&
+    !app.slice(
+      app.indexOf('const confirmDiscardProjectChanges = (actionLabel: string): Promise<boolean> => {'),
+      app.indexOf('  const applyEngineSnapshot ='),
+    ).includes("window.confirm") &&
+    app.includes("data-project-discard-dialog") &&
+    app.includes('role="alertdialog"') &&
+    app.includes("data-project-discard-cancel") &&
+    app.includes("data-project-discard-confirm") &&
+    app.includes('class="protectedCloseDialog"') &&
+    app.includes('class="protectedCloseFrame"') &&
+    app.includes('class="protectedCloseMark"') &&
+    app.includes('class="protectedCloseActions"') &&
+    app.includes('if (!await confirmDiscardProjectChanges("create a new project"))'),
+  "project replacement must use the in-app protected-close alertdialog instead of a browser confirmation",
+);
+for (const copy of [
+  "Discard unsaved changes?",
+  "Create a new project?",
+  "Unsaved project changes will be discarded before continuing.",
+  "Unsaved Timeline edits will be discarded before continuing.",
+  "Unsaved project changes and Timeline edits will be discarded before continuing.",
+  "Discard and Continue",
+]) {
+  assert.ok(
+    uiLocalization.includes(copy),
+    `project-discard localization must cover ${copy}`,
+  );
+}
 assert.ok(
   controller.includes("DESKTOP_RESIZE_DIRECTIONS") &&
     controller.includes("await appWindow.startResizeDragging(direction)") &&

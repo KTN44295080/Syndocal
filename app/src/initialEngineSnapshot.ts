@@ -4,9 +4,9 @@ import type { EngineSnapshot } from "./types";
 export const createInitialEngineSnapshot = (): EngineSnapshot => ({
   fixtures: [],
   cues: [],
-  cue_lists: [{ id: 1, label: "Main", active_cue_id: null }],
+  cue_lists: [{ id: 1, label: "Bank 1", active_cue_id: null }],
   palettes: [],
-  playback_executors: [{ id: 1, label: "Main", cue_list_id: 1, page: 1, slot: 1, level: 1 }],
+  playback_executors: [{ id: 1, label: "Bank 1", cue_list_id: 1, page: 1, slot: 1, level: 1 }],
   playback_master: 1,
   active_cue_id: null,
   direct_child_timeline_transports: [],

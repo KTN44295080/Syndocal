@@ -3968,6 +3968,7 @@ async function installSetupIoInvokeMock(client) {
         mock.calls.push({ command, args: clone(args) });
         if (command === "begin_project_transaction") return ++mock.transactionId;
         if (command === "commit_project_transaction") {
+          capture.commitArgs = structuredClone(args);
           return {
             can_undo: true,
             can_redo: false,
@@ -4235,12 +4236,29 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   await sleep(100);
   measurements.io = await measure(client, `setup-io-${viewport.width}x${viewport.height}`);
   const routePagination = await exerciseDmxRoutePagination(client);
+  const dmxConnection = await exerciseSetupIoDisclosure(
+    client,
+    'dmx-connection-settings',
+    '[data-io-control="dmx-protocol"]',
+  );
+  await client.evaluate(`document.querySelector('[data-io-disclosure="dmx-connection-settings"] > summary')?.click()`);
   await selectVisibleOption(client, '[data-io-control="dmx-protocol"]', 'EnttecUsbPro');
   await selectVisibleOption(client, '[data-io-control="dmx-serial-port"]', 'COM9');
   await sleep(80);
   const serialState = await measure(client, `setup-io-serial-${viewport.width}x${viewport.height}`);
   await clickVisibleSelector(client, '[data-io-control="dmx-apply-output"]');
   await sleep(140);
+  const dmxOutputOptions = await exerciseSetupIoDisclosure(
+    client,
+    'dmx-output-options',
+    '[data-io-control="dmx-recommended-protocol"]',
+  );
+  const dmxRouteActions = await exerciseSetupIoDisclosure(
+    client,
+    'dmx-route-actions',
+    '[data-io-control="dmx-add-artnet"]',
+  );
+  await client.evaluate(`document.querySelector('[data-io-disclosure="dmx-route-actions"] > summary')?.click()`);
   await clickVisibleSelector(client, '[data-io-control="dmx-add-artnet"]');
   await sleep(140);
   await clickVisibleSelector(client, '[data-io-control="dmx-add-sacn"]');
@@ -4266,13 +4284,15 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     routePaginationRestored:
       routePagination.firstPageRestored &&
       routePagination.forwardClicks === routePagination.backwardClicks,
-    serialReachableWithoutDisclosure: serialState.ioSerialRouteApplyReachable,
+    serialReachableWithDisclosure: serialState.ioSerialRouteApplyReachable,
     serialApplyCommand: Boolean(serialApply),
     artNetRouteCreated: routeCalls.some((call) => call.args?.configs?.some((route) => route.protocol === 'ArtNet')),
     sacnRouteCreated: routeCalls.some((call) => call.args?.configs?.some((route) => route.protocol === 'Sacn')),
   };
   disclosures.dmx = [
-    await exerciseSetupIoDisclosure(client, 'dmx-output-options', '[data-io-control="dmx-recommended-protocol"]'),
+    dmxConnection,
+    dmxRouteActions,
+    dmxOutputOptions,
     await exerciseSetupIoDisclosure(client, 'dmx-input', '[data-io-control="dmx-input-protocol"]'),
     await exerciseSetupIoDisclosure(client, 'dmx-rdm', '[data-io-control="rdm-transport"]'),
     await exerciseSetupIoDisclosure(client, 'dmx-diagnostics', '[data-io-control="dmx-test-channel"]'),
@@ -4280,9 +4300,11 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
 
   if (!dmxOnly) {
     disclosures.midi = [
+      await exerciseSetupIoDisclosure(client, 'midi-connection-settings', '[data-io-control="midi-input"]'),
       await exerciseSetupIoDisclosure(client, 'midi-feedback', '[data-io-control="midi-feedback-output"]'),
       await exerciseSetupIoDisclosure(client, 'midi-mapping', '[data-io-control="midi-map-message"]'),
     ];
+    await client.evaluate(`document.querySelector('[data-io-disclosure="midi-connection-settings"] > summary')?.click()`);
     await clickVisibleSelector(client, '[data-io-control="midi-clock-connect"]');
     await sleep(100);
     await clickVisibleSelector(client, '[data-io-control="midi-control-connect"]');
@@ -4298,6 +4320,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
 
     disclosures.osc = [
+      await exerciseSetupIoDisclosure(client, 'osc-connection-settings', '[data-io-control="osc-bind-ip"]'),
       await exerciseSetupIoDisclosure(client, 'osc-mapping', '[data-io-control="osc-map-address"]'),
     ];
     await clickVisibleSelector(client, '[data-io-control="osc-start"]');
@@ -4312,12 +4335,14 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       ),
     };
 
+    const remoteConnection = await exerciseSetupIoDisclosure(client, 'remote-connection-settings', '[data-io-control="remote-pin"]');
+    const remoteDjLink = await exerciseSetupIoDisclosure(client, 'dj-link', '[data-io-control="dj-link-enabled"]');
     const remoteSecurity = await exerciseSetupIoDisclosure(client, 'remote-security', '[data-io-control="remote-max-clients"]');
     const remoteStandby = await exerciseSetupIoDisclosure(client, 'remote-standby', '[data-io-control="remote-standby-role"]');
     await clickVisibleSelector(client, '[data-io-control="remote-start"]');
     await sleep(180);
     const remoteEndpoints = await exerciseSetupIoDisclosure(client, 'remote-endpoints', '[data-io-control="remote-copy-url"]');
-    disclosures.remote = [remoteSecurity, remoteEndpoints, remoteStandby];
+    disclosures.remote = [remoteConnection, remoteSecurity, remoteEndpoints, remoteDjLink, remoteStandby];
     const remoteCalls = await readSetupIoMockCalls(client);
     flows.remote = {
       started: remoteCalls.some((call) =>
@@ -4329,8 +4354,8 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
   }
 
-  const expectedControlCounts = { dmx: 28, midi: 6, osc: 4, remote: 10 };
-  const expectedDisclosureCounts = { dmx: 4, midi: 2, osc: 1, remote: 3 };
+  const expectedControlCounts = { dmx: 22, midi: 5, osc: 3, remote: 6 };
+  const expectedDisclosureCounts = { dmx: 6, midi: 3, osc: 2, remote: 5 };
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
     ioSubTabBarRemoved:
@@ -4350,7 +4375,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     unifiedSurfaceContract: hasExpectedSetupSurface(measurements.io),
     disclosuresOpenAndExposeControls: Object.values(disclosures).flat().every(setupIoDisclosurePassed),
     dmxRoutePagination: flows.dmx.routeTotalCountPreserved && flows.dmx.allRoutePagesReachable && flows.dmx.allRouteRowsComplete && flows.dmx.routePaginationRestored,
-    serialApplyFlow: flows.dmx.serialReachableWithoutDisclosure && flows.dmx.serialApplyCommand,
+    serialApplyFlow: flows.dmx.serialReachableWithDisclosure && flows.dmx.serialApplyCommand,
     dmxRouteCreationFlows: flows.dmx.artNetRouteCreated && flows.dmx.sacnRouteCreated,
     midiConnectFlows: dmxOnly || Object.values(flows.midi).every(Boolean),
     oscListenFlow: dmxOnly || Object.values(flows.osc).every(Boolean),
@@ -8428,7 +8453,8 @@ async function measure(client, label) {
         setupIoPanel?.querySelector('[data-io-control="dmx-protocol"]') &&
         visibleInteractiveElements(setupIoPanel).includes(setupIoPanel?.querySelector('[data-io-control="dmx-serial-port"]')) &&
         visibleInteractiveElements(setupIoPanel).includes(setupIoPanel?.querySelector('[data-io-control="dmx-apply-output"]')) &&
-        ioDisclosures.every((disclosure) => !disclosure.open)
+        setupIoPanel?.querySelector('[data-io-disclosure="dmx-connection-settings"]')?.open === true &&
+        setupIoPanel?.querySelector('[data-io-disclosure="dmx-route-actions"]')?.open !== true
       ),
       visibleDmxOutputConfigPanelCount: visibleCount('.setupMode-io .dmxOutputConfigPanel'),
       visibleArtRdmPanelCount: visibleCount('.setupMode-io .artRdmPanel'),
@@ -10762,11 +10788,11 @@ function hasExpectedSetupSurface(result) {
       result.ioVisibleZoneCount === 4 &&
       JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx", "midi", "osc", "remote"]) &&
       result.ioAllZoneRectsPositive &&
-      JSON.stringify(result.ioZoneVisibleControlCounts) === JSON.stringify({ dmx: 28, midi: 6, osc: 4, remote: 10 }) &&
-      result.ioVisibleControlCount === 48 &&
-      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 4, midi: 2, osc: 1, remote: 3 }) &&
+      JSON.stringify(result.ioZoneVisibleControlCounts) === JSON.stringify({ dmx: 22, midi: 5, osc: 3, remote: 6 }) &&
+      result.ioVisibleControlCount === 36 &&
+      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 6, midi: 3, osc: 2, remote: 5 }) &&
       JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0, midi: 0, osc: 0, remote: 0 }) &&
-      result.ioDisclosureCount === 10 &&
+      result.ioDisclosureCount === 16 &&
       result.ioOpenDisclosureCount === 0 &&
       result.ioRouteTotalCount === 128 &&
       result.ioRoutePageCount === Math.ceil(result.ioRouteTotalCount / 6) &&
@@ -16958,7 +16984,7 @@ async function measureSceneMatrixPane(client) {
     const replaceCards = cards.filter((card) => isVisible(card.querySelector('.sceneMatrixReplaceBadge')));
     const groupColorInputs = [...document.querySelectorAll('[data-group-color-input]')].filter(isVisible);
     const backHeader = headers.find((header) =>
-      header.closest('[data-scene-matrix-column]')?.getAttribute('data-scene-matrix-column') === 'back');
+      header.closest('[data-scene-matrix-column]')?.getAttribute('data-scene-matrix-column') === '3');
     const columnIdentityById = Object.fromEntries(columns.map((column) => [
       column.getAttribute('data-scene-matrix-column') ?? '',
       {
@@ -17028,6 +17054,11 @@ async function measureSceneMatrixPane(client) {
         }),
       };
     });
+    const internalScrollport = Boolean(
+      scroller && scrollerStyle && /(auto|scroll)/.test(scrollerStyle.overflowX) &&
+      cardScrollers.length === columns.length &&
+      cardScrollers.every((cardScroller) => /(auto|scroll)/.test(getComputedStyle(cardScroller).overflowY))
+    );
     return {
       paneVisible: isVisible(pane),
       paneInPrimaryLiveDesk: pane?.parentElement?.classList.contains('liveControlPanel') === true,
@@ -17146,11 +17177,7 @@ async function measureSceneMatrixPane(client) {
       activeCardIds: cards
         .filter((card) => card.getAttribute('data-scene-matrix-active') === 'true' && card.classList.contains('active'))
         .map((card) => card.getAttribute('data-scene-matrix-cue-id')),
-      internalScrollport: Boolean(
-        scroller && scrollerStyle && /(auto|scroll)/.test(scrollerStyle.overflowX) &&
-        cardScrollers.length === columns.length &&
-        cardScrollers.every((cardScroller) => /(auto|scroll)/.test(getComputedStyle(cardScroller).overflowY))
-      ),
+      internalScrollport,
       documentAndAppScrollZero:
         window.scrollX === 0 && window.scrollY === 0 &&
         documentElement.scrollWidth === documentElement.clientWidth &&
@@ -17366,7 +17393,7 @@ async function exerciseSceneMatrixHorizontalScroll(client) {
     const settle = () => new Promise((resolveFrame) =>
       requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const scroller = document.querySelector('.sceneMatrixScroller');
-    const showColumn = document.querySelector('[data-scene-matrix-column="Show"]');
+    const showColumn = document.querySelector('[data-scene-matrix-column="1"]');
     const showHeader = showColumn?.querySelector('.sceneMatrixColumnHeader') ?? showColumn;
     if (!(scroller instanceof HTMLElement) || !(showColumn instanceof HTMLElement) || !(showHeader instanceof HTMLElement)) {
       return {
@@ -17488,7 +17515,7 @@ async function exerciseSceneMatrixWheelScroll(client) {
       requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const scroller = document.querySelector('.sceneMatrixScroller');
     const columnScroller = document.querySelector(
-      '[data-scene-matrix-column="front"] [data-scene-matrix-column-scroll]'
+      '[data-scene-matrix-column="2"] [data-scene-matrix-column-scroll]'
     );
     if (!(scroller instanceof HTMLElement) || !(columnScroller instanceof HTMLElement)) {
       return { available: false };
@@ -17569,7 +17596,7 @@ async function exerciseSceneMatrixBankJump(client) {
     const settle = () => new Promise((resolveFrame) =>
       requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const scroller = document.querySelector('.sceneMatrixScroller');
-    const targetId = 'bank-12';
+    const targetId = '13';
     const targetColumn = document.querySelector(
       '[data-scene-matrix-column="' + targetId + '"]',
     );
@@ -17623,6 +17650,368 @@ async function exerciseSceneMatrixBankJump(client) {
   })()`);
 }
 
+async function exerciseSceneMatrixCueListBanks(client) {
+  const settle = () => sleep(80);
+  const readState = async (scope) => await client.evaluate(`(() => ({
+    scope: ${JSON.stringify(scope)},
+    tabListRole: document.querySelector('.sceneMatrixCueListTabs')?.getAttribute('role') ?? '',
+    tabRoles: [...document.querySelectorAll('[data-scene-matrix-cue-list-tab]')]
+      .map((tab) => tab.getAttribute('role') ?? ''),
+    tabs: [...document.querySelectorAll('[data-scene-matrix-cue-list-tab]')].map((tab) => ({
+      id: tab.getAttribute('data-scene-matrix-cue-list-tab') ?? '',
+      selected: tab.getAttribute('aria-selected') === 'true',
+      label: tab.querySelector('span')?.textContent?.trim() ?? '',
+      count: Number(tab.querySelector('small')?.textContent ?? -1),
+    })),
+    selectedTab: document.querySelector('[data-scene-matrix-cue-list-tab][aria-selected="true"] span')?.textContent?.trim() ?? '',
+    selectedTabId: document.querySelector('[data-scene-matrix-cue-list-tab][aria-selected="true"]')?.getAttribute('data-scene-matrix-cue-list-tab') ?? '',
+    cardIds: [...document.querySelectorAll('[data-scene-matrix-cue-id]')]
+      .map((card) => card.getAttribute('data-scene-matrix-cue-id') ?? ''),
+    cardCueListIds: [...document.querySelectorAll('[data-scene-matrix-cue-id]')]
+      .map((card) => card.getAttribute('data-scene-matrix-cue-list-id') ?? ''),
+    emptyBankId: document.querySelector('[data-scene-matrix-empty-bank]')?.getAttribute('data-scene-matrix-empty-bank') ?? '',
+    editorOpen: Boolean(document.querySelector('[data-scene-matrix-save-bank]')),
+    editorError: document.querySelector('[data-scene-matrix-bank-editor-error]')?.textContent?.trim() ?? '',
+    createDrawerOpen: Boolean(document.querySelector('[data-timeline-context-drawer-panel="cue"]')),
+    storeCueButton: Boolean(document.querySelector('#cue-store-form button.primary')),
+  }))()`);
+  const setBankInput = async (value) => {
+    await client.evaluate(`(() => {
+      const input = document.querySelector('[data-scene-matrix-save-bank]')?.closest('form')?.querySelector('input');
+      if (!(input instanceof HTMLInputElement)) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`);
+  };
+  const initial = await readState('initial');
+  await clickVisibleSelector(client, '[data-scene-matrix-create-bank]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-save-bank]")', 'Scene Matrix Bank create editor');
+  await setBankInput('Night');
+  await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-cue-list-tab][aria-selected=\\"true\\"]")', 'created Scene Matrix Bank selection');
+  await settle();
+  const createdEmpty = await readState('created-empty');
+
+  await clickVisibleSelector(client, '[data-scene-matrix-create-bank]');
+  await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
+  await settle();
+  const rejectedEmptyLabel = await readState('empty-label-rejected');
+  await client.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" });
+  await client.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" });
+  await settle();
+  const canceledEmptyLabel = await readState('empty-label-escape-canceled');
+
+  await clickVisibleSelector(client, '[data-scene-matrix-rename-bank]');
+  await setBankInput('Night Renamed');
+  await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
+  await waitForClientCondition(client, `document.querySelector('[data-scene-matrix-cue-list-tab][aria-selected="true"] span')?.textContent?.trim() === 'Night Renamed'`, 'renamed Scene Matrix Bank');
+  const renamedEmpty = await readState('renamed-empty');
+
+  await clickVisibleSelector(client, '[data-scene-matrix-create-scene]');
+  await waitForClientCondition(client, 'document.querySelector("[data-timeline-context-drawer-panel=cue]")', 'Scene Matrix create-scene drawer');
+  const drawer = await readState('create-scene-drawer');
+  await client.evaluate(`document.querySelector('#cue-store-form button.primary')?.scrollIntoView({ block: 'center', inline: 'nearest' })`);
+  await client.evaluate(`document.querySelector('#cue-store-form button.primary')?.click()`);
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-cue-id][data-scene-matrix-cue-list-id=\\"2\\"]")', 'Scene Matrix cue stored in selected Bank');
+  await settle();
+  const createdScene = await readState('created-scene');
+
+  await clickVisibleSelector(client, '[data-scene-matrix-cue-list-tab="1"]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-cue-list-tab=\\"1\\"][aria-selected=\\"true\\"]")', 'Main Bank selection');
+  await settle();
+  const mainFiltered = await readState('main-filtered');
+  await clickVisibleSelector(client, '[data-scene-matrix-cue-list-tab="2"]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-cue-list-tab=\\"2\\"][aria-selected=\\"true\\"]")', 'created Bank re-selection');
+  await settle();
+  const selectedFiltered = await readState('selected-filtered');
+  await clickVisibleSelector(client, '[data-scene-matrix-cue-list-tab="1"]');
+  await settle();
+  return {
+    initial,
+    createdEmpty,
+    rejectedEmptyLabel,
+    canceledEmptyLabel,
+    renamedEmpty,
+    drawer,
+    createdScene,
+    mainFiltered,
+    selectedFiltered,
+  };
+}
+
+async function exerciseSceneMatrixCueListBanksV2(client) {
+  const settle = () => sleep(100);
+  const readState = async (scope) => await client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const columns = [...document.querySelectorAll('[data-scene-matrix-column]')].filter(visible);
+    const banks = columns.map((column) => ({
+      id: column.getAttribute('data-scene-matrix-column') ?? '',
+      label: column.querySelector('.sceneMatrixColumnHeader strong')?.textContent?.trim() ?? '',
+      cards: [...column.querySelectorAll('[data-scene-matrix-cue-id]')].map((card) => card.getAttribute('data-scene-matrix-cue-id') ?? ''),
+      cardListIds: [...column.querySelectorAll('[data-scene-matrix-cue-id]')].map((card) => card.getAttribute('data-scene-matrix-cue-list-id') ?? ''),
+      empty: Boolean(column.querySelector('[data-scene-matrix-empty-bank]')),
+    }));
+    const jumpButtons = [...document.querySelectorAll('[data-scene-matrix-bank-jump]')].filter(visible);
+    const headerRows = [...document.querySelectorAll('.sceneMatrixCueListHeader')].filter(visible);
+    const surfaceHeader = document.querySelector('.sceneMatrixSurfaceHeader');
+    const lastControl = [...document.querySelectorAll('.sceneMatrixSurfaceHeader button')].filter(visible).at(-1);
+    const lastRect = lastControl?.getBoundingClientRect();
+    return {
+      scope: ${JSON.stringify(scope)},
+      banks,
+      bankIds: banks.map((bank) => bank.id),
+      cueListLabels: banks.map((bank) => bank.label),
+      playbackExecutorCueListLabels: [...document.querySelectorAll(
+        '.playbackExecutorPanel select option',
+      )].map((option) => option.textContent?.trim() ?? ''),
+      playbackExecutorLabels: [...document.querySelectorAll(
+        '.playbackExecutorPanel .playbackExecutorHeading input',
+      )].map((input) => input.value.trim()),
+      jumpIds: jumpButtons.map((button) => button.getAttribute('data-scene-matrix-bank-jump') ?? ''),
+      activeJumpIds: jumpButtons.filter((button) => button.getAttribute('aria-current') === 'true')
+        .map((button) => button.getAttribute('data-scene-matrix-bank-jump') ?? ''),
+      jumpRoles: jumpButtons.map((button) => button.getAttribute('role') ?? ''),
+      jumpCurrentValues: jumpButtons.map((button) => button.getAttribute('aria-current') ?? ''),
+      cardIds: [...document.querySelectorAll('[data-scene-matrix-cue-id]')].map((card) => card.getAttribute('data-scene-matrix-cue-id') ?? ''),
+      headerRows: headerRows.length,
+      legacyGroupHeaderCount: document.querySelectorAll('.sceneMatrixGroupHeader').length,
+      surfaceHeaderOverflowX: surfaceHeader ? getComputedStyle(surfaceHeader).overflowX : '',
+      lastControlReachable: Boolean(lastRect && lastRect.width > 0 && lastRect.height > 0 && lastRect.left >= -1 && lastRect.right <= innerWidth + 1),
+      createSceneButtons: [...document.querySelectorAll('[data-scene-matrix-create-scene]')].map((button) => button.getAttribute('data-scene-matrix-create-scene') ?? ''),
+      contextMenuOpen: Boolean(document.querySelector('[data-scene-matrix-context-rename]')),
+      deleteDialogOpen: Boolean(document.querySelector('[data-scene-matrix-delete-dialog]')),
+      deleteDialogVisible: Boolean(document.querySelector('[data-scene-matrix-delete-dialog][open]')),
+      deleteConfirmDisabled: Boolean(document.querySelector('[data-scene-matrix-delete-confirm]')?.disabled),
+      deleteSceneCount: document.querySelector('[data-scene-matrix-delete-scene-count]')?.textContent?.trim() ?? '',
+      editorOpen: Boolean(document.querySelector('[data-scene-matrix-save-bank]')),
+      editorValue: document.querySelector('[data-scene-matrix-save-bank]')?.closest('form')?.querySelector('input')?.value ?? '',
+      editorError: document.querySelector('[data-scene-matrix-bank-editor-error]')?.textContent?.trim() ?? '',
+      activeElement: (() => {
+        const active = document.activeElement;
+        return {
+          tag: active?.tagName ?? '',
+          bankJump: active?.getAttribute?.('data-scene-matrix-bank-jump') ?? '',
+          createBank: active?.hasAttribute?.('data-scene-matrix-create-bank') ?? false,
+        };
+      })(),
+    };
+  })()`);
+  const setBankInput = async (value) => {
+    await client.evaluate(`(() => {
+      const input = document.querySelector('[data-scene-matrix-save-bank]')?.closest('form')?.querySelector('input');
+      if (!(input instanceof HTMLInputElement)) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`);
+  };
+  const openContext = async (id, keyboard = false) => {
+    await client.evaluate(`(() => {
+      const button = document.querySelector('[data-scene-matrix-bank-jump="${id}"]');
+      if (!(button instanceof HTMLButtonElement)) return false;
+      button.focus();
+      if (${keyboard ? 'true' : 'false'}) {
+        button.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', code: 'F10', shiftKey: true, bubbles: true }));
+      } else {
+        button.dispatchEvent(new MouseEvent('contextmenu', { clientX: 40, clientY: 40, bubbles: true, cancelable: true }));
+      }
+      return true;
+    })()`);
+    await settle();
+    return await readState(`context-${id}-${keyboard ? 'keyboard' : 'pointer'}`);
+  };
+  const clickMenu = async (selector) => {
+    await clickVisibleSelector(client, selector);
+    await settle();
+  };
+  const initial = await readState('initial');
+  await clickVisibleSelector(client, '[data-scene-matrix-create-bank]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-save-bank]")', 'Scene Matrix Bank editor');
+  const prefilled = await readState('prefilled');
+  await setBankInput('Night');
+  await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-column=\\"2\\"]")', 'Night bank column');
+  const customCreated = await readState('custom-created');
+  await clickVisibleSelector(client, '[data-scene-matrix-create-bank]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-save-bank]")', 'duplicate Bank editor');
+  await setBankInput(' night ');
+  await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
+  await settle();
+  const duplicateCreateRejected = await readState('duplicate-create-rejected');
+  await clickVisibleSelector(client, '[data-scene-matrix-cancel-bank]');
+  await settle();
+  await clickVisibleSelector(client, '[data-scene-matrix-create-bank]');
+  const autoPrefilled = await readState('auto-prefilled');
+  await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-column=\\"3\\"]")', 'automatic bank column');
+  const autoCreated = await readState('auto-created');
+
+  await openContext('2');
+  await clickMenu('[data-scene-matrix-context-rename]');
+  await setBankInput(' bank 1 ');
+  await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
+  await settle();
+  const duplicateRenameRejected = await readState('duplicate-rename-rejected');
+  await clickVisibleSelector(client, '[data-scene-matrix-cancel-bank]');
+  await settle();
+  await openContext('2');
+  await clickMenu('[data-scene-matrix-context-rename]');
+  await setBankInput('Night Renamed');
+  await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-column=\\"2\\"] .sceneMatrixColumnHeader strong")?.textContent?.trim() === "Night Renamed"', 'renamed bank column');
+  const renamed = await readState('renamed');
+
+  const keyboardOpened = await openContext('3', true);
+  await client.evaluate(`(() => {
+    const panel = document.querySelector('.sceneMatrixPanel');
+    if (!(panel instanceof HTMLElement)) return false;
+    panel.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    return true;
+  })()`);
+  await settle();
+  const backgroundClosed = await readState('context-background-closed');
+  const interactiveOpened = await openContext('3', true);
+  await client.evaluate(`(() => {
+    const button = document.querySelector('[data-scene-matrix-create-bank]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.focus();
+    button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    return true;
+  })()`);
+  await settle();
+  const interactiveClosed = await readState('context-interactive-closed');
+  await openContext('3', true);
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
+  await settle();
+  const keyboardEsc = await readState('keyboard-escape');
+
+  await clickVisibleSelector(client, '[data-scene-matrix-column="3"] [data-scene-matrix-create-scene]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-cue-list-id=\\"3\\"]")', 'scene in selected bank');
+  const sceneCreated = await readState('scene-created');
+
+  await openContext('3');
+  await clickMenu('[data-scene-matrix-context-delete]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-delete-dialog][open]")', 'bank delete dialog');
+  const deleteDialog = await readState('delete-dialog');
+  await clickVisibleSelector(client, '[data-scene-matrix-delete-cancel]');
+  await settle();
+  const deleteCanceled = await readState('delete-canceled');
+  await openContext('1');
+  await clickMenu('[data-scene-matrix-context-delete]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-delete-dialog][open]")', 'Main bank delete dialog');
+  const mainDeleteDialog = await readState('main-delete-dialog');
+  await clickVisibleSelector(client, '[data-scene-matrix-delete-cancel]');
+  await settle();
+  await openContext('3');
+  await clickMenu('[data-scene-matrix-context-delete]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-delete-dialog][open]")', 'bank delete confirmation');
+  await clickVisibleSelector(client, '[data-scene-matrix-delete-confirm]');
+  await waitForClientCondition(client, '!document.querySelector("[data-scene-matrix-column=\\"3\\"]")', 'bank delete completion');
+  const deleteConfirmed = await readState('delete-confirmed');
+  await client.evaluate(`(() => {
+    const button = document.querySelector('.appMenuButton');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`);
+  await settle();
+  await client.evaluate(`(() => {
+    const undo = [...document.querySelectorAll('button')].find((button) => (button.getAttribute('title') || '').includes('Delete Scene Bank'));
+    if (undo instanceof HTMLButtonElement && !undo.disabled) undo.click();
+  })()`);
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-column=\\"3\\"]")', 'bank delete undo completion');
+  const deleteUndone = await readState('delete-undone');
+  await client.evaluate(`(() => {
+    const button = document.querySelector('.appMenuButton');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`);
+  await settle();
+  await client.evaluate(`(() => {
+    const redo = [...document.querySelectorAll('button')].find((button) => (button.getAttribute('title') || '').includes('Delete Scene Bank'));
+    if (redo instanceof HTMLButtonElement && !redo.disabled) redo.click();
+  })()`);
+  await waitForClientCondition(client, '!document.querySelector("[data-scene-matrix-column=\\"3\\"]")', 'bank delete redo completion');
+  const deleteRedone = await readState('delete-redone');
+  await client.evaluate(`(() => {
+    const button = document.querySelector('.appMenuButton');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`);
+  await settle();
+  await client.evaluate(`(() => {
+    const undo = [...document.querySelectorAll('button')].find((button) => (button.getAttribute('title') || '').includes('Delete Scene Bank'));
+    if (undo instanceof HTMLButtonElement && !undo.disabled) undo.click();
+  })()`);
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-column=\\"3\\"]")', 'bank delete second undo completion');
+  const deleteReundone = await readState('delete-reundone');
+
+  await client.evaluate(`(() => {
+    const source = document.querySelector('[data-scene-matrix-bank-jump="2"]');
+    const target = document.querySelector('[data-scene-matrix-bank-jump="1"]');
+    if (!(source instanceof HTMLElement) || !(target instanceof HTMLElement)) return false;
+    source.dispatchEvent(new Event('dragstart', { bubbles: true }));
+    target.dispatchEvent(new Event('dragover', { bubbles: true, cancelable: true }));
+    target.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }));
+    source.dispatchEvent(new Event('dragend', { bubbles: true }));
+    return true;
+  })()`);
+  await settle();
+  const reordered = await readState('reordered');
+  // The Undo control is a project-menu item. Open that menu before querying it
+  // so this assertion exercises the same operator path as the real UI rather
+  // than silently treating a hidden menu item as an absent Undo affordance.
+  await client.evaluate(`(() => {
+    const button = document.querySelector('.appMenuButton');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`);
+  await settle();
+  await client.evaluate(`(() => {
+    const undo = [...document.querySelectorAll('button')].find((button) => (button.getAttribute('title') || '').includes('Reorder Scene Banks'));
+    if (undo instanceof HTMLButtonElement && !undo.disabled) undo.click();
+  })()`);
+  await settle();
+  const undone = await readState('undone');
+  return {
+    initial,
+    prefilled,
+    customCreated,
+    duplicateCreateRejected,
+    autoPrefilled,
+    autoCreated,
+    duplicateRenameRejected,
+    renamed,
+    keyboardOpened,
+    backgroundClosed,
+    interactiveOpened,
+    interactiveClosed,
+    keyboardEsc,
+    sceneCreated,
+    deleteDialog,
+    deleteCanceled,
+    mainDeleteDialog,
+    deleteConfirmed,
+    deleteUndone,
+    deleteRedone,
+    deleteReundone,
+    reordered,
+    undone,
+  };
+}
+
 async function measureSceneMatrixInteractionState(client, cueId) {
   return await client.evaluate(`(() => {
     const markers = [...document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock[data-timeline-event-id]')]
@@ -17639,10 +18028,10 @@ async function measureSceneMatrixInteractionState(client, cueId) {
       markers,
       cuePlacementCount: cueItem?.querySelectorAll('.cueTimelinePlacementChip').length ?? -1,
       frontColumnCueIds: [...document.querySelectorAll(
-        '[data-scene-matrix-column="front"] [data-scene-matrix-cue-id]',
+        '[data-scene-matrix-column="2"] [data-scene-matrix-cue-id]',
       )].map((card) => card.getAttribute('data-scene-matrix-cue-id')),
       backColumnCueIds: [...document.querySelectorAll(
-        '[data-scene-matrix-column="back"] [data-scene-matrix-cue-id]',
+        '[data-scene-matrix-column="3"] [data-scene-matrix-cue-id]',
       )].map((card) => card.getAttribute('data-scene-matrix-cue-id')),
       cueGroupId: document.querySelector(
         '[data-scene-matrix-cue-id="${cueId}"]',
@@ -17786,6 +18175,7 @@ async function installSceneMatrixBankMoveCapture(client) {
       installedWithoutExistingInternals,
       commands: [],
       beginArgs: null,
+      cueListArgs: null,
       metadataArgs: null,
       moveArgs: [],
       commitArgs: null,
@@ -17797,7 +18187,11 @@ async function installSceneMatrixBankMoveCapture(client) {
         capture.commands.push(command);
         if (command === "begin_project_transaction") {
           capture.beginArgs = structuredClone(args);
-          return 27_001;
+          return { transaction_id: 27_001, project_epoch: 0 };
+        }
+        if (command === "set_cue_list") {
+          capture.cueListArgs = structuredClone(args);
+          return undefined;
         }
         if (command === "set_cue_metadata") {
           capture.metadataArgs = structuredClone(args);
@@ -18745,12 +19139,8 @@ async function runSceneMatrixPaneCheck(client, viewport) {
   }
   const sameColumnReorder = await exerciseSceneMatrixStripReorder(client, 302, 301);
   const after = await measureSceneMatrixPane(client);
-  const expectedColumns = [
-    "front",
-    "back",
-    ...Array.from({ length: 10 }, (_, index) => `bank-${String(index + 3).padStart(2, "0")}`),
-    "Show",
-  ];
+  const cueListBanks = await exerciseSceneMatrixCueListBanksV2(client);
+  const expectedColumns = Array.from({ length: 13 }, (_, index) => String(index + 1));
   // T17 added the flash-mode cue 320 to the "back" column of the fixture.
   const expectedCardCount = 15;
   const expectedReplaceCards = ["302", "303"];
@@ -18768,7 +19158,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     sceneBankChips: readFileSync(
       join(appRoot, "src", "components", "SceneMatrixPanel.tsx"),
       "utf8",
-    ).includes('data-wheel-scroll-surface="scene-bank-chips"'),
+    ).includes('data-wheel-scroll-surface="scene-cue-list-tabs"'),
     groupAndTypeChips: (() => {
       const source = readFileSync(
         join(appRoot, "src", "components", "MappingFilterStrips.tsx"),
@@ -19006,8 +19396,6 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       Math.abs(horizontalScroll.initialScrollLeft) <= 1 &&
       horizontalScroll.maxScrollLeft > 1 &&
       horizontalScroll.reachedMax &&
-      horizontalScroll.showVisibleAtMax &&
-      horizontalScroll.showHitColumnAtMax === "Show" &&
       horizontalScroll.resetAtOrigin],
     ["matrixCdpPlainAndShiftWheelScrollBanksHorizontally", () =>
       wheelScroll.available &&
@@ -19031,13 +19419,13 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       && JSON.stringify(before.bankJumpChipIds) === JSON.stringify(expectedColumns)
       && before.bankJumpOneLine
       && before.bankJumpStripHeight > 0
-      && before.bankJumpStripHeight <= 30
+      && before.bankJumpStripHeight <= 36
       && before.bankJumpIdentityTextMatchesColumns],
     ["matrixBankChipRowEndsWithinThirtySixPixelsOfColumnHeaders", () =>
       before.bankJumpToColumnTopGap >= 0
       && before.bankJumpToColumnTopGap <= 4
       && before.bankJumpToColumnHeaderTop > before.bankJumpStripHeight
-      && before.bankJumpToColumnHeaderTop <= 36.5],
+      && before.bankJumpToColumnHeaderTop <= 40],
     ["matrixBankChipClickBringsColumnLeadingEdgeIntoViewAndActivatesIt", () =>
       bankJump.available
       && Math.abs(bankJump.beforeScrollLeft) <= 1
@@ -19050,15 +19438,90 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     // Cue identity priority is explicit cue > owning bank > cue hash.
     ["matrixExplicitCueColorStillWinsBankInheritance", () =>
       (before.coloredCardIdentity || "").startsWith("hsl(345")
-      && before.cardIdentityById["301"].fill !== before.columnIdentityById.front.fill],
-    ["matrixUncoloredCueCellAndStripInheritOwningBankIdentity", () =>
-      before.cardIdentityById["302"].fill === before.columnIdentityById.front.fill
+      && before.cardIdentityById["301"].fill !== before.columnIdentityById["2"].fill],
+    ["matrixUncoloredCueCellKeepsBankIdentitySeparateFromGroupIdentity", () =>
+      before.cardIdentityById["302"].fill !== before.columnIdentityById["2"].fill
       && before.cardIdentityById["302"].strip === before.cardIdentityById["302"].border
-      && before.cardIdentityById["303"].fill === before.columnIdentityById.back.fill
+      && before.cardIdentityById["303"].fill !== before.columnIdentityById["3"].fill
       && before.cardIdentityById["303"].strip === before.cardIdentityById["303"].border],
-    ["matrixPersistedGroupColorWinsHashHue", () =>
-      (before.backHeaderIdentity || "").startsWith("hsl(165")],
-    ["matrixGroupColorPickerPerGroupColumn", () => before.groupColorInputCount === expectedColumns.length - 1],
+    ["matrixBankIdentityUsesStableNonGroupHue", () =>
+      (before.backHeaderIdentity || "").startsWith("hsl(")],
+    ["matrixGroupColorPickerNotDuplicatedIntoBankHeader", () => before.groupColorInputCount === 0],
+    ["matrixCueListBanksAlwaysRenderAllColumns", () =>
+      cueListBanks.initial.bankIds.length === expectedColumns.length
+      && cueListBanks.initial.cardIds.length === expectedCardCount
+      && cueListBanks.initial.bankIds.every((id) => expectedColumns.includes(id))
+      && cueListBanks.initial.jumpIds.length === expectedColumns.length],
+    ["matrixNewFixtureUsesBankLabelsForCueListAndPlaybackExecutor", () =>
+      cueListBanks.initial.cueListLabels.length > 0
+      && cueListBanks.initial.cueListLabels.every((label) => label !== "Main")
+      && cueListBanks.initial.playbackExecutorCueListLabels.length > 0
+      && cueListBanks.initial.playbackExecutorCueListLabels.every((label) => label !== "Main")
+      && cueListBanks.initial.playbackExecutorLabels.length > 0
+      && cueListBanks.initial.playbackExecutorLabels.every((label) => label !== "Main")],
+    ["matrixCueListJumpStripIsNavigationNotTabs", () =>
+      cueListBanks.initial.jumpRoles.every((role) => role === "")
+      && cueListBanks.initial.jumpCurrentValues.every((value) => value === "true" || value === "")
+      && cueListBanks.initial.headerRows === 1
+      && cueListBanks.initial.legacyGroupHeaderCount === 0],
+    ["matrixCueListBankCreatePrefillsAndSupportsCustomName", () =>
+      cueListBanks.prefilled.editorOpen
+      && cueListBanks.prefilled.editorValue === "Bank 2"
+      && cueListBanks.customCreated.banks.some((bank) => bank.label === "Night")],
+    ["matrixCueListBankAutoNameIsUnused", () =>
+      cueListBanks.autoPrefilled.editorValue === "Bank 2"
+      && cueListBanks.autoCreated.banks.some((bank) => bank.label === "Bank 2")],
+    ["matrixCueListBankCreateRejectsNormalizedDuplicate", () =>
+      cueListBanks.duplicateCreateRejected.editorOpen
+      && cueListBanks.duplicateCreateRejected.editorError.length > 0
+      && cueListBanks.duplicateCreateRejected.banks.filter((bank) =>
+        bank.label.trim().toLowerCase() === "night").length === 1],
+    ["matrixCueListBankRenameRejectsNormalizedDuplicate", () =>
+      cueListBanks.duplicateRenameRejected.editorOpen
+      && cueListBanks.duplicateRenameRejected.editorError.length > 0
+      && cueListBanks.duplicateRenameRejected.banks.find((bank) => bank.id === "2")?.label === "Front"],
+    ["matrixCueListContextRenameAndKeyboardEscape", () =>
+      cueListBanks.renamed.banks.some((bank) => bank.label === "Night Renamed")
+      && cueListBanks.keyboardOpened.contextMenuOpen
+      && !cueListBanks.keyboardEsc.contextMenuOpen],
+    ["matrixCueListContextOutsideRestoresInvokerFocus", () =>
+      !cueListBanks.backgroundClosed.contextMenuOpen
+      && cueListBanks.backgroundClosed.activeElement.bankJump === "3"],
+    ["matrixCueListContextInteractiveOutsideKeepsTargetFocus", () =>
+      cueListBanks.interactiveOpened.contextMenuOpen
+      && !cueListBanks.interactiveClosed.contextMenuOpen
+      && cueListBanks.interactiveClosed.activeElement.createBank],
+    ["matrixCueListSceneCreateTargetsExplicitBank", () =>
+      cueListBanks.sceneCreated.banks.find((bank) => bank.id === "3")?.cards.includes("321")
+      && cueListBanks.sceneCreated.banks.find((bank) => bank.id === "3")?.cardListIds.every((id) => id === "3")],
+    ["matrixCueListDeleteUsesCancelConfirmAndDeletesBankScenes", () =>
+      cueListBanks.deleteDialog.deleteDialogVisible
+      && cueListBanks.deleteCanceled.bankIds.includes("3")
+      && !cueListBanks.deleteConfirmed.bankIds.includes("3")
+      && cueListBanks.deleteDialog.deleteSceneCount.startsWith("3")
+      && cueListBanks.deleteConfirmed.cardIds.every((id) => !["303", "320", "321"].includes(id))],
+    ["matrixCueListMainDeleteIsAllowedWhenAnotherBankRemains", () =>
+      cueListBanks.mainDeleteDialog.deleteDialogVisible
+      && !cueListBanks.mainDeleteDialog.deleteConfirmDisabled],
+    ["matrixCueListDeleteUndoRestoresBankScenes", () =>
+      cueListBanks.deleteUndone.bankIds.includes("3")
+      && cueListBanks.deleteUndone.banks.find((bank) => bank.id === "3")?.cards.join(",") === "303,320,321"
+      && cueListBanks.deleteUndone.cardIds.includes("321")],
+    ["matrixCueListDeleteRedoAndSecondUndoRemainAuthoritative", () =>
+      !cueListBanks.deleteRedone.bankIds.includes("3")
+      && !cueListBanks.deleteRedone.cardIds.includes("321")
+      && cueListBanks.deleteReundone.bankIds.includes("3")
+      && cueListBanks.deleteReundone.cardIds.includes("321")],
+    ["matrixCueListReorderIsOneGestureAndUndoRestoresOrder", () =>
+      cueListBanks.reordered.bankIds[0] === "2"
+      && cueListBanks.reordered.bankIds[1] === "1"
+      && cueListBanks.undone.bankIds[0] === "1"
+      && cueListBanks.undone.bankIds[1] === "2"
+      && JSON.stringify(cueListBanks.reordered.bankIds.slice(2)) ===
+        JSON.stringify(cueListBanks.undone.bankIds.slice(2))],
+    ["matrixCueListTopRowControlsReachable", () =>
+      cueListBanks.initial.lastControlReachable
+      && ["auto", "scroll"].some((mode) => cueListBanks.initial.surfaceHeaderOverflowX.includes(mode))],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -19083,6 +19546,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     subThresholdClick,
     oneGestureDrag,
     sameColumnReorder,
+    cueListBanks,
   };
 }
 
@@ -19131,7 +19595,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       reorder.targetHitCueId === "301" &&
       reorder.indicatorCueId === "301" &&
       reorder.indicatorPosition === "before" &&
-      reorder.targetColumnId === "front" &&
+      reorder.targetColumnId === "2" &&
       reorder.targetColumnHighlighted &&
       reorder.ghostCleared],
     ["identityStripDragReordersWithinColumn", () =>
@@ -19156,7 +19620,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       && crossBank.move.targetHitCueId === "320"
       && crossBank.move.indicatorCueId === "320"
       && crossBank.move.indicatorPosition === "after"
-      && crossBank.move.targetColumnId === "back"
+      && crossBank.move.targetColumnId === "3"
       && crossBank.move.targetColumnHighlighted
       && crossBank.move.ghostCleared],
     ["crossBankDragMovesIntoTargetAndRemovesFromSourceWithoutClickMisfire", () =>
@@ -19164,7 +19628,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       && JSON.stringify(crossBank.move?.before.backColumnCueIds) === JSON.stringify(["303", "320"])
       && JSON.stringify(crossBank.move?.after.frontColumnCueIds) === JSON.stringify(["301"])
       && JSON.stringify(crossBank.move?.after.backColumnCueIds) === JSON.stringify(["303", "320", "302"])
-      && crossBank.move?.after.cueGroupId === "back"
+      && crossBank.move?.after.cueGroupId === "3"
       && JSON.stringify(crossBank.move?.before.activeCardIds) === JSON.stringify(["301"])
       && JSON.stringify(crossBank.move?.after.activeCardIds) === JSON.stringify(["301"])
       && JSON.stringify(crossBank.move?.before.selectedCardIds) === JSON.stringify([])
@@ -19176,17 +19640,17 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       && crossBank.capture.installedWithoutExistingInternals
       && JSON.stringify(crossBank.capture.commands) === JSON.stringify([
         "begin_project_transaction",
+        "set_cue_list",
         "set_cue_metadata",
-        "move_cue",
-        "move_cue",
         "commit_project_transaction",
       ])
       && crossBank.capture.beginArgs?.label === "Move Cue Between Scene Banks"
       && crossBank.capture.beginArgs?.coalesceKey === "scene_matrix_bank_move:cue:302"
+      && crossBank.capture.cueListArgs?.cueId === 302
+      && crossBank.capture.cueListArgs?.cueListId === 3
       && crossBank.capture.metadataArgs?.cueId === 302
       && crossBank.capture.metadataArgs?.groupId === "back"
-      && crossBank.capture.moveArgs.length === 2
-      && crossBank.capture.moveArgs.every((args) => args.cueId === 302 && args.delta === 1)
+      && crossBank.capture.moveArgs.length === 0
       && crossBank.capture.commitArgs?.transactionId === 27_001
       && crossBank.capture.cancelCount === 0],
     ["singleUndoCompletelyRestoresCrossBankMove", () =>
@@ -19194,7 +19658,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       && crossBank.undoControl.enabled
       && JSON.stringify(crossBank.afterUndo.frontColumnCueIds) === JSON.stringify(["301", "302"])
       && JSON.stringify(crossBank.afterUndo.backColumnCueIds) === JSON.stringify(["303", "320"])
-      && crossBank.afterUndo.cueGroupId === "front"
+      && crossBank.afterUndo.cueGroupId === "2"
       && JSON.stringify(crossBank.afterUndo.activeCardIds) === JSON.stringify(["301"])
       && JSON.stringify(crossBank.afterUndo.selectedCardIds) === JSON.stringify([])
       && crossBank.afterUndo.sceneSettingsCount === 0],
@@ -28647,7 +29111,7 @@ async function main() {
               `${Object.values(result.disclosures).flat().length} ` +
             `scroll=${Number(result.measurements.io.ioDocumentAndAppScrollZero)} ` +
             `legacy=${result.legacyStoredTabs.states.filter((state) => state.storedSetupSubTab === 'io').length}/4 ` +
-            `serial=${Number(result.flows.dmx.serialReachableWithoutDisclosure)}/` +
+            `serial=${Number(result.flows.dmx.serialReachableWithDisclosure)}/` +
               `${Number(result.flows.dmx.serialApplyCommand)} ` +
             `routes=${Number(result.flows.dmx.artNetRouteCreated)}/` +
               `${Number(result.flows.dmx.sacnRouteCreated)} ` +

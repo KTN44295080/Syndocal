@@ -40,14 +40,15 @@ use protocol::DmxControlAction;
 use protocol::{
     canonical_video_output_mapping_field,
     control_plane_command::{
-        AuthoredRequestV1, OutputConsentChallengeV1, OutputConsentPrepareRequestV1,
-        OutputConsentStatusRequestV1, OutputConsentStatusV1, OutputControlAuthorityBundleV1,
-        OutputControlCommandRequestV1, OutputControlFenceV1, OutputControlResponseV1,
-        ProjectMutationFenceV1, RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorV1,
-        RuntimeCommandRequestV1, RuntimeCommandResponseV1, SafetyBlackoutEngageRequestV1,
-        SafetyBlackoutEngageResponseV1, SetEffectEnabledPayload, SetEffectEnabledResponseV1,
-        TimelineFollowAbortAuthorityBundleV1, TimelineFollowAbortRuntimeRequestV1,
-        TimelineFollowAbortRuntimeResponseV1, OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+        AuthoredRequestV1, DisplayOutputSpecV1, OutputConsentChallengeV1,
+        OutputConsentPrepareRequestV1, OutputConsentStatusRequestV1, OutputConsentStatusV1,
+        OutputControlAuthorityBundleV1, OutputControlCommandRequestV1, OutputControlFenceV1,
+        OutputControlResponseV1, ProjectMutationFenceV1, RuntimeCommandAuthorityBundleV1,
+        RuntimeCommandErrorV1, RuntimeCommandRequestV1, RuntimeCommandResponseV1,
+        SafetyBlackoutEngageRequestV1, SafetyBlackoutEngageResponseV1, SetEffectEnabledPayload,
+        SetEffectEnabledResponseV1, TimelineFollowAbortAuthorityBundleV1,
+        TimelineFollowAbortRuntimeRequestV1, TimelineFollowAbortRuntimeResponseV1,
+        OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_DISPLAY_ADD_OPERATION_ID,
         OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
         OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
         OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
@@ -216,6 +217,7 @@ const OUTPUT_OWNERSHIP_STATE_VERSION: u32 = 1;
 const OUTPUT_OWNERSHIP_STATE_FILE: &str = "machine-output-ownership.json";
 const PROJECT_RECOVERY_AUTHORITY_STATE_VERSION: u32 = 1;
 const PROJECT_RECOVERY_AUTHORITY_STATE_FILE: &str = "project-recovery-authority.json";
+const MAX_SHOW_LAN_INTERFACES: usize = 32;
 const APPLICATION_UPDATE_PROGRESS_EVENT: &str = "syndocal://application-update-progress";
 const APPLICATION_UPDATE_ENDPOINT: Option<&str> = option_env!("SYNDOCAL_UPDATE_ENDPOINT");
 const APPLICATION_UPDATE_PUBKEY: Option<&str> = option_env!("SYNDOCAL_UPDATE_PUBKEY");
@@ -346,6 +348,10 @@ struct DjLinkRuntime {
     track_playing: bool,
     track_bpm: Option<f64>,
     position_sec: Option<f64>,
+    authoritative_state: protocol::DjLinkTimelineStateValue,
+    timeline_id: Option<String>,
+    position_bars: u64,
+    loop_active: bool,
 }
 
 impl DjLinkRuntime {
@@ -370,6 +376,10 @@ impl DjLinkRuntime {
             track_playing: false,
             track_bpm: None,
             position_sec: None,
+            authoritative_state: protocol::DjLinkTimelineStateValue::Idle,
+            timeline_id: None,
+            position_bars: 0,
+            loop_active: false,
         }
     }
 
@@ -394,6 +404,10 @@ impl DjLinkRuntime {
             self.track_playing = false;
             self.track_bpm = None;
             self.position_sec = None;
+            self.authoritative_state = protocol::DjLinkTimelineStateValue::Idle;
+            self.timeline_id = None;
+            self.position_bars = 0;
+            self.loop_active = false;
         }
     }
 
@@ -403,6 +417,51 @@ impl DjLinkRuntime {
         // Live entries are never evicted to make room for a new event.  A
         // full ledger fails closed in the dispatcher; only the explicit TTL
         // purge can release a once-per-session slot.
+    }
+}
+
+fn dj_link_timeline_state(
+    runtime: &DjLinkRuntime,
+    engine: &EngineHandle,
+    event_id: &str,
+    sequence: u64,
+) -> protocol::DjLinkTimelineState {
+    let snapshot = engine.snapshot();
+    let timeline_id = runtime
+        .timeline_id
+        .clone()
+        .unwrap_or_else(|| "none".to_string());
+    let loop_active = runtime.loop_active
+        || !matches!(
+            snapshot.timeline.loop_runtime.status,
+            protocol::TimelineLoopRuntimeStatus::Disabled
+        );
+    let position_bars = runtime
+        .track_bpm
+        .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+        .and_then(|bpm| {
+            let bar_ms = (60_000.0_f64 / bpm * f64::from(protocol::DJ_LINK_BEATS_PER_BAR)).round();
+            (bar_ms.is_finite() && bar_ms >= 1.0)
+                .then(|| snapshot.timeline.position_ms / (bar_ms as u64))
+        })
+        .unwrap_or(runtime.position_bars);
+    let state = if runtime.timeline_id.is_none() {
+        protocol::DjLinkTimelineStateValue::Idle
+    } else if snapshot.timeline.playing
+        || runtime.authoritative_state == protocol::DjLinkTimelineStateValue::Running
+    {
+        protocol::DjLinkTimelineStateValue::Running
+    } else {
+        runtime.authoritative_state
+    };
+    protocol::DjLinkTimelineState {
+        message_type: "DJ_TIMELINE_STATE".to_string(),
+        event_id: event_id.to_string(),
+        sequence,
+        state,
+        loop_active,
+        timeline_id,
+        position_bars,
     }
 }
 
@@ -514,6 +573,8 @@ fn dispatch_dj_link_event(
     runtime.sync_project(&coordinator);
     runtime.purge_dedupe(Instant::now());
     let current_generation = runtime.state_generation;
+    let event_id = envelope.event_id.clone();
+    let sequence = envelope.sequence;
     match envelope.message_type {
         protocol::DjLinkMessageType::MasterChanged => {
             let payload = match serde_json::from_value::<protocol::DjLinkMasterChangedPayload>(
@@ -542,6 +603,10 @@ fn dispatch_dj_link_event(
             runtime.track_started_at = None;
             runtime.track_bpm = None;
             runtime.position_sec = None;
+            runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Idle;
+            runtime.timeline_id = None;
+            runtime.position_bars = 0;
+            runtime.loop_active = false;
             runtime.last_event_id = Some(envelope.event_id);
             runtime.state_generation = next;
             dj_link_accepted(next)
@@ -604,9 +669,16 @@ fn dispatch_dj_link_event(
             runtime.track_active = true;
             runtime.playing = true;
             runtime.released = false;
+            runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+            runtime.timeline_id = Some(mapping.timeline_id.0.to_string());
+            runtime.position_bars = 0;
+            runtime.loop_active = false;
             runtime.last_event_id = Some(envelope.event_id);
             runtime.state_generation = next;
-            dj_link_accepted(next)
+            DjLinkDispatchOutcome::TimelineState {
+                state_generation: next,
+                state: dj_link_timeline_state(&runtime, engine, &event_id, sequence),
+            }
         }
         protocol::DjLinkMessageType::LoopState => {
             let payload = match serde_json::from_value::<protocol::DjLinkLoopStatePayload>(
@@ -638,6 +710,7 @@ fn dispatch_dj_link_event(
             }
             runtime.loop_division = Some(payload.division);
             runtime.released = !payload.enabled;
+            runtime.loop_active = payload.enabled;
             runtime.last_event_id = Some(envelope.event_id);
             runtime.state_generation = next;
             dj_link_accepted(next)
@@ -659,10 +732,15 @@ fn dispatch_dj_link_event(
             if engine.dj_link_release().is_err() {
                 return dj_link_rejected("engine_publication_rejected", current_generation);
             }
-            runtime.released = true;
+            runtime.released = false;
+            runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+            runtime.loop_active = false;
             runtime.last_event_id = Some(envelope.event_id);
             runtime.state_generation = next;
-            dj_link_accepted(next)
+            DjLinkDispatchOutcome::TimelineState {
+                state_generation: next,
+                state: dj_link_timeline_state(&runtime, engine, &event_id, sequence),
+            }
         }
         protocol::DjLinkMessageType::StateSync => {
             let payload = match serde_json::from_value::<protocol::DjLinkStateSyncPayload>(
@@ -683,6 +761,10 @@ fn dispatch_dj_link_event(
                 runtime.track_content_id = track.content_id.clone();
                 runtime.track_title = track.title.clone();
                 runtime.track_artist = track.artist.clone();
+                runtime.track_bpm = track.track_bpm;
+                runtime.position_sec = track.position_sec;
+                runtime.track_started_at = track.started_at.clone();
+                runtime.track_deck_id = track.deck_id.clone();
             } else {
                 runtime.track_active = false;
                 runtime.playing = false;
@@ -696,28 +778,100 @@ fn dispatch_dj_link_event(
                 runtime.position_sec = None;
             }
             if let Some(division) = payload.loop_division {
-                if !payload.released && runtime.loop_division != Some(division) {
-                    let next = match dj_link_next_generation(&runtime) {
-                        Ok(next) => next,
-                        Err(_) => {
-                            return dj_link_rejected(
-                                "state_generation_exhausted",
-                                current_generation,
-                            )
-                        }
-                    };
-                    if engine
-                        .dj_link_set_timeline_loop_absolute(division, true)
-                        .is_err()
-                    {
-                        return dj_link_rejected("engine_publication_rejected", current_generation);
-                    }
-                    runtime.state_generation = next;
-                }
+                // STATE_SYNC is diagnostics/order only.  It never publishes an
+                // engine loop command; the authoritative timeline lane owns
+                // convergence after its explicit request/ACK.
                 runtime.loop_division = Some(division);
             }
             runtime.last_event_id = Some(envelope.event_id);
             dj_link_accepted(runtime.state_generation)
+        }
+        protocol::DjLinkMessageType::TimelineStateRequest => DjLinkDispatchOutcome::TimelineState {
+            state_generation: current_generation,
+            state: dj_link_timeline_state(&runtime, engine, &event_id, sequence),
+        },
+        protocol::DjLinkMessageType::TimelineBeatJump => {
+            let payload = match serde_json::from_value::<protocol::DjLinkTimelineBeatJumpPayload>(
+                envelope.payload,
+            ) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    return dj_link_rejected(
+                        "invalid_timeline_beat_jump_payload",
+                        current_generation,
+                    )
+                }
+            };
+            let Some(current_timeline_id) = runtime.timeline_id.as_deref() else {
+                return dj_link_rejected("timeline_not_active", current_generation);
+            };
+            if current_timeline_id != payload.timeline_id {
+                return dj_link_rejected("timeline_identity_mismatch", current_generation);
+            }
+            let Ok(timeline_id) = payload.timeline_id.parse::<u64>() else {
+                return dj_link_rejected("invalid_timeline_id", current_generation);
+            };
+            if timeline_id == 0 {
+                return dj_link_rejected("invalid_timeline_id", current_generation);
+            }
+            if engine
+                .dj_link_timeline_beat_jump(TimelineId(timeline_id), payload.bars)
+                .is_err()
+            {
+                return dj_link_rejected("engine_publication_rejected", current_generation);
+            }
+            runtime.position_bars = if payload.bars > 0 {
+                match runtime.position_bars.checked_add(payload.bars as u64) {
+                    Some(position) => position,
+                    None => return dj_link_rejected("position_overflow", current_generation),
+                }
+            } else {
+                match runtime
+                    .position_bars
+                    .checked_sub(payload.bars.unsigned_abs() as u64)
+                {
+                    Some(position) => position,
+                    None => return dj_link_rejected("position_underflow", current_generation),
+                }
+            };
+            runtime.last_event_id = Some(event_id.clone());
+            DjLinkDispatchOutcome::TimelineState {
+                state_generation: current_generation,
+                state: dj_link_timeline_state(&runtime, engine, &event_id, sequence),
+            }
+        }
+        protocol::DjLinkMessageType::TimelineLoopSet => {
+            let payload = match serde_json::from_value::<protocol::DjLinkTimelineLoopSetPayload>(
+                envelope.payload,
+            ) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    return dj_link_rejected(
+                        "invalid_timeline_loop_set_payload",
+                        current_generation,
+                    )
+                }
+            };
+            let Some(current_timeline_id) = runtime.timeline_id.as_deref() else {
+                return dj_link_rejected("timeline_not_active", current_generation);
+            };
+            if current_timeline_id != payload.timeline_id {
+                return dj_link_rejected("timeline_identity_mismatch", current_generation);
+            }
+            let division = runtime.loop_division.unwrap_or(0);
+            if engine
+                .dj_link_set_timeline_loop_absolute(division, payload.active)
+                .is_err()
+            {
+                return dj_link_rejected("engine_publication_rejected", current_generation);
+            }
+            // The ACK is based on the engine publication.  The returned state
+            // is built from the post-ACK snapshot, never from the request.
+            runtime.last_event_id = Some(event_id.clone());
+            DjLinkDispatchOutcome::TimelineState {
+                state_generation: current_generation,
+                state: dj_link_timeline_state(&runtime, engine, &event_id, sequence),
+            }
         }
         protocol::DjLinkMessageType::Heartbeat | protocol::DjLinkMessageType::Hello => {
             dj_link_accepted(current_generation)
@@ -1666,6 +1820,13 @@ struct VideoClipSlotRemoveRequest {
 struct VideoClipSlotReorderRequest {
     layer_id: VideoLayerId,
     slot_ids: Vec<VideoClipSlotId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CueListReorderRequest {
+    /// The complete desired order. Every visible Bank is included exactly
+    /// once; ID 1 has no special position or deletion privilege here.
+    cue_list_ids: Vec<protocol::CueListId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15177,6 +15338,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetVideoMasterOpacity(..)
         | EngineCommand::SetVideoBlackout(..)
         | EngineCommand::AddVideoOutput(..)
+        | EngineCommand::AddVideoOutputPublished { .. }
         | EngineCommand::RemoveVideoOutput(..)
         | EngineCommand::SetVideoOutputConfig { .. }
         | EngineCommand::SetVideoOutputEnabled { .. }
@@ -15266,6 +15428,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::RemoveNodeGraphPublished { .. }
         | EngineCommand::CreateCue { .. }
         | EngineCommand::CreateCuePublished { .. }
+        | EngineCommand::CreateEmptyCuePublished { .. }
         | EngineCommand::UpdateCue { .. }
         | EngineCommand::UpdateCuePublished { .. }
         | EngineCommand::SetCueEffectTargetsPublished { .. }
@@ -15285,6 +15448,8 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::MoveCue { .. }
         | EngineCommand::DuplicateCue { .. }
         | EngineCommand::UpsertCueList { .. }
+        | EngineCommand::ReorderCueListsPublished { .. }
+        | EngineCommand::DeleteCueListPublished { .. }
         | EngineCommand::RemoveCueList(..)
         | EngineCommand::SetCueList { .. }
         | EngineCommand::UpsertPlaybackExecutor(..)
@@ -15350,6 +15515,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetTimelineLoopEnabled(..)
         | EngineCommand::SetTimelineLoopAbsolute { .. }
         | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+        | EngineCommand::DjLinkTimelineBeatJump { .. }
         | EngineCommand::DjLinkRelease { .. }
         | EngineCommand::ToggleTimelineLoop
         | EngineCommand::ScaleTimelineLoop(..)
@@ -20251,6 +20417,73 @@ fn remote_access_urls(config: RemoteControlConfig) -> Vec<String> {
     build_remote_access_urls(&config, discover_lan_ip())
 }
 
+/// Return only addresses that are explicitly reported by an adapter's
+/// IPv4/IPv6 address line.  Gateway, DNS, loopback, link-local, unspecified,
+/// and duplicate values are excluded before the renderer can select a bind
+/// target.  This is intentionally a read-only OS query; it never changes a
+/// listener or remote-control configuration.
+fn normalize_show_lan_interfaces(candidates: impl IntoIterator<Item = IpAddr>) -> Vec<String> {
+    let mut addresses = BTreeSet::new();
+    for address in candidates {
+        let eligible = !address.is_loopback()
+            && !address.is_unspecified()
+            && match address {
+                IpAddr::V4(ip) => !ip.is_link_local() && !ip.is_multicast(),
+                IpAddr::V6(ip) => !ip.is_unicast_link_local() && !ip.is_multicast(),
+            };
+        if eligible {
+            addresses.insert(address.to_string());
+        }
+    }
+    addresses
+        .into_iter()
+        .take(MAX_SHOW_LAN_INTERFACES)
+        .collect()
+}
+
+fn parse_show_lan_interface_addresses(output: &str) -> Vec<IpAddr> {
+    output
+        .lines()
+        .filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.contains("ipv4") || lower.contains("ipv6")
+        })
+        .flat_map(|line| {
+            line.split_whitespace().filter_map(|token| {
+                let token = token.trim_matches(|character: char| {
+                    matches!(character, '.' | ',' | ';' | '(' | ')' | '[' | ']')
+                });
+                let token = token.split('%').next().unwrap_or(token);
+                token.parse::<IpAddr>().ok()
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn list_show_lan_interfaces() -> Result<Vec<String>, String> {
+    let program = if cfg!(target_os = "windows") {
+        "ipconfig"
+    } else {
+        "ifconfig"
+    };
+    let output = Command::new(program)
+        .output()
+        .map_err(|error| format!("LAN interface enumeration failed: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "LAN interface enumeration exited with {}",
+            output.status
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let addresses = normalize_show_lan_interfaces(parse_show_lan_interface_addresses(&text));
+    if addresses.is_empty() {
+        return Err("No eligible non-loopback LAN interface was discovered".to_string());
+    }
+    Ok(addresses)
+}
+
 fn discover_lan_ip() -> Option<IpAddr> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
@@ -20754,6 +20987,14 @@ fn remote_control_status(state: State<'_, AppState>) -> Result<RemoteControlStat
         track_playing: runtime.track_playing,
         track_bpm: runtime.track_bpm,
         position_sec: runtime.position_sec,
+        snapshot_ready: transport.snapshot_ready,
+        authoritative_state: Some(runtime.authoritative_state),
+        timeline_id: runtime.timeline_id.clone(),
+        position_bars: Some(runtime.position_bars),
+        loop_active: runtime.loop_active,
+        last_outbound_event_id: transport.last_outbound_event_id,
+        last_outbound_sequence: transport.last_outbound_sequence,
+        last_outbound_delivery: transport.last_outbound_delivery,
     });
     Ok(status)
 }
@@ -21387,6 +21628,371 @@ fn format_hex_bytes(bytes: &[u8]) -> String {
         .join(" ")
 }
 
+fn reorder_cue_lists_in_candidate(
+    mut snapshot: EngineSnapshot,
+    cue_list_ids: &[protocol::CueListId],
+) -> Result<EngineSnapshot, String> {
+    if cue_list_ids.is_empty() {
+        return Err("Cue List reorder must contain every Cue List".to_string());
+    }
+    if cue_list_ids.len() != snapshot.cue_lists.len() {
+        return Err(format!(
+            "Cue List reorder must contain all {} Cue Lists exactly once",
+            snapshot.cue_lists.len()
+        ));
+    }
+    let mut by_id = snapshot
+        .cue_lists
+        .into_iter()
+        .map(|cue_list| (cue_list.id, cue_list))
+        .collect::<HashMap<_, _>>();
+    let mut seen = HashSet::with_capacity(cue_list_ids.len());
+    let mut reordered = Vec::with_capacity(cue_list_ids.len());
+    for cue_list_id in cue_list_ids {
+        if !seen.insert(*cue_list_id) {
+            return Err(format!(
+                "Cue List reorder contains duplicate ID {cue_list_id}"
+            ));
+        }
+        reordered.push(
+            by_id
+                .remove(cue_list_id)
+                .ok_or_else(|| format!("Cue List {cue_list_id} was not found"))?,
+        );
+    }
+    if !by_id.is_empty() {
+        return Err("Cue List reorder omitted an existing Cue List".to_string());
+    }
+    snapshot.cue_lists = reordered;
+    Ok(snapshot)
+}
+
+fn delete_cue_list_in_candidate(
+    mut snapshot: EngineSnapshot,
+    cue_list_id: protocol::CueListId,
+) -> Result<EngineSnapshot, String> {
+    if snapshot.cue_lists.len() <= 1 {
+        return Err("At least one Cue List must remain".to_string());
+    }
+    if !snapshot
+        .cue_lists
+        .iter()
+        .any(|cue_list| cue_list.id == cue_list_id)
+    {
+        return Err(format!("Cue List {cue_list_id} was not found"));
+    }
+    let removed_cue_ids = snapshot
+        .cues
+        .iter()
+        .filter(|cue| cue.cue_list_id == cue_list_id)
+        .map(|cue| cue.id)
+        .collect::<HashSet<_>>();
+    snapshot
+        .cue_lists
+        .retain(|cue_list| cue_list.id != cue_list_id);
+    snapshot.cues.retain(|cue| cue.cue_list_id != cue_list_id);
+    snapshot
+        .playback_executors
+        .retain(|executor| executor.cue_list_id != cue_list_id);
+    snapshot
+        .active_group_cue_ids
+        .retain(|_, cue_id| !removed_cue_ids.contains(cue_id));
+    snapshot
+        .cue_live_modifiers
+        .retain(|modifier| !removed_cue_ids.contains(&modifier.cue_id));
+    snapshot.active_cue_id = snapshot
+        .active_cue_id
+        .filter(|cue_id| !removed_cue_ids.contains(cue_id));
+    if snapshot
+        .active_fade
+        .as_ref()
+        .is_some_and(|fade| removed_cue_ids.contains(&fade.cue_id))
+    {
+        snapshot.active_fade = None;
+    }
+    snapshot
+        .timeline
+        .events
+        .retain(|event| !removed_cue_ids.contains(&event.cue_id));
+    let remaining_event_ids = snapshot
+        .timeline
+        .events
+        .iter()
+        .map(|event| event.id)
+        .collect::<HashSet<_>>();
+    for event in &mut snapshot.timeline.events {
+        if event
+            .jump_to_event_id
+            .is_some_and(|target_id| !remaining_event_ids.contains(&target_id))
+        {
+            event.jump_to_event_id = None;
+        }
+    }
+    Ok(snapshot)
+}
+
+fn add_empty_cue_in_candidate(
+    mut snapshot: EngineSnapshot,
+    cue_id: CueId,
+    cue_list_id: protocol::CueListId,
+) -> Result<EngineSnapshot, String> {
+    if cue_id == 0 {
+        return Err("Empty Cue ID must be greater than zero".to_string());
+    }
+    if !snapshot
+        .cue_lists
+        .iter()
+        .any(|cue_list| cue_list.id == cue_list_id)
+    {
+        return Err(format!("Cue List {cue_list_id} was not found"));
+    }
+    if snapshot.cues.iter().any(|cue| cue.id == cue_id) {
+        return Err(format!("Cue {cue_id} already exists"));
+    }
+    snapshot.cues.push(protocol::CueSummary {
+        id: cue_id,
+        cue_list_id,
+        cue_number: cue_id.to_string(),
+        label: "New Scene".to_string(),
+        ..protocol::CueSummary::default()
+    });
+    Ok(snapshot)
+}
+
+fn commit_authoritative_cue_list_reorder(
+    state: &AppState,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    request: &CueListReorderRequest,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_media_asset_commit(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err("Project transaction is active; retry the Cue List reorder".to_string());
+    }
+
+    let before_snapshot = state.engine.persistence_snapshot()?;
+    let before_project =
+        project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
+    let before = ProjectCheckpoint {
+        hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+        project: before_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+    };
+    let candidate_snapshot =
+        reorder_cue_lists_in_candidate(before_snapshot, &request.cue_list_ids)?;
+    let after_project =
+        project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
+    let after = ProjectCheckpoint {
+        project: after_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: String::new(),
+    };
+    let plan = prepare_internal_media_asset_commit(
+        &coordinator,
+        "Reorder Cue Lists",
+        "cue-lists-order",
+        before,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )?;
+    run_admitted_internal_media_asset_transaction(
+        &state.project_transaction_active,
+        &mut coordinator,
+        plan,
+        || {
+            state
+                .engine
+                .reorder_cue_lists_published(request.cue_list_ids.clone())
+        },
+    )?;
+    Ok(ProjectHistoryMutationResult {
+        history_status: project_history_status_for_coordinator(&coordinator),
+        authority: project_authority_bundle_from_coordinator(state, &coordinator),
+    })
+}
+
+fn commit_authoritative_cue_list_delete(
+    state: &AppState,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    cue_list_id: protocol::CueListId,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_media_asset_commit(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err("Project transaction is active; retry the Cue List delete".to_string());
+    }
+
+    let before_snapshot = state.engine.persistence_snapshot()?;
+    let before_project =
+        project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
+    let before = ProjectCheckpoint {
+        hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+        project: before_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+    };
+    let candidate_snapshot = delete_cue_list_in_candidate(before_snapshot, cue_list_id)?;
+    let after_project =
+        project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
+    let after = ProjectCheckpoint {
+        project: after_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: String::new(),
+    };
+    let plan = prepare_internal_media_asset_commit(
+        &coordinator,
+        "Delete Cue List",
+        "cue-lists-delete",
+        before,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )?;
+    run_admitted_internal_media_asset_transaction(
+        &state.project_transaction_active,
+        &mut coordinator,
+        plan,
+        || state.engine.delete_cue_list_published(cue_list_id),
+    )?;
+    Ok(ProjectHistoryMutationResult {
+        history_status: project_history_status_for_coordinator(&coordinator),
+        authority: project_authority_bundle_from_coordinator(state, &coordinator),
+    })
+}
+
+fn commit_authoritative_empty_cue(
+    state: &AppState,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    cue_list_id: protocol::CueListId,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_media_asset_commit(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err("Project transaction is active; retry the empty Cue create".to_string());
+    }
+
+    let before_snapshot = state.engine.persistence_snapshot()?;
+    let before_project =
+        project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
+    let before = ProjectCheckpoint {
+        hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+        project: before_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+    };
+    let cue_id = state.engine.allocate_cue_id();
+    let candidate_snapshot = match add_empty_cue_in_candidate(before_snapshot, cue_id, cue_list_id)
+    {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            let _ = state.engine.release_cue_id_if_last(cue_id);
+            return Err(error);
+        }
+    };
+    let after_project =
+        project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
+    let after = ProjectCheckpoint {
+        project: after_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: String::new(),
+    };
+    let plan = match prepare_internal_media_asset_commit(
+        &coordinator,
+        "Create Empty Scene",
+        "",
+        before,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let _ = state.engine.release_cue_id_if_last(cue_id);
+            return Err(error);
+        }
+    };
+    if let Err(error) = run_admitted_internal_media_asset_transaction(
+        &state.project_transaction_active,
+        &mut coordinator,
+        plan,
+        || state.engine.create_empty_cue_published(cue_id, cue_list_id),
+    ) {
+        let _ = state.engine.release_cue_id_if_last(cue_id);
+        return Err(error);
+    }
+    Ok(ProjectHistoryMutationResult {
+        history_status: project_history_status_for_coordinator(&coordinator),
+        authority: project_authority_bundle_from_coordinator(state, &coordinator),
+    })
+}
+
+#[tauri::command]
+fn create_empty_cue(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    cue_list_id: protocol::CueListId,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let expected_authority = MediaAssetPrepareAuthority {
+        epoch: expected_epoch,
+        revision: expected_revision,
+        checkpoint_hash: expected_checkpoint_hash,
+    };
+    commit_authoritative_empty_cue(
+        &state,
+        expected_epoch,
+        &owner_id,
+        &expected_authority,
+        cue_list_id,
+    )
+}
+
 #[tauri::command]
 fn create_cue_from_current(
     state: State<'_, AppState>,
@@ -21461,12 +22067,73 @@ fn create_cue_list(
     if label.is_empty() {
         return Err("Cue List label is required".to_string());
     }
+    if state
+        .engine
+        .snapshot()
+        .cue_lists
+        .iter()
+        .any(|cue_list| cue_list.label.trim().eq_ignore_ascii_case(&label))
+    {
+        return Err(format!("Cue List label '{label}' is already in use"));
+    }
     let cue_list_id = state.engine.allocate_cue_list_id();
     state
         .engine
         .send(EngineCommand::UpsertCueList { cue_list_id, label })
         .map_err(|error| error.to_string())?;
     Ok(cue_list_id)
+}
+
+#[tauri::command]
+fn reorder_cue_lists(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    request: CueListReorderRequest,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let expected_authority = MediaAssetPrepareAuthority {
+        epoch: expected_epoch,
+        revision: expected_revision,
+        checkpoint_hash: expected_checkpoint_hash,
+    };
+    commit_authoritative_cue_list_reorder(
+        &state,
+        expected_epoch,
+        &owner_id,
+        &expected_authority,
+        &request,
+    )
+}
+
+#[tauri::command]
+fn delete_cue_list(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    cue_list_id: protocol::CueListId,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let expected_authority = MediaAssetPrepareAuthority {
+        epoch: expected_epoch,
+        revision: expected_revision,
+        checkpoint_hash: expected_checkpoint_hash,
+    };
+    commit_authoritative_cue_list_delete(
+        &state,
+        expected_epoch,
+        &owner_id,
+        &expected_authority,
+        cue_list_id,
+    )
 }
 
 fn validate_reference_palette_values(
@@ -21851,6 +22518,15 @@ fn rename_cue_list(
     cue_list_id: protocol::CueListId,
     label: String,
 ) -> Result<(), String> {
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return Err("Cue List label is required".to_string());
+    }
+    if state.engine.snapshot().cue_lists.iter().any(|cue_list| {
+        cue_list.id != cue_list_id && cue_list.label.trim().eq_ignore_ascii_case(&label)
+    }) {
+        return Err(format!("Cue List label '{label}' is already in use"));
+    }
     state
         .engine
         .send(EngineCommand::UpsertCueList { cue_list_id, label })
@@ -32808,6 +33484,54 @@ fn set_video_composition_layers(
 }
 
 #[tauri::command]
+fn list_video_display_monitors(window: WebviewWindow) -> Result<Vec<VideoDisplayMonitor>, String> {
+    let monitors = window
+        .available_monitors()
+        .map_err(|error| format!("Display enumeration failed: {error}"))?;
+    if monitors.is_empty() {
+        return Err("No physical display was discovered".to_string());
+    }
+    monitors
+        .into_iter()
+        .enumerate()
+        .map(|(index, monitor)| {
+            let index = u32::try_from(index).map_err(|_| {
+                "Display enumeration exceeded the supported index range".to_string()
+            })?;
+            let size = monitor.size();
+            let position = monitor.position();
+            let scale_factor = monitor.scale_factor();
+            if !scale_factor.is_finite() || scale_factor <= 0.0 {
+                return Err(format!("Display {index} reported an invalid scale factor"));
+            }
+            let name = monitor
+                .name()
+                .cloned()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| format!("Display {}", index + 1));
+            let identity_material = format!(
+                "syndocal.display-monitor.v1\0{name}\0{}\0{}\0{}\0{}\0{}",
+                position.x,
+                position.y,
+                size.width,
+                size.height,
+                scale_factor.to_bits(),
+            );
+            Ok(VideoDisplayMonitor {
+                index,
+                identity: sha256_hex(identity_material.as_bytes()),
+                name,
+                physical_width: size.width,
+                physical_height: size.height,
+                position_x: position.x,
+                position_y: position.y,
+                scale_factor,
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
 fn add_video_output(
     state: State<'_, AppState>,
     label: String,
@@ -33582,6 +34306,26 @@ fn take_over_output_control_v1(
         &state,
         &query_state,
         OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+        request,
+    )
+}
+
+/// Authoritative Display-output creation lane.  This is deliberately a new
+/// operation; the legacy `add_video_output` route remains fail-closed.
+#[tauri::command]
+fn add_display_output_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: OutputControlCommandRequestV1,
+) -> OutputControlResponseV1 {
+    control_plane_runtime::execute_output_control_for_operation(
+        &app,
+        &window,
+        &state,
+        &query_state,
+        OUTPUT_DISPLAY_ADD_OPERATION_ID,
         request,
     )
 }
@@ -36295,15 +37039,29 @@ where
     let receipt = candidate
         .submit_request(request, now_ms)
         .map_err(|error| format!("Output lease {context} admission failed: {error:?}"))?;
-    ensure_output_lease_receipt_succeeded_or_commit_expiry(
-        live_registry,
-        candidate.clone(),
-        &receipt,
-        context,
-    )?;
-    let committed = commit()?;
-    *live_registry = candidate;
-    Ok((committed, receipt))
+    match &receipt.outcome {
+        Ok(_) => {
+            // Keep the candidate private until the physical/project commit
+            // has returned success. Publishing the lease before the callback
+            // would leave an Authorized lease behind when the engine or
+            // project transaction rejects the requested resource.
+            let committed = commit()?;
+            *live_registry = candidate;
+            Ok((committed, receipt))
+        }
+        Err(output_lease::OutputLeaseError::Expired) => {
+            // Expiry is the one deliberate rejection that advances authority
+            // to HeldOrphaned. It must be published, but no physical callback
+            // is allowed to run for an expired request.
+            *live_registry = candidate;
+            Err(format!(
+                "AI3 output lease {context} transition failed: {receipt:?}"
+            ))
+        }
+        Err(_) => Err(format!(
+            "AI3 output lease {context} transition failed: {receipt:?}"
+        )),
+    }
 }
 
 fn output_lease_resources_for_control_action(
@@ -36319,8 +37077,14 @@ fn output_lease_resources_for_control_action(
             }
         },
         protocol::control_plane_command::OutputControlActionV1::ReleaseBlackout { .. }
+        | protocol::control_plane_command::OutputControlActionV1::AddDisplay { .. }
         | protocol::control_plane_command::OutputControlActionV1::TakeOverStandby { .. } => {
-            vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
+            match action {
+                protocol::control_plane_command::OutputControlActionV1::AddDisplay { .. } => {
+                    vec![OutputLeaseResource::Video]
+                }
+                _ => vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video],
+            }
         }
         _ => return Err("Output lease authority is not an ordinary output action".to_string()),
     };
@@ -36340,6 +37104,7 @@ pub(crate) fn build_output_lease_authorization_request(
     let authority = match action {
         OutputControlActionV1::Arm { lease, .. }
         | OutputControlActionV1::ReleaseBlackout { lease }
+        | OutputControlActionV1::AddDisplay { lease, .. }
         | OutputControlActionV1::TakeOverStandby { lease, .. } => lease,
         _ => return Err("Output lease authority is not an ordinary output action".to_string()),
     };
@@ -42517,13 +43282,8 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
             ));
         }
     }
-    if !project
-        .snapshot
-        .cue_lists
-        .iter()
-        .any(|cue_list| cue_list.id == protocol::DEFAULT_CUE_LIST_ID)
-    {
-        return Err("Project is missing the Main Cue List".to_string());
+    if project.snapshot.cue_lists.is_empty() {
+        return Err("Project must contain at least one Cue List".to_string());
     }
     for cue_list in &project.snapshot.cue_lists {
         if cue_list.id == 0 || cue_list.label.trim().is_empty() {
@@ -48027,6 +48787,242 @@ where
     apply(&guard, validation)
 }
 
+/// Commit one Display output through the authenticated R4 lane.  The legacy
+/// `add_video_output` command remains fail-closed; this seam owns the exact
+/// lease, transition lock, monitor revalidation, engine publication, and
+/// terminal output fence for the simplified setup flow.
+fn validate_display_output_monitor_snapshot(
+    app: &tauri::AppHandle,
+    spec: &DisplayOutputSpecV1,
+) -> Result<(), String> {
+    let monitors = app
+        .available_monitors()
+        .map_err(|error| format!("Display enumeration failed: {error}"))?;
+    let monitor = monitors
+        .get(spec.monitor_index as usize)
+        .ok_or_else(|| "Display output monitor index is not available".to_string())?;
+    let size = monitor.size();
+    let position = monitor.position();
+    let scale_factor = monitor.scale_factor();
+    if size.width == 0 || size.height == 0 || !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Err("Display output monitor reported invalid geometry".to_string());
+    }
+    let name = monitor
+        .name()
+        .cloned()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| format!("Display {}", spec.monitor_index + 1));
+    let identity_material = format!(
+        "syndocal.display-monitor.v1\0{name}\0{}\0{}\0{}\0{}\0{}",
+        position.x,
+        position.y,
+        size.width,
+        size.height,
+        scale_factor.to_bits(),
+    );
+    if spec.monitor_identity != sha256_hex(identity_material.as_bytes()) {
+        return Err("Display output monitor identity is stale".to_string());
+    }
+    if spec.width != size.width || spec.height != size.height {
+        return Err(
+            "Display output dimensions must match the selected monitor exactly".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn add_display_output_with_output_control_fence(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    spec: &DisplayOutputSpecV1,
+    expected_fence: &OutputControlFenceV1,
+    lease_request: &OutputLeaseRequest,
+    _lease_now_ms: u64,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
+    spec.validate()
+        .map_err(|_| "Display output specification is invalid".to_string())?;
+    let _lifecycle_guard = state
+        .standby_sync_lifecycle
+        .lock()
+        .map_err(|_| "Standby synchronization lifecycle lock was poisoned".to_string())?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    let _transition_guard = lock_output_ownership_transition(state)?;
+    let (output_epoch_after, output_generation_after) = {
+        if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+            || !control_plane_runtime::exact_output_control_fence_matches(
+                state,
+                &coordinator,
+                expected_fence,
+            )
+            || ensure_no_pending_project_transaction(&coordinator).is_err()
+        {
+            return Err("Output control fence changed before Display output creation".to_string());
+        }
+        validate_display_output_monitor_snapshot(app, spec)?;
+        if state.engine.snapshot().video.outputs.iter().any(|output| {
+            output.kind == VideoOutputKind::Display && output.monitor_id == Some(spec.monitor_index)
+        }) {
+            return Err("A Display output already targets this monitor".to_string());
+        }
+        // Display creation does not change the Engine's output-ownership
+        // role. Capture the projection from that real authority instead
+        // of manufacturing a successor pair that exact fence matching
+        // could never observe after this resource-only mutation.
+        let output_authority = state.engine.output_ownership_status();
+        let output_epoch_after = output_authority
+            .epoch
+            .checked_add(1)
+            .filter(|value| *value <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
+            .ok_or_else(|| "Output ownership epoch is exhausted".to_string())?;
+        let output_generation_after = output_authority
+            .generation
+            .checked_add(1)
+            .filter(|value| *value <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
+            .ok_or_else(|| "Output ownership generation is exhausted".to_string())?;
+        (output_epoch_after, output_generation_after)
+    };
+    {
+        let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
+            "Output lease registry lock was poisoned before Display output publication".to_string()
+        })?;
+        let final_lease_now_ms = state.output_lease_now_ms()?;
+        let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
+            &mut lease_registry,
+            lease_request,
+            final_lease_now_ms,
+            "Display output creation",
+            || {
+                // The consent and lease may have waited while the native
+                // topology changed. Re-query immediately before allocating
+                // an output ID or publishing the authored project image.
+                validate_display_output_monitor_snapshot(app, spec)?;
+                if !state.engine.output_ownership_status().video_allowed {
+                    return Err("Video output ownership is not active".to_string());
+                }
+                let output_id = state.engine.allocate_video_output_id();
+                let output = VideoOutputSummary {
+                    id: output_id,
+                    label: spec.label.trim().to_string(),
+                    kind: VideoOutputKind::Display,
+                    enabled: true,
+                    composition_id: 1,
+                    fullscreen: spec.fullscreen,
+                    monitor_id: Some(spec.monitor_index),
+                    width: spec.width,
+                    height: spec.height,
+                    endpoint_name: None,
+                    opacity: 1.0,
+                    blackout: false,
+                    mapping: VideoOutputMapping::default(),
+                };
+                let before_snapshot = match state.engine.persistence_snapshot() {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        let _ = state.engine.release_video_output_id_if_last(output_id);
+                        return Err(error);
+                    }
+                };
+                let before_project = project_file_for_save_from_parts(
+                    before_snapshot.clone(),
+                    &coordinator.ancillary,
+                );
+                let before = ProjectCheckpoint {
+                    hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+                    project: before_project,
+                    mappings: coordinator.mappings.clone(),
+                    epoch: coordinator.epoch,
+                    revision: coordinator.revision,
+                };
+                let mut candidate_snapshot = before_snapshot;
+                candidate_snapshot.video.outputs.push(output.clone());
+                let after_project =
+                    project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
+                let after = ProjectCheckpoint {
+                    project: after_project,
+                    mappings: coordinator.mappings.clone(),
+                    epoch: coordinator.epoch,
+                    revision: coordinator.revision,
+                    hash: String::new(),
+                };
+                let plan = match prepare_internal_media_asset_commit(
+                    &coordinator,
+                    "Add Display Output",
+                    "",
+                    before,
+                    after,
+                    current_unix_ms().min(u64::MAX as u128) as u64,
+                ) {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        let _ = state.engine.release_video_output_id_if_last(output_id);
+                        return Err(error);
+                    }
+                };
+                match run_admitted_internal_media_asset_transaction(
+                    &state.project_transaction_active,
+                    &mut coordinator,
+                    plan,
+                    || state.engine.add_video_output_published(output),
+                ) {
+                    Ok(()) => Ok(true),
+                    Err(error) => {
+                        // The Published command either never entered the
+                        // queue or definitively rolled back before this
+                        // error returned. Reclaim only the unused tail;
+                        // concurrent allocations remain monotonic.
+                        let _ = state.engine.release_video_output_id_if_last(output_id);
+                        Err(error)
+                    }
+                }
+            },
+        )?;
+        let fence_after = if !applied {
+            expected_fence.clone()
+        } else {
+            let output_authority = state.engine.output_ownership_status();
+            let actual_output_epoch = output_authority
+                .epoch
+                .checked_add(1)
+                .filter(|value| *value <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
+                .ok_or_else(|| "Output ownership epoch is exhausted".to_string())?;
+            let actual_output_generation = output_authority
+                .generation
+                .checked_add(1)
+                .filter(|value| *value <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
+                .ok_or_else(|| "Output ownership generation is exhausted".to_string())?;
+            if (actual_output_epoch, actual_output_generation)
+                != (output_epoch_after, output_generation_after)
+            {
+                return Err(
+                    "Output ownership authority changed during Display output publication"
+                        .to_string(),
+                );
+            }
+            let safety = state.engine.safety_blackout_authority();
+            control_plane_runtime::committed_output_control_fence(
+                expected_fence,
+                coordinator.epoch,
+                coordinator.revision,
+                &coordinator.checkpoint_hash,
+                coordinator.publication_generation,
+                output_epoch_after,
+                output_generation_after,
+                safety.epoch,
+                safety.generation,
+            )
+        };
+        Ok((applied, fence_after, lease_receipt))
+    }
+}
+
 /// Apply an authenticated R4 Arm while retaining the same lifecycle and
 /// project admission boundary that was used to validate its consent fence.
 /// The output transition lock is acquired in the global order after the
@@ -50719,6 +51715,23 @@ struct VideoOutputWindowStatus {
     ownership_reason: protocol::OutputOwnershipReason,
     ownership_error: Option<String>,
     performance: Option<NativeVideoOutputPerformance>,
+}
+
+/// Physical display targets exposed to the local setup UI.  The index is the
+/// stable-in-process position used by the existing native output window path;
+/// geometry intentionally keeps signed coordinates because Windows monitor
+/// topologies may extend left/up from the primary display.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VideoDisplayMonitor {
+    index: u32,
+    identity: String,
+    name: String,
+    physical_width: u32,
+    physical_height: u32,
+    position_x: i32,
+    position_y: i32,
+    scale_factor: f64,
 }
 
 #[derive(Debug)]
@@ -56437,6 +57450,19 @@ pub(crate) mod tests {
         directory: PathBuf,
     }
 
+    /// `EngineHandle::start_for_tests` starts its real runtime worker before
+    /// returning.  The first worker command publishes the definitive initial
+    /// persistence image (including runtime-owned catalog mirrors).  A test
+    /// that seeds a coordinator from the immediately returned snapshot can
+    /// otherwise race that publication and retain a stale fence.  Keep this
+    /// synchronization in the test fixture instead of weakening production
+    /// query/commit assertions or polling a timing-dependent frame counter.
+    fn wait_for_test_engine_startup(engine: &EngineHandle) -> EngineSnapshot {
+        engine
+            .persistence_snapshot()
+            .expect("test EngineHandle must acknowledge its startup snapshot")
+    }
+
     impl MediaAssetA6CommandHarness {
         pub(crate) fn new() -> Self {
             let directory = unique_test_directory("media-asset-a6-command");
@@ -56446,8 +57472,9 @@ pub(crate) mod tests {
                 enabled: false,
                 ..DmxOutputConfig::default()
             });
+            let initial_snapshot = wait_for_test_engine_startup(&engine);
             let initial_project_coordinator =
-                project_coordinator_for_initial_snapshot(engine.snapshot());
+                project_coordinator_for_initial_snapshot(initial_snapshot);
             let dj_link_runtime = Arc::new(Mutex::new(DjLinkRuntime::from_coordinator(
                 &initial_project_coordinator,
             )));
@@ -69258,6 +70285,47 @@ f 1 2 3
     }
 
     #[test]
+    fn show_lan_interface_normalization_is_sorted_bounded_and_fail_closed() {
+        let addresses = normalize_show_lan_interfaces([
+            "192.168.1.40".parse::<IpAddr>().unwrap(),
+            "2001:db8::2".parse::<IpAddr>().unwrap(),
+            "192.168.1.40".parse::<IpAddr>().unwrap(),
+            "127.0.0.1".parse::<IpAddr>().unwrap(),
+            "169.254.10.3".parse::<IpAddr>().unwrap(),
+            "fe80::1".parse::<IpAddr>().unwrap(),
+            "0.0.0.0".parse::<IpAddr>().unwrap(),
+            "::".parse::<IpAddr>().unwrap(),
+        ]);
+        assert_eq!(
+            addresses,
+            vec!["192.168.1.40".to_string(), "2001:db8::2".to_string()]
+        );
+        assert!(normalize_show_lan_interfaces(Vec::<IpAddr>::new()).is_empty());
+        let many = (1..=64).map(|index| format!("10.0.0.{index}").parse::<IpAddr>().unwrap());
+        assert_eq!(
+            normalize_show_lan_interfaces(many).len(),
+            MAX_SHOW_LAN_INTERFACES
+        );
+    }
+
+    #[test]
+    fn show_lan_interface_parser_accepts_multiple_ipv4_ipv6_and_ignores_unknown_lines() {
+        let output = "\
+        Ethernet adapter LAN:\n\
+           IPv4 Address. . . . . . . . . . . : 192.168.1.40\n\
+           IPv6 Address. . . . . . . . . . . : 2001:db8::2\n\
+           Default Gateway . . . . . . . . . : 192.168.1.1\n\
+        Unknown field: 203.0.113.8\n";
+        let parsed = parse_show_lan_interface_addresses(output);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            normalize_show_lan_interfaces(parsed),
+            vec!["192.168.1.40".to_string(), "2001:db8::2".to_string()]
+        );
+        assert!(parse_show_lan_interface_addresses("not an address listing").is_empty());
+    }
+
+    #[test]
     fn normalize_video_layer_label_trims_and_rejects_empty() {
         assert_eq!(
             normalize_video_layer_label("  Clip A  ".to_string()).unwrap(),
@@ -78889,6 +79957,7 @@ f 1 2 3
             },
         );
         mapping.timeline_id = engine.snapshot().timeline.id;
+        let mapping_timeline_id = mapping.timeline_id.0;
         coordinator.mappings.dj_track_triggers = vec![mapping];
         let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
         let coordinator = Mutex::new(coordinator);
@@ -78931,10 +80000,17 @@ f 1 2 3
             &admission,
             &transaction_active,
         );
-        assert!(matches!(
-            active_outcome,
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
+        match active_outcome {
+            DjLinkDispatchOutcome::TimelineState { state, .. } => {
+                assert_eq!(
+                    state.state,
+                    protocol::DjLinkTimelineStateValue::Running,
+                    "mapped active track publishes authoritative running state"
+                );
+                assert_eq!(state.timeline_id, mapping_timeline_id.to_string());
+            }
+            other => panic!("mapped active track must publish timeline state: {other:?}"),
+        }
         let replay_with_new_event = dj_link_test_envelope(
             protocol::DjLinkMessageType::MasterTrackActive,
             3,
@@ -78942,6 +80018,7 @@ f 1 2 3
             active.payload.clone(),
         );
         let first_generation = runtime.lock().unwrap().state_generation;
+        let engine_before_replay = engine.snapshot();
         assert!(matches!(
             dispatch_dj_link_event(
                 replay_with_new_event,
@@ -78953,6 +80030,11 @@ f 1 2 3
             ),
             DjLinkDispatchOutcome::Accepted { .. }
         ));
+        assert_eq!(
+            engine.snapshot().timeline.transport_generation,
+            engine_before_replay.timeline.transport_generation,
+            "play-session dedupe must not re-dispatch the engine"
+        );
         assert_eq!(runtime.lock().unwrap().state_generation, first_generation);
 
         let nonmaster = dj_link_test_envelope(
@@ -78967,6 +80049,7 @@ f 1 2 3
                 "deck": "B"
             }),
         );
+        let engine_before_nonmaster = engine.snapshot();
         assert!(matches!(
             dispatch_dj_link_event(
                 nonmaster,
@@ -78978,6 +80061,11 @@ f 1 2 3
             ),
             DjLinkDispatchOutcome::Rejected { .. }
         ));
+        assert_eq!(
+            engine.snapshot(),
+            engine_before_nonmaster,
+            "non-master track input must not reach the engine"
+        );
 
         let engine_before_sync = engine.snapshot();
         let sync = dj_link_test_envelope(
@@ -79021,6 +80109,7 @@ f 1 2 3
                 "deck": "A"
             }),
         );
+        let engine_before_missing = engine.snapshot();
         assert!(matches!(
             dispatch_dj_link_event(
                 missing,
@@ -79032,6 +80121,11 @@ f 1 2 3
             ),
             DjLinkDispatchOutcome::NoMapping { .. }
         ));
+        assert_eq!(
+            engine.snapshot(),
+            engine_before_missing,
+            "unmapped track input must not reach the engine"
+        );
     }
 
     #[test]
@@ -89464,6 +90558,7 @@ fn main() {
             start_osc_input,
             stop_osc_input,
             remote_access_urls,
+            list_show_lan_interfaces,
             start_remote_control,
             remote_control_status,
             rotate_dj_link_token,
@@ -89478,8 +90573,12 @@ fn main() {
             discover_usb_rdm_devices,
             discover_art_rdm_devices,
             start_art_rdm_full_discovery,
+            list_video_display_monitors,
             create_cue_from_current,
+            create_empty_cue,
             create_cue_list,
+            reorder_cue_lists,
+            delete_cue_list,
             create_reference_palette,
             update_reference_palette,
             remove_reference_palette,
@@ -89697,6 +90796,7 @@ fn main() {
             release_blackout_output_control_v1,
             arm_output_control_v1,
             take_over_output_control_v1,
+            add_display_output_v1,
             acquire_output_lease_v1,
             renew_output_lease_v1,
             recover_output_lease_v1,

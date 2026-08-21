@@ -2929,6 +2929,13 @@ mod tests {
             enabled: false,
             ..protocol::DmxOutputConfig::default()
         });
+        // Synchronize this test's private EngineHandle with its first
+        // published persistence image.  Without the command acknowledgement,
+        // a full-suite run can race the startup ownership image while this
+        // test is fencing the disconnected sender.
+        engine
+            .persistence_snapshot()
+            .expect("Spout test engine must acknowledge startup publication");
         let activation = engine
             .admit_output_activation(protocol::MachineOutputRole::Both)
             .unwrap();
@@ -2957,6 +2964,10 @@ mod tests {
         while !pending.poll() {
             std::thread::yield_now();
         }
+        // Make the worker/failure lease cleanup explicit before attempting
+        // the next ownership transition; the retry must never rely on a
+        // scope drop that can be delayed by the test harness.
+        drop(pending);
         let retry = engine
             .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
             .unwrap();

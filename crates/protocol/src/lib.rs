@@ -3781,7 +3781,7 @@ impl Default for PlaybackExecutorSummary {
     fn default() -> Self {
         Self {
             id: 1,
-            label: "Main".to_string(),
+            label: "Bank 1".to_string(),
             cue_list_id: DEFAULT_CUE_LIST_ID,
             page: 1,
             slot: 1,
@@ -3802,7 +3802,7 @@ impl Default for CueListSummary {
     fn default() -> Self {
         Self {
             id: DEFAULT_CUE_LIST_ID,
-            label: "Main".to_string(),
+            label: "Bank 1".to_string(),
             active_cue_id: None,
         }
     }
@@ -7552,6 +7552,7 @@ pub const DJ_LINK_MIN_TOKEN_BYTES: usize = 32;
 pub const DJ_LINK_MAX_CAPABILITIES: usize = 32;
 pub const DJ_LINK_MAX_MAPPINGS: usize = 128;
 pub const DJ_LINK_MAX_SEQUENCE: u64 = 9_007_199_254_740_991;
+pub const DJ_LINK_BEATS_PER_BAR: u8 = 4;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -7570,6 +7571,12 @@ pub enum DjLinkMessageType {
     Release,
     #[serde(rename = "DJ_STATE_SYNC")]
     StateSync,
+    #[serde(rename = "DJ_TIMELINE_STATE_REQUEST")]
+    TimelineStateRequest,
+    #[serde(rename = "DJ_TIMELINE_BEAT_JUMP")]
+    TimelineBeatJump,
+    #[serde(rename = "DJ_TIMELINE_LOOP_SET")]
+    TimelineLoopSet,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -7600,7 +7607,10 @@ pub struct DjLinkHelloPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
-pub struct DjLinkHeartbeatPayload {}
+pub struct DjLinkHeartbeatPayload {
+    #[serde(default)]
+    pub at: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -7654,14 +7664,16 @@ pub struct DjLinkLoopStatePayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
-pub struct DjLinkReleasePayload {}
+pub struct DjLinkReleasePayload {
+    #[serde(default)]
+    pub state: Option<String>,
+}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkStateSyncPayload {
     #[serde(default, rename = "loopDivision")]
     pub loop_division: Option<u8>,
-    #[serde(default)]
     pub released: bool,
     #[serde(default, rename = "masterDeck")]
     pub master_deck: Option<String>,
@@ -7669,7 +7681,196 @@ pub struct DjLinkStateSyncPayload {
     pub master_track: Option<DjLinkMasterTrackStatePayload>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkTimelineStateRequestPayload {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkTimelineBeatJumpPayload {
+    pub bars: i8,
+    #[serde(rename = "timelineId")]
+    pub timeline_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkTimelineLoopSetPayload {
+    pub active: bool,
+    #[serde(rename = "timelineId")]
+    pub timeline_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DjLinkTimelineStateValue {
+    Idle,
+    Running,
+    Stopped,
+    Ended,
+    Reset,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkTimelineState {
+    #[serde(rename = "type")]
+    pub message_type: String,
+    #[serde(rename = "eventId")]
+    pub event_id: String,
+    pub sequence: u64,
+    pub state: DjLinkTimelineStateValue,
+    #[serde(rename = "loopActive")]
+    pub loop_active: bool,
+    #[serde(rename = "timelineId")]
+    pub timeline_id: String,
+    #[serde(rename = "positionBars")]
+    pub position_bars: u64,
+}
+
+impl DjLinkTimelineState {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.message_type != "DJ_TIMELINE_STATE" {
+            return Err("DJ timeline state type must be DJ_TIMELINE_STATE".to_string());
+        }
+        validate_dj_link_string(&self.event_id, "eventId")?;
+        if self.sequence == 0 || self.sequence > DJ_LINK_MAX_SEQUENCE {
+            return Err("DJ timeline state sequence must be a positive safe integer".to_string());
+        }
+        validate_dj_link_string(&self.timeline_id, "timelineId")?;
+        Ok(())
+    }
+}
+
+/// The peer's final generic-json adapter is deliberately flat: only HELLO
+/// carries the adapter protocol and token, while event payload fields live at
+/// the envelope root. The older v1 `{v,agentId,sessionId,payload}` envelope is
+/// kept separately for compatibility and is never used as a silent fallback
+/// for an unknown flat protocol.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DjLinkFlatFrame {
+    #[serde(rename = "type")]
+    pub message_type: String,
+    #[serde(rename = "eventId")]
+    pub event_id: String,
+    pub sequence: u64,
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(flatten)]
+    pub payload: serde_json::Map<String, serde_json::Value>,
+}
+
+impl DjLinkFlatFrame {
+    pub fn parse_json(text: &str) -> Result<Self, String> {
+        if text.len() > DJ_LINK_MAX_FRAME_BYTES {
+            return Err("DJ Link frame exceeds the bounded size".to_string());
+        }
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let field_names = value
+            .as_object()
+            .ok_or_else(|| "DJ Link flat frame must be an object".to_string())?
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let frame: Self = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        validate_dj_link_string(&frame.message_type, "type")?;
+        validate_dj_link_string(&frame.event_id, "eventId")?;
+        if frame.sequence == 0 || frame.sequence > DJ_LINK_MAX_SEQUENCE {
+            return Err("DJ Link sequence must be a positive safe integer".to_string());
+        }
+        let known = matches!(
+            frame.message_type.as_str(),
+            "DJ_AGENT_HELLO"
+                | "DJ_AGENT_HEARTBEAT"
+                | "DJ_HEARTBEAT"
+                | "DJ_MASTER_CHANGED"
+                | "DJ_MASTER_TRACK_ACTIVE"
+                | "DJ_LOOP_STATE"
+                | "DJ_RELEASE"
+                | "DJ_STATE_SYNC"
+                | "DJ_TIMELINE_STATE_REQUEST"
+                | "DJ_TIMELINE_BEAT_JUMP"
+                | "DJ_TIMELINE_LOOP_SET"
+        );
+        if !known {
+            return Err(format!(
+                "unknown DJ Link flat message type {}",
+                frame.message_type
+            ));
+        }
+        if frame.message_type == "DJ_AGENT_HELLO" {
+            if frame.protocol.as_deref() != Some("generic-json") {
+                return Err("DJ Link HELLO protocol must be generic-json".to_string());
+            }
+            let token = frame
+                .token
+                .as_deref()
+                .ok_or_else(|| "DJ Link HELLO token is required".to_string())?;
+            if token.len() < DJ_LINK_MIN_TOKEN_BYTES || token.len() > DJ_LINK_MAX_STRING_BYTES {
+                return Err("DJ Link HELLO token length is invalid".to_string());
+            }
+            for capability in &frame.capabilities {
+                validate_dj_link_string(capability, "capability")?;
+            }
+        }
+        for key in &field_names {
+            validate_dj_link_string(key, "field name")?;
+        }
+        Ok(frame)
+    }
+
+    pub fn is_hello(&self) -> bool {
+        self.message_type == "DJ_AGENT_HELLO"
+    }
+
+    pub fn to_envelope(&self, agent_id: &str, session_id: &str) -> Result<DjLinkEnvelope, String> {
+        validate_dj_link_string(agent_id, "agentId")?;
+        validate_dj_link_string(session_id, "sessionId")?;
+        let message_type = match self.message_type.as_str() {
+            "DJ_AGENT_HELLO" => DjLinkMessageType::Hello,
+            "DJ_AGENT_HEARTBEAT" | "DJ_HEARTBEAT" => DjLinkMessageType::Heartbeat,
+            "DJ_MASTER_CHANGED" => DjLinkMessageType::MasterChanged,
+            "DJ_MASTER_TRACK_ACTIVE" => DjLinkMessageType::MasterTrackActive,
+            "DJ_LOOP_STATE" => DjLinkMessageType::LoopState,
+            "DJ_RELEASE" => DjLinkMessageType::Release,
+            "DJ_STATE_SYNC" => DjLinkMessageType::StateSync,
+            "DJ_TIMELINE_STATE_REQUEST" => DjLinkMessageType::TimelineStateRequest,
+            "DJ_TIMELINE_BEAT_JUMP" => DjLinkMessageType::TimelineBeatJump,
+            "DJ_TIMELINE_LOOP_SET" => DjLinkMessageType::TimelineLoopSet,
+            _ => return Err("unknown DJ Link flat message type".to_string()),
+        };
+        let mut payload = self.payload.clone();
+        if self.is_hello() {
+            let token = self
+                .token
+                .clone()
+                .ok_or_else(|| "DJ Link HELLO token is required".to_string())?;
+            payload.insert("authToken".to_string(), serde_json::Value::String(token));
+            payload.insert("version".to_string(), serde_json::Value::from(1u8));
+            payload.insert(
+                "capabilities".to_string(),
+                serde_json::to_value(&self.capabilities).map_err(|e| e.to_string())?,
+            );
+        }
+        let envelope = DjLinkEnvelope {
+            v: DJ_LINK_PROTOCOL_VERSION,
+            message_type,
+            agent_id: agent_id.to_string(),
+            session_id: session_id.to_string(),
+            sequence: self.sequence,
+            event_id: self.event_id.clone(),
+            payload: serde_json::Value::Object(payload),
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkMasterTrackStatePayload {
     #[serde(default, rename = "contentId")]
@@ -7682,6 +7883,14 @@ pub struct DjLinkMasterTrackStatePayload {
     pub playing: bool,
     #[serde(default, rename = "playSessionId")]
     pub play_session_id: Option<String>,
+    #[serde(default, rename = "trackBpm")]
+    pub track_bpm: Option<f64>,
+    #[serde(default, rename = "positionSec")]
+    pub position_sec: Option<f64>,
+    #[serde(default, rename = "startedAt")]
+    pub started_at: Option<String>,
+    #[serde(default, rename = "deckId")]
+    pub deck_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -7707,6 +7916,12 @@ pub struct DjLinkAck {
     pub code: Option<String>,
     #[serde(rename = "stateGeneration")]
     pub state_generation: u64,
+    /// Additive handoff-compatible ACK fields. Existing v1 consumers use the
+    /// outcome/code fields; timeline-control peers consume ok/message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -7746,6 +7961,22 @@ pub struct DjLinkRuntimeStatus {
     pub track_bpm: Option<f64>,
     #[serde(default, rename = "positionSec")]
     pub position_sec: Option<f64>,
+    #[serde(default, rename = "snapshotReady")]
+    pub snapshot_ready: bool,
+    #[serde(default, rename = "authoritativeState")]
+    pub authoritative_state: Option<DjLinkTimelineStateValue>,
+    #[serde(default, rename = "timelineId")]
+    pub timeline_id: Option<String>,
+    #[serde(default, rename = "positionBars")]
+    pub position_bars: Option<u64>,
+    #[serde(default, rename = "loopActive")]
+    pub loop_active: bool,
+    #[serde(default, rename = "lastOutboundEventId")]
+    pub last_outbound_event_id: Option<String>,
+    #[serde(default, rename = "lastOutboundSequence")]
+    pub last_outbound_sequence: Option<u64>,
+    #[serde(default, rename = "lastOutboundDelivery")]
+    pub last_outbound_delivery: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -7907,7 +8138,10 @@ impl DjLinkEnvelope {
                 }
             }
             DjLinkMessageType::Release => {
-                let _: DjLinkReleasePayload = parse_dj_link_payload(&self.payload)?;
+                let payload: DjLinkReleasePayload = parse_dj_link_payload(&self.payload)?;
+                if let Some(state) = payload.state.as_deref() {
+                    validate_dj_link_string(state, "state")?;
+                }
             }
             DjLinkMessageType::StateSync => {
                 let payload: DjLinkStateSyncPayload = parse_dj_link_payload(&self.payload)?;
@@ -7930,7 +8164,29 @@ impl DjLinkEnvelope {
                             validate_dj_link_string(value, label)?;
                         }
                     }
+                    if track.track_bpm.is_some_and(|value| {
+                        !value.is_finite() || !(0.0..=1_000.0).contains(&value)
+                    }) || track
+                        .position_sec
+                        .is_some_and(|value| !value.is_finite() || value < 0.0)
+                    {
+                        return Err("DJ Link state sync numeric fields are invalid".to_string());
+                    }
                 }
+            }
+            DjLinkMessageType::TimelineStateRequest => {
+                let _: DjLinkTimelineStateRequestPayload = parse_dj_link_payload(&self.payload)?;
+            }
+            DjLinkMessageType::TimelineBeatJump => {
+                let payload: DjLinkTimelineBeatJumpPayload = parse_dj_link_payload(&self.payload)?;
+                if !matches!(payload.bars, -4 | 4) {
+                    return Err("DJ timeline beat jump must be exactly -4 or 4 bars".to_string());
+                }
+                validate_dj_link_string(&payload.timeline_id, "timelineId")?;
+            }
+            DjLinkMessageType::TimelineLoopSet => {
+                let payload: DjLinkTimelineLoopSetPayload = parse_dj_link_payload(&self.payload)?;
+                validate_dj_link_string(&payload.timeline_id, "timelineId")?;
             }
         }
         Ok(())
@@ -8375,9 +8631,20 @@ fn default_cue_lists() -> Vec<CueListSummary> {
 mod tests {
     use super::{
         canonical_video_output_mapping_field, set_video_output_mapping_field_value,
-        video_output_mapping_field_value, AudioSpectrumBand, AudioSpectrumSource,
-        NodeGraphAudioNode, VideoOutputMapping,
+        video_output_mapping_field_value, AudioSpectrumBand, AudioSpectrumSource, CueListSummary,
+        NodeGraphAudioNode, PlaybackExecutorSummary, VideoOutputMapping, DEFAULT_CUE_LIST_ID,
     };
+
+    #[test]
+    fn cue_list_and_playback_executor_defaults_are_ordinary_bank_one_labels() {
+        assert_eq!(CueListSummary::default().label, "Bank 1");
+        assert_eq!(PlaybackExecutorSummary::default().label, "Bank 1");
+        assert_eq!(CueListSummary::default().id, DEFAULT_CUE_LIST_ID);
+        assert_eq!(
+            PlaybackExecutorSummary::default().cue_list_id,
+            DEFAULT_CUE_LIST_ID
+        );
+    }
 
     #[test]
     fn video_output_mapping_fields_are_canonicalized() {
@@ -13361,6 +13628,69 @@ mod tests {
         assert!(
             super::DjLinkEnvelope::parse_json(&hello.replace("DJ_AGENT_HELLO", "HELLO")).is_err()
         );
+    }
+
+    #[test]
+    fn dj_link_flat_generic_json_cross_fixture_is_strict_and_canonical() {
+        let hello = r#"{"type":"DJ_AGENT_HELLO","eventId":"hello-flat","sequence":1,"protocol":"generic-json","token":"0123456789abcdef0123456789abcdef","capabilities":["DJ_STATE_SYNC","DJ_TIMELINE_STATE_REQUEST"]}"#;
+        let frame = super::DjLinkFlatFrame::parse_json(hello).unwrap();
+        assert!(frame.is_hello());
+        let envelope = frame
+            .to_envelope("generic-json", "socket-hello-flat")
+            .unwrap();
+        assert_eq!(envelope.message_type, super::DjLinkMessageType::Hello);
+        assert_eq!(envelope.agent_id, "generic-json");
+        assert!(
+            super::DjLinkFlatFrame::parse_json(&hello.replace("generic-json", "unknown")).is_err()
+        );
+        assert!(super::DjLinkFlatFrame::parse_json(&hello.replace(
+            "\"token\":\"0123456789abcdef0123456789abcdef\"",
+            "\"token\":\"short\""
+        ))
+        .is_err());
+
+        let sync = r#"{"type":"DJ_STATE_SYNC","eventId":"sync-flat","sequence":2,"loopDivision":2,"released":false,"masterDeck":"A","masterTrack":{"contentId":"abc","title":"Track","artist":"Artist","trackBpm":128.0,"isPlaying":true}}"#;
+        let sync_frame = super::DjLinkFlatFrame::parse_json(sync).unwrap();
+        let sync_envelope = sync_frame
+            .to_envelope("generic-json", "socket-hello-flat")
+            .unwrap();
+        assert_eq!(
+            sync_envelope.message_type,
+            super::DjLinkMessageType::StateSync
+        );
+        assert_eq!(
+            sync_envelope
+                .payload
+                .get("masterTrack")
+                .and_then(|value| value.get("trackBpm"))
+                .and_then(serde_json::Value::as_f64),
+            Some(128.0)
+        );
+
+        let request =
+            r#"{"type":"DJ_TIMELINE_STATE_REQUEST","eventId":"request-flat","sequence":3}"#;
+        let request_envelope = super::DjLinkFlatFrame::parse_json(request)
+            .unwrap()
+            .to_envelope("generic-json", "socket-hello-flat")
+            .unwrap();
+        assert_eq!(
+            request_envelope.message_type,
+            super::DjLinkMessageType::TimelineStateRequest
+        );
+        let state = super::DjLinkTimelineState {
+            message_type: "DJ_TIMELINE_STATE".to_string(),
+            event_id: "request-flat".to_string(),
+            sequence: 3,
+            state: super::DjLinkTimelineStateValue::Running,
+            loop_active: false,
+            timeline_id: "show-1".to_string(),
+            position_bars: 16,
+        };
+        state.validate().unwrap();
+        let wire = serde_json::to_value(&state).unwrap();
+        assert_eq!(wire["type"], "DJ_TIMELINE_STATE");
+        assert_eq!(wire["timelineId"], "show-1");
+        assert_eq!(wire["positionBars"], 16);
     }
 
     #[test]

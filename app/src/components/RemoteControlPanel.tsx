@@ -148,51 +148,56 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
           <span class={`ioConnectionState ${props.running ? "ok" : "idle"}`}><i aria-hidden="true" />{props.running ? "Running" : "Stopped"}</span>
         </header>
         <div class="ioConnectionControls remoteConnectionControls">
-          <label>
-            Bind IP
-            <input
-              data-io-control="remote-bind-ip"
-              value={props.bindIp}
-              disabled={props.running || !props.allowLan}
-              onInput={(event) => props.onBindIp(event.currentTarget.value)}
-            />
-          </label>
-          <label>
-            Port
-            <input
-              data-io-control="remote-port"
-              type="number"
-              min="1"
-              value={props.port}
-              disabled={props.running}
-              onInput={(event) => props.onPort(Number(event.currentTarget.value))}
-            />
-          </label>
-          <label class="remoteLanToggle">
-            <input
-              data-io-control="remote-lan"
-              type="checkbox"
-              checked={props.allowLan}
-              disabled={props.running}
-              onChange={(event) => props.onAllowLan(event.currentTarget.checked)}
-            />
-            Trusted LAN access
-          </label>
-          <label class="remotePinField">
-            Pairing PIN
-            <div class="remoteUrlActions">
-              <input
-                data-io-control="remote-pin"
-                inputmode="numeric"
-                maxlength="6"
-                pattern="[0-9]{6}"
-                value={props.pairingPin}
-                disabled={props.running}
-                onInput={(event) => props.onPairingPin(event.currentTarget.value.replace(/\D/g, "").slice(0, 6))}
-              />
-              <button data-io-control="remote-new-pin" onClick={props.onRegeneratePairingPin} disabled={props.running}>New PIN</button>
+          <details class="ioDisclosure" data-io-disclosure="remote-connection-settings">
+            <summary>Connection and access settings</summary>
+            <div class="ioDisclosureBody">
+              <label>
+                Bind IP
+                <input
+                  data-io-control="remote-bind-ip"
+                  value={props.bindIp}
+                  disabled={props.running || !props.allowLan}
+                  onInput={(event) => props.onBindIp(event.currentTarget.value)}
+                />
+              </label>
+              <label>
+                Port
+                <input
+                  data-io-control="remote-port"
+                  type="number"
+                  min="1"
+                  value={props.port}
+                  disabled={props.running}
+                  onInput={(event) => props.onPort(Number(event.currentTarget.value))}
+                />
+              </label>
+              <label class="remoteLanToggle">
+                <input
+                  data-io-control="remote-lan"
+                  type="checkbox"
+                  checked={props.allowLan}
+                  disabled={props.running}
+                  onChange={(event) => props.onAllowLan(event.currentTarget.checked)}
+                />
+                Trusted LAN access
+              </label>
+              <label class="remotePinField">
+                Pairing PIN
+                <div class="remoteUrlActions">
+                  <input
+                    data-io-control="remote-pin"
+                    inputmode="numeric"
+                    maxlength="6"
+                    pattern="[0-9]{6}"
+                    value={props.pairingPin}
+                    disabled={props.running}
+                    onInput={(event) => props.onPairingPin(event.currentTarget.value.replace(/\D/g, "").slice(0, 6))}
+                  />
+                  <button data-io-control="remote-new-pin" onClick={props.onRegeneratePairingPin} disabled={props.running}>New PIN</button>
+                </div>
+              </label>
             </div>
-          </label>
+          </details>
           <Show when={props.running} fallback={
             <button data-io-control="remote-start" class="primary" onClick={() => void props.onStart()}>Start Remote</button>
           }>

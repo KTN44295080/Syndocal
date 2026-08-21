@@ -1,9 +1,10 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{Shutdown, TcpListener, TcpStream},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
@@ -15,10 +16,10 @@ use std::sync::OnceLock;
 
 use protocol::{
     canonical_video_output_mapping_field, ClockSource, CueId, DjLinkAck, DjLinkAckOutcome,
-    DjLinkEnvelope, DjLinkMessageType, DjLinkRuntimeStatus, EffectId, EngineSnapshot, FixtureId,
-    NodeGraphId, OperatorSelectionContext, RemoteClientSummary, RemoteControlConfig,
-    RemoteControlStatus, VideoLayerId, VideoOutputId, VideoOutputMapping, VideoParam,
-    VideoRuntimeStatus, DJ_LINK_MAX_FRAME_BYTES,
+    DjLinkEnvelope, DjLinkFlatFrame, DjLinkMessageType, DjLinkRuntimeStatus, DjLinkTimelineState,
+    EffectId, EngineSnapshot, FixtureId, NodeGraphId, OperatorSelectionContext,
+    RemoteClientSummary, RemoteControlConfig, RemoteControlStatus, VideoLayerId, VideoOutputId,
+    VideoOutputMapping, VideoParam, VideoRuntimeStatus, DJ_LINK_MAX_FRAME_BYTES,
 };
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -27,6 +28,8 @@ use tungstenite::{accept, Message};
 use crate::{parse_clock_source_label, parse_timecode_position_ms};
 
 const HTTP_PEEK_SIZE: usize = 2048;
+const REMOTE_SOCKET_READ_TIMEOUT: Duration = Duration::from_millis(100);
+const REMOTE_SOCKET_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
 <html lang="en">
 <head>
@@ -2920,10 +2923,24 @@ pub enum RemoteParseError {
 /// has authenticated, validated, and reserved the event identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DjLinkDispatchOutcome {
-    Accepted { state_generation: u64 },
-    NoMapping { state_generation: u64 },
-    Rejected { code: String, state_generation: u64 },
-    Busy { code: String, state_generation: u64 },
+    Accepted {
+        state_generation: u64,
+    },
+    NoMapping {
+        state_generation: u64,
+    },
+    TimelineState {
+        state_generation: u64,
+        state: DjLinkTimelineState,
+    },
+    Rejected {
+        code: String,
+        state_generation: u64,
+    },
+    Busy {
+        code: String,
+        state_generation: u64,
+    },
 }
 
 pub type DjLinkDispatchHandler = Arc<dyn Fn(DjLinkEnvelope) -> DjLinkDispatchOutcome + Send + Sync>;
@@ -2948,6 +2965,105 @@ struct DjLinkSession {
     generation: u64,
     last_sequence: u64,
     last_heartbeat: Instant,
+    state_sync_received: bool,
+    timeline_state_request_received: bool,
+    snapshot_ready: bool,
+    outbound: SyncSender<DjLinkOutboundState>,
+    last_outbound_state: Option<DjLinkTimelineState>,
+}
+
+#[derive(Debug, Clone)]
+struct DjLinkOutboundState {
+    generation: u64,
+    state: DjLinkTimelineState,
+}
+
+const DJ_LINK_OUTBOUND_QUEUE_LIMIT: usize = 8;
+const DJ_LINK_OBSERVATION_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DjLinkEngineObservation {
+    timeline_id: u64,
+    playing: bool,
+    position_ms: u64,
+    duration_ms: u64,
+    loop_active: bool,
+    bpm_millis: u32,
+}
+
+impl DjLinkEngineObservation {
+    fn from_snapshot(snapshot: &EngineSnapshot) -> Self {
+        let loop_active = !matches!(
+            snapshot.timeline.loop_runtime.status,
+            protocol::TimelineLoopRuntimeStatus::Disabled
+        );
+        let bpm_millis = if snapshot.clock.bpm.is_finite() && snapshot.clock.bpm > 0.0 {
+            (snapshot.clock.bpm * 1_000.0)
+                .round()
+                .clamp(1.0, u32::MAX as f32) as u32
+        } else {
+            0
+        };
+        Self {
+            timeline_id: snapshot.timeline.id.0,
+            playing: snapshot.timeline.playing,
+            position_ms: snapshot.timeline.position_ms,
+            duration_ms: snapshot.timeline.duration_ms,
+            loop_active,
+            bpm_millis,
+        }
+    }
+
+    fn position_bars(self) -> u64 {
+        if self.bpm_millis == 0 {
+            return 0;
+        }
+        let bar_ms = (60_000_u64)
+            .saturating_mul(u64::from(protocol::DJ_LINK_BEATS_PER_BAR))
+            .checked_mul(1_000)
+            .and_then(|scaled| scaled.checked_div(u64::from(self.bpm_millis)))
+            .filter(|bar_ms| *bar_ms > 0)
+            .unwrap_or(1);
+        self.position_ms / bar_ms
+    }
+
+    fn state(self, previous: Option<Self>) -> protocol::DjLinkTimelineStateValue {
+        if self.playing {
+            return protocol::DjLinkTimelineStateValue::Running;
+        }
+        if previous.is_some_and(|before| {
+            before.timeline_id == self.timeline_id
+                && before.position_ms > 0
+                && self.position_ms == 0
+        }) {
+            return protocol::DjLinkTimelineStateValue::Reset;
+        }
+        if self.duration_ms > 0 && self.position_ms >= self.duration_ms {
+            return protocol::DjLinkTimelineStateValue::Ended;
+        }
+        if previous.is_some_and(|before| before.playing) {
+            return protocol::DjLinkTimelineStateValue::Stopped;
+        }
+        if self.position_ms == 0 {
+            protocol::DjLinkTimelineStateValue::Idle
+        } else {
+            protocol::DjLinkTimelineStateValue::Stopped
+        }
+    }
+
+    fn semantic_key(
+        self,
+        previous: Option<Self>,
+    ) -> (u64, protocol::DjLinkTimelineStateValue, bool) {
+        (self.timeline_id, self.state(previous), self.loop_active)
+    }
+}
+
+fn dj_link_state_truth_equal(left: &DjLinkTimelineState, right: &DjLinkTimelineState) -> bool {
+    left.state == right.state
+        && left.loop_active == right.loop_active
+        && left.timeline_id == right.timeline_id
+        && left.position_bars == right.position_bars
 }
 
 #[derive(Debug)]
@@ -2965,6 +3081,7 @@ struct DjLinkRegistry {
     /// the generation after the final check but before physical dispatch.
     dispatch_leases: HashSet<(String, String, u64)>,
     next_generation: u64,
+    next_outbound_sequence: u64,
     state_generation: u64,
     status: DjLinkRuntimeStatus,
 }
@@ -2978,6 +3095,7 @@ impl Default for DjLinkRegistry {
             inflight: HashMap::new(),
             dispatch_leases: HashSet::new(),
             next_generation: 0,
+            next_outbound_sequence: 0,
             state_generation: 0,
             status: DjLinkRuntimeStatus::default(),
         }
@@ -3081,6 +3199,52 @@ fn run_dj_link_after_final_check_hook() {
 #[inline]
 fn run_dj_link_after_final_check_hook() {}
 
+#[cfg(test)]
+static DJ_LINK_BEFORE_OUTBOUND_PERMIT_HOOK: OnceLock<Mutex<Option<DjLinkPreDispatchHook>>> =
+    OnceLock::new();
+
+#[cfg(test)]
+fn set_dj_link_before_outbound_permit_hook(hook: Option<DjLinkPreDispatchHook>) {
+    let slot = DJ_LINK_BEFORE_OUTBOUND_PERMIT_HOOK.get_or_init(|| Mutex::new(None));
+    if let Ok(mut current) = slot.lock() {
+        *current = hook;
+    }
+}
+
+#[cfg(test)]
+struct DjLinkBeforeOutboundPermitHookGuard;
+
+#[cfg(test)]
+impl Drop for DjLinkBeforeOutboundPermitHookGuard {
+    fn drop(&mut self) {
+        set_dj_link_before_outbound_permit_hook(None);
+    }
+}
+
+#[cfg(test)]
+fn install_dj_link_before_outbound_permit_hook(
+    hook: DjLinkPreDispatchHook,
+) -> DjLinkBeforeOutboundPermitHookGuard {
+    set_dj_link_before_outbound_permit_hook(Some(hook));
+    DjLinkBeforeOutboundPermitHookGuard
+}
+
+#[cfg(test)]
+fn run_dj_link_before_outbound_permit_hook() {
+    let hook = DJ_LINK_BEFORE_OUTBOUND_PERMIT_HOOK
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|current| current.clone());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(not(test))]
+#[inline]
+fn run_dj_link_before_outbound_permit_hook() {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DjLinkAdmission {
     Accepted,
@@ -3090,6 +3254,7 @@ enum DjLinkAdmission {
     Busy,
     ReplayNotRetained,
     Capacity,
+    OrderBlocked,
 }
 
 impl DjLinkRegistry {
@@ -3100,6 +3265,7 @@ impl DjLinkRegistry {
         sequence: u64,
         hello_event_id: &str,
         peer: String,
+        outbound: SyncSender<DjLinkOutboundState>,
         now: Instant,
     ) -> Result<u64, String> {
         let hello_key = (agent_id.to_string(), hello_event_id.to_string());
@@ -3127,6 +3293,11 @@ impl DjLinkRegistry {
                 generation,
                 last_sequence: sequence,
                 last_heartbeat: now,
+                state_sync_received: false,
+                timeline_state_request_received: false,
+                snapshot_ready: false,
+                outbound,
+                last_outbound_state: None,
             },
         );
         self.status = DjLinkRuntimeStatus {
@@ -3135,7 +3306,8 @@ impl DjLinkRegistry {
             generation,
             agent_id: Some(agent_id.to_string()),
             session_id: Some(session_id.to_string()),
-            ..self.status.clone()
+            snapshot_ready: false,
+            ..DjLinkRuntimeStatus::default()
         };
         let hello_inflight = self
             .inflight
@@ -3151,15 +3323,157 @@ impl DjLinkRegistry {
         })
     }
 
+    fn order_allows(&self, envelope: &DjLinkEnvelope, generation: u64) -> bool {
+        let Some(session) = self.sessions.get(&envelope.agent_id).filter(|session| {
+            session.session_id == envelope.session_id && session.generation == generation
+        }) else {
+            return false;
+        };
+        match envelope.message_type {
+            DjLinkMessageType::Heartbeat => true,
+            DjLinkMessageType::StateSync => !session.snapshot_ready,
+            DjLinkMessageType::TimelineStateRequest => {
+                session.state_sync_received && !session.snapshot_ready
+            }
+            _ => session.snapshot_ready,
+        }
+    }
+
+    fn note_state_sync(&mut self, envelope: &DjLinkEnvelope, generation: u64) {
+        if let Some(session) = self.sessions.get_mut(&envelope.agent_id).filter(|session| {
+            session.session_id == envelope.session_id && session.generation == generation
+        }) {
+            session.state_sync_received = true;
+        }
+    }
+
+    fn note_timeline_state_request(&mut self, envelope: &DjLinkEnvelope, generation: u64) {
+        if let Some(session) = self.sessions.get_mut(&envelope.agent_id).filter(|session| {
+            session.session_id == envelope.session_id && session.generation == generation
+        }) {
+            session.timeline_state_request_received = true;
+        }
+    }
+
+    fn mark_snapshot_ready(&mut self, envelope: &DjLinkEnvelope, generation: u64) {
+        if let Some(session) = self.sessions.get_mut(&envelope.agent_id).filter(|session| {
+            session.session_id == envelope.session_id && session.generation == generation
+        }) {
+            if session.state_sync_received && session.timeline_state_request_received {
+                session.snapshot_ready = true;
+                self.status.snapshot_ready = true;
+            }
+        }
+    }
+
+    fn note_outbound_state(&mut self, state: &DjLinkTimelineState, event_id: &str, sequence: u64) {
+        self.status.authoritative_state = Some(state.state);
+        self.status.timeline_id = Some(state.timeline_id.clone());
+        self.status.position_bars = Some(state.position_bars);
+        self.status.loop_active = state.loop_active;
+        self.status.last_outbound_event_id = Some(event_id.to_string());
+        self.status.last_outbound_sequence = Some(sequence);
+        self.status.last_outbound_delivery = Some("delivered".to_string());
+        if let Some(session) = self.sessions.values_mut().find(|session| {
+            session.generation == self.status.generation
+                && session
+                    .last_outbound_state
+                    .as_ref()
+                    .is_none_or(|previous| !dj_link_state_truth_equal(previous, state))
+        }) {
+            session.last_outbound_state = Some(state.clone());
+        }
+    }
+
+    fn should_deliver_outbound_state(
+        &self,
+        agent_id: &str,
+        session_id: &str,
+        generation: u64,
+        state: &DjLinkTimelineState,
+    ) -> bool {
+        self.sessions.get(agent_id).is_some_and(|session| {
+            session.session_id == session_id
+                && session.generation == generation
+                && session.snapshot_ready
+                && session
+                    .last_outbound_state
+                    .as_ref()
+                    .is_none_or(|previous| !dj_link_state_truth_equal(previous, state))
+        })
+    }
+
+    /// Queue one authoritative state transition for the current, snapshot-ready
+    /// session. The queue is bounded and replacement/disconnect/queue failure
+    /// retires the current authority instead of allowing stale delivery.
+    fn queue_outbound_state(&mut self, mut state: DjLinkTimelineState) -> Result<bool, String> {
+        state.validate()?;
+        let Some((agent_id, generation, sender, previous)) =
+            self.sessions.iter().next().map(|(agent_id, session)| {
+                (
+                    agent_id.clone(),
+                    session.generation,
+                    session.outbound.clone(),
+                    session.last_outbound_state.clone(),
+                )
+            })
+        else {
+            return Ok(false);
+        };
+        if !self
+            .sessions
+            .get(&agent_id)
+            .is_some_and(|session| session.snapshot_ready)
+        {
+            return Ok(false);
+        }
+        if previous
+            .as_ref()
+            .is_some_and(|previous| dj_link_state_truth_equal(previous, &state))
+        {
+            return Ok(false);
+        }
+        self.next_outbound_sequence = self
+            .next_outbound_sequence
+            .checked_add(1)
+            .ok_or_else(|| "DJ Link outbound state sequence exhausted".to_string())?;
+        state.event_id = format!("syndocal-dj-state-{}", self.next_outbound_sequence);
+        state.sequence = self.next_outbound_sequence;
+        state.validate()?;
+        let queued = DjLinkOutboundState { generation, state };
+        match sender.try_send(queued) {
+            Ok(()) => Ok(true),
+            Err(TrySendError::Full(_)) => {
+                self.sessions.remove(&agent_id);
+                self.status.connected = false;
+                self.status.snapshot_ready = false;
+                Err(format!(
+                    "DJ Link outbound queue exceeded {DJ_LINK_OUTBOUND_QUEUE_LIMIT}"
+                ))
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.sessions.remove(&agent_id);
+                self.status.connected = false;
+                self.status.snapshot_ready = false;
+                Err("DJ Link outbound session disconnected".to_string())
+            }
+        }
+    }
+
     fn begin_dispatch(&mut self, envelope: &DjLinkEnvelope, generation: u64) -> Result<(), String> {
-        if !self.is_current(&envelope.agent_id, &envelope.session_id, generation) {
+        self.begin_dispatch_for_session(&envelope.agent_id, &envelope.session_id, generation)
+    }
+
+    fn begin_dispatch_for_session(
+        &mut self,
+        agent_id: &str,
+        session_id: &str,
+        generation: u64,
+    ) -> Result<(), String> {
+        if !self.is_current(agent_id, session_id, generation) {
             return Err("DJ Link session is stale before dispatch".to_string());
         }
-        let key = (
-            envelope.agent_id.clone(),
-            envelope.session_id.clone(),
-            generation,
-        );
+        let key = (agent_id.to_string(), session_id.to_string(), generation);
         if !self.dispatch_leases.insert(key) {
             return Err("DJ Link dispatch is already in flight".to_string());
         }
@@ -3218,6 +3532,9 @@ impl DjLinkRegistry {
         }
         if self.seen_events.len() >= DJ_LINK_EVENT_ID_LIMIT {
             return Ok(DjLinkAdmission::Capacity);
+        }
+        if !self.order_allows(envelope, generation) {
+            return Ok(DjLinkAdmission::OrderBlocked);
         }
         self.inflight.insert(
             key,
@@ -3323,6 +3640,7 @@ impl DjLinkRegistry {
             self.sessions.remove(agent_id);
             self.status.connected = false;
             self.status.age_ms = None;
+            self.status.snapshot_ready = false;
         }
     }
 
@@ -3376,6 +3694,7 @@ impl DjLinkRegistry {
         peer: &str,
         now: Instant,
     ) -> u64 {
+        let (outbound, _receiver) = mpsc::sync_channel(DJ_LINK_OUTBOUND_QUEUE_LIMIT);
         let event_id = format!("test-hello-{agent_id}-{session_id}");
         self.inflight.insert(
             (agent_id.to_string(), event_id.clone()),
@@ -3392,6 +3711,7 @@ impl DjLinkRegistry {
                 sequence,
                 &event_id,
                 peer.to_string(),
+                outbound,
                 now,
             )
             .expect("test session registration");
@@ -3437,6 +3757,15 @@ pub struct RemoteWsServer {
     clients: Arc<Mutex<HashMap<u64, RemoteClientState>>>,
     rejected_connections: Arc<AtomicU64>,
     dj_link_registry: Arc<Mutex<DjLinkRegistry>>,
+    /// Every accepted client worker is retained by the server until shutdown.
+    /// A detached worker could otherwise keep a socket (and a DJ generation)
+    /// alive after `RemoteWsServer` has been dropped.
+    client_workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    /// Clones of accepted sockets used only to unblock a worker before join.
+    /// No network write is performed while either this or the DJ registry is
+    /// locked.
+    shutdown_sockets: Arc<Mutex<HashMap<u64, TcpStream>>>,
+    dj_link_connections: Arc<AtomicU64>,
 }
 
 struct RemoteClientState {
@@ -3623,12 +3952,78 @@ impl RemoteWsServer {
         let dj_link_registry = Arc::new(Mutex::new(DjLinkRegistry::default()));
         let thread_dj_link_registry = Arc::clone(&dj_link_registry);
         let thread_dj_link_handler = dj_link_handler.clone();
+        let client_workers = Arc::new(Mutex::new(Vec::<JoinHandle<()>>::new()));
+        let shutdown_sockets = Arc::new(Mutex::new(HashMap::<u64, TcpStream>::new()));
+        let next_worker_id = Arc::new(AtomicU64::new(1));
+        let thread_client_workers = Arc::clone(&client_workers);
+        let thread_shutdown_sockets = Arc::clone(&shutdown_sockets);
+        let thread_next_worker_id = Arc::clone(&next_worker_id);
         let thread = thread::Builder::new()
             .name("syndocal-remote-ws".to_string())
             .spawn(move || {
+                let mut next_dj_observation = Instant::now();
+                let mut previous_dj_observation: Option<DjLinkEngineObservation> = None;
+                let mut last_dj_semantic_key = None;
                 while !thread_stop.load(Ordering::Relaxed) {
+                    // Completed workers remain joinable until their result is
+                    // collected.  Reap them here so a long-lived listener
+                    // does not accumulate one JoinHandle per connection.
+                    if let Ok(mut workers) = thread_client_workers.lock() {
+                        let mut active_workers = Vec::with_capacity(workers.len());
+                        for worker in workers.drain(..) {
+                            if worker.is_finished() {
+                                let _ = worker.join();
+                            } else {
+                                active_workers.push(worker);
+                            }
+                        }
+                        *workers = active_workers;
+                    }
+                    let now = Instant::now();
+                    if config.dj_link_enabled && now >= next_dj_observation {
+                        next_dj_observation = now + DJ_LINK_OBSERVATION_INTERVAL;
+                        let snapshot = (snapshot_provider.as_ref())();
+                        let current = DjLinkEngineObservation::from_snapshot(&snapshot);
+                        let semantic_key = current.semantic_key(previous_dj_observation);
+                        if previous_dj_observation.is_some()
+                            && last_dj_semantic_key != Some(semantic_key)
+                        {
+                            let state = DjLinkTimelineState {
+                                message_type: "DJ_TIMELINE_STATE".to_string(),
+                                event_id: "pending".to_string(),
+                                sequence: 1,
+                                state: current.state(previous_dj_observation),
+                                loop_active: current.loop_active,
+                                timeline_id: current.timeline_id.to_string(),
+                                position_bars: current.position_bars(),
+                            };
+                            if let Ok(mut registry) = thread_dj_link_registry.lock() {
+                                let _ = registry.queue_outbound_state(state);
+                            }
+                        }
+                        last_dj_semantic_key = Some(semantic_key);
+                        previous_dj_observation = Some(current);
+                    }
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            if thread_stop.load(Ordering::Acquire) {
+                                let _ = stream.shutdown(Shutdown::Both);
+                                break;
+                            }
+                            let worker_id = thread_next_worker_id.fetch_add(1, Ordering::AcqRel);
+                            let shutdown_stream = match stream.try_clone() {
+                                Ok(shutdown_stream) => shutdown_stream,
+                                Err(_) => {
+                                    let _ = stream.shutdown(Shutdown::Both);
+                                    continue;
+                                }
+                            };
+                            if let Ok(mut sockets) = thread_shutdown_sockets.lock() {
+                                sockets.insert(worker_id, shutdown_stream);
+                            } else {
+                                let _ = stream.shutdown(Shutdown::Both);
+                                continue;
+                            }
                             let client_stop = Arc::clone(&thread_stop);
                             let client_callback = Arc::clone(&callback);
                             let client_snapshot_provider = Arc::clone(&snapshot_provider);
@@ -3651,28 +4046,60 @@ impl RemoteWsServer {
                             let client_dj_link_handler = thread_dj_link_handler.clone();
                             let client_dj_link_connections =
                                 Arc::clone(&thread_dj_link_connections);
-                            let _ = thread::Builder::new()
+                            let worker_sockets = Arc::clone(&thread_shutdown_sockets);
+                            let worker = thread::Builder::new()
                                 .name("syndocal-remote-ws-client".to_string())
                                 .spawn(move || {
-                                    handle_connection(
-                                        stream,
-                                        client_stop,
-                                        client_callback.as_ref(),
-                                        client_snapshot_provider.as_ref(),
-                                        client_video_runtime_status_provider.as_ref(),
-                                        client_video_output_render_plans_provider.as_ref(),
-                                        client_external_video_io_plans_provider.as_ref(),
-                                        client_external_video_transport_status_provider.as_ref(),
-                                        client_external_video_transport_sync_provider.as_ref(),
-                                        client_config.as_ref(),
-                                        client_registry,
-                                        client_next_id,
-                                        client_rejected_connections,
-                                        client_dj_link_handler,
-                                        client_dj_link_registry,
-                                        client_dj_link_connections,
-                                    );
+                                    // The transport boundary is panic-safe: a
+                                    // callback panic must still remove the
+                                    // socket from the shutdown registry and
+                                    // release the DJ slot guard.
+                                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                        || {
+                                            handle_connection(
+                                                stream,
+                                                client_stop,
+                                                client_callback.as_ref(),
+                                                client_snapshot_provider.as_ref(),
+                                                client_video_runtime_status_provider.as_ref(),
+                                                client_video_output_render_plans_provider.as_ref(),
+                                                client_external_video_io_plans_provider.as_ref(),
+                                                client_external_video_transport_status_provider
+                                                    .as_ref(),
+                                                client_external_video_transport_sync_provider
+                                                    .as_ref(),
+                                                client_config.as_ref(),
+                                                client_registry,
+                                                client_next_id,
+                                                client_rejected_connections,
+                                                client_dj_link_handler,
+                                                client_dj_link_registry,
+                                                client_dj_link_connections,
+                                            );
+                                        },
+                                    ));
+                                    if let Ok(mut sockets) = worker_sockets.lock() {
+                                        sockets.remove(&worker_id);
+                                    }
                                 });
+                            let Ok(worker) = worker else {
+                                if let Ok(mut sockets) = thread_shutdown_sockets.lock() {
+                                    if let Some(socket) = sockets.remove(&worker_id) {
+                                        let _ = socket.shutdown(Shutdown::Both);
+                                    }
+                                }
+                                continue;
+                            };
+                            if let Ok(mut workers) = thread_client_workers.lock() {
+                                workers.push(worker);
+                            } else {
+                                let _ = worker.join();
+                                if let Ok(mut sockets) = thread_shutdown_sockets.lock() {
+                                    if let Some(socket) = sockets.remove(&worker_id) {
+                                        let _ = socket.shutdown(Shutdown::Both);
+                                    }
+                                }
+                            }
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(10));
@@ -3691,6 +4118,9 @@ impl RemoteWsServer {
             clients,
             rejected_connections,
             dj_link_registry,
+            client_workers,
+            shutdown_sockets,
+            dj_link_connections,
         })
     }
 
@@ -3746,14 +4176,49 @@ impl RemoteWsServer {
             })
             .unwrap_or_else(|_| DjLinkRuntimeStatus::default())
     }
+
+    fn stop_and_join(&mut self) {
+        let shutdown_started = Instant::now();
+        self.stop.store(true, Ordering::Release);
+        // Closing the accepted socket clones is what unblocks a worker that
+        // is waiting for a peer that stopped reading.  The registry is never
+        // held while doing network shutdown.
+        if let Ok(sockets) = self.shutdown_sockets.lock() {
+            for socket in sockets.values() {
+                let _ = socket.shutdown(Shutdown::Both);
+            }
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        let workers = self
+            .client_workers
+            .lock()
+            .map(|mut workers| workers.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+        for worker in workers {
+            let _ = worker.join();
+        }
+        if let Ok(mut sockets) = self.shutdown_sockets.lock() {
+            sockets.clear();
+        }
+        if let Ok(mut clients) = self.clients.lock() {
+            clients.clear();
+        }
+        if let Ok(mut registry) = self.dj_link_registry.lock() {
+            *registry = DjLinkRegistry::default();
+        }
+        self.dj_link_connections.store(0, Ordering::Release);
+        debug_assert!(
+            shutdown_started.elapsed() <= Duration::from_secs(2),
+            "remote worker shutdown exceeded bounded deadline"
+        );
+    }
 }
 
 impl Drop for RemoteWsServer {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.stop_and_join();
     }
 }
 
@@ -4207,12 +4672,15 @@ fn handle_connection<F, S>(
     F: Fn(RemoteInputEvent) + ?Sized,
     S: Fn() -> EngineSnapshot + ?Sized,
 {
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+    let _ = stream.set_read_timeout(Some(REMOTE_SOCKET_READ_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(REMOTE_SOCKET_WRITE_TIMEOUT));
     let mut peek_buffer = [0u8; HTTP_PEEK_SIZE];
     match stream.peek(&mut peek_buffer) {
         Ok(size) if is_websocket_request(&peek_buffer[..size]) => {
             let request = String::from_utf8_lossy(&peek_buffer[..size]);
-            if request_path(&request) == Some("/dj-link") {
+            if request_path(&request) == Some("/dj-link")
+                || (request_target(&request) == Some("/ws") && config.dj_link_enabled)
+            {
                 if !request_host_is_allowed(&request, &stream, config) {
                     reject_http_client(stream, "403 Forbidden", "Invalid Host or Origin");
                     return;
@@ -4340,7 +4808,172 @@ fn dj_link_ack(
         outcome,
         code,
         state_generation,
+        ok: None,
+        message: None,
     }
+}
+
+fn dj_link_flat_ack(ack: &DjLinkAck) -> String {
+    let ok = matches!(
+        ack.outcome,
+        DjLinkAckOutcome::Accepted | DjLinkAckOutcome::Duplicate
+    );
+    let message = ack.code.clone().unwrap_or_else(|| {
+        match ack.outcome {
+            DjLinkAckOutcome::Accepted => "accepted",
+            DjLinkAckOutcome::Duplicate => "duplicate",
+            DjLinkAckOutcome::NoMapping => "no_mapping",
+            DjLinkAckOutcome::Rejected => "rejected",
+            DjLinkAckOutcome::Busy => "busy",
+        }
+        .to_string()
+    });
+    serde_json::json!({
+        "type": "ACK",
+        "eventId": ack.event_id,
+        "ok": ok,
+        "message": message,
+    })
+    .to_string()
+}
+
+fn dj_link_wire_ack(ack: &DjLinkAck, flat: bool) -> String {
+    if flat {
+        dj_link_flat_ack(ack)
+    } else {
+        serde_json::to_string(ack).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
+fn dj_link_state_wire(
+    state: &DjLinkTimelineState,
+    flat: bool,
+    agent_id: &str,
+    session_id: &str,
+) -> Result<String, String> {
+    state.validate()?;
+    if flat {
+        return serde_json::to_string(state).map_err(|error| error.to_string());
+    }
+    serde_json::to_string(&json!({
+        "v": protocol::DJ_LINK_PROTOCOL_VERSION,
+        "type": "DJ_TIMELINE_STATE",
+        "agentId": agent_id,
+        "sessionId": session_id,
+        "sequence": state.sequence,
+        "eventId": state.event_id,
+        "payload": {
+            "state": state.state,
+            "loopActive": state.loop_active,
+            "timelineId": state.timeline_id,
+            "positionBars": state.position_bars,
+        },
+    }))
+    .map_err(|error| error.to_string())
+}
+
+fn send_pending_dj_link_states<S: Read + Write>(
+    websocket: &mut tungstenite::WebSocket<S>,
+    receiver: &Receiver<DjLinkOutboundState>,
+    registry: &Arc<Mutex<DjLinkRegistry>>,
+    agent_id: &str,
+    session_id: &str,
+    generation: u64,
+    flat_wire: bool,
+) -> bool {
+    loop {
+        let outbound = match receiver.try_recv() {
+            Ok(outbound) => outbound,
+            Err(TryRecvError::Empty) => return true,
+            Err(TryRecvError::Disconnected) => return false,
+        };
+        if outbound.generation != generation {
+            continue;
+        }
+        let should_deliver = match registry.lock() {
+            Ok(registry) => registry.should_deliver_outbound_state(
+                agent_id,
+                session_id,
+                generation,
+                &outbound.state,
+            ),
+            Err(_) => return false,
+        };
+        if !should_deliver {
+            continue;
+        }
+        // This hook is test-only and deliberately runs after the first
+        // registry observation. The production permit below revalidates the
+        // same generation atomically, so a HELLO replacement in this window
+        // makes the old send a no-op rather than a stale socket write.
+        run_dj_link_before_outbound_permit_hook();
+        let dispatch_permit = match registry.lock() {
+            Ok(mut registry_guard) => {
+                if registry_guard
+                    .begin_dispatch_for_session(agent_id, session_id, generation)
+                    .is_err()
+                {
+                    None
+                } else {
+                    Some(DjLinkDispatchLease {
+                        registry: Arc::clone(registry),
+                        agent_id: agent_id.to_string(),
+                        session_id: session_id.to_string(),
+                        generation,
+                    })
+                }
+            }
+            _ => None,
+        };
+        let Some(_dispatch_permit) = dispatch_permit else {
+            continue;
+        };
+        let final_should_deliver = match registry.lock() {
+            Ok(registry) => registry.should_deliver_outbound_state(
+                agent_id,
+                session_id,
+                generation,
+                &outbound.state,
+            ),
+            Err(_) => false,
+        };
+        if !final_should_deliver {
+            continue;
+        }
+        let Ok(state_text) = dj_link_state_wire(&outbound.state, flat_wire, agent_id, session_id)
+        else {
+            return false;
+        };
+        if websocket.send(Message::Text(state_text)).is_err() {
+            return false;
+        }
+        let Ok(mut registry) = registry.lock() else {
+            return false;
+        };
+        if !registry.is_current(agent_id, session_id, generation) {
+            return false;
+        }
+        registry.note_outbound_state(
+            &outbound.state,
+            &outbound.state.event_id,
+            outbound.state.sequence,
+        );
+    }
+}
+
+fn dj_link_flat_error_ack(text: &str, message: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    let object = value.as_object()?;
+    let event_id = object.get("eventId")?.as_str()?;
+    Some(
+        serde_json::json!({
+            "type": "ACK",
+            "eventId": event_id,
+            "ok": false,
+            "message": message,
+        })
+        .to_string(),
+    )
 }
 
 /// Compare the backend-issued credential without an early return on the
@@ -4384,33 +5017,48 @@ fn handle_dj_link_client(
     };
     let _ = websocket
         .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(100)));
+        .set_read_timeout(Some(REMOTE_SOCKET_READ_TIMEOUT));
+    let _ = websocket
+        .get_ref()
+        .set_write_timeout(Some(REMOTE_SOCKET_WRITE_TIMEOUT));
     let hello_deadline = Instant::now() + Duration::from_secs(5);
-    let hello = loop {
+    let (hello, flat_wire) = loop {
         match websocket.read() {
-            Ok(Message::Text(text)) => match DjLinkEnvelope::parse_json(&text) {
-                Ok(envelope) if envelope.message_type == DjLinkMessageType::Hello => {
-                    break envelope
-                }
-                Ok(envelope) => {
+            Ok(Message::Text(text)) => {
+                if let Ok(envelope) = DjLinkEnvelope::parse_json(&text) {
+                    if envelope.message_type == DjLinkMessageType::Hello {
+                        break (envelope, false);
+                    }
                     let ack = dj_link_ack(
                         &envelope,
                         DjLinkAckOutcome::Rejected,
                         Some("hello_required".to_string()),
                         0,
                     );
-                    let _ = websocket.send(Message::Text(
-                        serde_json::to_string(&ack).unwrap_or_else(|_| "{}".to_string()),
-                    ));
+                    let _ = websocket.send(Message::Text(dj_link_wire_ack(&ack, false)));
                     return;
                 }
-                Err(_) => {
-                    if Instant::now() < hello_deadline {
-                        continue;
+                if let Ok(frame) = DjLinkFlatFrame::parse_json(&text) {
+                    if frame.is_hello() {
+                        let agent_id = "generic-json";
+                        let session_id = format!("socket-{}", frame.event_id);
+                        match frame.to_envelope(agent_id, &session_id) {
+                            Ok(envelope) => break (envelope, true),
+                            Err(_) => return,
+                        }
+                    }
+                    if let Some(ack) = dj_link_flat_error_ack(&text, "hello_required") {
+                        let _ = websocket.send(Message::Text(ack));
                     }
                     return;
                 }
-            },
+                if let Some(ack) = dj_link_flat_error_ack(&text, "invalid_or_unknown_frame") {
+                    let _ = websocket.send(Message::Text(ack));
+                }
+                if Instant::now() >= hello_deadline {
+                    return;
+                }
+            }
             Ok(Message::Close(_)) => return,
             Ok(_) => return,
             Err(tungstenite::Error::Io(error))
@@ -4436,9 +5084,7 @@ fn handle_dj_link_client(
             Some("invalid_auth".to_string()),
             0,
         );
-        let _ = websocket.send(Message::Text(
-            serde_json::to_string(&ack).unwrap_or_else(|_| "{}".to_string()),
-        ));
+        let _ = websocket.send(Message::Text(dj_link_wire_ack(&ack, flat_wire)));
         return;
     }
     let now = Instant::now();
@@ -4446,6 +5092,8 @@ fn handle_dj_link_client(
         Ok(shape) => shape,
         Err(_) => return,
     };
+    let (outbound_sender, outbound_receiver) =
+        mpsc::sync_channel::<DjLinkOutboundState>(DJ_LINK_OUTBOUND_QUEUE_LIMIT);
     let hello_admission = match registry.lock() {
         Ok(mut registry) => registry.admit_hello(&hello, &hello_shape, now),
         Err(_) => return,
@@ -4454,9 +5102,7 @@ fn handle_dj_link_client(
         DjLinkAdmission::Accepted => {}
         DjLinkAdmission::Duplicate(mut ack) => {
             ack.outcome = DjLinkAckOutcome::Duplicate;
-            let _ = websocket.send(Message::Text(
-                serde_json::to_string(&ack).unwrap_or_else(|_| "{}".to_string()),
-            ));
+            let _ = websocket.send(Message::Text(dj_link_wire_ack(&ack, flat_wire)));
             return;
         }
         admission => {
@@ -4468,12 +5114,13 @@ fn handle_dj_link_client(
                 }
                 DjLinkAdmission::Capacity => (DjLinkAckOutcome::Rejected, "terminal_capacity"),
                 DjLinkAdmission::Rollback => (DjLinkAckOutcome::Rejected, "sequence_rollback"),
-                DjLinkAdmission::Accepted | DjLinkAdmission::Duplicate(_) => unreachable!(),
+                DjLinkAdmission::OrderBlocked => (DjLinkAckOutcome::Rejected, "order_blocked"),
+                DjLinkAdmission::Accepted | DjLinkAdmission::Duplicate(_) => {
+                    (DjLinkAckOutcome::Rejected, "invalid_admission_state")
+                }
             };
             let ack = dj_link_ack(&hello, outcome, Some(code.to_string()), 0);
-            let _ = websocket.send(Message::Text(
-                serde_json::to_string(&ack).unwrap_or_else(|_| "{}".to_string()),
-            ));
+            let _ = websocket.send(Message::Text(dj_link_wire_ack(&ack, flat_wire)));
             return;
         }
     }
@@ -4484,6 +5131,7 @@ fn handle_dj_link_client(
             hello.sequence,
             &hello.event_id,
             peer,
+            outbound_sender,
             now,
         ) {
             Ok(generation) => generation,
@@ -4495,9 +5143,7 @@ fn handle_dj_link_client(
                     Some("session_replacement_busy".to_string()),
                     0,
                 );
-                let _ = websocket.send(Message::Text(
-                    serde_json::to_string(&ack).unwrap_or_else(|_| "{}".to_string()),
-                ));
+                let _ = websocket.send(Message::Text(dj_link_wire_ack(&ack, flat_wire)));
                 return;
             }
         },
@@ -4514,13 +5160,22 @@ fn handle_dj_link_client(
     } else {
         return;
     }
-    let _ = websocket.send(Message::Text(
-        serde_json::to_string(&hello_ack).unwrap_or_else(|_| "{}".to_string()),
-    ));
+    let _ = websocket.send(Message::Text(dj_link_wire_ack(&hello_ack, flat_wire)));
     let mut rate_window_started = Instant::now();
     let mut rate_window_messages: u16 = 0;
 
     while !stop.load(Ordering::Relaxed) {
+        if !send_pending_dj_link_states(
+            &mut websocket,
+            &outbound_receiver,
+            &registry,
+            &hello.agent_id,
+            &hello.session_id,
+            generation,
+            flat_wire,
+        ) {
+            break;
+        }
         let timed_out = registry
             .lock()
             .ok()
@@ -4538,27 +5193,46 @@ fn handle_dj_link_client(
                 if text.len() > DJ_LINK_MAX_FRAME_BYTES {
                     break;
                 }
-                let envelope = match DjLinkEnvelope::parse_json(&text) {
-                    Ok(envelope)
-                        if envelope.agent_id == hello.agent_id
-                            && envelope.session_id == hello.session_id =>
-                    {
-                        envelope
+                let envelope = if flat_wire {
+                    let frame = match DjLinkFlatFrame::parse_json(&text) {
+                        Ok(frame) => frame,
+                        Err(_) => {
+                            if let Some(ack) = dj_link_flat_error_ack(&text, "invalid_frame") {
+                                let _ = websocket.send(Message::Text(ack));
+                            }
+                            continue;
+                        }
+                    };
+                    match frame.to_envelope(&hello.agent_id, &hello.session_id) {
+                        Ok(envelope) => envelope,
+                        Err(_) => {
+                            if let Some(ack) = dj_link_flat_error_ack(&text, "invalid_frame") {
+                                let _ = websocket.send(Message::Text(ack));
+                            }
+                            continue;
+                        }
                     }
-                    Ok(envelope) => {
-                        let ack = dj_link_ack(
-                            &envelope,
-                            DjLinkAckOutcome::Rejected,
-                            Some("session_mismatch".to_string()),
-                            generation,
-                        );
-                        let _ = websocket.send(Message::Text(
-                            serde_json::to_string(&ack).unwrap_or_else(|_| "{}".to_string()),
-                        ));
-                        continue;
-                    }
-                    Err(_) => {
-                        continue;
+                } else {
+                    match DjLinkEnvelope::parse_json(&text) {
+                        Ok(envelope)
+                            if envelope.agent_id == hello.agent_id
+                                && envelope.session_id == hello.session_id =>
+                        {
+                            envelope
+                        }
+                        Ok(envelope) => {
+                            let ack = dj_link_ack(
+                                &envelope,
+                                DjLinkAckOutcome::Rejected,
+                                Some("session_mismatch".to_string()),
+                                generation,
+                            );
+                            let _ = websocket.send(Message::Text(dj_link_wire_ack(&ack, false)));
+                            continue;
+                        }
+                        Err(_) => {
+                            continue;
+                        }
                     }
                 };
                 let shape = match envelope.canonical_shape() {
@@ -4567,7 +5241,24 @@ fn handle_dj_link_client(
                 };
                 let admission = match registry.lock() {
                     Ok(mut registry) => {
-                        registry.admit(&envelope, &shape, generation, Instant::now())
+                        let mut admission =
+                            registry.admit(&envelope, &shape, generation, Instant::now());
+                        // The original v1 envelope predates the generic-json
+                        // snapshot handshake.  Keep its established direct
+                        // event compatibility; the flat final adapter remains
+                        // strictly ordered through STATE_SYNC/request.
+                        if !flat_wire && matches!(admission, Ok(DjLinkAdmission::OrderBlocked)) {
+                            registry.inflight.insert(
+                                (envelope.agent_id.clone(), envelope.event_id.clone()),
+                                DjLinkInflight {
+                                    shape: shape.clone(),
+                                    sequence: envelope.sequence,
+                                    generation,
+                                },
+                            );
+                            admission = Ok(DjLinkAdmission::Accepted);
+                        }
+                        admission
                     }
                     Err(_) => Err("DJ Link registry lock was poisoned".to_string()),
                 };
@@ -4583,6 +5274,8 @@ fn handle_dj_link_client(
                 }
                 rate_window_messages = rate_window_messages.saturating_add(1);
                 let mut dispatch_lease: Option<DjLinkDispatchLease> = None;
+                let mut outbound_state: Option<DjLinkTimelineState> = None;
+                let mut terminalized = false;
                 let ack = match admission {
                     DjLinkAdmission::Duplicate(mut ack) => {
                         ack.outcome = DjLinkAckOutcome::Duplicate;
@@ -4616,6 +5309,12 @@ fn handle_dj_link_client(
                         &envelope,
                         DjLinkAckOutcome::Rejected,
                         Some("terminal_capacity".to_string()),
+                        generation,
+                    ),
+                    DjLinkAdmission::OrderBlocked => dj_link_ack(
+                        &envelope,
+                        DjLinkAckOutcome::Rejected,
+                        Some("order_blocked".to_string()),
                         generation,
                     ),
                     DjLinkAdmission::Accepted => {
@@ -4714,6 +5413,11 @@ fn handle_dj_link_client(
                                 state_generation: generation,
                             };
                         }
+                        if !stale_generation {
+                            if let DjLinkDispatchOutcome::TimelineState { state, .. } = &outcome {
+                                outbound_state = Some(state.clone());
+                            }
+                        }
                         let (outcome, code, state_generation) = match outcome {
                             DjLinkDispatchOutcome::Accepted { state_generation } => {
                                 (DjLinkAckOutcome::Accepted, None, state_generation)
@@ -4721,6 +5425,9 @@ fn handle_dj_link_client(
                             DjLinkDispatchOutcome::NoMapping { state_generation } => {
                                 (DjLinkAckOutcome::NoMapping, None, state_generation)
                             }
+                            DjLinkDispatchOutcome::TimelineState {
+                                state_generation, ..
+                            } => (DjLinkAckOutcome::Accepted, None, state_generation),
                             DjLinkDispatchOutcome::Rejected {
                                 code,
                                 state_generation,
@@ -4750,6 +5457,8 @@ fn handle_dj_link_client(
                                     Some("terminalization_failed".to_string()),
                                     generation,
                                 );
+                            } else {
+                                terminalized = true;
                             }
                         } else {
                             ack = dj_link_ack(
@@ -4762,9 +5471,49 @@ fn handle_dj_link_client(
                         ack
                     }
                 };
-                let _ = websocket.send(Message::Text(
-                    serde_json::to_string(&ack).unwrap_or_else(|_| "{}".to_string()),
-                ));
+                if terminalized {
+                    if let Ok(mut registry) = registry.lock() {
+                        match envelope.message_type {
+                            DjLinkMessageType::StateSync => {
+                                registry.note_state_sync(&envelope, generation);
+                            }
+                            DjLinkMessageType::TimelineStateRequest => {
+                                registry.note_timeline_state_request(&envelope, generation);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let _ = websocket.send(Message::Text(dj_link_wire_ack(&ack, flat_wire)));
+                // Keep the state response out of the terminal ACK itself:
+                // exact retries replay the ACK without re-running the engine,
+                // while snapshot readiness is published only after the state
+                // frame has been accepted by the socket.
+                if terminalized {
+                    if let Some(state) = outbound_state {
+                        if let Ok(state_text) = dj_link_state_wire(
+                            &state,
+                            flat_wire,
+                            &hello.agent_id,
+                            &hello.session_id,
+                        ) {
+                            if websocket.send(Message::Text(state_text)).is_ok() {
+                                if let Ok(mut registry) = registry.lock() {
+                                    registry.note_outbound_state(
+                                        &state,
+                                        &envelope.event_id,
+                                        envelope.sequence,
+                                    );
+                                    if envelope.message_type
+                                        == DjLinkMessageType::TimelineStateRequest
+                                    {
+                                        registry.mark_snapshot_ready(&envelope, generation);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 // Keep the lease through ACK publication.  A replacement may
                 // proceed only after the old request is no longer able to
                 // publish an authority result on this socket.
@@ -4807,6 +5556,12 @@ fn handle_websocket_client<F, S>(
     let Ok(mut websocket) = accept(stream) else {
         return;
     };
+    let _ = websocket
+        .get_ref()
+        .set_read_timeout(Some(REMOTE_SOCKET_READ_TIMEOUT));
+    let _ = websocket
+        .get_ref()
+        .set_write_timeout(Some(REMOTE_SOCKET_WRITE_TIMEOUT));
     let mut rate_window_started = Instant::now();
     let mut rate_window_messages = 0u16;
     while !stop.load(Ordering::Relaxed) && !disconnect.load(Ordering::Relaxed) {
@@ -6471,7 +7226,7 @@ mod tests {
             |_| {},
         )
         .unwrap();
-        let url = format!("ws://127.0.0.1:{port}/dj-link");
+        let url = format!("ws://127.0.0.1:{port}/ws");
         let (mut wrong_client, _) = tungstenite::connect(url.as_str()).unwrap();
         let wrong_hello = serde_json::json!({
             "v": 1,
@@ -6572,6 +7327,473 @@ mod tests {
         };
         assert_eq!(rollback_ack.outcome, DjLinkAckOutcome::Rejected);
         let _ = client.close(None);
+        drop(server);
+    }
+
+    #[test]
+    fn dj_link_flat_ws_snapshot_order_and_state_broadcast_are_exact() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let token = "0123456789abcdef0123456789abcdef";
+        let handler: DjLinkDispatchHandler = Arc::new(|envelope| {
+            if envelope.message_type == DjLinkMessageType::TimelineStateRequest {
+                return DjLinkDispatchOutcome::TimelineState {
+                    state_generation: 9,
+                    state: DjLinkTimelineState {
+                        message_type: "DJ_TIMELINE_STATE".to_string(),
+                        event_id: envelope.event_id,
+                        sequence: envelope.sequence,
+                        state: protocol::DjLinkTimelineStateValue::Running,
+                        loop_active: false,
+                        timeline_id: "show-1".to_string(),
+                        position_bars: 16,
+                    },
+                };
+            }
+            DjLinkDispatchOutcome::Accepted {
+                state_generation: 9,
+            }
+        });
+        let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link(
+            RemoteControlConfig {
+                bind_ip: "127.0.0.1".to_string(),
+                port,
+                pairing_pin: "123456".to_string(),
+                max_connections: 2,
+                dj_link_enabled: true,
+                dj_link_bind_ip: Some("127.0.0.1".to_string()),
+                dj_link_token: Some(token.to_string()),
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+            EngineSnapshot::default,
+            VideoRuntimeStatus::default,
+            default_video_output_render_plans,
+            default_external_video_io_plans,
+            default_external_video_transport_status,
+            default_external_video_transport_sync,
+            Some(handler),
+        )
+        .unwrap();
+        let url = format!("ws://127.0.0.1:{port}/ws");
+        let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
+        let read_value = |client: &mut tungstenite::WebSocket<_>| -> serde_json::Value {
+            match client.read().unwrap() {
+                Message::Text(text) => serde_json::from_str(&text).unwrap(),
+                other => panic!("unexpected flat DJ Link reply: {other:?}"),
+            }
+        };
+        client
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "DJ_AGENT_HELLO",
+                    "eventId": "hello-flat-socket",
+                    "sequence": 1,
+                    "protocol": "generic-json",
+                    "token": token,
+                    "capabilities": ["DJ_STATE_SYNC", "DJ_TIMELINE_STATE_REQUEST"]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let hello_ack = read_value(&mut client);
+        assert_eq!(hello_ack["type"], "ACK");
+        assert_eq!(hello_ack["eventId"], "hello-flat-socket");
+        assert_eq!(hello_ack["ok"], true);
+
+        client
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "DJ_STATE_SYNC",
+                    "eventId": "sync-flat-socket",
+                    "sequence": 2,
+                    "loopDivision": 2,
+                    "released": false,
+                    "masterDeck": "A",
+                    "masterTrack": {"contentId":"abc","title":"Track","artist":"Artist","isPlaying":true}
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let sync_ack = read_value(&mut client);
+        assert_eq!(sync_ack["eventId"], "sync-flat-socket");
+        assert_eq!(sync_ack["ok"], true);
+
+        client
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "DJ_TIMELINE_STATE_REQUEST",
+                    "eventId": "request-flat-socket",
+                    "sequence": 3
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let request_ack = read_value(&mut client);
+        assert_eq!(request_ack["eventId"], "request-flat-socket");
+        assert_eq!(request_ack["ok"], true);
+        let state = read_value(&mut client);
+        assert_eq!(state["type"], "DJ_TIMELINE_STATE");
+        assert_eq!(state["eventId"], "request-flat-socket");
+        assert_eq!(state["state"], "running");
+        assert_eq!(state["timelineId"], "show-1");
+        assert_eq!(state["positionBars"], 16);
+        assert!(server.dj_link_status().snapshot_ready);
+        client
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "DJ_TIMELINE_STATE",
+                    "eventId": "server-only-state",
+                    "sequence": 4,
+                    "state": "running",
+                    "loopActive": false,
+                    "timelineId": "show-1",
+                    "positionBars": 16
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let server_only_reject = read_value(&mut client);
+        assert_eq!(server_only_reject["type"], "ACK");
+        assert_eq!(server_only_reject["eventId"], "server-only-state");
+        assert_eq!(server_only_reject["ok"], false);
+        // DJ Link owns only the bare configured /ws target.  The existing
+        // browser Remote path keeps its pairing query and must not be stolen
+        // by the dedicated HELLO/token handshake.
+        let remote_url = format!("ws://127.0.0.1:{port}/ws?token=123456");
+        let (mut remote_client, _) = tungstenite::connect(remote_url.as_str()).unwrap();
+        for _ in 0..20 {
+            if server.status().clients.len() == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(server.status().clients.len(), 1);
+        let invalid_query = format!("ws://127.0.0.1:{port}/ws?token=654321");
+        assert!(tungstenite::connect(invalid_query.as_str()).is_err());
+        let _ = remote_client.close(None);
+        let _ = client.close(None);
+        drop(server);
+    }
+
+    #[test]
+    fn dj_link_engine_transition_broadcast_is_async_and_generation_fenced() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let token = "0123456789abcdef0123456789abcdef";
+        let snapshot = Arc::new(Mutex::new(EngineSnapshot::default()));
+        let snapshot_provider = {
+            let snapshot = Arc::clone(&snapshot);
+            move || snapshot.lock().unwrap().clone()
+        };
+        let handler: DjLinkDispatchHandler = Arc::new(|envelope| {
+            if envelope.message_type == DjLinkMessageType::TimelineStateRequest {
+                return DjLinkDispatchOutcome::TimelineState {
+                    state_generation: 1,
+                    state: DjLinkTimelineState {
+                        message_type: "DJ_TIMELINE_STATE".to_string(),
+                        event_id: envelope.event_id,
+                        sequence: envelope.sequence,
+                        state: protocol::DjLinkTimelineStateValue::Idle,
+                        loop_active: false,
+                        timeline_id: "1".to_string(),
+                        position_bars: 0,
+                    },
+                };
+            }
+            DjLinkDispatchOutcome::Accepted {
+                state_generation: 1,
+            }
+        });
+        let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link(
+            RemoteControlConfig {
+                bind_ip: "127.0.0.1".to_string(),
+                port,
+                pairing_pin: "123456".to_string(),
+                max_connections: 2,
+                dj_link_enabled: true,
+                dj_link_bind_ip: Some("127.0.0.1".to_string()),
+                dj_link_token: Some(token.to_string()),
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+            snapshot_provider,
+            VideoRuntimeStatus::default,
+            default_video_output_render_plans,
+            default_external_video_io_plans,
+            default_external_video_transport_status,
+            default_external_video_transport_sync,
+            Some(handler),
+        )
+        .unwrap();
+        let url = format!("ws://127.0.0.1:{port}/ws");
+        let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
+        client
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "DJ_AGENT_HELLO",
+                    "eventId": "hello-engine-transition",
+                    "sequence": 1,
+                    "protocol": "generic-json",
+                    "token": token,
+                    "capabilities": ["DJ_STATE_SYNC", "DJ_TIMELINE_STATE_REQUEST"]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let _ = client.read().unwrap();
+        client
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "DJ_STATE_SYNC",
+                    "eventId": "sync-engine-transition",
+                    "sequence": 2,
+                    "released": false,
+                    "masterDeck": "A",
+                    "masterTrack": {"contentId":"abc","isPlaying":true}
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let _ = client.read().unwrap();
+        client
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "DJ_TIMELINE_STATE_REQUEST",
+                    "eventId": "request-engine-transition",
+                    "sequence": 3
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let _ = client.read().unwrap();
+        let _ = client.read().unwrap();
+        assert!(server.dj_link_status().snapshot_ready);
+
+        {
+            let mut changed = snapshot.lock().unwrap();
+            changed.timeline.playing = true;
+            changed.timeline.position_ms = 4_000;
+            changed.timeline.duration_ms = 20_000;
+        }
+        let transition = match client.read().unwrap() {
+            Message::Text(text) => serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+            other => panic!("unexpected async DJ state: {other:?}"),
+        };
+        assert_eq!(transition["type"], "DJ_TIMELINE_STATE");
+        assert_eq!(transition["state"], "running");
+        assert_eq!(transition["timelineId"], "1");
+        assert_eq!(transition["positionBars"], 2);
+        assert!(transition["eventId"]
+            .as_str()
+            .is_some_and(|event_id| event_id.starts_with("syndocal-dj-state-")));
+        assert!(server.dj_link_status().last_outbound_delivery.as_deref() == Some("delivered"));
+
+        let _ = client.close(None);
+        for _ in 0..30 {
+            if !server.dj_link_status().connected {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!server.dj_link_status().connected);
+        assert!(!server.dj_link_status().snapshot_ready);
+        {
+            let mut changed = snapshot.lock().unwrap();
+            changed.timeline.playing = false;
+            changed.timeline.position_ms = 4_000;
+        }
+        thread::sleep(Duration::from_millis(150));
+        assert!(!server.dj_link_status().connected);
+        // A send/read failure retires the old session; a subsequent HELLO is
+        // the only way to regain an observer lane and receives a new
+        // generation.  No queued state from the old socket is replayed.
+        let old_generation = server.dj_link_status().generation;
+        let (mut reconnect, _) = (0..100)
+            .find_map(|_| tungstenite::connect(url.as_str()).ok())
+            .expect("DJ Link observer did not accept a reconnect");
+        reconnect
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "DJ_AGENT_HELLO",
+                    "eventId": "hello-engine-reconnect",
+                    "sequence": 1,
+                    "protocol": "generic-json",
+                    "token": token,
+                    "capabilities": ["DJ_STATE_SYNC", "DJ_TIMELINE_STATE_REQUEST"]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let reconnect_ack = match reconnect.read().unwrap() {
+            Message::Text(text) => serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+            other => panic!("unexpected DJ Link reconnect reply: {other:?}"),
+        };
+        assert_eq!(reconnect_ack["type"], "ACK");
+        assert_eq!(reconnect_ack["ok"], true);
+        assert!(server.dj_link_status().generation > old_generation);
+        let _ = reconnect.close(None);
+        drop(server);
+    }
+
+    #[test]
+    fn dj_link_observer_generation_barrier_sends_no_stale_bytes() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let token = "0123456789abcdef0123456789abcdef";
+        let snapshot = Arc::new(Mutex::new(EngineSnapshot::default()));
+        let snapshot_provider = {
+            let snapshot = Arc::clone(&snapshot);
+            move || snapshot.lock().unwrap().clone()
+        };
+        let handler: DjLinkDispatchHandler = Arc::new(|envelope| {
+            if envelope.message_type == DjLinkMessageType::TimelineStateRequest {
+                return DjLinkDispatchOutcome::TimelineState {
+                    state_generation: 1,
+                    state: DjLinkTimelineState {
+                        message_type: "DJ_TIMELINE_STATE".to_string(),
+                        event_id: envelope.event_id,
+                        sequence: envelope.sequence,
+                        state: protocol::DjLinkTimelineStateValue::Idle,
+                        loop_active: false,
+                        timeline_id: "1".to_string(),
+                        position_bars: 0,
+                    },
+                };
+            }
+            DjLinkDispatchOutcome::Accepted {
+                state_generation: 1,
+            }
+        });
+        let entered = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let _barrier = install_dj_link_before_outbound_permit_hook({
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            Arc::new(move || {
+                let (entered_lock, entered_ready) = &*entered;
+                *entered_lock.lock().unwrap() = true;
+                entered_ready.notify_all();
+                let (release_lock, release_ready) = &*release;
+                let mut allowed = release_lock.lock().unwrap();
+                while !*allowed {
+                    allowed = release_ready.wait(allowed).unwrap();
+                }
+            })
+        });
+        let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link(
+            RemoteControlConfig {
+                bind_ip: "127.0.0.1".to_string(),
+                port,
+                pairing_pin: "123456".to_string(),
+                max_connections: 2,
+                dj_link_enabled: true,
+                dj_link_bind_ip: Some("127.0.0.1".to_string()),
+                dj_link_token: Some(token.to_string()),
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+            snapshot_provider,
+            VideoRuntimeStatus::default,
+            default_video_output_render_plans,
+            default_external_video_io_plans,
+            default_external_video_transport_status,
+            default_external_video_transport_sync,
+            Some(handler),
+        )
+        .unwrap();
+        let url = format!("ws://127.0.0.1:{port}/ws");
+        let (mut old_client, _) = tungstenite::connect(url.as_str()).unwrap();
+        let flat_hello = |event_id: &str| {
+            Message::Text(
+                serde_json::json!({
+                    "type": "DJ_AGENT_HELLO",
+                    "eventId": event_id,
+                    "sequence": 1,
+                    "protocol": "generic-json",
+                    "token": token,
+                    "capabilities": ["DJ_STATE_SYNC", "DJ_TIMELINE_STATE_REQUEST"]
+                })
+                .to_string(),
+            )
+        };
+        old_client.send(flat_hello("hello-observer-old")).unwrap();
+        let _ = old_client.read().unwrap();
+        old_client
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "DJ_STATE_SYNC",
+                    "eventId": "sync-observer-old",
+                    "sequence": 2,
+                    "released": false,
+                    "masterDeck": "A",
+                    "masterTrack": {"contentId":"abc","isPlaying":true}
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let _ = old_client.read().unwrap();
+        old_client
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "DJ_TIMELINE_STATE_REQUEST",
+                    "eventId": "request-observer-old",
+                    "sequence": 3
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let _ = old_client.read().unwrap();
+        let _ = old_client.read().unwrap();
+        {
+            let mut changed = snapshot.lock().unwrap();
+            changed.timeline.playing = true;
+            changed.timeline.position_ms = 4_000;
+            changed.timeline.duration_ms = 20_000;
+        }
+        for _ in 0..50 {
+            if *entered.0.lock().unwrap() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            *entered.0.lock().unwrap(),
+            "observer barrier was not reached"
+        );
+
+        let (mut new_client, _) = tungstenite::connect(url.as_str()).unwrap();
+        new_client.send(flat_hello("hello-observer-new")).unwrap();
+        let new_ack = match new_client.read().unwrap() {
+            Message::Text(text) => serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+            other => panic!("unexpected replacement HELLO reply: {other:?}"),
+        };
+        assert_eq!(new_ack["type"], "ACK");
+        assert_eq!(new_ack["eventId"], "hello-observer-new");
+        assert_eq!(new_ack["ok"], true);
+        assert_eq!(
+            server.dj_link_status().session_id.as_deref(),
+            Some("socket-hello-observer-new")
+        );
+
+        {
+            let (release_lock, release_ready) = &*release;
+            *release_lock.lock().unwrap() = true;
+            release_ready.notify_all();
+        }
+        let old_result = old_client.read();
+        if let Ok(Message::Text(text)) = old_result {
+            panic!("stale observer delivered bytes after replacement: {text}");
+        }
+        assert_eq!(
+            server.dj_link_status().session_id.as_deref(),
+            Some("socket-hello-observer-new")
+        );
+        let _ = new_client.close(None);
+        let _ = old_client.close(None);
         drop(server);
     }
 
@@ -7050,6 +8272,298 @@ mod tests {
         fresh.send(Message::Text(fresh_hello.to_string())).unwrap();
         assert_eq!(read_ack(&mut fresh).outcome, DjLinkAckOutcome::Accepted);
         drop(server);
+    }
+
+    #[test]
+    fn dj_link_observer_state_matrix_flat_and_v1_is_deduplicated() {
+        let idle = DjLinkEngineObservation {
+            timeline_id: 7,
+            playing: false,
+            position_ms: 0,
+            duration_ms: 20_000,
+            loop_active: false,
+            bpm_millis: 128_000,
+        };
+        let running = DjLinkEngineObservation {
+            playing: true,
+            position_ms: 4_000,
+            ..idle
+        };
+        let stopped = DjLinkEngineObservation {
+            position_ms: 4_000,
+            ..idle
+        };
+        let ended = DjLinkEngineObservation {
+            position_ms: 20_000,
+            ..idle
+        };
+        let reset = DjLinkEngineObservation { ..idle };
+
+        assert_eq!(idle.state(None), protocol::DjLinkTimelineStateValue::Idle);
+        assert_eq!(
+            running.state(Some(idle)),
+            protocol::DjLinkTimelineStateValue::Running
+        );
+        assert_eq!(
+            stopped.state(Some(running)),
+            protocol::DjLinkTimelineStateValue::Stopped
+        );
+        assert_eq!(
+            ended.state(Some(stopped)),
+            protocol::DjLinkTimelineStateValue::Ended
+        );
+        assert_eq!(
+            reset.state(Some(stopped)),
+            protocol::DjLinkTimelineStateValue::Reset
+        );
+
+        // The observer's semantic key intentionally excludes positionBars:
+        // ordinary engine ticks do not flood the bounded outbound queue.
+        assert_eq!(
+            running.semantic_key(Some(idle)),
+            (7, protocol::DjLinkTimelineStateValue::Running, false)
+        );
+        assert_eq!(
+            running.semantic_key(Some(idle)),
+            running.semantic_key(Some(idle))
+        );
+
+        let state = DjLinkTimelineState {
+            message_type: "DJ_TIMELINE_STATE".to_string(),
+            event_id: "matrix-state".to_string(),
+            sequence: 11,
+            state: protocol::DjLinkTimelineStateValue::Running,
+            loop_active: true,
+            timeline_id: "7".to_string(),
+            position_bars: 2,
+        };
+        let flat = dj_link_state_wire(&state, true, "generic-json", "flat-session").unwrap();
+        let v1 = dj_link_state_wire(&state, false, "agent-v1", "v1-session").unwrap();
+        let flat_value: serde_json::Value = serde_json::from_str(&flat).unwrap();
+        let v1_value: serde_json::Value = serde_json::from_str(&v1).unwrap();
+        assert_eq!(flat_value["type"], "DJ_TIMELINE_STATE");
+        assert_eq!(flat_value["state"], "running");
+        assert_eq!(flat_value["positionBars"], 2);
+        assert_eq!(v1_value["type"], "DJ_TIMELINE_STATE");
+        assert_eq!(v1_value["payload"]["state"], "running");
+        assert_eq!(v1_value["payload"]["positionBars"], 2);
+    }
+
+    #[test]
+    fn dj_link_observer_queue_full_retires_generation_before_reconnect() {
+        let now = Instant::now();
+        let mut registry = DjLinkRegistry::default();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let hello_event = "queue-hello-old".to_string();
+        registry.inflight.insert(
+            ("queue-agent".to_string(), hello_event.clone()),
+            DjLinkInflight {
+                shape: "queue-hello".to_string(),
+                sequence: 1,
+                generation: 0,
+            },
+        );
+        let old_generation = registry
+            .register(
+                "queue-agent",
+                "queue-old",
+                1,
+                &hello_event,
+                "queue-peer".to_string(),
+                sender,
+                now,
+            )
+            .unwrap();
+        registry
+            .inflight
+            .remove(&("queue-agent".to_string(), hello_event));
+        let session = registry.sessions.get_mut("queue-agent").unwrap();
+        session.state_sync_received = true;
+        session.timeline_state_request_received = true;
+        session.snapshot_ready = true;
+
+        let state = DjLinkTimelineState {
+            message_type: "DJ_TIMELINE_STATE".to_string(),
+            event_id: "pending".to_string(),
+            sequence: 1,
+            state: protocol::DjLinkTimelineStateValue::Running,
+            loop_active: false,
+            timeline_id: "queue".to_string(),
+            position_bars: 1,
+        };
+        assert!(registry.queue_outbound_state(state.clone()).unwrap());
+        assert!(registry.queue_outbound_state(state).is_err());
+        assert!(!registry.is_current("queue-agent", "queue-old", old_generation));
+        assert!(!registry.status.connected);
+        drop(receiver);
+
+        let (new_sender, _new_receiver) = mpsc::sync_channel(1);
+        let new_hello = "queue-hello-new".to_string();
+        registry.inflight.insert(
+            ("queue-agent".to_string(), new_hello.clone()),
+            DjLinkInflight {
+                shape: "queue-hello".to_string(),
+                sequence: 1,
+                generation: 0,
+            },
+        );
+        let new_generation = registry
+            .register(
+                "queue-agent",
+                "queue-new",
+                1,
+                &new_hello,
+                "queue-peer-new".to_string(),
+                new_sender,
+                now,
+            )
+            .unwrap();
+        assert!(new_generation > old_generation);
+        assert!(registry.is_current("queue-agent", "queue-new", new_generation));
+    }
+
+    #[test]
+    fn dj_link_server_drop_unblocks_stalled_peer_and_reaps_workers() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let token = "0123456789abcdef0123456789abcdef";
+        let snapshot = Arc::new(Mutex::new(EngineSnapshot::default()));
+        let snapshot_provider = {
+            let snapshot = Arc::clone(&snapshot);
+            move || snapshot.lock().unwrap().clone()
+        };
+        let handler: DjLinkDispatchHandler = Arc::new(|envelope| {
+            if envelope.message_type == DjLinkMessageType::TimelineStateRequest {
+                return DjLinkDispatchOutcome::TimelineState {
+                    state_generation: 1,
+                    state: DjLinkTimelineState {
+                        message_type: "DJ_TIMELINE_STATE".to_string(),
+                        event_id: envelope.event_id,
+                        sequence: envelope.sequence,
+                        state: protocol::DjLinkTimelineStateValue::Idle,
+                        loop_active: false,
+                        timeline_id: "1".to_string(),
+                        position_bars: 0,
+                    },
+                };
+            }
+            DjLinkDispatchOutcome::Accepted {
+                state_generation: 1,
+            }
+        });
+        let mut server =
+            RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link(
+                RemoteControlConfig {
+                    bind_ip: "127.0.0.1".to_string(),
+                    port,
+                    pairing_pin: "123456".to_string(),
+                    max_connections: 2,
+                    dj_link_enabled: true,
+                    dj_link_bind_ip: Some("127.0.0.1".to_string()),
+                    dj_link_token: Some(token.to_string()),
+                    ..RemoteControlConfig::default()
+                },
+                |_| {},
+                snapshot_provider,
+                VideoRuntimeStatus::default,
+                default_video_output_render_plans,
+                default_external_video_io_plans,
+                default_external_video_transport_status,
+                default_external_video_transport_sync,
+                Some(handler),
+            )
+            .unwrap();
+        let url = format!("ws://127.0.0.1:{port}/ws");
+        let (mut stalled, _) = (0..100)
+            .find_map(|_| tungstenite::connect(url.as_str()).ok())
+            .expect("DJ Link listener did not accept the stalled-peer socket");
+        stalled
+            .send(Message::Text(
+                json!({
+                    "type": "DJ_AGENT_HELLO",
+                    "eventId": "stalled-hello",
+                    "sequence": 1,
+                    "protocol": "generic-json",
+                    "token": token,
+                    "capabilities": ["DJ_STATE_SYNC", "DJ_TIMELINE_STATE_REQUEST"]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let hello_ack = stalled.read().unwrap();
+        assert!(matches!(hello_ack, Message::Text(_)));
+        assert_eq!(
+            server.dj_link_status().session_id.as_deref(),
+            Some("socket-stalled-hello")
+        );
+        let sync_text = json!({
+            "type": "DJ_STATE_SYNC",
+            "eventId": "stalled-sync",
+            "sequence": 2,
+            "loopDivision": 2,
+            "released": false,
+            "masterDeck": "A",
+            "masterTrack": {"contentId":"track","title":"Track","artist":"Artist","isPlaying":true}
+        })
+        .to_string();
+        assert!(
+            protocol::DjLinkFlatFrame::parse_json(&sync_text).is_ok(),
+            "flat sync fixture did not validate: {:?}",
+            protocol::DjLinkFlatFrame::parse_json(&sync_text)
+        );
+        let parsed_sync = protocol::DjLinkFlatFrame::parse_json(&sync_text).unwrap();
+        assert!(
+            parsed_sync
+                .to_envelope("generic-json", "socket-stalled-hello")
+                .is_ok(),
+            "flat sync envelope did not validate: {:?}",
+            parsed_sync.to_envelope("generic-json", "socket-stalled-hello")
+        );
+        stalled.send(Message::Text(sync_text)).unwrap();
+        let _ = stalled.read().unwrap();
+        stalled
+            .send(Message::Text(
+                json!({
+                    "type": "DJ_TIMELINE_STATE_REQUEST",
+                    "eventId": "stalled-request",
+                    "sequence": 3
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let _ = stalled.read().unwrap();
+        let _ = stalled.read().unwrap();
+        assert!(server.dj_link_status().snapshot_ready);
+        {
+            let mut changed = snapshot.lock().unwrap();
+            changed.timeline.playing = true;
+            changed.timeline.position_ms = 4_000;
+            changed.timeline.duration_ms = 20_000;
+        }
+        for _ in 0..100 {
+            if server.dj_link_status().last_outbound_delivery.as_deref() == Some("delivered") {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(server.dj_link_connections.load(Ordering::Acquire), 1);
+        assert_eq!(
+            server.dj_link_status().last_outbound_delivery.as_deref(),
+            Some("delivered")
+        );
+
+        // The peer deliberately stops reading.  Shutdown must close the
+        // cloned socket first, then join both the listener and client worker;
+        // it must not wait for an unbounded websocket write/read.
+        let started = Instant::now();
+        server.stop_and_join();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(server.dj_link_connections.load(Ordering::Acquire), 0);
+        assert!(server.client_workers.lock().unwrap().is_empty());
+        assert!(server.shutdown_sockets.lock().unwrap().is_empty());
+        assert!(server.dj_link_registry.lock().unwrap().sessions.is_empty());
+        let _ = stalled.close(None);
     }
 
     #[test]

@@ -107,7 +107,7 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
         </span>
       </header>
 
-      <div class="dmxRouteBuilder">
+      <div class="dmxRouteBuilder dmxPrimaryControls">
         <label class="checkbox dmxRouteEnable">
           <input
             data-io-control="dmx-output-enabled"
@@ -117,76 +117,89 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
           />
           Output enabled
         </label>
-        <label>
-          Protocol
-          <select
-            data-io-control="dmx-protocol"
-            value={props.output.protocol}
-            onInput={(event) => props.onProtocolChange(event.currentTarget.value as DmxOutputConfig["protocol"])}
-          >
-            <option value="ArtNet">Art-Net</option>
-            <option value="Sacn">sACN / E1.31</option>
-            <option value="EnttecUsbPro">Enttec USB PRO</option>
-            <option value="DmxKingUltraDmx">DMXKing ultraDMX</option>
-            <option value="EnttecOpenDmx">Enttec Open DMX</option>
-          </select>
-        </label>
-        <Show when={!props.isSerialProtocol(props.output.protocol)} fallback={
-          <>
-            <label class="dmxSerialPortSelect">
-              Serial port
-              <select
-                data-io-control="dmx-serial-port"
-                value={props.output.serial_port}
-                onInput={(event) => props.onOutputChange({ ...props.output, serial_port: event.currentTarget.value })}
-              >
-                <option value="">Select port</option>
-                <For each={props.serialPorts}>
-                  {(port) => <option value={port.name}>{port.name} / {port.port_type}</option>}
-                </For>
-              </select>
-            </label>
-            <button data-io-control="dmx-scan-serial" type="button" onClick={props.onRefreshSerialPorts}>Scan Serial</button>
-          </>
-        }>
-          <label>
-            Target IP
-            <input
-              data-io-control="dmx-target"
-              value={props.output.target_ip}
-              placeholder={props.output.protocol === "Sacn" ? "multicast, auto, or unicast IP" : "127.0.0.1"}
-              onInput={(event) => props.onOutputChange({ ...props.output, target_ip: event.currentTarget.value })}
-            />
-          </label>
-          <label>
-            Port
-            <input
-              data-io-control="dmx-port"
-              type="number"
-              value={props.output.port}
-              onInput={(event) => props.onOutputChange({ ...props.output, port: Number(event.currentTarget.value) })}
-            />
-          </label>
-        </Show>
-        <label>
-          Universe
-          <input
-            data-io-control="dmx-universe"
-            type="number"
-            min={props.output.protocol === "Sacn" ? "1" : "0"}
-            value={props.output.universe}
-            onInput={(event) => props.onOutputChange({ ...props.output, universe: Number(event.currentTarget.value) })}
-          />
-        </label>
         <button data-io-control="dmx-apply-output" class="primary" onClick={props.onApply}>Apply Output</button>
       </div>
 
-      <div class="dmxRouteActions">
-        <button data-io-control="dmx-add-artnet" onClick={() => void addNetworkRoute("ArtNet")}>Add Art-Net route</button>
-        <button data-io-control="dmx-add-sacn" onClick={() => void addNetworkRoute("Sacn")}>Add sACN route</button>
-        <button data-io-control="dmx-add-current" onClick={props.onAddCurrentRoute}>Add current route</button>
-        <button data-io-control="dmx-apply-routes" onClick={props.onApplyRoutes}>Apply routes</button>
-      </div>
+      <details class="ioDisclosure" data-io-disclosure="dmx-connection-settings">
+        <summary>Connection settings</summary>
+        <div class="ioDisclosureBody">
+          <div class="dmxRouteBuilder">
+            <label>
+              Protocol
+              <select
+                data-io-control="dmx-protocol"
+                value={props.output.protocol}
+                onInput={(event) => props.onProtocolChange(event.currentTarget.value as DmxOutputConfig["protocol"])}
+              >
+                <option value="ArtNet">Art-Net</option>
+                <option value="Sacn">sACN / E1.31</option>
+                <option value="EnttecUsbPro">Enttec USB PRO</option>
+                <option value="DmxKingUltraDmx">DMXKing ultraDMX</option>
+                <option value="EnttecOpenDmx">Enttec Open DMX</option>
+              </select>
+            </label>
+            <Show when={!props.isSerialProtocol(props.output.protocol)} fallback={
+              <>
+                <label class="dmxSerialPortSelect">
+                  Serial port
+                  <select
+                    data-io-control="dmx-serial-port"
+                    value={props.output.serial_port}
+                    onInput={(event) => props.onOutputChange({ ...props.output, serial_port: event.currentTarget.value })}
+                  >
+                    <option value="">Select port</option>
+                    <For each={props.serialPorts}>
+                      {(port) => <option value={port.name}>{port.name} / {port.port_type}</option>}
+                    </For>
+                  </select>
+                </label>
+                <button data-io-control="dmx-scan-serial" type="button" onClick={props.onRefreshSerialPorts}>Scan Serial</button>
+              </>
+            }>
+              <label>
+                Target IP
+                <input
+                  data-io-control="dmx-target"
+                  value={props.output.target_ip}
+                  placeholder={props.output.protocol === "Sacn" ? "multicast, auto, or unicast IP" : "127.0.0.1"}
+                  onInput={(event) => props.onOutputChange({ ...props.output, target_ip: event.currentTarget.value })}
+                />
+              </label>
+              <label>
+                Port
+                <input
+                  data-io-control="dmx-port"
+                  type="number"
+                  value={props.output.port}
+                  onInput={(event) => props.onOutputChange({ ...props.output, port: Number(event.currentTarget.value) })}
+                />
+              </label>
+            </Show>
+            <label>
+              Universe
+              <input
+                data-io-control="dmx-universe"
+                type="number"
+                min={props.output.protocol === "Sacn" ? "1" : "0"}
+                value={props.output.universe}
+                onInput={(event) => props.onOutputChange({ ...props.output, universe: Number(event.currentTarget.value) })}
+              />
+            </label>
+          </div>
+        </div>
+      </details>
+
+      <details class="ioDisclosure" data-io-disclosure="dmx-route-actions">
+        <summary>Manage output routes</summary>
+        <div class="ioDisclosureBody">
+          <div class="dmxRouteActions">
+            <button data-io-control="dmx-add-artnet" onClick={() => void addNetworkRoute("ArtNet")}>Add Art-Net route</button>
+            <button data-io-control="dmx-add-sacn" onClick={() => void addNetworkRoute("Sacn")}>Add sACN route</button>
+            <button data-io-control="dmx-add-current" onClick={props.onAddCurrentRoute}>Add current route</button>
+            <button data-io-control="dmx-apply-routes" onClick={props.onApplyRoutes}>Apply routes</button>
+          </div>
+        </div>
+      </details>
 
       <div
         class="dmxRouteList"

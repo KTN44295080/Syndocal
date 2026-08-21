@@ -219,10 +219,12 @@ blocked every job, so no CI/platform claim is derived from that run.
 
 ### Phase 0 — Rebaseline, version, warnings, and ledgers
 
-- [ ] Advance and verify all product metadata as `1.2.0-alpha.1`.
-- [ ] Replace stale resume instructions and percentages with current AI3 truth.
+- [x] Advance and verify all product metadata as `1.2.0-alpha.1`.
+- [x] Replace stale resume instructions and percentages with current AI3 truth.
 - [ ] Build Q1-Q4 coverage from every phase below; assign Supported/External/etc.
-- [ ] Create W0 warning inventory and enforce W1 no-new-warning ratchet.
+- [x] Create the structured W0 inventory and enforce the W1 no-new-warning ratchet.
+- [ ] Measure and enforce macOS dev/release so the W0 required matrix can change
+  from 11 enforced / 2 pending to `requiredMatrixComplete=true`.
 - [ ] Extend `check:release` with tag/previous-version/updater/artifact checks.
 
 Exit: synchronized version metadata, warning baseline, current traceability/risk/
@@ -246,21 +248,29 @@ Exit: no project/file mutation bypasses one recoverable authority/publication pa
 
 ### Phase 2 — Complete AI3 runtime/output bridge
 
-- [ ] Extend the pure lease core into a bounded multi-lease registry with atomic
+- [x] Extend the pure lease core into a bounded multi-lease registry with atomic
   Lighting/Video overlap handling.
-- [ ] Add exact request receipts, same-ID/different-shape rejection, bounded lanes,
-  rate limit, audit truth, and crash-safe/durable terminal recovery.
-- [ ] Wire lease state into AppState, generation-stamped query, canonical commands,
+- [x] Add process-local exact request receipts, same-ID/different-shape rejection,
+  bounded lanes, rate limit, audit truth, and restart non-reclamation.
+- [ ] Add crash-safe/durable terminal recovery rather than reclaiming pre-crash
+  authority or presenting process-local receipts as durable truth.
+- [x] Wire lease state into AppState, generation-stamped query, canonical commands,
   registry metadata, and current-process owner retirement.
-- [ ] Revalidate exact lease owner/resource/generation/expiry at the final existing
+- [x] Revalidate exact lease owner/resource/generation/expiry at the final existing
   R4 Release/Arm/Take Over commit boundary while S0 remains independent.
-- [ ] Orphan affected leases on project identity replacement without physical change.
-- [ ] Canonicalize or fail-close MIDI, OSC, DMX mapping, Remote, shortcut, all/video/
-  per-output release, and every other energizing legacy route.
-- [ ] Fence New/Load/Recovery/Backup/Take Over through acknowledged physical
-  retirement, project replacement, and separate explicit re-Arm.
-- [ ] Prove stale owner, reply loss, restart non-reclamation, transfer races,
-  10,000-call saturation, physical creation/teardown ACK, and hardware behavior.
+- [x] Orphan affected leases on project identity replacement without physical change.
+- [x] Canonicalize or fail-close code-side MIDI, OSC, DMX mapping, Remote, shortcut,
+  all/video/per-output release, and every other discovered energizing legacy route.
+- [ ] Verify those ingress policies through native clients and hardware rather than
+  treating the generated source inventory as physical acceptance.
+- [x] Fence project replacement through candidate/orphan receipts, generation checks,
+  and an explicit re-Arm requirement.
+- [ ] Prove New/Load/Recovery/Backup/Take Over retirement and re-Arm end to end with
+  acknowledged physical output state.
+- [x] Prove code-side stale owner/ABA, restart non-reclamation, transfer races,
+  bounded 10,000-call saturation, and candidate/teardown ACK behavior.
+- [ ] Prove durable reply-loss/crash recovery, real Raw Input, physical creation/
+  teardown ACK, and the five-display hardware behavior.
 
 Exit: all five AI3 roadmap categories accepted. Do not begin AI4 before this exit.
 
@@ -307,7 +317,7 @@ Audio/recording/live-source clock and ownership semantics are complete.
   cache performance budgets.
 - [ ] L authored Audio schema/migration/history and explicit ShowClock/audio/PTS
   master-clock, resampling/slew/seek/loop/underrun/device-fault policy.
-- [ ] Extend the existing Web Remote listener with authenticated DJ Link events. Map
+- [x] Extend the existing Web Remote listener with authenticated DJ Link events. Map
   `DJ_MASTER_TRACK_ACTIVE` to project-owned Timeline starts, converge authored A-B
   Loop from absolute `DJ_LOOP_STATE`, and make `DJ_RELEASE` idempotently disable/resume.
   Do not add a second Agent/server or send rekordbox MIDI from Syndocal.
@@ -360,7 +370,8 @@ non-default artifact from MIT/WASAPI.
 
 - [ ] Select GPLv3-separated artifact or Steinberg proprietary SDK agreement; package
   notices/source obligations and approve installer/updater separation.
-- [ ] Pass a second vendor's working driver.
+- [x] Pass a second vendor's working driver (HOTONE 44.1 kHz / 2-channel / i32 /
+  128-frame, 100 exact Start/Stop/Free cycles with no fallback).
 - [ ] Pass advertised 44.1/48/96 kHz, 64/128/256 frames, format, mono/stereo/channel
   selection matrix without silent fallback.
 - [ ] Pass occupied-driver, control-panel rate/buffer change, reset/resync, XRUN,
@@ -458,15 +469,19 @@ gate is unavailable, or any claim exceeds the proven platform/hardware boundary.
 
 ## 12. Exact resume point
 
-After the documentation/version checkpoint containing this file:
+Resume from the current Windows-first checkpoint in this order:
 
-1. preserve the bounded Windows W1 ratchet and finish the nine pending W0 warning
-   configurations; do not claim W0, beta, or RC warning acceptance before the
-   required matrix is complete and first-party warnings reach zero;
-2. continue AI3 with the bounded multi-lease/resource-overlap registry and exact
-   process-local request receipt/shape-conflict layer;
-3. independently review it before AppState/R4 integration;
-4. keep AI4, distributed ShowClock, ASIO completion claims, and public release closed.
+1. preserve the zero-warning Windows/Linux rows and W1 ratchet; measure the two
+   macOS rows before claiming W0, beta, or RC warning acceptance;
+2. resolve and independently review the production Raw Input registration/lifecycle
+   failure observed by the real HID pass; do not weaken the SendInput/PostMessage/
+   DOM fail-closed boundary;
+3. obtain one exact physical lease receipt and the separate `Both` Arm receipt,
+   verify all five fullscreen origins, then leave editor + LED panel + projector;
+4. finish AI3 durable crash/reply-loss recovery and acknowledged project-lifecycle/
+   physical-output tests before starting AI4;
+5. keep distributed ShowClock, complete ASIO, signing/updater, beta/RC, and public
+   release claims closed until their remaining gates below are proven.
 
 ## 13. 2026-08-21 bounded completion-flow update
 
@@ -477,20 +492,19 @@ panic, distinguishes StateSync from triggers, and keeps all rekordbox/Pedal/MIDI
 responsibility in `rekordbox-DJ-Link-ForPCDJ`. The topbar no longer carries the
 Lighting/Video master sliders; no adjacent UI was reduced in size.
 
-The focused Rust and frontend gates listed in the handoff pass, and the final
-Windows native `--no-bundle` build completed in 2m12s with zero first-party and
-zero Vite warnings. Seven locally measurable W0 configurations must now be
-promoted from pending using exact artifacts/output markers and a reviewed
-inventory-only checkpoint. macOS dev/release remain pending external evidence,
-so this update does not set `requiredMatrixComplete=true` and does not claim beta,
-RC, or release acceptance.
+The focused Rust and frontend gates listed in the handoff pass, and the Windows
+native `--no-bundle` build, completed with zero first-party and zero Vite warnings.
+The seven locally measurable rows were subsequently promoted; the inventory is now
+11 enforced / 2 pending. macOS dev/release remain pending external evidence, so
+`requiredMatrixComplete` stays false and this does not claim beta, RC, or release
+acceptance.
 
-After the inventory-only checkpoint and its docs-only normal-mode proof, launch
-the exact rebuilt executable, verify exactly one responsive maximized Syndocal,
-then perform the requested five-display VJ output exercise and leave the final
-operational state as editor plus LED panel plus projector. If physical
-OutputControl consent rejects synthetic input, stop rather than bypassing the Raw
-Input boundary and record the single human-keyboard action still required.
+The exact rebuilt executable was launched as one responsive maximized Syndocal and
+five Display targets were enumerated. Real keyboard attempts then exposed an
+unresolved production Raw Input registration/lifecycle failure before lease receipt.
+Synthetic input remains rejected and must not be used as a bypass. Repair and
+re-review that production path, then repeat the five-display exercise and leave the
+final editor + LED panel + projector state.
 
 ## 14. 2026-08-21 warning-P2 promotion result
 
@@ -563,3 +577,70 @@ was substituted. The next action remains a coordinated human-keyboard lease
 confirmation, a second confirmation for `Both` Arm, five fullscreen origin checks,
 and the final editor + LED panel + projector state. Do not mark those boxes complete
 until that native evidence is recorded.
+
+## 17. 2026-08-21 Windows usability and physical-input continuation
+
+Windows completion now also requires a simple normal path rather than exposing
+implementation fields as the default operator workflow. Display-output creation
+must enumerate the current native displays and make the normal path select one
+display and add it. The display label, physical dimensions, and fullscreen default
+are derived from that exact detected target. Manual dimensions, fade, endpoint, and
+NDI/Spout/Syphon choices remain available in an initially closed advanced section.
+The normal action must use a canonical OutputControl R4 operation with the exact
+video lease, fresh physical consent, final fence revalidation, and an acknowledged
+engine commit; the legacy `add_video_output` rejection is not relaxed. Empty,
+failed, stale, or reordered display enumeration disables creation and cannot fall
+back silently to monitor zero.
+
+DMX, MIDI, OSC, and Web Remote likewise present connection state plus the actual
+enable/start/stop/connect action first. Addresses, ports, protocols, mapping,
+security limits, telemetry, and other engineering detail remain reachable through
+closed disclosures. Active/Standby, output lease state, and the physical challenge
+remain explicit safety controls rather than density debt. Existing typography,
+controls, icons, spacing, and hit targets are not reduced; 1280x720 containment is
+solved with reflow and internal scrolling.
+
+The Scene Matrix Bank model must match the direct operator workflow: every Cue List
+Bank, including an empty Bank, is rendered simultaneously as a horizontal column.
+The one-row top strip only jumps/focuses an already visible Bank and contains Bank
+creation plus the existing view controls; it is not a tab-panel switch. `+ Bank`
+opens a focused input prefilled with the first unused `Bank N` and selects the whole
+value, so Enter accepts the default and typing replaces it. Each Bank column owns
+its `+ Scene`; it creates `New Scene` in that exact Bank even with zero patched
+fixtures. Bank rename/delete are in the Bank context menu (mouse and Shift+F10),
+and Bank drag reorder is one durable project transaction with one Undo. Lighting
+Banks have no privileged `Main` row: ID 1 is an ordinary Bank, every Bank may be
+renamed, reordered, or deleted, and only the last remaining Bank is protected.
+Deleting a Bank deletes every Scene it contains; Scenes are not migrated to another
+Bank. Selection, active/group/live/fade/timeline references to deleted Scenes must
+be removed atomically and one Undo must restore the exact Bank and Scene state.
+The separately defined video-composition `Main` is not part of this Bank model.
+Cue group identity, live state, FX/Super Scene, cross-Bank cue drag, selection, and
+project persistence otherwise remain intact.
+
+The real keyboard retry in the maximized native app did not reach a challenge
+receipt because the backend reported `Physical Raw Input registration query
+failed`. An independent Win32 probe established the normal count/fill shapes as
+`0/1/0` then `1/1/1/0`, which the current classifier already accepts. The classifier
+therefore remains unchanged. The current diagnostic-only change returns a bounded,
+secret-free numeric phase record for count/fill/stabilization failures; its focused
+result is 16 passed, 0 failed, 1 separately ignored interactive SendInput test, with
+zero first-party warnings. A new native build must capture the exact production
+phase, then the exact documented shape may be repaired without broadening synthetic
+input acceptance. Until a human keyboard reaches Ready and one-shot consume, Raw
+Input, five fullscreen origins, and the final editor + LED panel + projector state
+remain incomplete.
+
+The Bank implementation subsequently closed its frozen review at P0 0 / P1 0 /
+P2 0. The final model has no privileged lighting `Main`: ID 1 is ordinary, only
+the last Bank is protected, and deleting a Bank deletes all child Scenes plus every
+runtime reference, including pending direct-child count-in. Save/reload and rollback
+proofs are exact. Engine 767/769 (two ignored manual benchmarks), protocol 139/139,
+strict control plane 73/74 (one ignored interactive SendInput), all three focused
+five-viewport surfaces, frontend invoke 407, localization 3542/3542, and warning
+zero passed. The native no-bundle build completed in 2m20s; executable SHA-256 is
+`620EA06C9696EBD6B45E53D42840CD5806EC16D627D2ED3B89BFB0A05A6B1017`.
+The sole exact-path process was responsive, but Computer Use could not bind its
+window (`foreground window did not report a process id`) on two attempts. This is
+an automation blocker, not evidence of maximize, Raw Input, or display acceptance;
+those hardware gates remain open without an alternate UI-automation bypass.

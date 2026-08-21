@@ -73,3 +73,40 @@ export const applySceneMatrixCueMove = (
   }
   return next;
 };
+
+/**
+ * Apply the Scene Matrix's outer-bank move in the browser fixture. The older
+ * helper above intentionally models the legacy group-column move; keep it
+ * intact for that surface and make Cue List ownership explicit here.
+ */
+export const applySceneMatrixCueListMove = (
+  currentCues: CueSummary[],
+  sourceCueId: number,
+  targetCueId: number | null,
+  targetCueListId: number,
+  targetGroupId: string | null,
+  position: "before" | "after",
+): CueSummary[] => {
+  const source = currentCues.find((cue) => cue.id === sourceCueId);
+  if (!source) return currentCues;
+  const next = currentCues.map((cue) => cue.id === sourceCueId
+    ? {
+        ...cue,
+        cue_list_id: targetCueListId,
+        group_id: targetGroupId,
+      }
+    : cue);
+  const sourceIndex = next.findIndex((cue) => cue.id === sourceCueId);
+  if (sourceIndex < 0) return next;
+  const [moved] = next.splice(sourceIndex, 1);
+  if (!moved) return next;
+  const targetIndex = targetCueId === null
+    ? next.reduce((last, cue, index) => cue.cue_list_id === targetCueListId ? index : last, -1)
+    : next.findIndex((cue) => cue.id === targetCueId);
+  if (targetIndex < 0) {
+    next.push(moved);
+    return next;
+  }
+  next.splice(position === "after" ? targetIndex + 1 : targetIndex, 0, moved);
+  return next;
+};

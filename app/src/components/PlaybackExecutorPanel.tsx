@@ -14,10 +14,19 @@ interface PlaybackExecutorPanelProps {
   onTrigger: (executorId: number, direction: "next" | "previous") => void | Promise<void>;
 }
 
+const cueListDisplayLabel = (cueList: CueListSummary): string =>
+  cueList.id === 1 && cueList.label.trim().toLowerCase() === "main"
+    ? "Bank 1"
+    : cueList.label;
+
 export function PlaybackExecutorPanel(props: PlaybackExecutorPanelProps) {
   const [page, setPage] = createSignal(1);
   const [label, setLabel] = createSignal("Playback");
   const [cueListId, setCueListId] = createSignal(1);
+  const displayCueLists = createMemo(() => props.cueLists.map((cueList) => ({
+    ...cueList,
+    label: cueListDisplayLabel(cueList),
+  })));
   const pageExecutors = createMemo(() => props.executors.filter((executor) => executor.page === page()));
   const nextSlot = createMemo(() => {
     const used = new Set(pageExecutors().map((executor) => executor.slot));
@@ -61,7 +70,7 @@ export function PlaybackExecutorPanel(props: PlaybackExecutorPanelProps) {
         <label>
           Cue List
           <select value={cueListId()} onInput={(event) => setCueListId(Number(event.currentTarget.value))}>
-            <For each={props.cueLists}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
+            <For each={displayCueLists()}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
           </select>
         </label>
         <button
@@ -95,7 +104,7 @@ export function PlaybackExecutorPanel(props: PlaybackExecutorPanelProps) {
                     value={executor.cue_list_id}
                     onInput={(event) => void props.onUpdate(executor, { cue_list_id: Number(event.currentTarget.value) })}
                   >
-                    <For each={props.cueLists}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
+                    <For each={displayCueLists()}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
                   </select>
                   <Show when={activeCue()} fallback={<span class="playbackExecutorNow">Ready</span>}>
                     {(cue) => <span class="playbackExecutorNow" data-no-localize>{cue().cue_number || cue().id} {cue().label}</span>}

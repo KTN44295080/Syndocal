@@ -578,14 +578,16 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     if (!targetColumn) return null;
     const sameColumn =
       sourceColumn?.dataset.sceneMatrixColumn === targetColumn?.dataset.sceneMatrixColumn;
-    const sameCueList =
-      !targetCard ||
-      sourceCard.dataset.sceneMatrixCueListId === targetCard.dataset.sceneMatrixCueListId;
-    return sameCueList &&
-      (!sameColumn || (
-        targetCard &&
-        targetCard.dataset.sceneMatrixCueId !== String(drag.cue_id)
-      ))
+    // Scene-matrix drops are valid across Banks as well as within one Bank.
+    // The authoritative end-drag path carries the target cue_list_id, so the
+    // ghost must not report a cross-bank move as rejected while that path is
+    // being previewed. An empty target column is valid only when it differs
+    // from the source column; dropping back onto the source cue is rejected.
+    const targetIsDifferentCue = Boolean(
+      targetCard && targetCard.dataset.sceneMatrixCueId !== String(drag.cue_id),
+    );
+    const targetIsEmptyDifferentColumn = !targetCard && !sameColumn;
+    return targetIsDifferentCue || targetIsEmptyDifferentColumn
       ? "matrix" as const
       : "rejected" as const;
   };

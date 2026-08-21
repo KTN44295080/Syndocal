@@ -10,6 +10,7 @@ export const OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID =
 export const OUTPUT_OWNERSHIP_ARM_OPERATION_ID = "syndocal.output.ownership.arm.v1";
 export const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID = "syndocal.output.blackout.release.v1";
 export const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID = "syndocal.output.standby.takeover.v1";
+export const OUTPUT_DISPLAY_ADD_OPERATION_ID = "syndocal.output.display.add.v1";
 export const OUTPUT_LEASE_ACQUIRE_OPERATION_ID = "syndocal.output.lease.acquire.v1";
 export const OUTPUT_LEASE_RENEW_OPERATION_ID = "syndocal.output.lease.renew.v1";
 export const OUTPUT_LEASE_RECOVER_OPERATION_ID = "syndocal.output.lease.recover.v1";
@@ -61,6 +62,21 @@ export interface OutputLeaseAuthorityQuery {
   statuses: OutputLeaseAuthorityQueryStatus[];
 }
 
+export interface DisplayOutputSpec {
+  label: string;
+  monitor_identity: string;
+  monitor_index: number;
+  width: number;
+  height: number;
+  fullscreen: boolean;
+}
+
+export type OutputDisplayAction = {
+  kind: "add_display";
+  spec: DisplayOutputSpec;
+  lease: OutputLeaseAuthority;
+};
+
 export type OutputControlAction =
   | { kind: "arm"; role: OutputControlTargetRole; lease: OutputLeaseAuthority }
   | { kind: "release_blackout"; lease: OutputLeaseAuthority }
@@ -70,7 +86,8 @@ export type OutputControlAction =
       standby_session_id: string;
       standby_generation: number;
       lease: OutputLeaseAuthority;
-    };
+    }
+  | OutputDisplayAction;
 
 export type OutputLeaseLifecycleAction =
   | { kind: "acquire_lease"; role: OutputControlTargetRole }
@@ -150,6 +167,7 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
     case "arm": return OUTPUT_OWNERSHIP_ARM_OPERATION_ID;
     case "release_blackout": return OUTPUT_BLACKOUT_RELEASE_OPERATION_ID;
     case "take_over_standby": return OUTPUT_STANDBY_TAKEOVER_OPERATION_ID;
+    case "add_display": return OUTPUT_DISPLAY_ADD_OPERATION_ID;
     case "acquire_lease": return OUTPUT_LEASE_ACQUIRE_OPERATION_ID;
     case "renew_lease": return OUTPUT_LEASE_RENEW_OPERATION_ID;
     case "recover_lease": return OUTPUT_LEASE_RECOVER_OPERATION_ID;
@@ -163,6 +181,7 @@ const commandForAction = (action: OutputControlOperationAction): string => {
     case "arm": return "arm_output_control_v1";
     case "release_blackout": return "release_blackout_output_control_v1";
     case "take_over_standby": return "take_over_output_control_v1";
+    case "add_display": return "add_display_output_v1";
     case "acquire_lease": return "acquire_output_lease_v1";
     case "renew_lease": return "renew_output_lease_v1";
     case "recover_lease": return "recover_output_lease_v1";
@@ -338,6 +357,19 @@ const assertAction = (action: OutputControlOperationAction): void => {
     if (!hasExactKeys(record, ["kind", "force", "standby_session_id", "standby_generation", "lease"])
       || typeof action.force !== "boolean" || !action.standby_session_id
       || !isPositiveSafeInteger(action.standby_generation)) throw new Error("OutputControl Take Over action was invalid; nothing was applied.");
+  } else if (action.kind === "add_display") {
+    const spec = action.spec as unknown as Record<string, unknown>;
+    if (!hasExactKeys(record, ["kind", "spec", "lease"])
+      || !isObject(spec)
+      || !hasExactKeys(spec, ["label", "monitor_identity", "monitor_index", "width", "height", "fullscreen"])
+      || typeof spec.label !== "string" || spec.label.trim().length === 0 || spec.label.length > 128
+      || !/^[0-9a-f]{64}$/.test(String(spec.monitor_identity))
+      || !isNonnegativeSafeInteger(spec.monitor_index) || spec.monitor_index > 255
+      || !isPositiveSafeInteger(spec.width) || spec.width > 16_384
+      || !isPositiveSafeInteger(spec.height) || spec.height > 16_384
+      || typeof spec.fullscreen !== "boolean") {
+      throw new Error("OutputControl display action was invalid; nothing was applied.");
+    }
   } else if (!hasExactKeys(record, ["kind", "lease"])) {
     throw new Error("Output lease lifecycle action was invalid; nothing was applied.");
   }
@@ -452,6 +484,9 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
     case "take_over_standby":
       if (!(outcome === "authorized" && phase === "held_active" || outcome === "project_orphaned" && phase === "held_orphaned") || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
+    case "add_display":
+      if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["video"])) throw new Error(errorMessage);
+      break;
     case "acquire_lease":
       if (outcome !== "acquired" || phase !== "held_active" || !sameResources(resources, resourcesForRole(action.role))) throw new Error(errorMessage);
       break;
@@ -545,12 +580,18 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     || action.kind === "arm" && selected[0].status !== "held_active"
     || action.kind === "release_blackout" && selected[0].status !== "held_active"
     || action.kind === "take_over_standby" && selected[0].status !== "held_active"
+    || action.kind === "add_display" && selected[0].status !== "held_active"
     || action.kind === "renew_lease" && selected[0].status !== "held_active"
     || action.kind === "recover_lease" && selected[0].status !== "held_orphaned") {
     throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   }
   if (action.kind === "arm" || action.kind === "release_blackout" || action.kind === "take_over_standby") {
-    const expectedResources = action.kind === "arm" ? resourcesForRole(action.role) : ["lighting", "video"] as const;
+    const expectedResources = action.kind === "arm"
+      ? resourcesForRole(action.role)
+      : ["lighting", "video"] as const;
+    if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
+  } else if (action.kind === "add_display") {
+    const expectedResources = ["video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   }
 };
@@ -589,6 +630,9 @@ const executeOutputControlOperation = async (
       request: { operation_id: OUTPUT_CONSENT_STATUS_QUERY_OPERATION_ID, request_id: statusRequestId, challenge_id: challenge.challenge_id },
     }), challenge, statusRequestId);
     ready = status.state === "ready";
+    if (ready && status.expires_at_unix_ms !== challenge.expires_at_unix_ms) {
+      onChallenge({ action, displayCode: challenge.display_code, expiresAtUnixMs: status.expires_at_unix_ms });
+    }
     if (!ready) {
       await wait(100);
       statusRequestId = allocateRequestId();

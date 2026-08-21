@@ -30,6 +30,11 @@ export type CueCaptureScopeMode = "all" | "lighting" | "effects" | "selectedFixt
 const cuesPerPage = 12;
 const timelinePlacementsPerCue = 8;
 
+const cueListDisplayLabel = (cueList: CueListSummary): string =>
+  cueList.id === 1 && cueList.label.trim().toLowerCase() === "main"
+    ? "Bank 1"
+    : cueList.label;
+
 const cueCaptureScopeLabel = (scope: CueCaptureScopeMode) => {
   if (scope === "all") return "All Sources";
   if (scope === "lighting") return "Lighting Only";
@@ -86,9 +91,9 @@ interface CueManagementPanelProps {
   onCueEffectCaptureTargets: (targets: CueEffectTarget[], change: CueEffectRecallChange) => void;
   onSelectCueList: (cueListId: number) => void;
   onCueListLabel: (label: string) => void;
-  onCreateCueList: () => void | Promise<void>;
-  onRenameCueList: () => void | Promise<void>;
-  onRemoveCueList: () => void | Promise<void>;
+  onCreateCueList: () => void | boolean | Promise<void | boolean>;
+  onRenameCueList: () => void | boolean | Promise<void | boolean>;
+  onRemoveCueList: (cueListId?: number, confirmed?: boolean) => void | boolean | Promise<void | boolean>;
   onSetCueList: (cueId: number, cueListId: number) => void | Promise<void>;
   onSetCuePalette: (cue: CueSummary, paletteId: number, enabled: boolean) => void | Promise<void>;
   onTriggerCueList: (cueListId: number, direction: "next" | "previous") => void | Promise<void>;
@@ -129,6 +134,10 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
   // otherwise sees each deserialized Cue object as a replacement and remounts
   // native selects/inputs while an operator is using them.
   const [stableCues, setStableCues] = createStore<CueSummary[]>(props.cues);
+  const displayCueLists = createMemo(() => props.cueLists.map((cueList) => ({
+    ...cueList,
+    label: cueListDisplayLabel(cueList),
+  })));
   createEffect(() => {
     setStableCues(reconcile(props.cues, { key: "id" }));
   });
@@ -273,7 +282,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
         <label>
           Cue List
           <select value={props.selectedCueListId} onInput={(event) => props.onSelectCueList(Number(event.currentTarget.value))}>
-            <For each={props.cueLists}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
+            <For each={displayCueLists()}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
           </select>
         </label>
         <label>
@@ -282,12 +291,12 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
         </label>
         <button onClick={() => void props.onCreateCueList()}>New List</button>
         <button onClick={() => void props.onRenameCueList()}>Rename</button>
-        <button class="danger" disabled={props.selectedCueListId === 1} onClick={() => void props.onRemoveCueList()}>Remove List</button>
+        <button class="danger" disabled={props.cueLists.length <= 1} onClick={() => void props.onRemoveCueList()}>Remove List</button>
       </div>
       </Show>
       <Show when={props.mode !== "scene-settings"}>
       <div class="cueExecutorBank" aria-label="Cue List executors">
-        <For each={props.cueLists}>
+        <For each={displayCueLists()}>
           {(cueList) => {
             const activeCue = () => props.allCues.find((cue) => cue.id === cueList.active_cue_id)
               ?? (cueList.id === props.selectedCueListId ? props.allCues.find((cue) => cue.id === props.activeCueId) : undefined);
@@ -604,7 +613,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   <label>
                     List
                     <select value={cue.cue_list_id} onInput={(event) => void props.onSetCueList(cue.id, Number(event.currentTarget.value))}>
-                      <For each={props.cueLists}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
+                      <For each={displayCueLists()}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
                     </select>
                   </label>
                   <label>

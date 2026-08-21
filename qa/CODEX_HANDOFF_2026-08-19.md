@@ -631,3 +631,69 @@ new code, verify lease acquisition, issue the separate `Both` Arm confirmation,
 then measure all five fullscreen window origins and leave the requested editor +
 LED panel + projector state. The code-side checkpoint is committed and pushed
 independently of that explicitly unverified hardware boundary.
+
+## 2026-08-21 simple-operation and Scene Matrix continuation
+
+The current uncommitted continuation is on `codex/syndocal-v1.2` at base HEAD
+`aa4a7059a1f231fa43004d65b7ebe1a97a0068f6`. It adds three mandatory Windows
+completion tranches which must be reviewed and committed together only after their
+native gates close:
+
+- Scene Matrix renders all Cue List Banks simultaneously as horizontal columns,
+  collapses the two header rows into one jump/action row, prefills and selects an
+  unused `Bank N` name, moves rename/delete to an accessible Bank context menu,
+  persists Bank drag order through one project transaction/Undo, and makes each
+  Bank's `+ Scene` create `New Scene` in that exact Bank even with no fixtures;
+- lighting Banks have no privileged `Main`: ID 1 is an ordinary Bank, only the
+  final remaining Bank is protected, and deleting any other Bank atomically deletes
+  all of its child Scenes rather than moving them. Save/reload must not recreate or
+  pin ID 1. This does not change the separate video-composition `Main` model;
+- Display output uses detected native targets and a normal select-plus-add path,
+  while manual/video-transport settings stay under Advanced. Creation must travel
+  through a new canonical OutputControl R4 action; legacy output creation stays
+  rejected. I/O defaults show state and the real connect/start/stop action while
+  raw configuration remains reachable in closed disclosures;
+- the real HID failure was confirmed as a production Raw Input registration query
+  failure, not operator input error. The current diagnostic-only change leaves the
+  accepted-input classifier unchanged and exposes safe numeric count/fill/stabilize
+  fields. Focused evidence is 16 pass / 0 fail / 1 interactive SendInput ignored,
+  `cargo check` warning zero, formatting and diff checks green. The next native
+  build must collect that numeric phase before any exact classifier repair.
+
+This is an in-progress checkpoint, not a completion claim. Remaining work is the
+frozen UI/backend review, five-viewport and persistence/Undo proof, full frontend
+and workspace gates, exact-process native rebuild, one maximized responsive window,
+human Raw Input Ready/consume, five fullscreen origin checks, final three-screen
+operator state, documentation refresh, descriptive commit, and push. No synthetic
+input may substitute for the hardware proof.
+
+### 2026-08-21 Bank semantics and native checkpoint
+
+The lighting Bank model no longer has a privileged `Main`. New projects create
+ordinary `Bank 1` labels for both the first Bank and its playback executor. ID 1
+may be reordered, renamed, or deleted like any other Bank; only the final remaining
+Bank is protected. Deleting a Bank deletes all of its child Scenes instead of
+migrating them. The canonical and legacy engine routes share that exact deletion
+path. Save/reload after deleting ID 1 neither revives it nor creates an orphan
+executor. Deleted active/group/live/fade/pending/timeline/direct-child references
+are removed, including a pending direct-child count-in, and publication rollback
+restores that count-in exactly. The independent final review returned P0 0, P1 0,
+and P2 0.
+
+Measured gates: engine 767 passed / 2 ignored / 0 failed; protocol 139/139;
+strict control plane 73 passed / 1 interactive-only ignored; Scene Matrix,
+Scene drag, and Setup I/O each passed all five viewports; frontend invokes 407;
+localization 3542/3542; OutputControl, output ownership, empty states, release
+metadata, formatting, and diff checks passed. The frontend warning ratchet remained
+zero first-party / zero third-party.
+
+Immediately before the native build, exact-path process inspection found zero
+running instances. `pnpm --dir app tauri build --no-bundle` completed in 2m20s
+with zero first-party Rust and zero Vite warnings. The rebuilt exact executable has
+SHA-256 `620EA06C9696EBD6B45E53D42840CD5806EC16D627D2ED3B89BFB0A05A6B1017` and
+was launched as PID 53816 with `Responding=True`, title `Syndocal`, and one main
+window. Computer Use then failed twice to bind that window with `foreground window
+did not report a process id`; no PowerShell/UIAutomation or synthetic-input bypass
+was used. Maximize, Raw Input, five fullscreen origins, and the final three-screen
+state therefore remain unverified and must be resumed through Computer Use or one
+explicit human handoff.
