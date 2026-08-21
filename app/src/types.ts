@@ -990,6 +990,42 @@ export interface ProjectHistoryMutationResult {
   authority: ProjectAuthorityBundle;
 }
 
+export const PROJECT_TRANSACTION_SCHEMA_VERSION = 1 as const;
+
+export interface ProjectTransactionTicket {
+  transaction_id: number;
+  project_epoch: number;
+  project_revision: number;
+  project_checkpoint_hash: string;
+  client_operation_id: string;
+  shape_fingerprint: string;
+  schema_version: number;
+  owner_id: string;
+  window_label: string;
+  owner_incarnation: number;
+  label: string;
+  coalesce_key: string;
+}
+
+export type ProjectTransactionRecovery =
+  | { status: "pending"; ticket: ProjectTransactionTicket }
+  | { status: "committed"; mutation: ProjectHistoryMutationResult }
+  | { status: "cancelled"; mutation: ProjectHistoryMutationResult }
+  | { status: "acknowledged" };
+
+/** Canonical renderer wire shape; Rust recomputes and compares this tuple. */
+export const projectTransactionShapeFingerprint = (
+  commandName: string,
+  label: string,
+  coalesceKey: string,
+) => `project-transaction-v${PROJECT_TRANSACTION_SCHEMA_VERSION}|command=${commandName}|label=${label}|coalesce=${coalesceKey}`;
+
+export const projectTransactionRecoveryCanAdopt = (status: ProjectTransactionRecovery["status"]) =>
+  status === "pending";
+
+export const projectTransactionRecoveryIsTerminal = (status: ProjectTransactionRecovery["status"]) =>
+  status === "committed" || status === "cancelled" || status === "acknowledged";
+
 /** A Save/Save As acknowledgement captured after final disk publication. */
 export interface ProjectSaveResult {
   path: string;

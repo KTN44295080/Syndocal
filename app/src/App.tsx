@@ -99,6 +99,12 @@ import { TouchFixturePanel } from "./components/TouchFixturePanel";
 import { TouchGenericAttributeGrid } from "./components/TouchGenericAttributeGrid";
 import { TouchPanTiltPad } from "./components/TouchPanTiltPad";
 import { TouchVideoPanel } from "./components/TouchVideoPanel";
+import {
+  PROJECT_TRANSACTION_SCHEMA_VERSION,
+  projectTransactionRecoveryCanAdopt,
+  projectTransactionRecoveryIsTerminal,
+  projectTransactionShapeFingerprint,
+} from "./types";
 import type {
   TimelineOverviewAutomationRange,
   TimelineOverviewEvent,
@@ -326,6 +332,8 @@ import type {
   ProjectFile,
   ProjectHistoryStatus,
   ProjectHistoryMutationResult,
+  ProjectTransactionRecovery,
+  ProjectTransactionTicket,
   ProjectHistoryNavigationResult,
   ProjectAuthorityBundle,
   ProjectLoadResult,
@@ -1317,6 +1325,9 @@ const invoke = async <T,>(
   const requestedExpectedEpoch = typeof args?.__expectedProjectEpoch === "number"
     ? args.__expectedProjectEpoch
     : null;
+  const requestedExpectedRevision = typeof args?.__expectedProjectRevision === "number"
+    ? args.__expectedProjectRevision
+    : null;
   const onProjectTransactionOpened = typeof args?.__onProjectTransactionOpened === "function"
     ? args.__onProjectTransactionOpened as () => void
     : null;
@@ -1333,11 +1344,10 @@ const invoke = async <T,>(
     && args?.__authoredEffectFencePrepared === true;
   const commandArgs = { ...(args ?? {}) };
   delete commandArgs.__expectedProjectEpoch;
+  delete commandArgs.__expectedProjectRevision;
   // Renderer-only lifecycle hooks for staged long-I/O helpers. Never let a
-  // closure cross the Tauri boundary. The ticket callback classifies a returned
-  // Begin ticket; the predicate lets this facade abandon a signal observed
-  // after mapping flush but before Begin dispatch. Neither resolves Begin
-  // reply-loss nor supplies a terminal receipt/history outcome.
+  // closure cross the Tauri boundary. Begin/Commit/Cancel all use the same
+  // operation receipt and recovery lane, including transport reply loss.
   delete commandArgs.__onProjectTransactionOpened;
   delete commandArgs.__shouldAbortProjectMutation;
   delete commandArgs.__awaitProjectMutationAbort;
@@ -1355,6 +1365,7 @@ const invoke = async <T,>(
     throw new Error("Project changed while the operation dialog was open; nothing was applied.");
   }
   const expectedEpoch = requestedExpectedEpoch ?? currentEpoch;
+  const expectedRevision = requestedExpectedRevision ?? projectTransactionAuthorityRevision;
   if (shouldAbortProjectMutation?.()) {
     throw new DOMException("Project mutation was cancelled before dispatch.", "AbortError");
   }
@@ -1370,31 +1381,46 @@ const invoke = async <T,>(
     markAuthoritativeApplicationCurrent(result, current);
     return result;
   }
-  const transaction = await tauriInvoke<ProjectTransactionTicket>("begin_project_transaction", {
-    label: projectMutationLabel(command),
-    coalesceKey: projectMutationCoalesceKey(command, args),
-    expectedEpoch,
+  const transactionLabel = projectMutationLabel(command).trim().slice(0, 80);
+  const transactionCoalesceKey = projectMutationCoalesceKey(command, args).trim().slice(0, 240);
+  const transactionShapeFingerprint = projectTransactionShapeFingerprint(
+    command,
+    transactionLabel,
+    transactionCoalesceKey,
+  );
+  const clientOperationId = projectTransactionOperationId();
+  const transactionIdentity = {
+    clientOperationId,
+    shapeFingerprint: transactionShapeFingerprint,
+    commandName: command,
+    schemaVersion: PROJECT_TRANSACTION_SCHEMA_VERSION,
     ownerId: projectTransactionOwnerId,
-  });
+  };
+  const beginArgs = {
+    label: transactionLabel,
+    coalesceKey: transactionCoalesceKey,
+    expectedEpoch,
+    expectedRevision,
+    ...transactionIdentity,
+  };
+  let transaction: ProjectTransactionTicket;
+  try {
+    transaction = await beginProjectTransactionWithRecovery(beginArgs, transactionIdentity);
+  } catch (beginError) {
+    throw beginError;
+  }
   let ticketCancellationAttempted = false;
   const cancelOpenedProjectTransaction = async () => {
     if (ticketCancellationAttempted) return;
     ticketCancellationAttempted = true;
-    const cancellation = await tauriInvoke<ProjectHistoryMutationResult>("cancel_project_transaction", {
-      transactionId: transaction.transaction_id,
-      expectedEpoch: transaction.project_epoch,
-      ownerId: projectTransactionOwnerId,
-    }).catch(() => null);
-    if (cancellation) {
-      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: cancellation }));
-    }
+    await cancelProjectTransactionWithRecovery(transaction, transactionIdentity).catch(() => undefined);
   };
   try {
     // A signal can arrive while Begin itself is awaiting. Recheck after its
     // reply, before issuing the staged mutation. Release this newly opened
     // ticket immediately, then await the helper's exact media-operation cancel
-    // request when available. Neither step resolves lost Begin replies or
-    // terminal receipt/history delivery.
+    // request when available. Terminal Cancel recovery below keeps history
+    // delivery exact even when the transport reply is lost.
     if (shouldAbortProjectMutation?.()) {
       const mediaAbort = Promise.resolve(awaitProjectMutationAbort?.()).catch(() => undefined);
       await cancelOpenedProjectTransaction();
@@ -1411,12 +1437,24 @@ const invoke = async <T,>(
       expectedEpoch: transaction.project_epoch,
       ownerId: projectTransactionOwnerId,
     });
-    const mutation = await tauriInvoke<ProjectHistoryMutationResult>("commit_project_transaction", {
-      transactionId: transaction.transaction_id,
-      expectedEpoch: transaction.project_epoch,
-      ownerId: projectTransactionOwnerId,
-    });
+    let mutation: ProjectHistoryMutationResult;
+    try {
+      mutation = await tauriInvoke<ProjectHistoryMutationResult>("commit_project_transaction", {
+        transactionId: transaction.transaction_id,
+        expectedEpoch: transaction.project_epoch,
+        clientOperationId: transaction.client_operation_id,
+        shapeFingerprint: transaction.shape_fingerprint,
+        commandName: transactionIdentity.commandName,
+        schemaVersion: transaction.schema_version,
+        ownerId: projectTransactionOwnerId,
+      });
+    } catch (commitError) {
+      const terminal = await queryProjectTransactionTerminal(transactionIdentity).catch(() => null);
+      if (!terminal || terminal.status !== "committed") throw commitError;
+      mutation = terminal.mutation;
+    }
     window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }));
+    await acknowledgeProjectTransaction(transactionIdentity).catch(() => undefined);
     return result;
   } catch (error) {
     await cancelOpenedProjectTransaction();
@@ -1483,6 +1521,7 @@ type ViewportSceneMatrixBankMoveHistoryEntry = {
   afterCueLists?: CueListSummary[];
   operation?: "move" | "reorder" | "delete";
 };
+
 
 interface LiveAudioInputLevels {
   running: boolean;
@@ -1856,11 +1895,6 @@ type ProjectControlMappingsFlushResult = {
   trusted: boolean;
 };
 
-type ProjectTransactionTicket = {
-  transaction_id: number;
-  project_epoch: number;
-};
-
 type AppliedProjectAuthorityResult = {
   verdict: ProjectAuthorityReplacementVerdict;
   token: ProjectAuthorityToken;
@@ -1887,6 +1921,172 @@ let flushProjectControlMappingsBeforeProjectMutation: (() => Promise<number>) | 
 const projectTransactionOwnerId = typeof crypto !== "undefined" && "randomUUID" in crypto
   ? `renderer:${crypto.randomUUID()}`
   : `renderer:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
+
+let projectTransactionOperationSequence = 0;
+let projectTransactionAuthorityRevision = 0;
+const projectTransactionOperationId = () => typeof crypto !== "undefined" && "randomUUID" in crypto
+  ? `project-op:${++projectTransactionOperationSequence}:${crypto.randomUUID()}`
+  : `project-op:${++projectTransactionOperationSequence}:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+type ProjectTransactionIdentity = {
+  clientOperationId: string;
+  shapeFingerprint: string;
+  commandName: string;
+  schemaVersion: number;
+  ownerId: string;
+};
+
+const queryProjectTransactionRecovery = async (
+  identity: ProjectTransactionIdentity,
+): Promise<ProjectTransactionRecovery | null> => tauriInvoke<ProjectTransactionRecovery | null>(
+  "query_project_transaction",
+  identity,
+);
+
+const acknowledgeProjectTransaction = async (
+  identity: ProjectTransactionIdentity,
+) => tauriInvoke<void>("acknowledge_project_transaction", identity);
+
+const recoverProjectTransactionBegin = async (
+  identity: ProjectTransactionIdentity,
+): Promise<ProjectTransactionRecovery | null> => {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const queried = await queryProjectTransactionRecovery(identity);
+      if (!queried) return null;
+      if (!projectTransactionRecoveryCanAdopt(queried.status)) return queried;
+      return await tauriInvoke<ProjectTransactionRecovery>("adopt_project_transaction", identity);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
+};
+
+const beginProjectTransactionWithRecovery = async (
+  beginArgs: Record<string, unknown>,
+  identity: ProjectTransactionIdentity,
+): Promise<ProjectTransactionTicket> => {
+  try {
+    return await tauriInvoke<ProjectTransactionTicket>("begin_project_transaction", beginArgs);
+  } catch (beginError) {
+    const recovered = await recoverProjectTransactionBegin(identity).catch(() => null);
+    if (!recovered) throw beginError;
+    if (recovered.status === "pending") return recovered.ticket;
+    if (recovered.status === "committed") {
+      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, {
+        detail: recovered.mutation,
+      }));
+      await acknowledgeProjectTransaction(identity).catch(() => undefined);
+      throw new Error(
+        "Project transaction committed while the Begin reply was lost; command result was not delivered. Refresh before retrying.",
+      );
+    }
+    if (recovered.status === "cancelled") {
+      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, {
+        detail: recovered.mutation,
+      }));
+      await acknowledgeProjectTransaction(identity).catch(() => undefined);
+      throw new Error("Project transaction was cancelled while the Begin reply was lost.");
+    }
+    throw new Error("Project transaction receipt was already acknowledged; use a new operation ID.");
+  }
+};
+
+const queryProjectTransactionTerminal = async (
+  identity: ProjectTransactionIdentity,
+): Promise<ProjectTransactionRecovery | null> => {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const queried = await queryProjectTransactionRecovery(identity);
+      if (queried && projectTransactionRecoveryIsTerminal(queried.status)) return queried;
+    } catch {
+      // A lost recovery reply is retried with the same operation identity.
+    }
+  }
+  return null;
+};
+
+const cancelProjectTransactionWithRecovery = async (
+  transaction: ProjectTransactionTicket,
+  identity: ProjectTransactionIdentity,
+): Promise<ProjectHistoryMutationResult | null> => {
+  const cancelArgs = {
+    transactionId: transaction.transaction_id,
+    expectedEpoch: transaction.project_epoch,
+    clientOperationId: transaction.client_operation_id,
+    shapeFingerprint: transaction.shape_fingerprint,
+    commandName: identity.commandName,
+    schemaVersion: transaction.schema_version,
+    ownerId: identity.ownerId,
+  };
+  try {
+    const cancellation = await tauriInvoke<ProjectHistoryMutationResult>(
+      "cancel_project_transaction",
+      cancelArgs,
+    );
+    window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, {
+      detail: cancellation,
+    }));
+    await acknowledgeProjectTransaction(identity).catch(() => undefined);
+    return cancellation;
+  } catch (cancelError) {
+    const terminal = await queryProjectTransactionTerminal(identity).catch(() => null);
+    if (terminal?.status === "cancelled") {
+      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, {
+        detail: terminal.mutation,
+      }));
+      await acknowledgeProjectTransaction(identity).catch(() => undefined);
+      return terminal.mutation;
+    }
+    if (terminal?.status === "committed") {
+      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, {
+        detail: terminal.mutation,
+      }));
+      await acknowledgeProjectTransaction(identity).catch(() => undefined);
+      throw new Error(
+        "Project transaction committed while Cancel was in flight; inspect the recovered history before retrying.",
+      );
+    }
+    if (terminal?.status === "acknowledged") {
+      throw new Error("Project transaction was already acknowledged while Cancel was in flight.");
+    }
+    throw cancelError;
+  }
+};
+
+const commitProjectTransactionWithRecovery = async (
+  transaction: ProjectTransactionTicket,
+  identity: ProjectTransactionIdentity,
+): Promise<ProjectHistoryMutationResult> => {
+  const commitArgs = {
+    transactionId: transaction.transaction_id,
+    expectedEpoch: transaction.project_epoch,
+    clientOperationId: transaction.client_operation_id,
+    shapeFingerprint: transaction.shape_fingerprint,
+    commandName: identity.commandName,
+    schemaVersion: transaction.schema_version,
+    ownerId: identity.ownerId,
+  };
+  try {
+    return await tauriInvoke<ProjectHistoryMutationResult>(
+      "commit_project_transaction",
+      commitArgs,
+    );
+  } catch (commitError) {
+    const terminal = await queryProjectTransactionTerminal(identity).catch(() => null);
+    if (terminal?.status === "committed") return terminal.mutation;
+    if (terminal?.status === "cancelled") {
+      throw new Error("Project transaction was cancelled while Commit was in flight.");
+    }
+    if (terminal?.status === "acknowledged") {
+      throw new Error("Project transaction was already acknowledged while Commit was in flight.");
+    }
+    throw commitError;
+  }
+};
 
 // A convergence poll can briefly leave the old transaction/recovery detail in
 // the global status line after the native Add transaction has already reached
@@ -11631,12 +11831,27 @@ export default function App() {
       .sort((left, right) => left.localeCompare(right))
       .join(",");
     const expectedEpoch = await flushProjectControlMappingsBeforeMutation();
-    const transaction = await tauriInvoke<ProjectTransactionTicket>("begin_project_transaction", {
-      label: projectMutationLabel("update_cue_from_current"),
-      coalesceKey: `update_cue_from_current:cue:${cue.id}:${scopeSignature}`,
-      expectedEpoch,
+    const expectedRevision = projectMappingsAuthority().project_revision;
+    const transactionLabel = projectMutationLabel("update_cue_from_current");
+    const transactionCoalesceKey = `update_cue_from_current:cue:${cue.id}:${scopeSignature}`;
+    const transactionIdentity = {
+      clientOperationId: projectTransactionOperationId(),
+      shapeFingerprint: projectTransactionShapeFingerprint(
+        "update_cue_from_current",
+        transactionLabel,
+        transactionCoalesceKey,
+      ),
+      commandName: "update_cue_from_current",
+      schemaVersion: PROJECT_TRANSACTION_SCHEMA_VERSION,
       ownerId: projectTransactionOwnerId,
-    });
+    };
+    const transaction = await beginProjectTransactionWithRecovery({
+      label: transactionLabel,
+      coalesceKey: transactionCoalesceKey,
+      expectedEpoch,
+      expectedRevision,
+      ...transactionIdentity,
+    }, transactionIdentity);
     try {
       for (const captureScope of captureTargets) {
         await tauriInvoke("update_cue_from_current", {
@@ -11646,27 +11861,15 @@ export default function App() {
           captureScope,
         });
       }
-      const mutation = await tauriInvoke<ProjectHistoryMutationResult>("commit_project_transaction", {
-        transactionId: transaction.transaction_id,
-        expectedEpoch: transaction.project_epoch,
-        ownerId: projectTransactionOwnerId,
-      });
+      const mutation = await commitProjectTransactionWithRecovery(transaction, transactionIdentity);
       window.dispatchEvent(
         new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }),
       );
+      await acknowledgeProjectTransaction(transactionIdentity).catch(() => undefined);
       setMessage(`Updated cue ${cue.id} look from the current Store Scope.`);
       await refreshSnapshot();
     } catch (error) {
-      const cancellation = await tauriInvoke<ProjectHistoryMutationResult>("cancel_project_transaction", {
-        transactionId: transaction.transaction_id,
-        expectedEpoch: transaction.project_epoch,
-        ownerId: projectTransactionOwnerId,
-      }).catch(() => null);
-      if (cancellation) {
-        window.dispatchEvent(
-          new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: cancellation }),
-        );
-      }
+      await cancelProjectTransactionWithRecovery(transaction, transactionIdentity).catch(() => undefined);
       throw error;
     }
   };
@@ -13024,6 +13227,7 @@ export default function App() {
       return false;
     }
     abortMediaAssetOperationsForAuthorityChange(next);
+    projectTransactionAuthorityRevision = next.project_revision;
     setProjectMappingsAuthority(next);
     setProjectMappingsAuthorityReady(true);
     return true;
@@ -13082,6 +13286,7 @@ export default function App() {
     setOscMappings(prepared.osc);
     setDmxMappings(prepared.dmx);
     setDjTrackTriggers(prepared.dj);
+    projectTransactionAuthorityRevision = prepared.token.project_revision;
     setProjectMappingsAuthority(prepared.token);
     setProjectMappingsAuthorityReady(true);
     if (prepared.dmx.length > 0) {
@@ -14140,6 +14345,7 @@ export default function App() {
         // B persist response was invalidated before this batch and a new B
         // request is scheduled below against this exact C token.
         abortMediaAssetOperationsForAuthorityChange(candidate);
+        projectTransactionAuthorityRevision = candidate.project_revision;
         setProjectMappingsAuthority(candidate);
         setProjectMappingsAuthorityReady(true);
       }
@@ -17377,12 +17583,27 @@ export default function App() {
       );
     }
     const expectedEpoch = await flushProjectControlMappingsBeforeMutation();
-    const transaction = await tauriInvoke<ProjectTransactionTicket>("begin_project_transaction", {
-      label: "Move Cue Between Scene Banks",
-      coalesceKey: `scene_matrix_bank_move:cue:${cue.id}`,
-      expectedEpoch,
+    const expectedRevision = projectMappingsAuthority().project_revision;
+    const transactionLabel = "Move Cue Between Scene Banks";
+    const transactionCoalesceKey = `scene_matrix_bank_move:cue:${cue.id}`;
+    const transactionIdentity = {
+      clientOperationId: projectTransactionOperationId(),
+      shapeFingerprint: projectTransactionShapeFingerprint(
+        "scene_matrix_bank_move",
+        transactionLabel,
+        transactionCoalesceKey,
+      ),
+      commandName: "scene_matrix_bank_move",
+      schemaVersion: PROJECT_TRANSACTION_SCHEMA_VERSION,
       ownerId: projectTransactionOwnerId,
-    });
+    };
+    const transaction = await beginProjectTransactionWithRecovery({
+      label: transactionLabel,
+      coalesceKey: transactionCoalesceKey,
+      expectedEpoch,
+      expectedRevision,
+      ...transactionIdentity,
+    }, transactionIdentity);
     try {
       if (cue.cue_list_id !== cueListId) {
         await tauriInvoke("set_cue_list", { cueId: cue.id, cueListId });
@@ -17391,26 +17612,14 @@ export default function App() {
       for (let step = 0; step < stepCount; step += 1) {
         await tauriInvoke("move_cue", { cueId: cue.id, delta });
       }
-      const mutation = await tauriInvoke<ProjectHistoryMutationResult>("commit_project_transaction", {
-        transactionId: transaction.transaction_id,
-        expectedEpoch: transaction.project_epoch,
-        ownerId: projectTransactionOwnerId,
-      });
+      const mutation = await commitProjectTransactionWithRecovery(transaction, transactionIdentity);
       window.dispatchEvent(
         new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }),
       );
+      await acknowledgeProjectTransaction(transactionIdentity).catch(() => undefined);
       return mutation.history_status;
     } catch (error) {
-      const cancellation = await tauriInvoke<ProjectHistoryMutationResult>("cancel_project_transaction", {
-        transactionId: transaction.transaction_id,
-        expectedEpoch: transaction.project_epoch,
-        ownerId: projectTransactionOwnerId,
-      }).catch(() => null);
-      if (cancellation) {
-        window.dispatchEvent(
-          new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: cancellation }),
-        );
-      }
+      await cancelProjectTransactionWithRecovery(transaction, transactionIdentity).catch(() => undefined);
       throw error;
     }
   };

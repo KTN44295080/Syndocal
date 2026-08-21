@@ -779,12 +779,12 @@ Focused acceptance matrix:
 
 Media-specific authoritative commit removes the generic Begin boundary only from media operations. The generic system still needs its own completion tranche.
 
-### E1. Generic Begin reply-loss and transaction lifetime
+### E1. Generic Begin reply-loss and transaction lifetime — accepted on Windows
 
-Open P1:
+Accepted boundary:
 
-- Begin can install pending/active state before the renderer receives the ticket.
-- owner liveness recovery handles renderer retirement, but not every live-owner reply-loss case.
+- Begin-side effects survive a dropped reply through an idempotent receipt/query/adopt path.
+- exact owner/window incarnation, terminal recovery, renderer retirement, and stale delayed Commit/Cancel are enforced backend-side.
 
 Required design:
 
@@ -1734,7 +1734,7 @@ This is the minimum domain-level inventory. Each row must be decomposed into Q1 
 | `RECORDING` | A/V recording and finalization | L | Partial legacy capability | terminal state machine, crash/disk-full recovery, artifact verification |
 | `PATCH-GDTF` | fixture catalog/cache/Patch/Repair | D | Partial implementation | cache purity and atomic project/engine publication |
 | `STAGE` | Stage import and mutation | D | Partial implementation | authoritative Published transaction and stale-dialog fence proof |
-| `PROJECT-TX` | generic Begin/Commit/Cancel/history | E | In progress | Begin reply-loss/liveness and terminal recovery |
+| `PROJECT-TX` | generic Begin/Commit/Cancel/history | E | E1 accepted on Windows | E2 authority-bundle integration, E3 durable restart recovery, and E4 Save/Save As |
 | `PROJECT-AUTH` | authority bundle, mappings, disposition | E | Advanced | frozen re-audit and integration proof |
 | `RECOVERY-SAVE` | recovery journal, backup, Save/As | E/O/P | Advanced | full route/latch audit, upgrade compatibility, fault evidence |
 | `INPUT` | MIDI/OSC/DMX/manual lifecycle and feedback | F/K | Advanced | generation/reply-loss re-audit and physical matrix |
@@ -1831,7 +1831,7 @@ Initial high-severity register:
 | Risk ID | Severity | Boundary | Status / blocking milestone |
 | --- | --- | --- | --- |
 | `R-MEDIA-TERM-001` | P1 | media publish/history/reply loss | Closed for the current Windows Media T1 tranche by `aad9172`/`14eeeb2`, final reviews, and A8 evidence |
-| `R-TX-BEGIN-001` | P1 | Begin side effect with lost reply | Open; blocks generic dependent mutations |
+| `R-TX-BEGIN-001` | P1 | Begin side effect with lost reply | Closed for the Windows E1 tranche by the client-operation receipt/query/adopt path, owner-incarnation ABA rejection, focused tests, and independent P0/P1/P2-zero review |
 | `R-MEDIA-COMPAT-001` | P1 | old raw IPC authority/hash/atomicity | Closed for current Windows Media T1 by `4173e35`, command tests, and A8 acceptance |
 | `R-FILE-ABA-001` | P1 if non-Windows supported | path/file image coherence | Code implementation closed by `8cb0459`; macOS/Linux execution and product support decision pending |
 | `R-PATCH-ATOMIC-001` | P1 | profile ancillary and Engine Patch/Repair | Open; blocks D completion |
@@ -2011,8 +2011,8 @@ No confirmed P0-Code at the last frozen reviewed checkpoint. Current dirty `main
 
 ### P1
 
-- Generic Begin reply-loss/liveness.
-- Media terminal reply-loss/history and old compatibility atomicity are closed for the accepted Windows Media T1 tranche; generic non-media Begin reply-loss remains open.
+- Generic Begin reply-loss/liveness is closed for the accepted Windows E1 tranche; E2-E4 authority, restart durability, and Save/Save As remain open.
+- Media terminal reply-loss/history and old compatibility atomicity remain closed for the accepted Windows Media T1 tranche.
 - Non-Windows file coherence is implemented, but macOS/Linux execution proof and the supported-platform decision remain open.
 - Pending broader PATCH/GDTF atomic project/engine commit and raw mutation admission.
 - Remaining generic project/input/output authority boundaries identified in prior reviews must be re-audited before release.
@@ -2040,7 +2040,7 @@ No confirmed P0-Code at the last frozen reviewed checkpoint. Current dirty `main
 Do not claim:
 
 - cross-platform Media Asset T1 complete (the current acceptance is explicitly Windows-scoped);
-- reply-loss idempotency complete;
+- whole-product reply-loss idempotency complete (E1 is closed, but E3 and other subsystem-specific durable boundaries remain open);
 - native verification complete;
 - Clip Slot model implemented;
 - ShowClock distributed synchronization implemented;
@@ -2111,3 +2111,21 @@ advanced dangerous mutations; stable monitor-identity persistence and
 revalidation; five canonical fullscreen output-window origin checks; and the
 retained editor + LED panel + projector layout. No six-digit, Raw Input, Enter, or
 15-second challenge remains in production or acceptance.
+
+## 30. 2026-08-22 E1 generic transaction closure
+
+- Generic Begin/Commit/Cancel now uses a strict client operation identity and
+  exact backend owner/window incarnation, with Pending/Committed/Cancelled
+  receipt query, adopt, acknowledgement, and terminal replay behavior.
+- Same-ID shape conflict, same-label owner ABA, delayed stale Commit/Cancel,
+  live-pane stealing, renderer retirement races, partial/no-change history, and
+  bounded owner/receipt capacity are covered by the production-path checker and
+  focused Rust tests. Independent read-only review reports P0 0 / P1 0 / P2 0.
+- Frontend invoke inventory is exactly 410 and localization is 3538/3538. Native
+  `tauri build --no-bundle` passed with zero first-party warnings. The resulting
+  executable SHA-256 is
+  `0AACEA71AC666329A56DFBD57515650621E68DCD4D1B54E3ABA37918636C818C`;
+  exactly one responsive 1920x1032 maximized `Syndocal` window was verified.
+- Product progress is 14/79 (17.7%). E2 authority-bundle/generation consistency
+  is next. E3 restart durability, E4 Save/Save As, and all later roadmap items
+  remain open; this is not a whole-product or cross-platform completion claim.

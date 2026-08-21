@@ -942,3 +942,55 @@ product roadmap remains 13/79 (16.5%); it is not a whole-product completion
 claim. Repeated regression validation must continue through the canonical
 backend driver. Computer Use remains limited to the final physical placement,
 native modal, and visible-window acceptance pass.
+
+### 2026-08-22 E1 generic project-transaction final checkpoint
+
+Branch `codex/syndocal-v1.2` started this tranche from upstream-equal HEAD
+`41ab143d7926b2d13f424f3fe2266870680f2524`. E1 now closes generic Begin
+reply-loss, terminal query/adopt/ack recovery, live-owner transaction liveness,
+renderer retirement, and stale delayed Commit/Cancel rejection. Requests bind a
+strict client operation ID and shape to the backend-issued owner/window
+incarnation and current project authority. Retirement produces exactly one
+Interrupted history entry for a partial mutation, no entry for no change, and
+does not discard retryable mappings on failure. Same-label owner ABA is blocked
+by a bounded 1024-entry retired-binding tombstone with fail-closed capacity.
+
+Frozen source SHA-256 values are:
+
+- `app/src-tauri/src/main.rs`:
+  `1FDD6AE23647D021CDB20FA9C0E8CD925F52B6875E69FD3ED63BB65AE91CB7EB`
+- `app/src/App.tsx`:
+  `079F0DDD6894F5DDFF3ED74C5CF5D57104A45D86B090CE51A06F2E81DE9FD5FC`
+- `app/src/types.ts`:
+  `474CCC6C6E20B25CB79DB1901FCF8507E21404FA4851CD57AE2EFAA2A45102FB`
+- invoke manifest / typed tuple:
+  `55D1B6D8A3CE4CFF20A90F6291689BEC6A6C425476799E3F1532226BF43AE07A` /
+  `9B46C5CD11BFB67812990F9EE5C590BF7A3004C50ACA3FE845AB7ACF1698F9E2`
+- project-authority / transaction checkers:
+  `70E6239AB1B223F437FE76919F396716FEE3E9E4B7212F96D0942D12751CC70A` /
+  `2D052455343CBBC5E37D8F10E46D9679C61C234C1C25F0AACEF619DEE1D48551`
+
+Evidence: `check:project-transaction` PASS; exact frontend invoke inventory 410;
+4/4 focused project-transaction Rust tests; focused partial-cancel Undo 1/1;
+no-default and default-feature Rust checks; TypeScript/Vite build;
+`check:release`; localization 3538/3538; empty-state; frontend warning ratchet;
+format, Node syntax, and diff checks. Independent adversarial review returned
+P0 0 / P1 0 / P2 0. First-party warnings are zero for the no-default check,
+default-feature check, release native build, and frontend ratchet. The structured
+all-target warning runner was attempted but failed in its controlled build-script
+environment because it could not use the absolute MSVC linker; do not count that
+attempt as a completed warning row.
+
+Immediately before the native build, exact-path running process count was zero.
+`pnpm --dir app tauri build --no-bundle` passed in 2m29s. The resulting
+54,958,080-byte `target/release/syndocal.exe` has SHA-256
+`0AACEA71AC666329A56DFBD57515650621E68DCD4D1B54E3ABA37918636C818C`.
+It launched as exactly one responsive exact-path process/window titled
+`Syndocal`; the verified window was explicitly maximized at 1920x1032. Because
+E1 changes transaction recovery rather than a visible workflow, no redundant
+Computer Use mutation sequence was repeated.
+
+Current progress is E1 100% and product checklist 14/79 (17.7%). This is not a
+whole-product completion claim. Resume at E2 authority bundle/generation
+consistency, then E3 restart-durable recovery and E4 Save/Save As. macOS warning
+rows and all external/hardware acceptance outside this E1 boundary remain open.

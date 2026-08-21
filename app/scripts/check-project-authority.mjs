@@ -40,6 +40,11 @@ import {
   saveProjectRecoveryCheckpoint,
   tombstoneProjectRecoveryCheckpoint,
 } from "../src/projectRecoveryStorage.ts";
+import {
+  projectTransactionRecoveryCanAdopt,
+  projectTransactionRecoveryIsTerminal,
+  projectTransactionShapeFingerprint,
+} from "../src/types.ts";
 
 let state = createProjectAuthoritySyncState();
 state = noteLocalProjectAuthorityEdit(state);
@@ -672,5 +677,22 @@ assert.equal(
   false,
   "a changed authority token alone makes the delayed B ACK non-current",
 );
+
+// E1 uses the production frontend canonicalizer and recovery classifier. A
+// retry may adopt only the exact pending receipt; terminal outcomes are never
+// cast to an arbitrary mutation command result.
+const e1Shape = projectTransactionShapeFingerprint(
+  "update_cue_from_current",
+  "Update Cue From Current",
+  "cue:7",
+);
+assert.equal(
+  e1Shape,
+  "project-transaction-v1|command=update_cue_from_current|label=Update Cue From Current|coalesce=cue:7",
+);
+assert.equal(projectTransactionRecoveryCanAdopt("pending"), true);
+assert.equal(projectTransactionRecoveryCanAdopt("committed"), false);
+assert.equal(projectTransactionRecoveryIsTerminal("cancelled"), true);
+assert.equal(projectTransactionRecoveryIsTerminal("acknowledged"), true);
 
 console.log("project authority deterministic checks passed");

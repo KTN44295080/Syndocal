@@ -255,7 +255,7 @@ evidence ledgers, clean reviewed commit, and pushed handoff.
 
 ### Phase 1 — Generic project authority and atomic project mutations
 
-- [ ] E1 generic Begin reply-loss, terminal recovery, live-owner transaction
+- [x] E1 generic Begin reply-loss, terminal recovery, live-owner transaction
   liveness, renderer retirement, and stale delayed Commit/Cancel rejection.
 - [ ] E2 authority bundle/generation consistency across every project mutation.
 - [ ] E3 recovery durable handshake and crash/reply-loss behavior.
@@ -852,3 +852,39 @@ maximized 1920x1032 `Syndocal` window after a greater-than-ten-second wait.
 The Windows native display acceptance is 4/4 and this bounded tranche is 100%.
 The product checklist remains 13/79 (16.5%). Continue the roadmap dependency
 order; do not convert this acceptance into a whole-product completion claim.
+
+## 23. 2026-08-22 E1 generic project-transaction acceptance
+
+E1 is accepted for the Windows-first train. Generic Begin now carries a client
+operation ID, strict schema and canonical shape, the exact backend-issued window
+and owner incarnation, and the current project epoch/revision/hash. Pending,
+Committed, and Cancelled receipts can be queried, adopted, and acknowledged;
+same-ID shape changes, stale delayed Commit/Cancel, live-pane stealing, and
+same-label owner ABA fail closed. Renderer retirement cancels only its exact
+pending transaction, preserves one `Interrupted:` history entry when a partial
+mutation exists, emits no history for no-change retirement, and keeps retryable
+owner state when retirement cannot complete. Retired owner bindings are bounded
+to 1024 and reject capacity overflow rather than reopening replay.
+
+The frozen implementation passed the project-transaction checker, exact
+frontend invoke inventory (410), 4/4 focused `project_transaction` Rust tests,
+the focused partial-cancel Undo regression, TypeScript/Vite build, localization
+3538/3538, empty-state, release metadata, Rust format, Node syntax, and diff
+checks. Independent adversarial review returned P0 0 / P1 0 / P2 0. First-party
+warnings were zero for the no-default Rust check, the default-feature Rust check,
+the release native build, and the frontend warning ratchet. The structured
+all-target warning command was also attempted, but its controlled child
+environment could not select the absolute MSVC linker and exited during build
+scripts; that environmental failure is not recorded as warning evidence.
+
+Immediately before `pnpm --dir app tauri build --no-bundle`, the exact-checkout
+running process count was zero. The build passed in 2m29s and produced the
+54,958,080-byte executable with SHA-256
+`0AACEA71AC666329A56DFBD57515650621E68DCD4D1B54E3ABA37918636C818C`.
+It launched as exactly one responsive exact-path `Syndocal` process/window and
+was explicitly maximized to 1920x1032 before the final capture. E1 changes no
+visible interaction, so no repeated Computer Use mutation sequence was run.
+
+The authoritative checklist is now 14/79 (17.7%). This is an E1-only acceptance,
+not whole-product or cross-platform completion. Continue next with E2 authority
+bundle/generation consistency; E3 durability and E4 Save/Save As remain open.

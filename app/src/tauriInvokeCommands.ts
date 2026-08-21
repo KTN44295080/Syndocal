@@ -3,6 +3,7 @@
 export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "abort_timeline_follow_runtime_v1",
   "acknowledge_project_recovery_applied",
+  "acknowledge_project_transaction",
   "acquire_output_lease_v2",
   "add_builtin_video_isf_effect",
   "add_chaser_effect",
@@ -28,6 +29,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "add_video_input_layer",
   "add_video_layer_isf_effect",
   "add_video_output",
+  "adopt_project_transaction",
   "analyze_audio_file",
   "analyze_timeline_audio_clip_path",
   "apply_reference_palette",
@@ -193,6 +195,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "query_display_add_lease_authority_v1",
   "query_output_control_authority_v1",
   "query_output_lease_authority_v1",
+  "query_project_transaction",
   "query_timeline_follow_abort_authority_v1",
   "query_timeline_transport_authority_v1",
   "queue_video_clip_slot_authoritative",

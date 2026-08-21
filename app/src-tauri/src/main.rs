@@ -1357,6 +1357,21 @@ struct AppState {
     /// never take the coordinator mutex, so this atomic blocks MIDI/OSC/DMX
     /// and remote sends during that interval without creating a lock cycle.
     project_transaction_active: Arc<AtomicBool>,
+    /// Begin receipts are retained by client operation identity rather than a
+    /// frontend transaction number.  Pending receipts are never expired;
+    /// terminal receipts are bounded by count and the lane refuses a new
+    /// operation when the bound is full, so a valid reply-loss recovery can
+    /// never race time-based eviction.
+    project_transaction_receipts: Mutex<HashMap<String, ProjectTransactionReceipt>>,
+    /// Compact per-owner-incarnation high-water marks let ACKed operation
+    /// payloads be removed without allowing an old client sequence to replay.
+    project_transaction_operation_highwaters: Mutex<HashMap<String, u64>>,
+    /// Explicit admission/closing fences for the generic transaction lane.
+    /// The external-admission mutex still serializes the production callers,
+    /// while this per-operation cell makes callback retirement and in-flight
+    /// accounting auditable and testable without holding a coordinator lock
+    /// over an engine callback.
+    project_transaction_lanes: Mutex<HashMap<String, Arc<ProjectTransactionLane>>>,
     /// Webview label -> current renderer generation. This makes transaction
     /// recovery a liveness decision instead of treating every different
     /// renderer as orphaned (which could steal a live pane's edit).
@@ -1366,6 +1381,13 @@ struct AppState {
     /// stale same-string IPC cannot cross a retire/re-register ABA boundary.
     project_transaction_owner_incarnations: Mutex<HashMap<String, u64>>,
     next_project_transaction_owner_incarnation: AtomicU64,
+    /// A renderer owner string is single-use for one concrete window label.
+    /// Keeping the retired binding prevents a raw caller from re-registering
+    /// an observed owner string and replaying an operation after the receipt,
+    /// lane, and old incarnation have been compacted. The bounded registry
+    /// fails closed at capacity; a process restart issues fresh frontend
+    /// owner identities and is the recovery boundary.
+    project_transaction_retired_owner_bindings: Mutex<HashSet<String>>,
     /// A Destroyed callback that cannot complete both owner/lease and query
     /// retirement permanently fences this concrete window label.  Entries are
     /// process-local and intentionally have no clear path: restart is the
@@ -6192,7 +6214,7 @@ fn validate_media_asset_commit_ticket_and_authority(
     expected_epoch: u64,
     owner_id: &str,
     authority: &MediaAssetPrepareAuthority,
-) -> Result<(), String> {
+) -> Result<ProjectTransactionLaneGuard, String> {
     // The caller holds external admission before coordinator. Reconcile first
     // so a completed external persistent send cannot masquerade as the
     // prepared catalog's checkpoint.
@@ -6204,7 +6226,14 @@ fn validate_media_asset_commit_ticket_and_authority(
         expected_epoch,
         owner_id,
         authority,
-    )
+    )?;
+    let pending = project_transaction_for_owner_epoch(
+        coordinator,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+    )?;
+    admit_project_transaction_command(state, &pending)
 }
 
 /// The testable half of commit admission after the caller has established
@@ -11145,9 +11174,10 @@ fn commit_prepared_media_asset_layers_locked(
     // First prove the token is paired with an exact live frontend ticket.
     // The second pass below closes the small window after filesystem CAS.
     {
-        let _external_admission = lock_project_external_command_admission(state)?;
+        let _external_admission =
+            lock_project_external_command_admission_for_display_finalize(state)?;
         let mut coordinator = lock_project_coordinator(state)?;
-        validate_media_asset_commit_ticket_and_authority(
+        let _ = validate_media_asset_commit_ticket_and_authority(
             state,
             &mut coordinator,
             project_transaction_id,
@@ -11167,10 +11197,10 @@ fn commit_prepared_media_asset_layers_locked(
 
     let authority = prepared.authority.clone();
     let (_external_admission, mut coordinator) = (
-        lock_project_external_command_admission(state)?,
+        lock_project_external_command_admission_for_display_finalize(state)?,
         lock_project_coordinator(state)?,
     );
-    validate_media_asset_commit_ticket_and_authority(
+    let _transaction_admission = validate_media_asset_commit_ticket_and_authority(
         state,
         &mut coordinator,
         project_transaction_id,
@@ -15235,11 +15265,22 @@ struct ProjectHistoryEntry {
 #[derive(Debug, Clone)]
 struct PendingProjectTransaction {
     transaction_id: u64,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
     owner_id: String,
+    window_label: String,
+    owner_incarnation: u64,
     label: String,
     coalesce_key: String,
     before: ProjectCheckpoint,
     epoch: u64,
+    /// Explicit retirement fence. The normal command path holds the external
+    /// admission gate across the engine call, but this state remains visible
+    /// to recovery tests and prevents a late callback from being admitted
+    /// after owner retirement starts.
+    closing: bool,
 }
 
 /// A transaction reservation is scoped to the identity that created it.  The
@@ -15250,6 +15291,127 @@ struct PendingProjectTransaction {
 struct ProjectTransactionTicket {
     transaction_id: u64,
     project_epoch: u64,
+    project_revision: u64,
+    project_checkpoint_hash: String,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    schema_version: u16,
+    owner_id: String,
+    window_label: String,
+    owner_incarnation: u64,
+    label: String,
+    coalesce_key: String,
+}
+
+const PROJECT_TRANSACTION_SCHEMA_VERSION: u16 = 1;
+const MAX_PROJECT_TRANSACTION_OPERATION_ID_BYTES: usize = 128;
+const MAX_PROJECT_TRANSACTION_SHAPE_BYTES: usize = 2048;
+const MAX_PROJECT_TRANSACTION_COMMAND_BYTES: usize = 128;
+const MAX_PROJECT_TRANSACTION_TERMINAL_RECEIPTS: usize = 256;
+const MAX_PROJECT_TRANSACTION_IN_FLIGHT_COMMANDS: u64 = 1024;
+
+#[derive(Debug, Clone)]
+enum ProjectTransactionReceiptState {
+    Pending,
+    Committed(ProjectHistoryMutationResult),
+    Cancelled(ProjectHistoryMutationResult),
+}
+
+#[derive(Debug, Clone)]
+struct ProjectTransactionReceipt {
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
+    transaction_id: u64,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    owner_id: String,
+    window_label: String,
+    owner_incarnation: u64,
+    label: String,
+    coalesce_key: String,
+    state: ProjectTransactionReceiptState,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ProjectTransactionRecovery {
+    Pending {
+        ticket: ProjectTransactionTicket,
+    },
+    Committed {
+        mutation: ProjectHistoryMutationResult,
+    },
+    Cancelled {
+        mutation: ProjectHistoryMutationResult,
+    },
+    Acknowledged,
+}
+
+#[derive(Debug)]
+struct ProjectTransactionLane {
+    in_flight_commands: AtomicU64,
+    closing: AtomicBool,
+}
+
+impl ProjectTransactionLane {
+    fn new() -> Self {
+        Self {
+            in_flight_commands: AtomicU64::new(0),
+            closing: AtomicBool::new(false),
+        }
+    }
+
+    fn admit(self: &Arc<Self>) -> Result<ProjectTransactionLaneGuard, String> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err("Project transaction is closing; late command rejected".to_string());
+        }
+        let mut admitted = self.in_flight_commands.load(Ordering::Acquire);
+        loop {
+            if admitted >= MAX_PROJECT_TRANSACTION_IN_FLIGHT_COMMANDS {
+                return Err("Project transaction in-flight command capacity is full".to_string());
+            }
+            match self.in_flight_commands.compare_exchange_weak(
+                admitted,
+                admitted + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(next) => admitted = next,
+            }
+        }
+        if self.closing.load(Ordering::Acquire) {
+            self.in_flight_commands.fetch_sub(1, Ordering::AcqRel);
+            return Err("Project transaction closed before command admission".to_string());
+        }
+        Ok(ProjectTransactionLaneGuard {
+            lane: Arc::clone(self),
+        })
+    }
+
+    fn close(&self) -> Result<(), String> {
+        self.closing.store(true, Ordering::Release);
+        if self.in_flight_commands.load(Ordering::Acquire) != 0 {
+            return Err(
+                "Project transaction has admitted commands; retry retirement after they finish"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+struct ProjectTransactionLaneGuard {
+    lane: Arc<ProjectTransactionLane>,
+}
+
+impl Drop for ProjectTransactionLaneGuard {
+    fn drop(&mut self) {
+        self.lane.in_flight_commands.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -15637,6 +15799,69 @@ fn lock_project_external_command_admission_for_display_finalize<'a>(
     state: &'a AppState,
 ) -> Result<std::sync::MutexGuard<'a, ()>, String> {
     lock_project_external_command_admission_inner(state, true)
+}
+
+/// Generic transaction retries may re-enter while the shared active flag is
+/// set, but only when the backend already has that exact operation receipt.
+/// This keeps Display Add's active interval closed to a new Begin while still
+/// allowing reply-lost Commit/Cancel idempotency.
+fn lock_project_transaction_operation_admission<'a>(
+    state: &'a AppState,
+    client_operation_id: &str,
+) -> Result<std::sync::MutexGuard<'a, ()>, String> {
+    let guard = state
+        .project_external_command_admission
+        .gate
+        .lock()
+        .map_err(|_| "Project external command admission lock was poisoned".to_string())?;
+    if state
+        .project_external_command_admission
+        .recovery_authority_faulted
+        .load(Ordering::Acquire)
+    {
+        return Err(
+            "Project recovery authority is awaiting startup reconciliation after an indeterminate Save; restart Syndocal before editing, saving, or changing the project"
+                .to_string(),
+        );
+    }
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        let receipts = state
+            .project_transaction_receipts
+            .lock()
+            .map_err(|_| "Project transaction receipt registry lock was poisoned".to_string())?;
+        if !receipts.contains_key(client_operation_id) {
+            return Err(
+                "Project transaction is active; retry after Display output publication".to_string(),
+            );
+        }
+    }
+    Ok(guard)
+}
+
+/// Owner registration/retirement may run while a generic transaction is live,
+/// because the transition itself is what cancels the exact displaced owner.
+/// The caller must hold this gate and then reject an active interval with no
+/// generic pending reservation (the Display Add case) after taking the
+/// coordinator lock.
+fn lock_project_transaction_owner_lifecycle_admission<'a>(
+    state: &'a AppState,
+) -> Result<std::sync::MutexGuard<'a, ()>, String> {
+    let guard = state
+        .project_external_command_admission
+        .gate
+        .lock()
+        .map_err(|_| "Project external command admission lock was poisoned".to_string())?;
+    if state
+        .project_external_command_admission
+        .recovery_authority_faulted
+        .load(Ordering::Acquire)
+    {
+        return Err(
+            "Project recovery authority is awaiting startup reconciliation after an indeterminate Save; restart Syndocal before editing, saving, or changing the project"
+                .to_string(),
+        );
+    }
+    Ok(guard)
 }
 
 fn lock_project_external_command_admission_inner<'a>(
@@ -17336,6 +17561,7 @@ fn load_verified_fixture_profile(profile_id: String) -> Result<FixtureProfileSum
 
 #[tauri::command]
 fn repair_fixture_profile(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     fixture_id: FixtureId,
     profile_path: String,
@@ -17345,15 +17571,16 @@ fn repair_fixture_profile(
     expected_epoch: u64,
     owner_id: String,
 ) -> Result<(), String> {
-    let _external_admission = lock_project_external_command_admission(&state)?;
+    let _external_admission = lock_project_external_command_admission_for_display_finalize(&state)?;
     let coordinator = lock_project_coordinator(&state)?;
-    ensure_project_transaction_owner_registered(&state, &owner_id)?;
-    project_transaction_for_owner_epoch(
+    let pending = project_transaction_for_owner_epoch(
         &coordinator,
         project_transaction_id,
         expected_epoch,
         &owner_id,
     )?;
+    ensure_project_transaction_pending_binding(&state, &pending, window.label(), &owner_id)?;
+    let _transaction_admission = admit_project_transaction_command(&state, &pending)?;
     let snapshot = state.engine.persistence_snapshot()?;
     let fixture = snapshot
         .fixtures
@@ -17500,6 +17727,7 @@ fn use_fixture_profile(
 
 #[tauri::command]
 fn patch_fixture(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     request: PatchFixtureRequest,
     profile: Option<FixtureProfileSummary>,
@@ -17514,6 +17742,7 @@ fn patch_fixture(
         project_transaction_id,
         expected_epoch,
         owner_id,
+        window.label(),
     )?
     .into_iter()
     .next()
@@ -17522,6 +17751,7 @@ fn patch_fixture(
 
 #[tauri::command]
 fn patch_fixtures(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     requests: Vec<PatchFixtureRequest>,
     profiles: Option<Vec<FixtureProfileSummary>>,
@@ -17536,6 +17766,7 @@ fn patch_fixtures(
         project_transaction_id,
         expected_epoch,
         owner_id,
+        window.label(),
     )
 }
 
@@ -17546,19 +17777,21 @@ fn patch_fixtures_in_project_transaction(
     project_transaction_id: u64,
     expected_epoch: u64,
     owner_id: String,
+    window_label: &str,
 ) -> Result<Vec<FixtureId>, String> {
     // One backend-authoritative boundary owns validation, publication and the
     // project profile image. Raw IPC cannot bypass the transaction/fault
     // fence, and callbacks/remotes cannot race the prepared A→B image.
-    let _external_admission = lock_project_external_command_admission(state)?;
+    let _external_admission = lock_project_external_command_admission_for_display_finalize(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
-    ensure_project_transaction_owner_registered(state, &owner_id)?;
-    project_transaction_for_owner_epoch(
+    let pending = project_transaction_for_owner_epoch(
         &coordinator,
         project_transaction_id,
         expected_epoch,
         &owner_id,
     )?;
+    ensure_project_transaction_pending_binding(state, &pending, window_label, &owner_id)?;
+    let _transaction_admission = admit_project_transaction_command(state, &pending)?;
 
     let before_snapshot = state.engine.persistence_snapshot()?;
     let prepared = prepare_fixture_patches_against_authority(
@@ -25065,6 +25298,7 @@ async fn finalize_prepared_media_asset_relink(
 
 #[tauri::command]
 async fn commit_prepared_media_asset_relink(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     prepared_relink_token: u64,
     request_id: u64,
@@ -25074,6 +25308,7 @@ async fn commit_prepared_media_asset_relink(
     owner_id: String,
 ) -> Result<MediaAssetRelinkReport, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
     let receipt_key = MediaAssetCommitReceiptKey {
         kind: MediaAssetCommitReceiptKind::Relink,
@@ -25110,9 +25345,10 @@ async fn commit_prepared_media_asset_relink(
             return Err("Media asset operation was cancelled".to_string());
         }
         {
-            let _external_admission = lock_project_external_command_admission(&state)?;
+            let _external_admission =
+                lock_project_external_command_admission_for_display_finalize(&state)?;
             let mut coordinator = lock_project_coordinator(&state)?;
-            validate_media_asset_commit_ticket_and_authority(
+            let _ = validate_media_asset_commit_ticket_and_authority(
                 &state,
                 &mut coordinator,
                 project_transaction_id,
@@ -25138,10 +25374,10 @@ async fn commit_prepared_media_asset_relink(
             )?;
         }
         let (_external_admission, mut coordinator) = (
-            lock_project_external_command_admission(&state)?,
+            lock_project_external_command_admission_for_display_finalize(&state)?,
             lock_project_coordinator(&state)?,
         );
-        validate_media_asset_commit_ticket_and_authority(
+        let _transaction_admission = validate_media_asset_commit_ticket_and_authority(
             &state,
             &mut coordinator,
             project_transaction_id,
@@ -25337,6 +25573,7 @@ async fn finalize_prepared_media_assets(
 /// this command intentionally never edits coordinator history itself.
 #[tauri::command]
 async fn commit_prepared_media_assets(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     prepared_import_token: u64,
     request_id: u64,
@@ -25346,6 +25583,7 @@ async fn commit_prepared_media_assets(
     owner_id: String,
 ) -> Result<MediaAssetImportReport, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
     let receipt_key = MediaAssetCommitReceiptKey {
         kind: MediaAssetCommitReceiptKind::Import,
@@ -25384,9 +25622,10 @@ async fn commit_prepared_media_assets(
         // frontend mutation. Full hashing was already finalized with no ticket;
         // only the intentionally short metadata CAS remains below.
         {
-            let _external_admission = lock_project_external_command_admission(&state)?;
+            let _external_admission =
+                lock_project_external_command_admission_for_display_finalize(&state)?;
             let mut coordinator = lock_project_coordinator(&state)?;
-            validate_media_asset_commit_ticket_and_authority(
+            let _ = validate_media_asset_commit_ticket_and_authority(
                 &state,
                 &mut coordinator,
                 project_transaction_id,
@@ -25414,10 +25653,10 @@ async fn commit_prepared_media_assets(
         let mut entries = prepared.entries.clone();
         let authority = prepared.authority.clone();
         let (_external_admission, mut coordinator) = (
-            lock_project_external_command_admission(&state)?,
+            lock_project_external_command_admission_for_display_finalize(&state)?,
             lock_project_coordinator(&state)?,
         );
-        validate_media_asset_commit_ticket_and_authority(
+        let _transaction_admission = validate_media_asset_commit_ticket_and_authority(
             &state,
             &mut coordinator,
             project_transaction_id,
@@ -26007,13 +26246,20 @@ fn prepare_internal_media_asset_commit(
     let mut next_history = coordinator.history.clone();
     let pending = PendingProjectTransaction {
         transaction_id: next_transaction_id.unwrap_or(coordinator.next_transaction_id),
+        client_operation_id: String::new(),
+        shape_fingerprint: String::new(),
+        command_name: String::new(),
+        schema_version: PROJECT_TRANSACTION_SCHEMA_VERSION,
         // The Undo entry does not retain an owner; the internal transaction has
         // no renderer ticket.
         owner_id: String::new(),
+        window_label: String::new(),
+        owner_incarnation: 0,
         label: label.trim().chars().take(80).collect(),
         coalesce_key: coalesce_key.trim().chars().take(240).collect(),
         before,
         epoch: coordinator.epoch,
+        closing: false,
     };
     commit_project_history_entry(&mut next_history, pending, after, committed_at_unix_ms)?;
     Ok(PreparedInternalMediaAssetCommit {
@@ -28830,6 +29076,7 @@ fn commit_prepared_bootstrap_vj_show_authoritative(
 /// prepare and finalize the local bytes before opening the generic ticket.
 #[tauri::command]
 fn commit_prepared_video_file_layer(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     label: String,
     prepared_import_token: u64,
@@ -28840,6 +29087,7 @@ fn commit_prepared_video_file_layer(
     owner_id: String,
 ) -> Result<VideoLayerId, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let label = normalize_video_layer_label(label)?;
     let receipt_key = media_asset_commit_receipt_key(
         MediaAssetCommitReceiptKind::Layers,
@@ -28887,6 +29135,7 @@ fn commit_prepared_video_file_layer(
 /// Staged compatibility commit for the historical batch-layer affordance.
 #[tauri::command]
 fn commit_prepared_local_media_layers(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     kind: VideoSourceKind,
     prepared_import_token: u64,
@@ -28897,6 +29146,7 @@ fn commit_prepared_local_media_layers(
     owner_id: String,
 ) -> Result<Vec<VideoLayerId>, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     if !matches!(kind, VideoSourceKind::File | VideoSourceKind::StillImage) {
         return Err("Batch media import supports video files and still images only".to_string());
     }
@@ -28980,6 +29230,7 @@ fn validate_bootstrap_vj_prepared_import(
 /// before the generic transaction ticket exists.
 #[tauri::command]
 fn commit_prepared_bootstrap_vj_show(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     kind: VideoSourceKind,
     prepared_import_token: u64,
@@ -28990,6 +29241,7 @@ fn commit_prepared_bootstrap_vj_show(
     owner_id: String,
 ) -> Result<VjFirstRunSetupResult, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let receipt_key = media_asset_commit_receipt_key(
         MediaAssetCommitReceiptKind::Bootstrap,
         prepared_import_token,
@@ -29052,6 +29304,7 @@ fn commit_prepared_bootstrap_vj_show(
 /// Staged compatibility commit for one StillImage layer.
 #[tauri::command]
 fn commit_prepared_still_image_layer(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     label: String,
     prepared_import_token: u64,
@@ -29062,6 +29315,7 @@ fn commit_prepared_still_image_layer(
     owner_id: String,
 ) -> Result<VideoLayerId, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let label = normalize_video_layer_label(label)?;
     let receipt_key = media_asset_commit_receipt_key(
         MediaAssetCommitReceiptKind::Layers,
@@ -29626,6 +29880,7 @@ async fn refresh_video_layer_metadata(
 
 #[tauri::command]
 fn add_video_input_layer(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     label: String,
     kind: VideoSourceKind,
@@ -29635,6 +29890,7 @@ fn add_video_input_layer(
     owner_id: String,
 ) -> Result<VideoLayerId, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let label = normalize_video_layer_label(label)?;
     let name = normalize_video_input_source_name(&kind, name)?;
     if !matches!(
@@ -29658,11 +29914,11 @@ fn add_video_input_layer(
         metadata: None,
     };
     let (_external_admission, mut coordinator) = (
-        lock_project_external_command_admission(&state)?,
+        lock_project_external_command_admission_for_display_finalize(&state)?,
         lock_project_coordinator(&state)?,
     );
     let authority = media_asset_prepare_authority(&coordinator);
-    validate_media_asset_commit_ticket_and_authority(
+    let _transaction_admission = validate_media_asset_commit_ticket_and_authority(
         &state,
         &mut coordinator,
         project_transaction_id,
@@ -37770,32 +38026,178 @@ fn get_project_history_status(state: State<'_, AppState>) -> Result<ProjectHisto
 
 #[tauri::command]
 fn begin_project_transaction(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     label: String,
     coalesce_key: String,
     expected_epoch: u64,
+    expected_revision: u64,
     owner_id: String,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
 ) -> Result<ProjectTransactionTicket, String> {
-    // The admission gate is acquired before coordinator so an external send is
-    // either already queued before `before` is captured or held until the
-    // transaction is active. Do not reverse this order anywhere.
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    begin_project_transaction_for_window_label(
+        &state,
+        window.label(),
+        label,
+        coalesce_key,
+        expected_epoch,
+        expected_revision,
+        owner_id,
+        client_operation_id,
+        shape_fingerprint,
+        command_name,
+        schema_version,
+    )
+}
+
+fn begin_project_transaction_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    label: String,
+    coalesce_key: String,
+    expected_epoch: u64,
+    expected_revision: u64,
+    owner_id: String,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
+) -> Result<ProjectTransactionTicket, String> {
+    validate_project_transaction_schema_version(schema_version)?;
+    let client_operation_id =
+        validate_project_transaction_client_operation_id(&client_operation_id)?;
+    let command_name = validate_project_transaction_command_name(&command_name)?;
+    let normalized_label = label.trim().chars().take(80).collect::<String>();
+    let normalized_coalesce_key = coalesce_key.trim().chars().take(240).collect::<String>();
+    let shape_fingerprint = validate_project_transaction_shape_fingerprint(&shape_fingerprint)?;
+    let canonical_shape = canonical_project_transaction_shape(
+        &command_name,
+        &normalized_label,
+        &normalized_coalesce_key,
+    );
+    if shape_fingerprint != canonical_shape {
+        return Err(
+            "Project transaction shape fingerprint does not match the canonical Begin shape"
+                .to_string(),
+        );
+    }
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let owner_incarnation =
+        project_transaction_owner_binding_for_window(state, window_label, &owner_id)?;
+    // A reply-lost duplicate Begin must reach the receipt lookup even while
+    // the original reservation is active. New IDs still fail at the pending
+    // check below, so this does not open a second live transaction.
+    let _external_admission =
+        lock_project_transaction_operation_admission(state, &client_operation_id)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    let mut receipts = state
+        .project_transaction_receipts
+        .lock()
+        .map_err(|_| "Project transaction receipt registry lock was poisoned".to_string())?;
+
+    if let Some(receipt) = receipts.get(&client_operation_id) {
+        project_transaction_receipt_matches_request(
+            receipt,
+            &client_operation_id,
+            &shape_fingerprint,
+            schema_version,
+            &command_name,
+            &owner_id,
+            window_label,
+            owner_incarnation,
+        )?;
+        return Ok(match &receipt.state {
+            ProjectTransactionReceiptState::Pending => ProjectTransactionTicket {
+                transaction_id: receipt.transaction_id,
+                project_epoch: receipt.project_epoch,
+                project_revision: receipt.project_revision,
+                project_checkpoint_hash: receipt.checkpoint_hash.clone(),
+                client_operation_id: receipt.client_operation_id.clone(),
+                shape_fingerprint: receipt.shape_fingerprint.clone(),
+                schema_version: receipt.schema_version,
+                owner_id: receipt.owner_id.clone(),
+                window_label: receipt.window_label.clone(),
+                owner_incarnation: receipt.owner_incarnation,
+                label: receipt.label.clone(),
+                coalesce_key: receipt.coalesce_key.clone(),
+            },
+            ProjectTransactionReceiptState::Committed(_)
+            | ProjectTransactionReceiptState::Cancelled(_) => ProjectTransactionTicket {
+                transaction_id: receipt.transaction_id,
+                project_epoch: receipt.project_epoch,
+                project_revision: receipt.project_revision,
+                project_checkpoint_hash: receipt.checkpoint_hash.clone(),
+                client_operation_id: receipt.client_operation_id.clone(),
+                shape_fingerprint: receipt.shape_fingerprint.clone(),
+                schema_version: receipt.schema_version,
+                owner_id: receipt.owner_id.clone(),
+                window_label: receipt.window_label.clone(),
+                owner_incarnation: receipt.owner_incarnation,
+                label: receipt.label.clone(),
+                coalesce_key: receipt.coalesce_key.clone(),
+            },
+        });
+    }
+
+    reject_project_transaction_replayed_sequence(
+        state,
+        &client_operation_id,
+        &owner_id,
+        window_label,
+        owner_incarnation,
+    )?;
+
     // The frontend captures this before awaiting its mapping-flush barrier.
     // Rejecting here prevents a delayed A click from reserving a B baseline.
     ensure_project_epoch_matches(&coordinator, expected_epoch)?;
+    if coordinator.revision != expected_revision {
+        return Err(format!(
+            "Project changed before this edit began (expected revision {expected_revision}, current revision {})",
+            coordinator.revision
+        ));
+    }
     ensure_no_pending_project_transaction(&coordinator)?;
     // Admission is live, so reconcile any persistence command that completed
     // before Begin before reserving Begin's own observable history change.
     // Otherwise an external reconciliation and pending insertion could both
     // publish the same history generation.
-    reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
-    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    if coordinator.revision != expected_revision {
+        return Err(format!(
+            "Project changed before this edit began (expected revision {expected_revision}, current revision {})",
+            coordinator.revision
+        ));
+    }
+    let unacknowledged_terminal_count = receipts
+        .values()
+        .filter(|receipt| {
+            matches!(
+                receipt.state,
+                ProjectTransactionReceiptState::Committed(_)
+                    | ProjectTransactionReceiptState::Cancelled(_)
+            )
+        })
+        .count();
+    if unacknowledged_terminal_count >= MAX_PROJECT_TRANSACTION_TERMINAL_RECEIPTS {
+        return Err(
+            "Project transaction terminal receipt capacity is full; acknowledge completed operations before editing"
+                .to_string(),
+        );
+    }
     let transaction_id = coordinator
         .next_transaction_id
         .checked_add(1)
         .ok_or_else(|| "Project transaction ID space is exhausted; restart Syndocal".to_string())?;
+    let mut lanes = state
+        .project_transaction_lanes
+        .lock()
+        .map_err(|_| "Project transaction lane registry lock was poisoned".to_string())?;
+    if lanes.contains_key(&client_operation_id) {
+        return Err("Project transaction operation lane already exists".to_string());
+    }
     // Inserting a pending reservation changes what the history UI may do.
     // Check the generation before capture/fencing so no Begin can leave a
     // partially armed transaction after an overflow error.
@@ -37803,44 +38205,138 @@ fn begin_project_transaction(
     let epoch = coordinator.epoch;
     let before =
         arm_project_transaction_and_capture_baseline(&state.project_transaction_active, || {
-            project_checkpoint_for_coordinator(&state, &coordinator)
+            project_checkpoint_for_coordinator(state, &coordinator)
         })?;
+    let before_revision = before.revision;
     coordinator.next_transaction_id = transaction_id;
-    coordinator.history.pending.insert(
+    let pending = PendingProjectTransaction {
         transaction_id,
-        PendingProjectTransaction {
-            transaction_id,
-            owner_id,
-            label: label.trim().chars().take(80).collect(),
-            coalesce_key: coalesce_key.trim().chars().take(240).collect(),
-            before,
-            epoch,
-        },
-    );
+        client_operation_id: client_operation_id.clone(),
+        shape_fingerprint: shape_fingerprint.clone(),
+        command_name: command_name.clone(),
+        schema_version,
+        owner_id,
+        window_label: window_label.to_string(),
+        owner_incarnation,
+        label: normalized_label,
+        coalesce_key: normalized_coalesce_key,
+        before,
+        epoch,
+        closing: false,
+    };
+    coordinator
+        .history
+        .pending
+        .insert(transaction_id, pending.clone());
     coordinator.history_generation = next_history_generation;
+    receipts.insert(
+        client_operation_id.clone(),
+        project_transaction_receipt_from_pending(&pending),
+    );
+    lanes.insert(client_operation_id, Arc::new(ProjectTransactionLane::new()));
     Ok(ProjectTransactionTicket {
         transaction_id,
         project_epoch: epoch,
+        project_revision: before_revision,
+        project_checkpoint_hash: pending.before.hash.clone(),
+        client_operation_id: pending.client_operation_id,
+        shape_fingerprint: pending.shape_fingerprint,
+        schema_version: pending.schema_version,
+        owner_id: pending.owner_id,
+        window_label: pending.window_label,
+        owner_incarnation: pending.owner_incarnation,
+        label: pending.label,
+        coalesce_key: pending.coalesce_key,
     })
 }
 
 #[tauri::command]
 fn commit_project_transaction(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     transaction_id: u64,
     expected_epoch: u64,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
     owner_id: String,
 ) -> Result<ProjectHistoryMutationResult, String> {
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
-    ensure_project_transaction_owner_registered(&state, &owner_id)?;
-    let _pending = project_transaction_for_owner_epoch(
-        &coordinator,
+    commit_project_transaction_for_window_label(
+        &state,
+        window.label(),
         transaction_id,
         expected_epoch,
+        client_operation_id,
+        shape_fingerprint,
+        command_name,
+        schema_version,
+        owner_id,
+    )
+}
+
+fn commit_project_transaction_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    transaction_id: u64,
+    expected_epoch: u64,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
+    owner_id: String,
+) -> Result<ProjectHistoryMutationResult, String> {
+    validate_project_transaction_schema_version(schema_version)?;
+    let client_operation_id =
+        validate_project_transaction_client_operation_id(&client_operation_id)?;
+    let shape_fingerprint = validate_project_transaction_shape_fingerprint(&shape_fingerprint)?;
+    let command_name = validate_project_transaction_command_name(&command_name)?;
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let owner_incarnation =
+        project_transaction_owner_binding_for_window(state, window_label, &owner_id)?;
+    let _external_admission =
+        lock_project_transaction_operation_admission(state, &client_operation_id)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    let mut receipts = state
+        .project_transaction_receipts
+        .lock()
+        .map_err(|_| "Project transaction receipt registry lock was poisoned".to_string())?;
+    let receipt = receipts.get(&client_operation_id).ok_or_else(|| {
+        format!("Unknown project transaction client operation {client_operation_id}")
+    })?;
+    project_transaction_receipt_matches_request(
+        receipt,
+        &client_operation_id,
+        &shape_fingerprint,
+        schema_version,
+        &command_name,
         &owner_id,
+        window_label,
+        owner_incarnation,
     )?;
-    with_retained_project_transaction(
+    if receipt.transaction_id != transaction_id || receipt.project_epoch != expected_epoch {
+        return Err(
+            "Project transaction ticket identity does not match its Begin receipt".to_string(),
+        );
+    }
+    match &receipt.state {
+        ProjectTransactionReceiptState::Committed(mutation) => return Ok(mutation.clone()),
+        ProjectTransactionReceiptState::Cancelled(_) => {
+            return Err("Project transaction was already cancelled".to_string())
+        }
+        ProjectTransactionReceiptState::Pending => {}
+    }
+    let pending = project_transaction_for_epoch(&coordinator, transaction_id, expected_epoch)?;
+    ensure_project_transaction_pending_binding(state, &pending, window_label, &owner_id)?;
+    if pending.shape_fingerprint != shape_fingerprint
+        || pending.command_name != command_name
+        || pending.schema_version != schema_version
+    {
+        return Err(
+            "Project transaction request shape does not match its Begin receipt".to_string(),
+        );
+    }
+    let result = with_retained_project_transaction(
         &mut coordinator,
         transaction_id,
         expected_epoch,
@@ -37854,7 +38350,7 @@ fn commit_project_transaction(
             // Begin and Commit one intended transaction. Do not compare the
             // current hash to `before`: a normal edit necessarily changes it
             // from A to B.
-            let mut after = project_checkpoint_for_coordinator(&state, coordinator)?;
+            let mut after = project_checkpoint_for_coordinator(state, coordinator)?;
             let changed = pending.before.project != after.project
                 || pending.before.mappings != after.mappings;
             let prepared_revision_and_hash = if changed {
@@ -37898,10 +38394,224 @@ fn commit_project_transaction(
                 .store(false, Ordering::Release);
             Ok(ProjectHistoryMutationResult {
                 history_status: project_history_status_for_coordinator(coordinator),
-                authority: project_authority_bundle_from_coordinator(&state, coordinator),
+                authority: project_authority_bundle_from_coordinator(state, coordinator),
             })
         },
+    )?;
+    if let Some(receipt) = receipts.get_mut(&client_operation_id) {
+        receipt.state = ProjectTransactionReceiptState::Committed(result.clone());
+    }
+    if let Some(lane) = state
+        .project_transaction_lanes
+        .lock()
+        .map_err(|_| "Project transaction lane registry lock was poisoned".to_string())?
+        .get(&client_operation_id)
+        .cloned()
+    {
+        lane.close()?;
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+fn query_project_transaction(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
+    owner_id: String,
+) -> Result<Option<ProjectTransactionRecovery>, String> {
+    query_project_transaction_for_window_label(
+        &state,
+        window.label(),
+        client_operation_id,
+        shape_fingerprint,
+        command_name,
+        schema_version,
+        owner_id,
     )
+}
+
+fn query_project_transaction_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
+    owner_id: String,
+) -> Result<Option<ProjectTransactionRecovery>, String> {
+    validate_project_transaction_schema_version(schema_version)?;
+    let client_operation_id =
+        validate_project_transaction_client_operation_id(&client_operation_id)?;
+    let shape_fingerprint = validate_project_transaction_shape_fingerprint(&shape_fingerprint)?;
+    let command_name = validate_project_transaction_command_name(&command_name)?;
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let owner_incarnation =
+        project_transaction_owner_binding_for_window(state, window_label, &owner_id)?;
+    let receipts = state
+        .project_transaction_receipts
+        .lock()
+        .map_err(|_| "Project transaction receipt registry lock was poisoned".to_string())?;
+    let Some(receipt) = receipts.get(&client_operation_id) else {
+        let sequence = project_transaction_operation_sequence(&client_operation_id)?;
+        let key =
+            project_transaction_operation_highwater_key(&owner_id, window_label, owner_incarnation);
+        let highwaters = state
+            .project_transaction_operation_highwaters
+            .lock()
+            .map_err(|_| {
+                "Project transaction operation high-water lock was poisoned".to_string()
+            })?;
+        if highwaters
+            .get(&key)
+            .copied()
+            .is_some_and(|highwater| sequence <= highwater)
+        {
+            return Err(
+                "Project transaction client operation ID was already completed; replay rejected"
+                    .to_string(),
+            );
+        }
+        return Ok(None);
+    };
+    project_transaction_receipt_matches_request(
+        receipt,
+        &client_operation_id,
+        &shape_fingerprint,
+        schema_version,
+        &command_name,
+        &owner_id,
+        window_label,
+        owner_incarnation,
+    )?;
+    Ok(Some(project_transaction_recovery_from_receipt(receipt)))
+}
+
+#[tauri::command]
+fn adopt_project_transaction(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
+    owner_id: String,
+) -> Result<ProjectTransactionRecovery, String> {
+    let recovery = query_project_transaction_for_window_label(
+        &state,
+        window.label(),
+        client_operation_id,
+        shape_fingerprint,
+        command_name,
+        schema_version,
+        owner_id,
+    )?
+    .ok_or_else(|| "Project transaction receipt was not found".to_string())?;
+    if let ProjectTransactionRecovery::Pending { ref ticket } = recovery {
+        let coordinator = lock_project_coordinator(&state)?;
+        let pending = project_transaction_for_epoch(
+            &coordinator,
+            ticket.transaction_id,
+            ticket.project_epoch,
+        )?;
+        ensure_project_transaction_pending_binding(
+            &state,
+            &pending,
+            &ticket.window_label,
+            &ticket.owner_id,
+        )?;
+    }
+    Ok(recovery)
+}
+
+#[tauri::command]
+fn acknowledge_project_transaction(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
+    owner_id: String,
+) -> Result<ProjectTransactionRecovery, String> {
+    acknowledge_project_transaction_for_window_label(
+        &state,
+        window.label(),
+        client_operation_id,
+        shape_fingerprint,
+        command_name,
+        schema_version,
+        owner_id,
+    )
+}
+
+fn acknowledge_project_transaction_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
+    owner_id: String,
+) -> Result<ProjectTransactionRecovery, String> {
+    let client_operation_id =
+        validate_project_transaction_client_operation_id(&client_operation_id)?;
+    let shape_fingerprint = validate_project_transaction_shape_fingerprint(&shape_fingerprint)?;
+    let command_name = validate_project_transaction_command_name(&command_name)?;
+    validate_project_transaction_schema_version(schema_version)?;
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let owner_incarnation =
+        project_transaction_owner_binding_for_window(state, window_label, &owner_id)?;
+    let mut receipts = state
+        .project_transaction_receipts
+        .lock()
+        .map_err(|_| "Project transaction receipt registry lock was poisoned".to_string())?;
+    let receipt = receipts.get(&client_operation_id).ok_or_else(|| {
+        format!("Unknown project transaction client operation {client_operation_id}")
+    })?;
+    project_transaction_receipt_matches_request(
+        receipt,
+        &client_operation_id,
+        &shape_fingerprint,
+        schema_version,
+        &command_name,
+        &owner_id,
+        window_label,
+        owner_incarnation,
+    )?;
+    if matches!(&receipt.state, ProjectTransactionReceiptState::Pending) {
+        return Err(
+            "Project transaction cannot be acknowledged before a terminal result".to_string(),
+        );
+    }
+    let highwater_key = project_transaction_operation_highwater_key(
+        &receipt.owner_id,
+        &receipt.window_label,
+        receipt.owner_incarnation,
+    );
+    let operation_sequence = project_transaction_operation_sequence(&client_operation_id)?;
+    let _ = receipt;
+    let mut highwaters = state
+        .project_transaction_operation_highwaters
+        .lock()
+        .map_err(|_| "Project transaction operation high-water lock was poisoned".to_string())?;
+    highwaters
+        .entry(highwater_key)
+        .and_modify(|highwater| *highwater = (*highwater).max(operation_sequence))
+        .or_insert(operation_sequence);
+    let mut lanes = state
+        .project_transaction_lanes
+        .lock()
+        .map_err(|_| "Project transaction lane registry lock was poisoned".to_string())?;
+    if let Some(lane) = lanes.get(&client_operation_id).cloned() {
+        lane.close()?;
+        lanes.remove(&client_operation_id);
+    }
+    receipts.remove(&client_operation_id);
+    Ok(ProjectTransactionRecovery::Acknowledged)
 }
 
 fn project_transaction_for_epoch(
@@ -37915,6 +38625,11 @@ fn project_transaction_for_epoch(
     if pending.epoch != expected_epoch || pending.epoch != coordinator.epoch {
         return Err(format!(
             "Project transaction {transaction_id} belongs to a replaced project and was discarded"
+        ));
+    }
+    if pending.closing {
+        return Err(format!(
+            "Project transaction {transaction_id} is closing; late command rejected"
         ));
     }
     Ok(pending)
@@ -37952,6 +38667,174 @@ fn normalize_project_transaction_owner_id(owner_id: String) -> Result<String, St
 
 const MAX_PROJECT_TRANSACTION_WINDOW_LABEL_BYTES: usize = 128;
 const MAX_PROJECT_TRANSACTION_OWNER_RETIREMENT_FAILURES: usize = 128;
+const MAX_PROJECT_TRANSACTION_RETIRED_OWNER_BINDINGS: usize = 1024;
+
+fn validate_project_transaction_schema_version(schema_version: u16) -> Result<(), String> {
+    if schema_version != PROJECT_TRANSACTION_SCHEMA_VERSION {
+        return Err(format!(
+            "Unsupported project transaction schema version {schema_version}; expected {PROJECT_TRANSACTION_SCHEMA_VERSION}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_project_transaction_client_operation_id(
+    client_operation_id: &str,
+) -> Result<String, String> {
+    let value = client_operation_id.trim();
+    if value.is_empty() || value.len() > MAX_PROJECT_TRANSACTION_OPERATION_ID_BYTES {
+        return Err(format!(
+            "Project transaction client operation ID must be 1 to {MAX_PROJECT_TRANSACTION_OPERATION_ID_BYTES} bytes"
+        ));
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(
+            "Project transaction client operation ID contains unsupported characters".to_string(),
+        );
+    }
+    project_transaction_operation_sequence(value)?;
+    Ok(value.to_string())
+}
+
+fn project_transaction_operation_sequence(client_operation_id: &str) -> Result<u64, String> {
+    let mut parts = client_operation_id.split(':');
+    let prefix = parts.next();
+    let sequence = parts.next();
+    let nonce = parts.next();
+    if prefix != Some("project-op") || nonce.is_none() || parts.next().is_some() {
+        return Err(
+            "Project transaction client operation ID must be project-op:<sequence>:<nonce>"
+                .to_string(),
+        );
+    }
+    let sequence = sequence
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            "Project transaction operation sequence must be a positive integer".to_string()
+        })?;
+    if nonce.is_none_or(str::is_empty) {
+        return Err("Project transaction operation nonce must not be empty".to_string());
+    }
+    Ok(sequence)
+}
+
+fn project_transaction_operation_highwater_key(
+    owner_id: &str,
+    window_label: &str,
+    owner_incarnation: u64,
+) -> String {
+    format!("{owner_id}\u{1f}{window_label}\u{1f}{owner_incarnation}")
+}
+
+fn project_transaction_retired_owner_binding_key(owner_id: &str, window_label: &str) -> String {
+    format!("{owner_id}\u{1f}{window_label}")
+}
+
+fn preflight_project_transaction_owner_binding_retirement(
+    retired: &HashSet<String>,
+    owner_id: &str,
+    window_label: &str,
+) -> Result<String, String> {
+    let key = project_transaction_retired_owner_binding_key(owner_id, window_label);
+    if !retired.contains(&key) && retired.len() >= MAX_PROJECT_TRANSACTION_RETIRED_OWNER_BINDINGS {
+        return Err(
+            "Project transaction retired-owner capacity is full; restart Syndocal before replacing another renderer"
+                .to_string(),
+        );
+    }
+    Ok(key)
+}
+
+fn ensure_project_transaction_owner_binding_not_retired(
+    retired: &HashSet<String>,
+    owner_id: &str,
+    window_label: &str,
+) -> Result<(), String> {
+    if retired.contains(&project_transaction_retired_owner_binding_key(
+        owner_id,
+        window_label,
+    )) {
+        return Err(
+            "Project transaction owner identity was already retired for this renderer window"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn reject_project_transaction_replayed_sequence(
+    state: &AppState,
+    client_operation_id: &str,
+    owner_id: &str,
+    window_label: &str,
+    owner_incarnation: u64,
+) -> Result<(), String> {
+    let sequence = project_transaction_operation_sequence(client_operation_id)?;
+    let key =
+        project_transaction_operation_highwater_key(owner_id, window_label, owner_incarnation);
+    let highwaters = state
+        .project_transaction_operation_highwaters
+        .lock()
+        .map_err(|_| "Project transaction operation high-water lock was poisoned".to_string())?;
+    if highwaters
+        .get(&key)
+        .copied()
+        .is_some_and(|highwater| sequence <= highwater)
+    {
+        return Err(
+            "Project transaction client operation ID was already completed; replay rejected"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_project_transaction_shape_fingerprint(
+    shape_fingerprint: &str,
+) -> Result<String, String> {
+    let value = shape_fingerprint.trim();
+    if value.is_empty() || value.len() > MAX_PROJECT_TRANSACTION_SHAPE_BYTES {
+        return Err(format!(
+            "Project transaction shape fingerprint must be 1 to {MAX_PROJECT_TRANSACTION_SHAPE_BYTES} bytes"
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(
+            "Project transaction shape fingerprint contains control characters".to_string(),
+        );
+    }
+    Ok(value.to_string())
+}
+
+fn validate_project_transaction_command_name(command_name: &str) -> Result<String, String> {
+    let value = command_name.trim();
+    if value.is_empty() || value.len() > MAX_PROJECT_TRANSACTION_COMMAND_BYTES {
+        return Err(format!(
+            "Project transaction command name must be 1 to {MAX_PROJECT_TRANSACTION_COMMAND_BYTES} bytes"
+        ));
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("Project transaction command name contains unsupported characters".to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn canonical_project_transaction_shape(
+    command_name: &str,
+    label: &str,
+    coalesce_key: &str,
+) -> String {
+    format!(
+        "project-transaction-v{PROJECT_TRANSACTION_SCHEMA_VERSION}|command={command_name}|label={label}|coalesce={coalesce_key}"
+    )
+}
 
 fn validate_project_transaction_window_label(window_label: &str) -> Result<(), String> {
     if window_label.trim().is_empty()
@@ -37977,6 +38860,219 @@ fn ensure_project_transaction_owner_registered(
     } else {
         Err("Project transaction renderer session is no longer registered".to_string())
     }
+}
+
+fn project_transaction_owner_binding_for_window(
+    state: &AppState,
+    window_label: &str,
+    owner_id: &str,
+) -> Result<u64, String> {
+    validate_project_transaction_window_label(window_label)?;
+    let owner_id = normalize_project_transaction_owner_id(owner_id.to_string())?;
+    state.ensure_window_authority_not_blocked(window_label)?;
+    let owners = state
+        .project_transaction_owners
+        .lock()
+        .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+    let incarnations = state
+        .project_transaction_owner_incarnations
+        .lock()
+        .map_err(|_| {
+            "Project transaction owner incarnation registry lock was poisoned".to_string()
+        })?;
+    if owners.get(window_label) != Some(&owner_id) {
+        return Err(
+            "Project transaction owner does not match the invoking renderer window".to_string(),
+        );
+    }
+    incarnations
+        .get(window_label)
+        .copied()
+        .ok_or_else(|| "Project transaction owner incarnation is no longer registered".to_string())
+}
+
+fn ensure_project_transaction_pending_binding(
+    state: &AppState,
+    pending: &PendingProjectTransaction,
+    window_label: &str,
+    owner_id: &str,
+) -> Result<(), String> {
+    let incarnation = project_transaction_owner_binding_for_window(state, window_label, owner_id)?;
+    if pending.owner_id != owner_id
+        || pending.window_label != window_label
+        || pending.owner_incarnation != incarnation
+    {
+        return Err(
+            "Project transaction belongs to a different renderer window incarnation".to_string(),
+        );
+    }
+    if pending.closing {
+        return Err("Project transaction is closing; late command rejected".to_string());
+    }
+    Ok(())
+}
+
+fn project_transaction_receipt_from_pending(
+    pending: &PendingProjectTransaction,
+) -> ProjectTransactionReceipt {
+    ProjectTransactionReceipt {
+        client_operation_id: pending.client_operation_id.clone(),
+        shape_fingerprint: pending.shape_fingerprint.clone(),
+        command_name: pending.command_name.clone(),
+        schema_version: pending.schema_version,
+        transaction_id: pending.transaction_id,
+        project_epoch: pending.epoch,
+        project_revision: pending.before.revision,
+        checkpoint_hash: pending.before.hash.clone(),
+        owner_id: pending.owner_id.clone(),
+        window_label: pending.window_label.clone(),
+        owner_incarnation: pending.owner_incarnation,
+        label: pending.label.clone(),
+        coalesce_key: pending.coalesce_key.clone(),
+        state: ProjectTransactionReceiptState::Pending,
+    }
+}
+
+fn mark_project_transaction_cancelled_receipt(
+    receipts: &mut HashMap<String, ProjectTransactionReceipt>,
+    client_operation_id: &str,
+    mutation: &ProjectHistoryMutationResult,
+) -> Result<(), String> {
+    if client_operation_id.is_empty() {
+        return Ok(());
+    }
+    let receipt = receipts.get_mut(client_operation_id).ok_or_else(|| {
+        format!("Project transaction cancellation completed without receipt {client_operation_id}")
+    })?;
+    match &receipt.state {
+        ProjectTransactionReceiptState::Pending => {
+            receipt.state = ProjectTransactionReceiptState::Cancelled(mutation.clone());
+            Ok(())
+        }
+        ProjectTransactionReceiptState::Cancelled(_) => Ok(()),
+        ProjectTransactionReceiptState::Committed(_) => {
+            Err("Project transaction cancellation raced with a committed receipt".to_string())
+        }
+    }
+}
+
+/// A destroyed renderer cannot query or acknowledge its old incarnation. Once
+/// the cancellation result has been recorded in history, remove that dead
+/// operation lane and receipt so pane retirement cannot exhaust the bounded
+/// live-lane registry. Owner/incarnation validation makes any later replay
+/// fail closed even though this terminal payload is no longer retained.
+fn compact_retired_project_transaction(
+    receipts: &mut HashMap<String, ProjectTransactionReceipt>,
+    lanes: &mut HashMap<String, Arc<ProjectTransactionLane>>,
+    client_operation_id: &str,
+) -> Result<(), String> {
+    if client_operation_id.is_empty() {
+        return Ok(());
+    }
+    let receipt = receipts.get(client_operation_id).ok_or_else(|| {
+        format!("Project transaction cancellation completed without receipt {client_operation_id}")
+    })?;
+    if !matches!(receipt.state, ProjectTransactionReceiptState::Cancelled(_)) {
+        return Err(
+            "Retired project transaction did not reach a cancelled terminal receipt".to_string(),
+        );
+    }
+    if lanes.remove(client_operation_id).is_none() {
+        return Err(format!(
+            "Project transaction cancellation completed without lane {client_operation_id}"
+        ));
+    }
+    receipts.remove(client_operation_id);
+    Ok(())
+}
+
+fn project_transaction_recovery_from_receipt(
+    receipt: &ProjectTransactionReceipt,
+) -> ProjectTransactionRecovery {
+    match &receipt.state {
+        ProjectTransactionReceiptState::Pending => ProjectTransactionRecovery::Pending {
+            ticket: ProjectTransactionTicket {
+                transaction_id: receipt.transaction_id,
+                project_epoch: receipt.project_epoch,
+                project_revision: receipt.project_revision,
+                project_checkpoint_hash: receipt.checkpoint_hash.clone(),
+                client_operation_id: receipt.client_operation_id.clone(),
+                shape_fingerprint: receipt.shape_fingerprint.clone(),
+                schema_version: receipt.schema_version,
+                owner_id: receipt.owner_id.clone(),
+                window_label: receipt.window_label.clone(),
+                owner_incarnation: receipt.owner_incarnation,
+                label: receipt.label.clone(),
+                coalesce_key: receipt.coalesce_key.clone(),
+            },
+        },
+        ProjectTransactionReceiptState::Committed(mutation) => {
+            ProjectTransactionRecovery::Committed {
+                mutation: mutation.clone(),
+            }
+        }
+        ProjectTransactionReceiptState::Cancelled(mutation) => {
+            ProjectTransactionRecovery::Cancelled {
+                mutation: mutation.clone(),
+            }
+        }
+    }
+}
+
+fn project_transaction_receipt_matches_request(
+    receipt: &ProjectTransactionReceipt,
+    client_operation_id: &str,
+    shape_fingerprint: &str,
+    schema_version: u16,
+    command_name: &str,
+    owner_id: &str,
+    window_label: &str,
+    owner_incarnation: u64,
+) -> Result<(), String> {
+    if receipt.client_operation_id != client_operation_id
+        || receipt.shape_fingerprint != shape_fingerprint
+        || receipt.schema_version != schema_version
+        || receipt.command_name != command_name
+    {
+        return Err(
+            "Project transaction client operation ID was reused with a different request shape"
+                .to_string(),
+        );
+    }
+    if receipt.owner_id != owner_id
+        || receipt.window_label != window_label
+        || receipt.owner_incarnation != owner_incarnation
+    {
+        return Err(
+            "Project transaction receipt belongs to a different renderer window incarnation"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn project_transaction_lane_for_operation(
+    state: &AppState,
+    client_operation_id: &str,
+) -> Result<Arc<ProjectTransactionLane>, String> {
+    state
+        .project_transaction_lanes
+        .lock()
+        .map_err(|_| "Project transaction lane registry lock was poisoned".to_string())?
+        .get(client_operation_id)
+        .cloned()
+        .ok_or_else(|| "Project transaction operation lane is no longer retained".to_string())
+}
+
+fn admit_project_transaction_command(
+    state: &AppState,
+    pending: &PendingProjectTransaction,
+) -> Result<ProjectTransactionLaneGuard, String> {
+    if pending.closing {
+        return Err("Project transaction is closing; late command rejected".to_string());
+    }
+    let lane = project_transaction_lane_for_operation(state, &pending.client_operation_id)?;
+    lane.admit()
 }
 
 /// Bind untrusted B3 IPC to the *calling* WebView, not merely to any window
@@ -38943,21 +40039,95 @@ fn commit_project_history_entry(
 
 #[tauri::command]
 fn cancel_project_transaction(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     transaction_id: u64,
     expected_epoch: u64,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
     owner_id: String,
 ) -> Result<ProjectHistoryMutationResult, String> {
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
-    ensure_project_transaction_owner_registered(&state, &owner_id)?;
-    let pending = project_transaction_for_owner_epoch(
-        &coordinator,
+    cancel_project_transaction_for_window_label(
+        &state,
+        window.label(),
         transaction_id,
         expected_epoch,
+        client_operation_id,
+        shape_fingerprint,
+        command_name,
+        schema_version,
+        owner_id,
+    )
+}
+
+fn cancel_project_transaction_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    transaction_id: u64,
+    expected_epoch: u64,
+    client_operation_id: String,
+    shape_fingerprint: String,
+    command_name: String,
+    schema_version: u16,
+    owner_id: String,
+) -> Result<ProjectHistoryMutationResult, String> {
+    validate_project_transaction_schema_version(schema_version)?;
+    let client_operation_id =
+        validate_project_transaction_client_operation_id(&client_operation_id)?;
+    let shape_fingerprint = validate_project_transaction_shape_fingerprint(&shape_fingerprint)?;
+    let command_name = validate_project_transaction_command_name(&command_name)?;
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let owner_incarnation =
+        project_transaction_owner_binding_for_window(state, window_label, &owner_id)?;
+    let _external_admission =
+        lock_project_transaction_operation_admission(state, &client_operation_id)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    let mut receipts = state
+        .project_transaction_receipts
+        .lock()
+        .map_err(|_| "Project transaction receipt registry lock was poisoned".to_string())?;
+    let receipt = receipts.get(&client_operation_id).ok_or_else(|| {
+        format!("Unknown project transaction client operation {client_operation_id}")
+    })?;
+    project_transaction_receipt_matches_request(
+        receipt,
+        &client_operation_id,
+        &shape_fingerprint,
+        schema_version,
+        &command_name,
         &owner_id,
+        window_label,
+        owner_incarnation,
     )?;
-    cancel_pending_project_transaction_locked(&state, &mut coordinator, pending)
+    if receipt.transaction_id != transaction_id || receipt.project_epoch != expected_epoch {
+        return Err(
+            "Project transaction ticket identity does not match its Begin receipt".to_string(),
+        );
+    }
+    match &receipt.state {
+        ProjectTransactionReceiptState::Cancelled(mutation) => return Ok(mutation.clone()),
+        ProjectTransactionReceiptState::Committed(_) => {
+            return Err("Project transaction was already committed".to_string())
+        }
+        ProjectTransactionReceiptState::Pending => {}
+    }
+    let pending = project_transaction_for_epoch(&coordinator, transaction_id, expected_epoch)?;
+    ensure_project_transaction_pending_binding(state, &pending, window_label, &owner_id)?;
+    if pending.shape_fingerprint != shape_fingerprint
+        || pending.command_name != command_name
+        || pending.schema_version != schema_version
+    {
+        return Err(
+            "Project transaction request shape does not match its Begin receipt".to_string(),
+        );
+    }
+    let result = cancel_pending_project_transaction_locked(state, &mut coordinator, pending)?;
+    if let Some(receipt) = receipts.get_mut(&client_operation_id) {
+        receipt.state = ProjectTransactionReceiptState::Cancelled(result.clone());
+    }
+    Ok(result)
 }
 
 /// Register the current generation of one concrete webview. Only the owner
@@ -38984,8 +40154,16 @@ fn register_project_transaction_owner_for_window_label(
         .lock()
         .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
     state.ensure_window_authority_not_blocked(window_label)?;
-    let _external_admission = lock_project_external_command_admission(&state)?;
+    let _external_admission = lock_project_transaction_owner_lifecycle_admission(&state)?;
     let mut coordinator = lock_project_coordinator(&state)?;
+    if state.project_transaction_active.load(Ordering::Acquire)
+        && coordinator.history.pending.is_empty()
+    {
+        return Err(
+            "Project transaction is active; retry owner registration after Display output publication"
+                .to_string(),
+        );
+    }
     let mut owners = state
         .project_transaction_owners
         .lock()
@@ -39019,6 +40197,42 @@ fn register_project_transaction_owner_for_window_label(
         .output_lease_registry
         .lock()
         .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
+    let mut receipts = state
+        .project_transaction_receipts
+        .lock()
+        .map_err(|_| "Project transaction receipt registry lock was poisoned".to_string())?;
+    let mut highwaters = state
+        .project_transaction_operation_highwaters
+        .lock()
+        .map_err(|_| "Project transaction operation high-water lock was poisoned".to_string())?;
+    let mut lanes = state
+        .project_transaction_lanes
+        .lock()
+        .map_err(|_| "Project transaction lane registry lock was poisoned".to_string())?;
+    let mut retired_owner_bindings = state
+        .project_transaction_retired_owner_bindings
+        .lock()
+        .map_err(|_| {
+            "Project transaction retired-owner binding registry lock was poisoned".to_string()
+        })?;
+    if !same_incarnation {
+        ensure_project_transaction_owner_binding_not_retired(
+            &retired_owner_bindings,
+            &owner_id,
+            window_label,
+        )?;
+    }
+    let retired_binding_key = retired_preview_owner
+        .as_deref()
+        .filter(|_| !same_incarnation)
+        .map(|retired_owner| {
+            preflight_project_transaction_owner_binding_retirement(
+                &retired_owner_bindings,
+                retired_owner,
+                window_label,
+            )
+        })
+        .transpose()?;
     let output_lease_candidate = if !same_incarnation {
         retired_preview_owner
             .as_deref()
@@ -39050,14 +40264,47 @@ fn register_project_transaction_owner_for_window_label(
             let Some(previous_owner) = previous_owner else {
                 return Ok(None);
             };
-            let Some(pending) =
+            let recovered = if let Some(pending) =
                 project_transaction_for_retired_owner(&coordinator.history, previous_owner)?
-            else {
-                return Ok(None);
+            {
+                let operation_id = pending.client_operation_id.clone();
+                let operation_lane = (!operation_id.is_empty())
+                    .then(|| {
+                        lanes.get(&operation_id).cloned().ok_or_else(|| {
+                            format!(
+                                "Project transaction cancellation completed without lane {operation_id}"
+                            )
+                        })
+                    })
+                    .transpose()?;
+                let result = cancel_pending_project_transaction_locked_with_lane(
+                    &state,
+                    coordinator,
+                    pending,
+                    operation_lane,
+                )?;
+                mark_project_transaction_cancelled_receipt(&mut receipts, &operation_id, &result)?;
+                compact_retired_project_transaction(&mut receipts, &mut lanes, &operation_id)?;
+                Some(result)
+            } else {
+                None
             };
-            cancel_pending_project_transaction_locked(&state, coordinator, pending).map(Some)
+            let key = retired_binding_key.as_ref().ok_or_else(|| {
+                "Project transaction owner retirement was not preflighted".to_string()
+            })?;
+            retired_owner_bindings.insert(key.clone());
+            Ok(recovered)
         },
     )?;
+    if !same_incarnation {
+        if let Some(retired_incarnation) = incarnations.get(window_label).copied() {
+            highwaters.remove(&project_transaction_operation_highwater_key(
+                &retired_preview_owner.clone().unwrap_or_default(),
+                window_label,
+                retired_incarnation,
+            ));
+        }
+    }
     incarnations.insert(window_label.to_string(), next_incarnation);
     if let Some(candidate) = output_lease_candidate {
         *output_lease_registry = candidate;
@@ -39067,6 +40314,10 @@ fn register_project_transaction_owner_for_window_label(
     drop(incarnations);
     drop(owners);
     drop(coordinator);
+    drop(lanes);
+    drop(highwaters);
+    drop(receipts);
+    drop(retired_owner_bindings);
     if retired_preview_owner.as_deref() != Some(owner_id.as_str()) {
         if let Some(retired_owner) = retired_preview_owner.as_deref() {
             state
@@ -39123,16 +40374,25 @@ fn project_transaction_for_retired_owner(
         .cloned())
 }
 
-fn retire_project_transaction_owner_for_window(
+fn retire_project_transaction_owner_for_window_incarnation(
     state: &AppState,
     window_label: &str,
+    expected_retired_incarnation: Option<u64>,
 ) -> Result<Option<ProjectHistoryMutationResult>, String> {
     let _owner_rotation = state
         .project_transaction_owner_rotation
         .lock()
         .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
-    let _external_admission = lock_project_external_command_admission(state)?;
+    let _external_admission = lock_project_transaction_owner_lifecycle_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
+    if state.project_transaction_active.load(Ordering::Acquire)
+        && coordinator.history.pending.is_empty()
+    {
+        return Err(
+            "Project transaction is active; retry owner retirement after Display output publication"
+                .to_string(),
+        );
+    }
     let mut owners = state
         .project_transaction_owners
         .lock()
@@ -39144,6 +40404,11 @@ fn retire_project_transaction_owner_for_window(
         .map_err(|_| {
             "Project transaction owner incarnation registry lock was poisoned".to_string()
         })?;
+    if let Some(expected) = expected_retired_incarnation {
+        if incarnations.get(window_label).copied() != Some(expected) {
+            return Ok(None);
+        }
+    }
     // Match registration's atomic owner/session boundary. In particular, an
     // orphan cancellation failure must leave its previous session available
     // under the still-registered owner instead of orphaning its lock state.
@@ -39155,6 +40420,34 @@ fn retire_project_transaction_owner_for_window(
         .output_lease_registry
         .lock()
         .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
+    let mut receipts = state
+        .project_transaction_receipts
+        .lock()
+        .map_err(|_| "Project transaction receipt registry lock was poisoned".to_string())?;
+    let mut highwaters = state
+        .project_transaction_operation_highwaters
+        .lock()
+        .map_err(|_| "Project transaction operation high-water lock was poisoned".to_string())?;
+    let mut lanes = state
+        .project_transaction_lanes
+        .lock()
+        .map_err(|_| "Project transaction lane registry lock was poisoned".to_string())?;
+    let mut retired_owner_bindings = state
+        .project_transaction_retired_owner_bindings
+        .lock()
+        .map_err(|_| {
+            "Project transaction retired-owner binding registry lock was poisoned".to_string()
+        })?;
+    let retired_binding_key = retired_preview_owner
+        .as_deref()
+        .map(|retired_owner| {
+            preflight_project_transaction_owner_binding_retirement(
+                &retired_owner_bindings,
+                retired_owner,
+                window_label,
+            )
+        })
+        .transpose()?;
     let output_lease_candidate = retired_preview_owner
         .as_deref()
         .map(|retired_owner| {
@@ -39180,14 +40473,48 @@ fn retire_project_transaction_owner_for_window(
             let Some(retired_owner) = retired_owner else {
                 return Ok(None);
             };
-            let Some(pending) =
+            let recovered = if let Some(pending) =
                 project_transaction_for_retired_owner(&coordinator.history, retired_owner)?
-            else {
-                return Ok(None);
+            {
+                let operation_id = pending.client_operation_id.clone();
+                let operation_lane = (!operation_id.is_empty())
+                    .then(|| {
+                        lanes.get(&operation_id).cloned().ok_or_else(|| {
+                            format!(
+                                "Project transaction cancellation completed without lane {operation_id}"
+                            )
+                        })
+                    })
+                    .transpose()?;
+                let result = cancel_pending_project_transaction_locked_with_lane(
+                    state,
+                    coordinator,
+                    pending,
+                    operation_lane,
+                )?;
+                mark_project_transaction_cancelled_receipt(&mut receipts, &operation_id, &result)?;
+                compact_retired_project_transaction(&mut receipts, &mut lanes, &operation_id)?;
+                Some(result)
+            } else {
+                None
             };
-            cancel_pending_project_transaction_locked(state, coordinator, pending).map(Some)
+            let key = retired_binding_key.as_ref().ok_or_else(|| {
+                "Project transaction owner retirement was not preflighted".to_string()
+            })?;
+            retired_owner_bindings.insert(key.clone());
+            Ok(recovered)
         },
     )?;
+    if let (Some(retired_owner), Some(retired_incarnation)) = (
+        retired_preview_owner.as_deref(),
+        incarnations.get(window_label).copied(),
+    ) {
+        highwaters.remove(&project_transaction_operation_highwater_key(
+            retired_owner,
+            window_label,
+            retired_incarnation,
+        ));
+    }
     incarnations.remove(window_label);
     if let Some(candidate) = output_lease_candidate {
         *output_lease_registry = candidate;
@@ -39197,6 +40524,10 @@ fn retire_project_transaction_owner_for_window(
     drop(incarnations);
     drop(owners);
     drop(coordinator);
+    drop(lanes);
+    drop(highwaters);
+    drop(receipts);
+    drop(retired_owner_bindings);
     if let Some(retired_owner) = retired_preview_owner.as_deref() {
         state
             .media_asset_operations
@@ -39213,6 +40544,13 @@ fn retire_project_transaction_owner_for_window(
     Ok(recovered)
 }
 
+fn retire_project_transaction_owner_for_window(
+    state: &AppState,
+    window_label: &str,
+) -> Result<Option<ProjectHistoryMutationResult>, String> {
+    retire_project_transaction_owner_for_window_incarnation(state, window_label, None)
+}
+
 /// Retire one destroyed renderer's AppState and query authority as one
 /// fail-closed lifecycle boundary. Owner/lease retirement is attempted first,
 /// then query retirement is always attempted as a best-effort fence even when
@@ -39225,8 +40563,35 @@ fn handle_destroyed_window_authority_retirement(
     query: &ControlPlaneQueryState,
     window_label: &str,
 ) -> Result<(), String> {
+    let expected_retired_incarnation = state
+        .project_transaction_owner_incarnations
+        .lock()
+        .ok()
+        .and_then(|incarnations| incarnations.get(window_label).copied());
+    handle_destroyed_window_authority_retirement_for_incarnation(
+        state,
+        query,
+        window_label,
+        expected_retired_incarnation,
+    )
+}
+
+fn handle_destroyed_window_authority_retirement_for_incarnation(
+    state: &AppState,
+    query: &ControlPlaneQueryState,
+    window_label: &str,
+    expected_retired_incarnation: Option<u64>,
+) -> Result<(), String> {
     let owner_error = match validate_project_transaction_window_label(window_label) {
-        Ok(()) => retire_project_transaction_owner_for_window(state, window_label).err(),
+        Ok(()) => match expected_retired_incarnation {
+            Some(expected) => retire_project_transaction_owner_for_window_incarnation(
+                state,
+                window_label,
+                Some(expected),
+            )
+            .err(),
+            None => retire_project_transaction_owner_for_window(state, window_label).err(),
+        },
         Err(error) => Some(format!("window label validation failed: {error}")),
     };
     let query_error = query.retire_window(window_label).err();
@@ -39348,6 +40713,21 @@ fn cancel_pending_project_transaction_locked(
     coordinator: &mut ProjectCoordinator,
     pending: PendingProjectTransaction,
 ) -> Result<ProjectHistoryMutationResult, String> {
+    let operation_lane = (!pending.client_operation_id.is_empty())
+        .then(|| project_transaction_lane_for_operation(state, &pending.client_operation_id))
+        .transpose()?;
+    cancel_pending_project_transaction_locked_with_lane(state, coordinator, pending, operation_lane)
+}
+
+/// Retirement already owns the lane registry so it can close and compact the
+/// exact operation atomically without recursively locking that registry.
+fn cancel_pending_project_transaction_locked_with_lane(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    pending: PendingProjectTransaction,
+    operation_lane: Option<Arc<ProjectTransactionLane>>,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let transaction_id = pending.transaction_id;
     // Cancel likewise removes an observable pending reservation whether or
     // not it creates an Interrupted Undo entry.
     let next_history_generation = checked_project_history_generation_after_change(coordinator)?;
@@ -39367,6 +40747,12 @@ fn cancel_pending_project_transaction_locked(
         .is_some()
         .then(|| checked_project_authority_publication_generation_after_change(coordinator))
         .transpose()?;
+    if let Some(lane) = operation_lane.as_ref() {
+        lane.close()?;
+    }
+    if let Some(live_pending) = coordinator.history.pending.get_mut(&transaction_id) {
+        live_pending.closing = true;
+    }
     if let Some((revision, hash)) = prepared_revision_and_hash {
         coordinator.revision = revision;
         coordinator.checkpoint_hash = hash;
@@ -49180,21 +50566,23 @@ fn load_stage_map_preset_file(
 
 #[tauri::command]
 fn import_stage_map_preset(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     mut preset: StageMapPresetSummary,
     project_transaction_id: u64,
     expected_epoch: u64,
     owner_id: String,
 ) -> Result<String, String> {
-    let _external_admission = lock_project_external_command_admission(&state)?;
+    let _external_admission = lock_project_external_command_admission_for_display_finalize(&state)?;
     let coordinator = lock_project_coordinator(&state)?;
-    ensure_project_transaction_owner_registered(&state, &owner_id)?;
-    project_transaction_for_owner_epoch(
+    let pending = project_transaction_for_owner_epoch(
         &coordinator,
         project_transaction_id,
         expected_epoch,
         &owner_id,
     )?;
+    ensure_project_transaction_pending_binding(&state, &pending, window.label(), &owner_id)?;
+    let _transaction_admission = admit_project_transaction_command(&state, &pending)?;
     preset = prepare_stage_map_preset_import(preset)?;
     let label = preset.label.clone();
     state.engine.upsert_stage_map_preset_published(preset)?;
@@ -60911,6 +62299,9 @@ pub(crate) mod tests {
                 project_callback_epoch: Arc::new(AtomicU64::new(0)),
                 project_mapping_callback_epoch: Arc::new(AtomicU64::new(0)),
                 project_transaction_active: Arc::new(AtomicBool::new(false)),
+                project_transaction_receipts: Mutex::new(HashMap::new()),
+                project_transaction_operation_highwaters: Mutex::new(HashMap::new()),
+                project_transaction_lanes: Mutex::new(HashMap::new()),
                 project_transaction_owners: Mutex::new(HashMap::from([(
                     "media-asset-a6".to_string(),
                     MEDIA_ASSET_A6_OWNER.to_string(),
@@ -60920,6 +62311,7 @@ pub(crate) mod tests {
                     1,
                 )])),
                 next_project_transaction_owner_incarnation: AtomicU64::new(1),
+                project_transaction_retired_owner_bindings: Mutex::new(HashSet::new()),
                 project_transaction_owner_retirement_failures: Mutex::new(HashSet::new()),
                 project_transaction_owner_retirement_failure_overflow: AtomicBool::new(false),
                 project_transaction_owner_rotation: Mutex::new(()),
@@ -72231,11 +73623,18 @@ pub(crate) mod tests {
     ) -> PendingProjectTransaction {
         PendingProjectTransaction {
             transaction_id,
+            client_operation_id: format!("test-op-{transaction_id}"),
+            shape_fingerprint: format!("test-shape-{transaction_id}"),
+            command_name: "test_command".to_string(),
+            schema_version: PROJECT_TRANSACTION_SCHEMA_VERSION,
             owner_id: "renderer:test".to_string(),
+            window_label: "main".to_string(),
+            owner_incarnation: 1,
             label: label.to_string(),
             coalesce_key: coalesce_key.to_string(),
             epoch: before.epoch,
             before,
+            closing: false,
         }
     }
 
@@ -72826,6 +74225,484 @@ pub(crate) mod tests {
         assert_eq!(
             revision_and_hash.as_ref().map(|(revision, _)| *revision),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn project_transaction_production_receipt_lifecycle_is_strict_and_idempotent() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let window_label = "media-asset-a6";
+        let owner_id = MEDIA_ASSET_A6_OWNER;
+        let begin = |operation_id: &str, label: &str, coalesce_key: &str| {
+            let (epoch, revision) = {
+                let coordinator = lock_project_coordinator(&state).unwrap();
+                (coordinator.epoch, coordinator.revision)
+            };
+            begin_project_transaction_for_window_label(
+                &state,
+                window_label,
+                label.to_string(),
+                coalesce_key.to_string(),
+                epoch,
+                revision,
+                owner_id.to_string(),
+                operation_id.to_string(),
+                canonical_project_transaction_shape(
+                    "test_project_transaction",
+                    label,
+                    coalesce_key,
+                ),
+                "test_project_transaction".to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+            )
+        };
+
+        state
+            .project_transaction_active
+            .store(true, Ordering::Release);
+        assert!(begin(
+            "project-op:1:e1-display-active",
+            "E1 display active",
+            "fixture:display"
+        )
+        .is_err());
+        assert!(state
+            .project_transaction_receipts
+            .lock()
+            .unwrap()
+            .is_empty());
+        state
+            .project_transaction_active
+            .store(false, Ordering::Release);
+        let ticket = begin("project-op:2:e1-lifecycle-1", "E1 no-op", "fixture:e1").unwrap();
+        let retry = begin("project-op:2:e1-lifecycle-1", "E1 no-op", "fixture:e1").unwrap();
+        assert_eq!(retry.transaction_id, ticket.transaction_id);
+        assert!(matches!(
+            query_project_transaction_for_window_label(
+                &state,
+                window_label,
+                ticket.client_operation_id.clone(),
+                ticket.shape_fingerprint.clone(),
+                "test_project_transaction".to_string(),
+                ticket.schema_version,
+                owner_id.to_string(),
+            )
+            .unwrap(),
+            Some(ProjectTransactionRecovery::Pending { .. })
+        ));
+        let conflicting_shape = canonical_project_transaction_shape(
+            "test_project_transaction",
+            "E1 different",
+            "fixture:e1",
+        );
+        assert!(begin_project_transaction_for_window_label(
+            &state,
+            window_label,
+            "E1 different".to_string(),
+            "fixture:e1".to_string(),
+            ticket.project_epoch,
+            ticket.project_revision,
+            owner_id.to_string(),
+            ticket.client_operation_id.clone(),
+            conflicting_shape,
+            "test_project_transaction".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .is_err());
+
+        let cancellation = cancel_project_transaction_for_window_label(
+            &state,
+            window_label,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            ticket.client_operation_id.clone(),
+            ticket.shape_fingerprint.clone(),
+            "test_project_transaction".to_string(),
+            ticket.schema_version,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(cancellation.history_status.undo_depth, 0);
+        let cancellation_retry = cancel_project_transaction_for_window_label(
+            &state,
+            window_label,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            ticket.client_operation_id.clone(),
+            ticket.shape_fingerprint.clone(),
+            "test_project_transaction".to_string(),
+            ticket.schema_version,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            cancellation_retry.history_status.history_generation,
+            cancellation.history_status.history_generation
+        );
+        assert!(matches!(
+            query_project_transaction_for_window_label(
+                &state,
+                window_label,
+                ticket.client_operation_id.clone(),
+                ticket.shape_fingerprint.clone(),
+                "test_project_transaction".to_string(),
+                ticket.schema_version,
+                owner_id.to_string(),
+            )
+            .unwrap(),
+            Some(ProjectTransactionRecovery::Cancelled { .. })
+        ));
+        acknowledge_project_transaction_for_window_label(
+            &state,
+            window_label,
+            ticket.client_operation_id.clone(),
+            ticket.shape_fingerprint.clone(),
+            "test_project_transaction".to_string(),
+            ticket.schema_version,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert!(query_project_transaction_for_window_label(
+            &state,
+            window_label,
+            ticket.client_operation_id.clone(),
+            ticket.shape_fingerprint.clone(),
+            "test_project_transaction".to_string(),
+            ticket.schema_version,
+            owner_id.to_string(),
+        )
+        .is_err());
+        for index in 0..2052 {
+            let operation_id = format!("project-op:{}:e1-capacity", index + 3);
+            let ticket = begin(&operation_id, "E1 capacity", "fixture:capacity").unwrap();
+            cancel_project_transaction_for_window_label(
+                &state,
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id.clone(),
+                ticket.shape_fingerprint.clone(),
+                "test_project_transaction".to_string(),
+                ticket.schema_version,
+                owner_id.to_string(),
+            )
+            .unwrap();
+            acknowledge_project_transaction_for_window_label(
+                &state,
+                window_label,
+                operation_id.clone(),
+                ticket.shape_fingerprint,
+                "test_project_transaction".to_string(),
+                ticket.schema_version,
+                owner_id.to_string(),
+            )
+            .unwrap();
+        }
+        assert!(begin("project-op:2:e1-lifecycle-1", "E1 no-op", "fixture:e1").is_err());
+    }
+
+    #[test]
+    fn project_transaction_commit_reply_loss_and_inflight_owner_rotation_fail_closed() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let window_label = "media-asset-a6";
+        let owner_id = MEDIA_ASSET_A6_OWNER;
+        let begin = |operation_id: &str, schema_version: u16| {
+            let (epoch, revision) = {
+                let coordinator = lock_project_coordinator(&state).unwrap();
+                (coordinator.epoch, coordinator.revision)
+            };
+            let label = "E1 commit recovery";
+            let coalesce = "fixture:e1-commit";
+            begin_project_transaction_for_window_label(
+                &state,
+                window_label,
+                label.to_string(),
+                coalesce.to_string(),
+                epoch,
+                revision,
+                owner_id.to_string(),
+                operation_id.to_string(),
+                canonical_project_transaction_shape("test_project_transaction", label, coalesce),
+                "test_project_transaction".to_string(),
+                schema_version,
+            )
+        };
+
+        assert!(begin(
+            "project-op:1:e1-future-schema",
+            PROJECT_TRANSACTION_SCHEMA_VERSION + 1,
+        )
+        .is_err());
+        let committed_ticket = begin(
+            "project-op:2:e1-commit-reply-loss",
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        let committed = commit_project_transaction_for_window_label(
+            &state,
+            window_label,
+            committed_ticket.transaction_id,
+            committed_ticket.project_epoch,
+            committed_ticket.client_operation_id.clone(),
+            committed_ticket.shape_fingerprint.clone(),
+            "test_project_transaction".to_string(),
+            committed_ticket.schema_version,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        let replay = commit_project_transaction_for_window_label(
+            &state,
+            window_label,
+            committed_ticket.transaction_id,
+            committed_ticket.project_epoch,
+            committed_ticket.client_operation_id.clone(),
+            committed_ticket.shape_fingerprint.clone(),
+            "test_project_transaction".to_string(),
+            committed_ticket.schema_version,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            replay.history_status.history_generation,
+            committed.history_status.history_generation,
+            "a lost Commit reply must return the exact terminal receipt without a second history change",
+        );
+        assert!(matches!(
+            query_project_transaction_for_window_label(
+                &state,
+                window_label,
+                committed_ticket.client_operation_id.clone(),
+                committed_ticket.shape_fingerprint.clone(),
+                "test_project_transaction".to_string(),
+                committed_ticket.schema_version,
+                owner_id.to_string(),
+            )
+            .unwrap(),
+            Some(ProjectTransactionRecovery::Committed { .. })
+        ));
+        acknowledge_project_transaction_for_window_label(
+            &state,
+            window_label,
+            committed_ticket.client_operation_id,
+            committed_ticket.shape_fingerprint,
+            "test_project_transaction".to_string(),
+            committed_ticket.schema_version,
+            owner_id.to_string(),
+        )
+        .unwrap();
+
+        let inflight_ticket = begin(
+            "project-op:3:e1-inflight-retirement",
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        let lane =
+            project_transaction_lane_for_operation(&state, &inflight_ticket.client_operation_id)
+                .unwrap();
+        let admitted = lane.admit().unwrap();
+        assert!(register_project_transaction_owner_for_window_label(
+            &state,
+            window_label,
+            "renderer:e1-successor".to_string(),
+        )
+        .is_err());
+        assert_eq!(
+            state
+                .project_transaction_owners
+                .lock()
+                .unwrap()
+                .get(window_label)
+                .map(String::as_str),
+            Some(owner_id),
+            "a failed retirement must not publish the successor owner",
+        );
+        drop(admitted);
+        register_project_transaction_owner_for_window_label(
+            &state,
+            window_label,
+            "renderer:e1-successor".to_string(),
+        )
+        .unwrap();
+        assert!(!state
+            .project_transaction_receipts
+            .lock()
+            .unwrap()
+            .contains_key(&inflight_ticket.client_operation_id));
+        assert!(!state
+            .project_transaction_lanes
+            .lock()
+            .unwrap()
+            .contains_key(&inflight_ticket.client_operation_id));
+        assert!(commit_project_transaction_for_window_label(
+            &state,
+            window_label,
+            inflight_ticket.transaction_id,
+            inflight_ticket.project_epoch,
+            inflight_ticket.client_operation_id,
+            inflight_ticket.shape_fingerprint,
+            "test_project_transaction".to_string(),
+            inflight_ticket.schema_version,
+            owner_id.to_string(),
+        )
+        .is_err());
+        assert!(
+            register_project_transaction_owner_for_window_label(
+                &state,
+                window_label,
+                owner_id.to_string(),
+            )
+            .is_err(),
+            "a same-label ABA cannot re-register the retired owner string"
+        );
+
+        let saturated = (0..MAX_PROJECT_TRANSACTION_RETIRED_OWNER_BINDINGS)
+            .map(|index| {
+                project_transaction_retired_owner_binding_key(
+                    &format!("renderer:retired-{index}"),
+                    "bounded-window",
+                )
+            })
+            .collect::<HashSet<_>>();
+        assert!(
+            preflight_project_transaction_owner_binding_retirement(
+                &saturated,
+                "renderer:retired-0",
+                "bounded-window",
+            )
+            .is_ok(),
+            "an already-recorded tombstone remains idempotent at capacity"
+        );
+        assert!(
+            preflight_project_transaction_owner_binding_retirement(
+                &saturated,
+                "renderer:new-at-capacity",
+                "bounded-window",
+            )
+            .is_err(),
+            "retired-owner capacity fails closed instead of evicting replay evidence"
+        );
+    }
+
+    #[test]
+    fn project_transaction_retirement_preserves_pane_owner_and_terminalizes_main_once() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        register_project_transaction_owner_for_window_label(
+            &state,
+            "pane-video",
+            "renderer:pane-video".to_string(),
+        )
+        .unwrap();
+        let begin_for = |window_label: &str, owner_id: &str, operation_id: &str| {
+            let (epoch, revision) = {
+                let coordinator = lock_project_coordinator(&state).unwrap();
+                (coordinator.epoch, coordinator.revision)
+            };
+            let label = format!("Retirement {window_label}");
+            let coalesce = format!("retirement:{window_label}");
+            begin_project_transaction_for_window_label(
+                &state,
+                window_label,
+                label.clone(),
+                coalesce.clone(),
+                epoch,
+                revision,
+                owner_id.to_string(),
+                operation_id.to_string(),
+                canonical_project_transaction_shape("retirement_test", &label, &coalesce),
+                "retirement_test".to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+            )
+        };
+
+        let pane_ticket =
+            begin_for("pane-video", "renderer:pane-video", "project-op:1:e1-pane").unwrap();
+        register_project_transaction_owner_for_window_label(
+            &state,
+            "media-asset-a6",
+            "renderer:main-reload".to_string(),
+        )
+        .unwrap();
+        assert!(state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .contains_key("pane-video"));
+        assert!(state
+            .project_transaction_lanes
+            .lock()
+            .unwrap()
+            .contains_key(&pane_ticket.client_operation_id));
+        cancel_project_transaction_for_window_label(
+            &state,
+            "pane-video",
+            pane_ticket.transaction_id,
+            pane_ticket.project_epoch,
+            pane_ticket.client_operation_id.clone(),
+            pane_ticket.shape_fingerprint.clone(),
+            "retirement_test".to_string(),
+            pane_ticket.schema_version,
+            "renderer:pane-video".to_string(),
+        )
+        .unwrap();
+
+        let main_ticket = begin_for(
+            "media-asset-a6",
+            "renderer:main-reload",
+            "project-op:2:e1-main",
+        )
+        .unwrap();
+        let old_request_id = state.next_output_lease_request_id.load(Ordering::Acquire);
+        state
+            .next_output_lease_request_id
+            .store(u64::MAX, Ordering::Release);
+        assert!(register_project_transaction_owner_for_window_label(
+            &state,
+            "media-asset-a6",
+            "renderer:main-reload-2".to_string(),
+        )
+        .is_err());
+        assert_eq!(
+            state
+                .project_transaction_owners
+                .lock()
+                .unwrap()
+                .get("media-asset-a6")
+                .map(String::as_str),
+            Some("renderer:main-reload")
+        );
+        state
+            .next_output_lease_request_id
+            .store(old_request_id, Ordering::Release);
+        register_project_transaction_owner_for_window_label(
+            &state,
+            "media-asset-a6",
+            "renderer:main-reload-2".to_string(),
+        )
+        .unwrap();
+        assert!(
+            state
+                .project_transaction_receipts
+                .lock()
+                .unwrap()
+                .get(&main_ticket.client_operation_id)
+                .is_none(),
+            "a dead renderer cannot acknowledge its terminal receipt, so retirement compacts it"
+        );
+        assert!(
+            state
+                .project_transaction_lanes
+                .lock()
+                .unwrap()
+                .get(&main_ticket.client_operation_id)
+                .is_none(),
+            "retirement must not leak an unreachable operation lane"
+        );
+        assert_eq!(
+            state.project_coordinator.lock().unwrap().history.undo.len(),
+            0
         );
     }
 
@@ -95442,11 +97319,18 @@ mod live_audio_input_tests {
                 83_211,
                 PendingProjectTransaction {
                     transaction_id: 83_211,
+                    client_operation_id: "test-unrelated".to_string(),
+                    shape_fingerprint: "test-unrelated-shape".to_string(),
+                    command_name: "test_command".to_string(),
+                    schema_version: PROJECT_TRANSACTION_SCHEMA_VERSION,
                     owner_id: "renderer:unrelated".to_string(),
+                    window_label: "main".to_string(),
+                    owner_incarnation: 1,
                     label: "Unrelated edit".to_string(),
                     coalesce_key: String::new(),
                     epoch: pending_before.epoch,
                     before: pending_before,
+                    closing: false,
                 },
             );
         harness
@@ -97094,9 +98978,13 @@ fn main() {
             project_callback_epoch: Arc::new(AtomicU64::new(0)),
             project_mapping_callback_epoch: Arc::new(AtomicU64::new(0)),
             project_transaction_active: Arc::new(AtomicBool::new(false)),
+            project_transaction_receipts: Mutex::new(HashMap::new()),
+            project_transaction_operation_highwaters: Mutex::new(HashMap::new()),
+            project_transaction_lanes: Mutex::new(HashMap::new()),
             project_transaction_owners: Mutex::new(HashMap::new()),
             project_transaction_owner_incarnations: Mutex::new(HashMap::new()),
             next_project_transaction_owner_incarnation: AtomicU64::new(0),
+            project_transaction_retired_owner_bindings: Mutex::new(HashSet::new()),
             project_transaction_owner_retirement_failures: Mutex::new(HashSet::new()),
             project_transaction_owner_retirement_failure_overflow: AtomicBool::new(false),
             project_transaction_owner_rotation: Mutex::new(()),
@@ -97119,8 +99007,9 @@ fn main() {
         .manage(control_plane_query_state)
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                let state = window.state::<AppState>();
                 if let Err(error) = handle_destroyed_window_authority_retirement(
-                    &window.state::<AppState>(),
+                    &state,
                     &window.state::<ControlPlaneQueryState>(),
                     window.label(),
                 ) {
@@ -97553,6 +99442,9 @@ fn main() {
             begin_project_transaction,
             commit_project_transaction,
             cancel_project_transaction,
+            query_project_transaction,
+            adopt_project_transaction,
+            acknowledge_project_transaction,
             register_project_transaction_owner,
             clear_project_history,
             undo_project_transaction,
