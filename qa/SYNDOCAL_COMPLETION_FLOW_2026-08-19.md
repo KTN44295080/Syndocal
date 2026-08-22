@@ -475,7 +475,7 @@ evidence ledgers, clean reviewed commit, and pushed handoff.
   liveness, renderer retirement, and stale delayed Commit/Cancel rejection.
 - [x] E2 authority bundle/generation consistency across every project mutation.
 - [x] E3 recovery durable handshake and crash/reply-loss behavior.
-- [ ] E4 Save/Save As/template/backup reservation, journal, mapping flush, atomic
+- [x] E4 Save/Save As/template/backup reservation, journal, mapping flush, atomic
   replacement, and truthful terminal receipt.
 - [x] D1 machine/session cache read purity.
 - [ ] D2 atomic PATCH/GDTF Repair with whole-batch prevalidation, Published ACK,
@@ -1258,7 +1258,26 @@ the production E4 controller/checker, exact 415 frontend invokes, TypeScript/Vit
 no-default Cargo check, format/diff checks, and zero first-party warnings in every
 modified configuration run.
 
-E4 remains unchecked until synchronized alpha.6 release metadata, full release
-gates, exact-path native build/launch, and scratch Save/Save As/template/backup
-operation have been recorded. The accepted Windows denominator therefore remains
-17/71 at this automated checkpoint; AI4 remains blocked.
+The synchronized alpha.6 native acceptance is now complete. After stopping only
+the exact checkout executable, `pnpm --dir app tauri build --no-bundle` passed in
+1m50s and produced the 57,085,440-byte executable SHA-256
+`687E7BFD8B9A74C7A3F91493C2FFAF56D97B60B32B0D0EDF6D45C2209EA563F7`, with
+ProductVersion/FileVersion `1.2.0-alpha.6`. Exactly one responsive, maximized
+`Syndocal` window was present.
+
+The first alpha.6 UI pass correctly exposed an invalid native User Template
+terminal DTO. Commit `d707872` restricts project authority to successful
+Save/Save As receipts; User Template and Backup receipts now remain non-project
+receipts through direct and restart-query paths. The strengthened Rust/frontend
+matrix and independent review are green at P0/P1/P2 zero. The rebuilt executable
+then passed scratch Save, Save As, User Template, and autosave Backup. Evidence is
+rooted at `C:\TEMP\syndocal-e4-qa-alpha6`: `qa-final-save-as.sdc`,
+`qa-template-fixed.sdctemplate`, and managed backup
+`backup-1787421898035.json` (SHA-256
+`01CCCBC4F99ECCC038FB80788ECBA774CDC2F1E6E1E9DBA65C7425E8A98C0EC3`), whose
+source is `qa-final-save-as.sdc` and whose payload contains the post-save
+`QA Backup` fixture group.
+
+E4 is accepted for the current Windows tranche. The accepted Windows denominator
+is now 18/71 (25.4%). This does not complete the product; later roadmap and
+current-PC hardware/ASIO/soak gates remain open.

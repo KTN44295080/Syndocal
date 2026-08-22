@@ -2214,3 +2214,26 @@ The product metadata is advancing to `1.2.0-alpha.6`, and the E4 checker is bein
 added to cross-platform CI. E4 is not checked complete until the alpha.6 native
 build, one responsive maximized window, and scratch Save/Save As/template/backup
 operation are recorded. AI4 remains blocked until that acceptance finishes.
+
+## 34. 2026-08-23 alpha.6 E4 native acceptance
+
+E4 is accepted for the current Windows tranche. The exact-path native build
+passed with executable SHA-256
+`687E7BFD8B9A74C7A3F91493C2FFAF56D97B60B32B0D0EDF6D45C2209EA563F7`, size
+57,085,440 bytes, and synchronized ProductVersion/FileVersion
+`1.2.0-alpha.6`. Launch verification found exactly one responsive, maximized
+`Syndocal` window.
+
+The first native pass found a real contract defect: successful User Template
+receipts carried project authority and were truthfully rejected by the frontend
+parser. Commit `d707872` fixes the native response and adds direct/restart proof
+that User Template and Backup receipts never expose project authority while Save
+and Save As retain it. Independent review returned P0/P1/P2 zero.
+
+The rebuilt executable then passed scratch Save, Save As, User Template, and
+autosave Backup. The current autosave is
+`backup-1787421898035.json`, SHA-256
+`01CCCBC4F99ECCC038FB80788ECBA774CDC2F1E6E1E9DBA65C7425E8A98C0EC3`; it names
+`qa-final-save-as.sdc` as source and contains the `QA Backup` fixture group.
+The broader current-Windows denominator is 18/71 (25.4%). This acceptance does
+not close remaining show-core hardware, ASIO, security, or soak work.

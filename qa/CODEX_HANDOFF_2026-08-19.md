@@ -1496,3 +1496,35 @@ and main
   build `1.2.0-alpha.6`, launch exactly one responsive maximized window, and use a
   scratch project for Save, Save As, template, and backup verification. E4 remains
   unchecked and the denominator remains 17/71 until those steps pass.
+
+## 2026-08-23 alpha.6 E4 native acceptance handoff
+
+- Branch/build source: `codex/syndocal-v1.2` / `d707872761e344805ac51550a38d9ce3c416d8d6`.
+- Immediately before build, only the running process whose resolved path exactly
+  matched this checkout's `target/release/syndocal.exe` was stopped. The native
+  command `pnpm --dir app tauri build --no-bundle` passed in 1m50s.
+- Artifact: `target/release/syndocal.exe`, 57,085,440 bytes, ProductVersion and
+  FileVersion `1.2.0-alpha.6`, SHA-256
+  `687E7BFD8B9A74C7A3F91493C2FFAF56D97B60B32B0D0EDF6D45C2209EA563F7`.
+- Native launch/UI: exactly one responsive `Syndocal` window, maximized at
+  1920x1032. Save and Save As succeeded against
+  `C:\TEMP\syndocal-e4-qa-alpha6\phase1-mini-show.sdc` and
+  `qa-final-save-as.sdc`.
+- The initial User Template operation exposed an invalid native terminal DTO.
+  Commit `d707872` makes User Template/Backup receipts authority-free while
+  preserving Save/Save As authority. The direct/restart Rust proof, canonical
+  frontend positive/negative cases, focused gates, warning-zero checks, and
+  independent P0/P1/P2-zero review all passed before rebuilding.
+- The rebuilt UI saved
+  `C:\TEMP\syndocal-e4-qa-alpha6\qa-template-fixed.sdctemplate` (SHA-256
+  `53F0C03BE45CA55E9F9469B4819366C1AE118D75B510E78EED482C6468F6783`) without a
+  malformed receipt. Creating the `QA Backup` fixture group dirtied the project;
+  after the autosave interval the UI listed `qa-final-save-as.sdc · autosave`.
+  The managed file
+  `C:\Users\kouty\AppData\Local\jp.seraf.ktn.syndocal\project-backups\backup-1787421898035.json`
+  is 36,053 bytes, SHA-256
+  `01CCCBC4F99ECCC038FB80788ECBA774CDC2F1E6E1E9DBA65C7425E8A98C0EC3`, names the
+  exact source path, and contains `QA Backup`.
+- E4 is accepted for this Windows tranche; the broader denominator is 18/71
+  (25.4%). The product is not complete. Current-PC ASIO/hardware/security/soak and
+  later roadmap gates remain.
