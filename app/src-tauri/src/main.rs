@@ -12740,9 +12740,41 @@ fn pending_timeline_follow_audio_settlement_ack_from_runtime(
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TimelineAudioPrepareFault {
+    BudgetExhausted(String),
+    Ordinary(String),
+}
+
+impl TimelineAudioPrepareFault {
+    fn budget(message: impl Into<String>) -> Self {
+        Self::BudgetExhausted(message.into())
+    }
+
+    fn ordinary(message: impl Into<String>) -> Self {
+        Self::Ordinary(message.into())
+    }
+}
+
+impl std::fmt::Display for TimelineAudioPrepareFault {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BudgetExhausted(message) | Self::Ordinary(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
+}
+
+impl From<String> for TimelineAudioPrepareFault {
+    fn from(message: String) -> Self {
+        Self::Ordinary(message)
+    }
+}
+
 enum TimelineAudioCommitAttempt {
     Busy,
-    Completed(Result<(), String>),
+    Completed(Result<(), TimelineAudioPrepareFault>),
 }
 
 #[derive(Debug, Default)]
@@ -12758,7 +12790,7 @@ fn sync_timeline_audio_without_blocking_playback_lock(
     commit_state: &Arc<Mutex<TimelineAudioPrepareCommitState>>,
     mut before_prepare: impl FnMut(),
     mut before_commit_lock: impl FnMut(),
-) -> Result<engine::TimelineAudioProjectionAuthority, String> {
+) -> Result<engine::TimelineAudioProjectionAuthority, TimelineAudioPrepareFault> {
     let transaction_deadline = Instant::now() + TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET;
     let mut plan = audio
         .lock()
@@ -12781,7 +12813,9 @@ fn sync_timeline_audio_without_blocking_playback_lock(
         for seek in std::mem::take(&mut plan.seeks) {
             seek.sink.stop();
         }
-        return Err("Timeline audio source projection changed before preparation".to_string());
+        return Err(TimelineAudioPrepareFault::ordinary(
+            "Timeline audio source projection changed before preparation",
+        ));
     }
 
     let mut prepared_output = None;
@@ -12795,16 +12829,22 @@ fn sync_timeline_audio_without_blocking_playback_lock(
         prepared_output = Some(output);
         Some(mixer)
     };
-    let mut prepared_clips = Vec::with_capacity(plan.prepares.len());
+    let mut prepared_clips: Vec<
+        Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>,
+    > = Vec::with_capacity(plan.prepares.len());
     if let Some(mixer) = mixer.as_ref() {
         for request in std::mem::take(&mut plan.prepares) {
             if Instant::now() >= transaction_deadline {
-                prepared_clips.push(Err((
-                    request,
-                    "Timeline audio decoder preparation transaction exceeded its budget"
-                        .to_string(),
-                )));
-                continue;
+                drop(request);
+                for prepared in prepared_clips.into_iter().flatten() {
+                    prepared.sink.stop();
+                }
+                for seek in std::mem::take(&mut plan.seeks) {
+                    seek.sink.stop();
+                }
+                return Err(TimelineAudioPrepareFault::budget(
+                    "Timeline audio decoder preparation transaction exceeded its budget",
+                ));
             }
             if !authority_is_current() {
                 prepared_clips.push(Err((
@@ -12848,10 +12888,10 @@ fn sync_timeline_audio_without_blocking_playback_lock(
             for (seek, _) in seek_results.take().unwrap_or_default() {
                 seek.sink.stop();
             }
-            return Err(
+            return Err(TimelineAudioPrepareFault::budget(
                 "Timeline audio position did not stabilize within the decoder preparation budget"
                     .to_string(),
-            );
+            ));
         }
         prepared_clips =
             rebase_prepared_timeline_audio_clips(&current.timeline_audio, prepared_clips);
@@ -12864,7 +12904,9 @@ fn sync_timeline_audio_without_blocking_playback_lock(
             for (seek, _) in seek_results.take().unwrap_or_default() {
                 seek.sink.stop();
             }
-            return Err("Timeline audio source projection changed before sink install".to_string());
+            return Err(TimelineAudioPrepareFault::ordinary(
+                "Timeline audio source projection changed before sink install",
+            ));
         }
         if latest.timeline_audio.publication_generation != timeline.publication_generation {
             for prepared in prepared_clips.into_iter().flatten() {
@@ -12873,7 +12915,9 @@ fn sync_timeline_audio_without_blocking_playback_lock(
             for (seek, _) in seek_results.take().unwrap_or_default() {
                 seek.sink.stop();
             }
-            return Err("Timeline audio transport changed before sink install".to_string());
+            return Err(TimelineAudioPrepareFault::ordinary(
+                "Timeline audio transport changed before sink install",
+            ));
         }
         if prepared_timeline_audio_clips_need_rebase(&latest.timeline_audio, &prepared_clips) {
             current = latest;
@@ -12886,22 +12930,36 @@ fn sync_timeline_audio_without_blocking_playback_lock(
                     Ok(state) => state,
                     Err(_) => {
                         return TimelineAudioCommitAttempt::Completed(Err(
-                            "Timeline audio prepare commit fence was poisoned".to_string(),
+                            TimelineAudioPrepareFault::ordinary(
+                                "Timeline audio prepare commit fence was poisoned",
+                            ),
                         ));
                     }
                 };
                 if commit_state.cancelled {
                     return TimelineAudioCommitAttempt::Completed(Err(
-                        "Timeline audio prepare was cancelled before sink install".to_string(),
+                        TimelineAudioPrepareFault::ordinary(
+                            "Timeline audio prepare was cancelled before sink install",
+                        ),
                     ));
                 }
                 match audio.try_lock() {
                     Ok(mut playback) => {
                         if Instant::now() > transaction_deadline {
+                            for prepared in std::mem::take(&mut prepared_clips)
+                                .into_iter()
+                                .flatten()
+                            {
+                                prepared.sink.stop();
+                            }
+                            for (seek, _) in seek_results.take().unwrap_or_default() {
+                                seek.sink.stop();
+                            }
                             return TimelineAudioCommitAttempt::Completed(Err(
-                            "Timeline audio decoder preparation transaction exceeded its budget"
-                                .to_string(),
-                        ));
+                                TimelineAudioPrepareFault::budget(
+                                    "Timeline audio decoder preparation transaction exceeded its budget",
+                                ),
+                            ));
                         }
                         // This state lock is the exact timeout/install
                         // linearization point. Once finalization begins the
@@ -12922,12 +12980,14 @@ fn sync_timeline_audio_without_blocking_playback_lock(
                                 seek_results
                                     .take()
                                     .expect("Timeline audio seeks commit once"),
-                            ),
+                            ).map_err(TimelineAudioPrepareFault::ordinary),
                         )
                     }
                     Err(TryLockError::WouldBlock) => TimelineAudioCommitAttempt::Busy,
                     Err(TryLockError::Poisoned(_)) => TimelineAudioCommitAttempt::Completed(Err(
-                        "Timeline audio playback lock was poisoned".to_string(),
+                        TimelineAudioPrepareFault::ordinary(
+                            "Timeline audio playback lock was poisoned",
+                        ),
                     )),
                 }
             });
@@ -12940,7 +13000,7 @@ fn sync_timeline_audio_without_blocking_playback_lock(
                 current = engine.video_audio_runtime_snapshot();
                 std::thread::sleep(Duration::from_millis(2));
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(TimelineAudioPrepareFault::ordinary(error)),
         }
     }
 }
@@ -12970,9 +13030,10 @@ struct TimelineAudioPrepareContext {
 struct TimelineAudioPrepareJob {
     context: TimelineAudioPrepareContext,
     started_at: Instant,
-    receiver: mpsc::Receiver<Result<engine::TimelineAudioProjectionAuthority, String>>,
+    receiver:
+        mpsc::Receiver<Result<engine::TimelineAudioProjectionAuthority, TimelineAudioPrepareFault>>,
     worker: Option<std::thread::JoinHandle<()>>,
-    result: Option<Result<engine::TimelineAudioProjectionAuthority, String>>,
+    result: Option<Result<engine::TimelineAudioProjectionAuthority, TimelineAudioPrepareFault>>,
     timed_out: bool,
     commit_state: Arc<Mutex<TimelineAudioPrepareCommitState>>,
 }
@@ -13050,8 +13111,9 @@ impl TimelineAudioPrepareCoordinator {
                     Ok(result) => job.result = Some(result),
                     Err(mpsc::TryRecvError::Empty) => {}
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        job.result =
-                            Some(Err("Timeline audio prepare worker disconnected".to_string()));
+                        job.result = Some(Err(TimelineAudioPrepareFault::ordinary(
+                            "Timeline audio prepare worker disconnected",
+                        )));
                     }
                 }
             }
@@ -13077,21 +13139,25 @@ impl TimelineAudioPrepareCoordinator {
                 let result = job
                     .result
                     .take()
-                    .expect("finished prepare job carries one result")
-                    .map(|_| ());
-                if result.as_ref().is_err_and(|error| {
-                    error.contains("preparation budget")
-                        || error.contains("decoder preparation budget")
-                }) {
-                    self.blocked = Some(job.context.fingerprint.clone());
-                    return TimelineAudioPreparePoll::TimedOut {
+                    .expect("finished prepare job carries one result");
+                return match result {
+                    Ok(_) => TimelineAudioPreparePoll::Completed {
                         context: job.context,
-                        error: result.unwrap_err(),
-                    };
-                }
-                return TimelineAudioPreparePoll::Completed {
-                    context: job.context,
-                    result,
+                        result: Ok(()),
+                    },
+                    Err(TimelineAudioPrepareFault::BudgetExhausted(error)) => {
+                        self.blocked = Some(job.context.fingerprint.clone());
+                        TimelineAudioPreparePoll::TimedOut {
+                            context: job.context,
+                            error,
+                        }
+                    }
+                    Err(TimelineAudioPrepareFault::Ordinary(error)) => {
+                        TimelineAudioPreparePoll::Completed {
+                            context: job.context,
+                            result: Err(error),
+                        }
+                    }
                 };
             }
             if !job.timed_out
@@ -13100,9 +13166,9 @@ impl TimelineAudioPrepareCoordinator {
                 let mut commit_state = match job.commit_state.lock() {
                     Ok(state) => state,
                     Err(_) => {
-                        job.result = Some(Err(
-                            "Timeline audio prepare commit fence was poisoned".to_string()
-                        ));
+                        job.result = Some(Err(TimelineAudioPrepareFault::ordinary(
+                            "Timeline audio prepare commit fence was poisoned",
+                        )));
                         return TimelineAudioPreparePoll::Pending;
                     }
                 };
@@ -91643,7 +91709,7 @@ mod media_audio_playback_tests {
 
     fn completed_timeline_audio_prepare_job(
         context: TimelineAudioPrepareContext,
-        result: Result<engine::TimelineAudioProjectionAuthority, String>,
+        result: Result<engine::TimelineAudioProjectionAuthority, TimelineAudioPrepareFault>,
     ) -> TimelineAudioPrepareJob {
         let (sender, receiver) = mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || {
@@ -91767,7 +91833,9 @@ mod media_audio_playback_tests {
         }
         release_tx.send(()).unwrap();
         let error = worker.join().unwrap().unwrap_err();
-        assert!(error.contains("output device changed during preparation"));
+        assert!(error
+            .to_string()
+            .contains("output device changed during preparation"));
         let playback = audio.lock().unwrap();
         assert!(playback.timeline_sinks.is_empty());
         assert_eq!(playback.timeline_start_attempt_count, 0);
@@ -91992,7 +92060,10 @@ mod media_audio_playback_tests {
         )
         .unwrap_err();
         contention.take().unwrap().join().unwrap();
-        assert!(error.contains("preparation budget"));
+        assert!(matches!(
+            error,
+            TimelineAudioPrepareFault::BudgetExhausted(_)
+        ));
         assert!(started.elapsed() < Duration::from_millis(1_100));
         let playback = audio.lock().unwrap();
         assert_eq!(playback.timeline_start_attempt_count, 2);
@@ -92092,6 +92163,83 @@ mod media_audio_playback_tests {
     }
 
     #[test]
+    fn timeline_audio_internal_budget_fault_blocks_exact_fingerprint_without_respawn() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        let hook_calls = Arc::new(AtomicU64::new(0));
+        let worker_hook_calls = Arc::clone(&hook_calls);
+        let mut coordinator = TimelineAudioPrepareCoordinator {
+            before_commit_lock: Some(Arc::new(move || {
+                if worker_hook_calls.fetch_add(1, Ordering::AcqRel) == 0 {
+                    std::thread::sleep(
+                        TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET + Duration::from_millis(20),
+                    );
+                }
+            })),
+            ..TimelineAudioPrepareCoordinator::default()
+        };
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::Pending
+        ));
+        let finish_deadline = Instant::now() + Duration::from_secs(2);
+        while !coordinator
+            .active
+            .as_ref()
+            .and_then(|job| job.worker.as_ref())
+            .is_some_and(|worker| worker.is_finished())
+        {
+            assert!(Instant::now() < finish_deadline);
+            std::thread::yield_now();
+        }
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::TimedOut { .. }
+        ));
+        assert!(coordinator.active.is_none());
+        for _ in 0..100 {
+            assert!(matches!(
+                coordinator.poll_or_spawn(&engine, &audio, &timeline),
+                TimelineAudioPreparePoll::Quarantined
+            ));
+        }
+        assert_eq!(coordinator.spawn_count, 1);
+        assert_eq!(hook_calls.load(Ordering::Acquire), 1);
+
+        {
+            let mut playback = audio.lock().unwrap();
+            playback.audio_device_generation =
+                playback.audio_device_generation.checked_add(1).unwrap();
+            playback.requested_device_name = Some("Post-budget output".to_string());
+        }
+        let rotated = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &rotated),
+            TimelineAudioPreparePoll::Pending
+        ));
+        assert_eq!(coordinator.spawn_count, 2);
+        let recovery_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match coordinator.poll_or_spawn(&engine, &audio, &rotated) {
+                TimelineAudioPreparePoll::Completed { result, .. } => {
+                    result.unwrap();
+                    break;
+                }
+                TimelineAudioPreparePoll::Pending => {
+                    assert!(Instant::now() < recovery_deadline);
+                    std::thread::yield_now();
+                }
+                other => panic!("rotated output generation must recover exactly once: {other:?}"),
+            }
+        }
+        assert_eq!(hook_calls.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
     fn timeline_audio_prepare_outcomes_never_cross_follow_contexts() {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
@@ -92104,7 +92252,7 @@ mod media_audio_playback_tests {
 
         for result in [
             Ok(current.fingerprint.authority),
-            Err("captured A failed".to_string()),
+            Err(TimelineAudioPrepareFault::ordinary("captured A failed")),
         ] {
             let mut captured_a = current.clone();
             captured_a.follow.generation = captured_a.follow.generation.saturating_add(1);
@@ -92431,7 +92579,7 @@ mod media_audio_playback_tests {
             || engine.set_timeline_audio_master(0, true).unwrap(),
         )
         .unwrap_err();
-        assert!(error.contains("changed before sink install"));
+        assert!(error.to_string().contains("changed before sink install"));
         assert_ne!(
             engine
                 .video_audio_runtime_snapshot()
@@ -92474,7 +92622,9 @@ mod media_audio_playback_tests {
             },
         )
         .unwrap_err();
-        assert!(error.contains("transport changed before sink install"));
+        assert!(error
+            .to_string()
+            .contains("transport changed before sink install"));
         let current = engine.video_audio_runtime_snapshot().timeline_audio;
         assert_eq!(current.source_projection_authority, authority);
         assert_ne!(current.publication_generation, publication_generation);
@@ -92518,7 +92668,9 @@ mod media_audio_playback_tests {
             },
         )
         .unwrap_err();
-        assert!(error.contains("transport changed before sink install"));
+        assert!(error
+            .to_string()
+            .contains("transport changed before sink install"));
         let current = engine.video_audio_runtime_snapshot().timeline_audio;
         assert_eq!(current.source_projection_authority, authority);
         assert_ne!(current.publication_generation, publication_generation);
