@@ -221,6 +221,14 @@ import { bundledLibraryProfileRequest } from "./bundledLibrary";
 import { confirmCueRemoval, confirmDestructiveAction } from "./destructiveActions";
 import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSync";
 import {
+  createPatchRepairSingleflight,
+  fixturePatchIdsAreExact,
+  publishedCommandRecoveryDisposition,
+  projectTransactionCommandResultIsWellFormed,
+  waitForPublishedCommandRecovery,
+  type PatchRepairTransactionCommand,
+} from "./patchTransactionD2";
+import {
   createTimelineCueAudioSettingsQueue,
   createTimelineCueAudioStatusRequestGate,
   type TimelineCueAudioStatusFence,
@@ -341,6 +349,9 @@ import type {
   ProjectFile,
   ProjectHistoryStatus,
   ProjectHistoryMutationResult,
+  ProjectTransactionCommandResult,
+  ProjectTransactionPatchCommandResult,
+  ProjectTransactionRepairFixtureProfileCommandResult,
   ProjectTransactionRecovery,
   ProjectTransactionTicket,
   ProjectHistoryNavigationResult,
@@ -884,7 +895,6 @@ const projectMutationCommands = new Set([
   "remove_timeline_audio_clip",
   "set_timeline_audio_master",
   "set_timeline_metronome",
-  "patch_fixture",
   "patch_fixtures",
   "remove_fixture",
   "repair_fixture_profile",
@@ -1462,12 +1472,44 @@ const invoke = async <T,>(
     // Backend mutation commands may opt into server-authoritative transaction
     // ownership. Tauri ignores unused object fields for legacy commands, while
     // newly hardened commands reject raw/direct IPC without this exact ticket.
-    const result = await tauriInvoke<T>(command, {
+    const ticketedArgs = {
       ...commandArgs,
       projectTransactionId: transaction.transaction_id,
       expectedEpoch: transaction.project_epoch,
       ownerId: projectTransactionOwnerId,
-    });
+    };
+    const publishedCommand: PatchRepairTransactionCommand | null = command === "patch_fixtures"
+      ? command
+      : command === "repair_fixture_profile"
+        ? command
+        : null;
+    let result: T;
+    try {
+      const replied = await tauriInvoke<T>(command, ticketedArgs);
+      if (publishedCommand && !projectTransactionCommandResultIsWellFormed(replied, publishedCommand, commandArgs)) {
+        throw new Error(`${publishedCommand} returned a malformed published-command receipt.`);
+      }
+      result = replied;
+    } catch (commandError) {
+      if (!publishedCommand) throw commandError;
+      const recovered = await recoverPublishedProjectTransactionCommandResult(
+        transactionIdentity,
+        publishedCommand,
+        commandArgs,
+      );
+      const disposition = publishedCommandRecoveryDisposition(recovered);
+      if (disposition === "commit" && recovered.kind === "published") {
+        result = recovered.result as T;
+      } else if (disposition === "hold") {
+        // A command can finish publishing after its Tauri reply is lost.  No
+        // cancel/replay is safe until the backend's receipt says otherwise.
+        throw recovered.kind === "indeterminate"
+          ? new ProjectTransactionPublicationIndeterminateError(publishedCommand, recovered.error)
+          : new ProjectTransactionPublicationUnconfirmedError(publishedCommand);
+      } else {
+        throw commandError;
+      }
+    }
     let mutation: ProjectHistoryMutationResult;
     try {
       mutation = await tauriInvoke<ProjectHistoryMutationResult>("commit_project_transaction", {
@@ -1488,7 +1530,10 @@ const invoke = async <T,>(
     await acknowledgeProjectTransaction(transactionIdentity).catch(() => undefined);
     return result;
   } catch (error) {
-    await cancelOpenedProjectTransaction();
+    if (!(error instanceof ProjectTransactionPublicationUnconfirmedError)
+      && !(error instanceof ProjectTransactionPublicationIndeterminateError)) {
+      await cancelOpenedProjectTransaction();
+    }
     throw error;
   }
 };
@@ -1552,6 +1597,20 @@ type ViewportSceneMatrixBankMoveHistoryEntry = {
   afterCueLists?: CueListSummary[];
   operation?: "move" | "reorder" | "delete";
 };
+
+class ProjectTransactionPublicationUnconfirmedError extends Error {
+  constructor(command: "patch_fixtures" | "repair_fixture_profile") {
+    super(`${command} may still be publishing; its terminal receipt was not confirmed. Do not retry yet.`);
+    this.name = "ProjectTransactionPublicationUnconfirmedError";
+  }
+}
+
+class ProjectTransactionPublicationIndeterminateError extends Error {
+  constructor(command: "patch_fixtures" | "repair_fixture_profile", detail: string) {
+    super(`${command} publication is indeterminate; restart is required before retrying. ${detail}`);
+    this.name = "ProjectTransactionPublicationIndeterminateError";
+  }
+}
 
 
 interface LiveAudioInputLevels {
@@ -1978,6 +2037,26 @@ const acknowledgeProjectTransaction = async (
   identity: ProjectTransactionIdentity,
 ) => tauriInvoke<void>("acknowledge_project_transaction", identity);
 
+type PublishedProjectTransactionCommandRecovery =
+  | { kind: "published"; result: ProjectTransactionCommandResult }
+  | { kind: "not_published" }
+  | { kind: "indeterminate"; error: string }
+  | { kind: "unconfirmed" };
+
+const recoverPublishedProjectTransactionCommandResult = async (
+  identity: ProjectTransactionIdentity,
+  command: "patch_fixtures" | "repair_fixture_profile",
+  commandArgs: Record<string, unknown>,
+): Promise<PublishedProjectTransactionCommandRecovery> => {
+  const decision = await waitForPublishedCommandRecovery(
+    () => queryProjectTransactionRecovery(identity),
+    command,
+    commandArgs,
+    (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds)),
+  );
+  return decision;
+};
+
 const recoverProjectTransactionBegin = async (
   identity: ProjectTransactionIdentity,
 ): Promise<ProjectTransactionRecovery | null> => {
@@ -2240,6 +2319,29 @@ export default function App() {
   const [customWorkbenchOpen, setCustomWorkbenchOpen] = createSignal(false);
   // #63: patched-fixture profile health (former catalog repair affordance).
   const [patchProfileHealth, setPatchProfileHealth] = createSignal<FixtureProfileHealthSummary[]>([]);
+  const [patchRepairOperationBusy, setPatchRepairOperationBusy] = createSignal(false);
+  const [patchRepairRestartRequired, setPatchRepairRestartRequired] = createSignal(false);
+  const patchRepairOperationLane = createPatchRepairSingleflight(setPatchRepairOperationBusy);
+  const beginPatchRepairOperation = () => {
+    if (!patchRepairOperationLane.begin()) {
+      setMessage(patchRepairRestartRequired()
+        ? "PATCH or profile repair is indeterminate; restart Syndocal before retrying."
+        : "PATCH or profile repair is already applying; wait for its terminal result.");
+      return false;
+    }
+    return true;
+  };
+  const retainPatchRepairIntentIfIndeterminate = (error: unknown) => {
+    if (!(error instanceof ProjectTransactionPublicationIndeterminateError)) return false;
+    // The backend process latch is the source of truth. Keep this renderer's
+    // operation lane occupied so it cannot create a new ticket before the
+    // required native restart resets the engine/runtime ambiguity.
+    setPatchRepairRestartRequired(true);
+    return true;
+  };
+  const finishPatchRepairOperation = () => {
+    if (!patchRepairRestartRequired()) patchRepairOperationLane.finish();
+  };
   const [recentPatchProfiles, setRecentPatchProfiles] = createSignal<PatchRecentProfileEntry[]>([]);
   createEffect(() => {
     const loaded = profile();
@@ -2645,6 +2747,14 @@ export default function App() {
   const selectedMediaLibraryAsset = () =>
     snapshot().video.media_assets.find((asset) => asset.id === selectedMediaLibraryAssetId()) ?? null;
   const [timelineUpperHost, setTimelineUpperHost] = createSignal<HTMLDivElement>();
+  const [timelinePaneExpanded, setTimelinePaneExpanded] = createSignal(false);
+  const timelinePaneActionLabel = () =>
+    timelinePaneExpanded() ? "Restore Timeline pane (Esc)" : "Expand Timeline pane";
+  createEffect(() => {
+    if (workspaceTab() !== "control" || controlMode() !== "live") {
+      setTimelinePaneExpanded(false);
+    }
+  });
   // Authored bank selection is shared by Edit and Control. Runtime transport
   // is a separate signal because it must never become project snapshot state.
   const [selectedVideoClipSlotLayerId, setSelectedVideoClipSlotLayerId] = createSignal<number | null>(null);
@@ -4718,7 +4828,7 @@ export default function App() {
       window.dispatchEvent(
         new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: recovered }),
       );
-      setMessage("Recovered an interrupted edit from the previous application session. Undo is available.");
+      setMessage("Recovered a prior project edit. Undo is available.");
     });
     void projectTransactionOwnerRegistration.catch((error) => {
       setMessage(`Interrupted edit recovery failed: ${String(error)}`);
@@ -11600,7 +11710,36 @@ export default function App() {
     }
   };
 
+  const invokePatchFixtures = async (
+    requests: PatchFixtureRequest[],
+    profiles: FixtureProfileSummary[],
+  ): Promise<number[]> => {
+    const result = await invoke<ProjectTransactionPatchCommandResult>("patch_fixtures", { requests, profiles });
+    if (!fixturePatchIdsAreExact(result.fixture_ids, requests.length)) {
+      throw new Error("PATCH returned a malformed published-command receipt.");
+    }
+    return result.fixture_ids;
+  };
+
+  const invokeFixtureProfileRepair = async (
+    fixtureId: number,
+    armedProfile: FixtureProfileSummary,
+    modeName: string | null,
+  ): Promise<ProjectTransactionRepairFixtureProfileCommandResult> => {
+    const result = await invoke<ProjectTransactionRepairFixtureProfileCommandResult>("repair_fixture_profile", {
+      fixtureId,
+      profilePath: armedProfile.source_path,
+      modeName,
+      profile: armedProfile,
+    });
+    if (result.fixture_id !== fixtureId || !Number.isSafeInteger(result.fixture_id) || result.fixture_id <= 0) {
+      throw new Error("Profile Repair returned a malformed published-command receipt.");
+    }
+    return result;
+  };
+
   const duplicateFixture = async (fixture: PatchedFixtureSummary) => {
+    if (!beginPatchRepairOperation()) return;
     try {
       const footprint = Math.max(1, fixtureFootprint(fixture));
       const occupiedRanges = buildOccupiedDmxRanges(snapshot().fixtures);
@@ -11624,7 +11763,7 @@ export default function App() {
         },
         rotation: { ...fixture.rotation },
       };
-      const fixtureIds = await invoke<number[]>("patch_fixtures", { requests: [request], profiles: [imported] });
+      const fixtureIds = await invokePatchFixtures([request], [imported]);
       const fixtureId = fixtureIds[0];
       if (fixtureId === undefined) {
         setMessage("Fixture duplicate did not return a fixture id.");
@@ -11655,7 +11794,10 @@ export default function App() {
       );
       await refreshSnapshot();
     } catch (error) {
+      retainPatchRepairIntentIfIndeterminate(error);
       setMessage(String(error));
+    } finally {
+      finishPatchRepairOperation();
     }
   };
 
@@ -11679,6 +11821,7 @@ export default function App() {
     const requests: PatchFixtureRequest[] = [];
     const profiles: FixtureProfileSummary[] = [];
 
+    if (!beginPatchRepairOperation()) return;
     try {
       for (const fixture of fixtures) {
         const imported = await invoke<FixtureProfileSummary>("use_fixture_profile", { fixtureId: fixture.id });
@@ -11712,12 +11855,7 @@ export default function App() {
         });
       }
 
-      const fixtureIds = await invoke<number[]>("patch_fixtures", { requests, profiles });
-      if (fixtureIds.length !== requests.length) {
-        setMessage(`Fixture duplicate returned ${fixtureIds.length}/${requests.length} fixture id(s).`);
-        await refreshSnapshot();
-        return;
-      }
+      const fixtureIds = await invokePatchFixtures(requests, profiles);
 
       const nextFaderValues: Record<string, number> = {};
       for (const [index, fixtureId] of fixtureIds.entries()) {
@@ -11752,7 +11890,10 @@ export default function App() {
       );
       await refreshSnapshot();
     } catch (error) {
+      retainPatchRepairIntentIfIndeterminate(error);
       setMessage(String(error));
+    } finally {
+      finishPatchRepairOperation();
     }
   };
 
@@ -11798,13 +11939,14 @@ export default function App() {
       };
     });
 
+    if (!beginPatchRepairOperation()) return false;
     try {
       const fixtureIds = viewportFixture === "patch"
         ? requests.map((request, index) => Math.max(0, ...snapshot().fixtures.map((fixture) => fixture.id)) + index + 1)
-        : await invoke<number[]>("patch_fixtures", {
-          requests,
-          profiles: requests.map(() => imported),
-        });
+        : await invokePatchFixtures(requests, requests.map(() => imported));
+      if (!fixturePatchIdsAreExact(fixtureIds, requests.length)) {
+        throw new Error("PATCH returned a malformed fixture ID set.");
+      }
       if (viewportFixture === "patch") {
         setSnapshot((current) => ({
           ...current,
@@ -11879,8 +12021,11 @@ export default function App() {
       setPendingPatchGroupRegistration({ fixtureIds, defaultName: baseLabel || imported.name });
       return true;
     } catch (error) {
+      retainPatchRepairIntentIfIndeterminate(error);
       setMessage(String(error));
       return false;
+    } finally {
+      finishPatchRepairOperation();
     }
   };
 
@@ -16177,12 +16322,7 @@ export default function App() {
     profile: FixtureProfileSummary,
     modeName: string | null,
   ) => {
-    await invoke("repair_fixture_profile", {
-      fixtureId,
-      profilePath: profile.source_path,
-      modeName,
-      profile,
-    });
+    await invokeFixtureProfileRepair(fixtureId, profile, modeName);
     await refreshSnapshot();
     setMessage(`Repaired fixture ${fixtureId} profile source with an exact DMX layout match.`);
   };
@@ -16215,11 +16355,15 @@ export default function App() {
     const health = repairablePatchFixture();
     const armed = profile();
     if (!health || !armed) return;
+    if (!beginPatchRepairOperation()) return;
     try {
       await repairCatalogFixtureProfile(health.fixture_id, armed, selectedMode() || null);
       await refreshPatchProfileHealth();
     } catch (error) {
+      retainPatchRepairIntentIfIndeterminate(error);
       setMessage(String(error));
+    } finally {
+      finishPatchRepairOperation();
     }
   };
 
@@ -22794,7 +22938,7 @@ export default function App() {
           onContextDrawer={setTimelineContextDrawer}
           onDeskSurface={selectTimelineDeskSurface}
         />
-        <details class="groupLiveMixerDisclosure">
+        <details class="groupLiveMixerDisclosure" name="timeline-header-disclosure">
           <summary title="Live Mixer" aria-label="Live Mixer"><span>Live Mixer</span></summary>
           <div class="groupLiveMixerDisclosurePanel">
             <GroupLiveMixerStrip
@@ -22868,11 +23012,6 @@ export default function App() {
   });
 
   const handleAppKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape" && !event.defaultPrevented && controlLearnMode() && !controlLearnBusy()) {
-      event.preventDefault();
-      setControlLearnMode(null);
-      return;
-    }
     if (
       event.key === "Escape" &&
       !event.defaultPrevented &&
@@ -22885,12 +23024,46 @@ export default function App() {
       event.key === "Escape" &&
       !event.defaultPrevented &&
       workspaceTab() === "control" &&
+      controlMode() === "live"
+    ) {
+      const openTimelineDisclosure = document.querySelector<HTMLDetailsElement>(
+        '.timelineArrangerHeader details[name="timeline-header-disclosure"][open]',
+      );
+      if (openTimelineDisclosure) {
+        event.preventDefault();
+        const summary = openTimelineDisclosure.querySelector<HTMLElement>(":scope > summary");
+        openTimelineDisclosure.open = false;
+        summary?.focus();
+        return;
+      }
+    }
+    if (
+      event.key === "Escape" &&
+      !event.defaultPrevented &&
+      workspaceTab() === "control" &&
       controlMode() === "live" &&
       timelineContextDrawer() !== "none"
     ) {
       event.preventDefault();
       setTimelineContextDrawer("none");
       return;
+    }
+    if (event.key === "Escape" && !event.defaultPrevented && controlLearnMode() && !controlLearnBusy()) {
+      event.preventDefault();
+      setControlLearnMode(null);
+      return;
+    }
+    if (
+      event.key === "Escape" &&
+      !event.defaultPrevented &&
+      workspaceTab() === "control" &&
+      controlMode() === "live"
+    ) {
+      if (timelinePaneExpanded()) {
+        event.preventDefault();
+        setTimelinePaneExpanded(false);
+        return;
+      }
     }
     if (
       paneWindow &&
@@ -23614,6 +23787,19 @@ export default function App() {
             <h2>Timeline</h2>
             <div class="controlContextHeaderTools">
               {renderTimelineDeskHeaderTools()}
+              <button
+                type="button"
+                class={`timelinePaneExpandToggle${timelinePaneExpanded() ? " expanded" : ""}`}
+                data-timeline-pane-expand-toggle
+                title={timelinePaneActionLabel()}
+                aria-label={timelinePaneActionLabel()}
+                aria-expanded={timelinePaneExpanded()}
+                onClick={() => setTimelinePaneExpanded((expanded) => !expanded)}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d={timelinePaneExpanded() ? "M3 6h3V3M13 6h-3V3M13 10h-3v3M3 10h3v3" : "M6 3H3v3M10 3h3v3M13 10v3h-3M3 10v3h3"} />
+                </svg>
+              </button>
             </div>
           </header>
           <div
@@ -24342,6 +24528,7 @@ export default function App() {
               onSharePassword={setGdtfSharePassword}
               onOpenWorkbench={() => setCustomWorkbenchOpen(true)}
               repairableFixtureLabel={repairablePatchFixture()?.label ?? null}
+              operationBusy={patchRepairOperationBusy()}
               onRepairSelectedFixture={() => void repairSelectedPatchFixture()}
               onProfileDragStart={beginPatchProfileDrag}
               onProfileDragEnd={clearPatchProfileDrag}
@@ -24349,6 +24536,7 @@ export default function App() {
             />
             <PatchFixtureFormPanel
               armed={Boolean(profile())}
+              operationBusy={patchRepairOperationBusy()}
               universe={universe()}
               address={address()}
               count={patchCount()}
@@ -24939,6 +25127,7 @@ export default function App() {
         <MappingPersistentWorkspaceBand
           poppedPanes={poppedPanes()}
           lowerSplitRatio={lowerSplitRatio()}
+          timelinePaneExpanded={timelinePaneExpanded()}
           selectionsDrawerOpen={selectionsDrawerOpen()}
           onTogglePaneWindow={togglePaneWindow}
           onLowerSplitRatio={setLowerSplitRatio}

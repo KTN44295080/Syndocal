@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, Show, type ComponentProps, type JSX } from "solid-js";
+import { createEffect, Show, type ComponentProps, type JSX } from "solid-js";
 import type { ControlMode } from "../uiModes";
 import { defaultWorkspaceLayout } from "../workspaceLayoutStorage";
 import { MappingEditableStageShell } from "./MappingEditableStageShell";
@@ -33,6 +33,7 @@ type MappingPersistentWorkspaceBandProps = {
   hotkeyHelpOpen: boolean;
   poppedPanes: string[];
   lowerSplitRatio: number;
+  timelinePaneExpanded: boolean;
   selectionsDrawerOpen: boolean;
   onTogglePaneWindow: (pane: "stage" | "timeline") => void;
   onLowerSplitRatio: (ratio: number) => void;
@@ -46,30 +47,10 @@ type MappingPersistentWorkspaceBandProps = {
 };
 
 export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspaceBandProps) {
-  const [timelinePaneExpanded, setTimelinePaneExpanded] = createSignal(false);
-  const timelinePaneActionLabel = () =>
-    timelinePaneExpanded() ? "Restore Timeline pane (Esc)" : "Expand Timeline pane";
   const contextClass = () =>
     props.workspace === "setup"
       ? "workspaceContextPane setupContextPane"
       : `workspaceContextPane controlContextPane controlMode${props.controlMode[0].toUpperCase()}${props.controlMode.slice(1)}`;
-
-  const handleWindowKeyDown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented) return;
-    if (event.key === "Escape" && timelinePaneExpanded()) {
-      event.preventDefault();
-      setTimelinePaneExpanded(false);
-    }
-  };
-
-  window.addEventListener("keydown", handleWindowKeyDown);
-  onCleanup(() => window.removeEventListener("keydown", handleWindowKeyDown));
-
-  createEffect(() => {
-    if (props.workspace !== "control" || props.controlMode !== "live") {
-      setTimelinePaneExpanded(false);
-    }
-  });
 
   createEffect(() => {
     if (
@@ -83,11 +64,13 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
 
   return (
     <section
-      class={`mappingPersistentWorkspaceBand${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}${props.poppedPanes.includes("timeline") ? " timelinePanePopped" : ""}`}
-      data-timeline-pane-expanded={timelinePaneExpanded() ? "true" : "false"}
+      class={`mappingPersistentWorkspaceBand${props.timelinePaneExpanded ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}${props.poppedPanes.includes("timeline") ? " timelinePanePopped" : ""}`}
+      data-timeline-pane-expanded={props.timelinePaneExpanded ? "true" : "false"}
       data-control-stage-chrome={props.workspace !== "setup" ? "true" : undefined}
       data-workspace-pane="lower"
       aria-label="Persistent workspace band"
+      aria-hidden={props.timelinePaneExpanded ? "true" : undefined}
+      inert={props.timelinePaneExpanded ? true : undefined}
     >
       <div
         class="mappingPersistentWorkspaceGrid"
@@ -245,21 +228,6 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                   </div>
                   <Show when={props.workspace === "control"}>
                     <div class="controlContextHeaderTools controlContextHeaderPaneActions" aria-label="Workspace pane controls">
-                      <Show when={props.controlMode === "live"}>
-                        <button
-                          type="button"
-                          class={`timelinePaneExpandToggle${timelinePaneExpanded() ? " expanded" : ""}`}
-                          data-timeline-pane-expand-toggle
-                          title={timelinePaneActionLabel()}
-                          aria-label={timelinePaneActionLabel()}
-                          aria-expanded={timelinePaneExpanded()}
-                          onClick={() => setTimelinePaneExpanded((expanded) => !expanded)}
-                        >
-                          <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path d={timelinePaneExpanded() ? "M3 6h3V3M13 6h-3V3M13 10h-3v3M3 10h3v3" : "M6 3H3v3M10 3h3v3M13 10v3h-3M3 10v3h3"} />
-                          </svg>
-                        </button>
-                      </Show>
                       <button
                         type="button"
                         class={`timelinePaneExpandToggle panePopoutToggle${props.poppedPanes.includes("stage") ? " expanded" : ""}`}

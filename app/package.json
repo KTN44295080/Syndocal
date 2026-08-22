@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.6",
+  "version": "1.2.0-alpha.7",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
@@ -20,6 +20,7 @@
     "check:dvc-midi-shortcuts": "node scripts/check-dvc-midi-shortcuts.mjs",
     "check:dvc-dmx-shortcuts": "node scripts/check-dvc-dmx-shortcuts.mjs",
     "check:backend-operator-contract": "node scripts/check-backend-operator-contract.mjs",
+    "check:patch-transaction-d2": "node scripts/check-patch-transaction-d2.mjs",
     "check:native-window": "node scripts/run-native-window-acceptance.mjs",
     "check:empty-states": "node scripts/check-empty-state-guidance.mjs",
     "check:cue-effect-recall": "node scripts/check-cue-effect-recall.mjs",
@@ -104,6 +105,7 @@
     "check:timeline-layered": "node scripts/check-viewport-containment.mjs --timeline-layered-only",
     "check:timeline-operator": "node scripts/check-viewport-containment.mjs --timeline-expansion-only",
     "check:timeline-performance": "node scripts/check-timeline-performance-browser.mjs",
+    "check:control-upper-workspaces": "node scripts/check-control-upper-workspaces-browser.mjs",
     "check:timeline-advanced": "node scripts/check-timeline-advanced-authoring.mjs",
     "check:timeline-viewport": "node scripts/check-timeline-viewport.mjs && node scripts/check-timeline-overlap-clusters.mjs && node scripts/check-viewport-containment.mjs --scene-block-hour-only && node scripts/check-viewport-containment.mjs --scene-block-overlap-only",
     "check:vj-first-run": "node scripts/check-vj-first-run.mjs",

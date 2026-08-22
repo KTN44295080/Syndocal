@@ -4,6 +4,8 @@ export type FixtureLayoutMode = "line" | "grid" | "circle";
 
 interface PatchFixtureFormPanelProps {
   armed: boolean;
+  /** A server-authoritative PATCH/Repair lane is awaiting its terminal receipt. */
+  operationBusy: boolean;
   universe: number;
   address: number;
   count: number;
@@ -57,7 +59,7 @@ export function PatchFixtureFormPanel(props: PatchFixtureFormPanelProps) {
         : "Line";
 
   return (
-    <section class="patchFixtureFormPanel" data-patch-left-form>
+    <section class="patchFixtureFormPanel" data-patch-left-form aria-busy={props.operationBusy}>
       <div class="patchFixtureMinimalForm" data-patch-minimal-form>
         <div class="patchFixtureField" data-patch-field="universe">
           <label for="patch-fixture-universe">Universe</label>
@@ -84,7 +86,7 @@ export function PatchFixtureFormPanel(props: PatchFixtureFormPanelProps) {
               type="button"
               class="patchFixtureNextFree"
               onClick={props.onNextFreeAddress}
-              disabled={props.nextFreeAddress === null}
+              disabled={props.operationBusy || props.nextFreeAddress === null}
             >
               Next Free
             </button>
@@ -101,8 +103,8 @@ export function PatchFixtureFormPanel(props: PatchFixtureFormPanelProps) {
             onInput={(event) => props.onCount(Number(event.currentTarget.value))}
           />
         </div>
-        <button class="primary patchFixtureSubmit" onClick={props.onPatch} disabled={!props.armed || props.invalid}>
-          PATCH
+        <button class="primary patchFixtureSubmit" onClick={props.onPatch} disabled={props.operationBusy || !props.armed || props.invalid}>
+          {props.operationBusy ? "Applying…" : "PATCH"}
         </button>
         {/* #64: placement options only make sense once a profile is armed -
             unarmed they showed a meaningless "0ch / end address 1" footer. */}

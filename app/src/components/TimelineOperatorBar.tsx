@@ -187,7 +187,7 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
         <button type="button" title="Double loop length" disabled={props.loopRegion === null} onClick={() => void props.onScaleLoop("double")}>×2</button>
         <output class={`timelineLoopState ${props.loopRuntime.status}`} aria-live="polite" data-no-localize>{props.loopRuntime.status === "armed" ? "ARMED" : props.loopRuntime.status === "looping" ? `LOOP ×${props.loopRuntime.wrap_count}` : "OFF"}</output>
       </div>
-      <details class="timelineToolsDisclosure">
+      <details class="timelineToolsDisclosure" name="timeline-header-disclosure">
         <summary title="Timeline tools" aria-label="Timeline tools">
           <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▤</span>
         </summary>

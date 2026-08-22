@@ -2571,8 +2571,23 @@ h3 {
 
 
 .layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .timelineExternalSourceShelf {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+  width: 100%;
   min-height: 0;
   height: 100%;
+  max-height: none;
+  overflow: hidden;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  > .timelineExternalSourceShelf
+  > [role="tabpanel"] {
+  min-height: 0;
+  overflow: hidden auto;
 }
 
 .timelineExternalSourceShelfInspector {
@@ -36273,7 +36288,13 @@ a[href]:focus-visible,
 /* Global operator strip: show-wide transport and safety controls belong to
    the common chrome. Control-local view choices stay with their surface. */
 .topbar {
-  grid-template-columns: minmax(235px, 0.65fr) minmax(54px, 0.2fr) minmax(0, 2.15fr) 120px;
+  grid-template-columns: minmax(235px, 0.65fr) minmax(150px, 0.35fr) minmax(0, 2fr) 120px;
+}
+
+@media (max-width: 1400px) {
+  .topbarProject > span {
+    display: none;
+  }
 }
 
 .topbarTransportCluster {
@@ -37419,6 +37440,479 @@ a[href]:focus-visible,
   }
 }
 
+/* Timeline is portaled from the persistent lower workspace into the upper
+   arranger host. Keep this contract at the end of the cascade: the generic
+   Live Deck rules above still target the same .liveControlPanel and otherwise
+   reintroduce their six-row matrix layout after the Timeline-specific rules.
+   Controls retain their authored 44px hit targets; the arranger receives the
+   remaining height and scrolls only its internal layer surface. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive > .liveControlPanel {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel:has(.timelineArrangerHeader details[open]),
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary:has(> .panelHeader details[open]) {
+  position: relative;
+  z-index: 1300;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 48px;
+  max-height: 48px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost {
+  display: grid;
+  grid-column: 1;
+  grid-row: 2;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Solid's Portal inserts one anonymous mount wrapper below the authored host.
+   Make that transport wrapper layout-transparent in size ownership while
+   retaining a real containing box for focus/overlay positioning. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  > div {
+  display: grid;
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .faders.timelineDesk-show {
+  display: grid;
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  gap: 0;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .faders.timelineDesk-show
+  > .timelinePanel,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .timelineShowSurface {
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .timelineShowSurface {
+  grid-template-rows: minmax(0, 1fr);
+  grid-auto-rows: 0;
+  align-content: stretch;
+  gap: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .timelineShowSurface
+  > .panelHeader,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .timelineShowSurface
+  > .timelineToolStrip {
+  display: none;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .timelineShowSurface
+  > .timelineOverviewFrame {
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  contain: size layout;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .timelineShowSurface.timelineShowSurfaceBlockDrawerOpen:has(
+    > .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer)
+  ) {
+  grid-template-columns:
+    minmax(0, 1fr)
+    var(--timeline-block-inspector-width);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .timelineShowSurface.timelineShowSurfaceBlockDrawerOpen
+  > .timelineOverviewFrame {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .timelineShowSurface.timelineShowSurfaceBlockDrawerOpen
+  > .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer) {
+  position: relative;
+  inset: auto;
+  grid-column: 2;
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  overflow: visible;
+  padding-block: 2px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  > h2 {
+  display: none;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  .controlContextHeaderTools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow: visible;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  .timelineOperatorBar {
+  flex: 1 1 auto;
+  height: 44px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  .groupLiveMixerDisclosure {
+  height: 44px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  button,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  summary {
+  height: 44px;
+  min-height: 44px;
+  max-height: none;
+}
+
+/* These disclosures used to open upward from the lower workspace. They now
+   live in the upper arranger header, so keep their full controls below the
+   48px header and inside the viewport instead of projecting off-screen. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  .timelineToolsDisclosurePanel:has(> .timelinePerformanceEditor) {
+  top: calc(100% + 3px);
+  bottom: auto;
+  width: min(356px, calc(100vw - 24px));
+  max-width: min(356px, calc(100vw - 24px));
+  max-height: min(680px, calc(100vh - 160px));
+  overflow: hidden auto;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  .groupLiveMixerDisclosurePanel {
+  top: calc(100% + 3px);
+  bottom: auto;
+  width: min(356px, calc(100vw - 24px));
+  max-width: min(356px, calc(100vw - 24px));
+  max-height: min(680px, calc(100vh - 160px));
+  overflow: hidden auto;
+}
+
+/* The expand command belongs to the portaled upper arranger. Expansion must
+   grow that arranger, not the now-unrelated lower Sources/Inspector band.
+   Escape restores the persisted normal split. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
+    > .mappingPersistentWorkspaceBand.timelinePaneExpanded
+  ) {
+  grid-template-rows: minmax(0, 1fr) 0 0 !important;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
+    > .mappingPersistentWorkspaceBand.timelinePaneExpanded
+  )
+  > .workspaceSplitHandle-horizontal {
+  display: none;
+}
+
+/* The shared workspace moved Lighting Banks and the Video Media Library into
+   their own authored upper panels. Keep the legacy scene/video selectors from
+   hiding those real surfaces or positioning their content below a zero-height
+   disclosure rail. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .sceneMatrixPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(100%, calc(100vw - 8px));
+  max-width: calc(100vw - 8px);
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  > .panelHeader {
+  display: grid;
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 48px;
+  overflow: visible;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  > .panelHeader
+  > .videoMixerSourceDisclosure {
+  position: relative;
+  z-index: 1200;
+  justify-self: end;
+  min-width: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  > .panelHeader
+  > .videoMixerSourceDisclosure
+  > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  border: 1px solid #343a3f;
+  border-radius: 2px;
+  padding: 0 10px;
+  color: #c8cfd4;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  > .panelHeader
+  > .videoMixerSourceDisclosure
+  > summary::-webkit-details-marker {
+  display: none;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  > .panelHeader
+  > .videoMixerSourceDisclosure[open]
+  > summary {
+  border-color: #555d63;
+  color: #fff;
+  box-shadow: inset 2px 0 0 var(--ray-accent);
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  > .panelHeader
+  > .videoMixerSourceDisclosure
+  > .videoMixerSourceCreateSurface {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  gap: 6px;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 160px));
+  overflow: hidden auto;
+  border: 1px solid #343a3f;
+  border-radius: 2px;
+  background: #181c1f;
+  padding: 8px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  > .panelHeader
+  > .videoMixerSourceDisclosure
+  > .videoMixerSourceCreateSurface
+  > label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  > .panelHeader
+  > .videoMixerSourceDisclosure
+  > .videoMixerSourceCreateSurface
+  input,
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  > .panelHeader
+  > .videoMixerSourceDisclosure
+  > .videoMixerSourceCreateSurface
+  select {
+  width: 100%;
+  min-width: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  > .videoMixerClipPane {
+  display: grid;
+  grid-column: 1;
+  grid-row: 2;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  .videoMediaLibraryRail {
+  display: grid;
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  .videoMediaLibrarySurface {
+  position: relative;
+  inset: auto;
+  display: grid;
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+  border: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  .videoMediaLibraryList {
+  min-width: 0;
+  min-height: 0;
+  align-content: start;
+  overflow: auto;
+}
+
 /* Timeline source shelf: a co-visible, internally scrolling source rail keeps
    drag-and-drop in the same editing domain without shrinking existing controls. */
 .timelineExternalSourceShelf {
@@ -37439,6 +37933,42 @@ a[href]:focus-visible,
   justify-content: space-between;
   gap: 1rem;
   min-width: 0;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  > .timelineExternalSourceShelf
+  > .timelineExternalSourceShelfHeader {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  > .timelineExternalSourceShelf
+  > .timelineExternalSourceShelfHeader
+  > :first-child {
+  flex: 1 1 100px;
+  min-width: 0;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  > .timelineExternalSourceShelf
+  > .timelineExternalSourceShelfHeader
+  button {
+  height: 44px;
+  min-height: 44px;
+}
+
+@media (max-width: 900px) {
+  .layoutSharedWorkspace.layoutControl.controlModeLive
+    .controlContextPane
+    > .timelineExternalSourceShelf
+    > .timelineExternalSourceShelfHeader
+    p {
+    display: none;
+  }
 }
 
 .timelineExternalSourceShelfHeader h3,
@@ -37493,6 +38023,15 @@ a[href]:focus-visible,
   display: grid;
   gap: 0.55rem;
   min-width: 0;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  > .timelineExternalSourceShelf
+  > .timelineExternalSourceShelfBody {
+  min-height: 0;
+  align-content: start;
+  overflow: hidden auto;
 }
 
 .timelineExternalSourceTargets {

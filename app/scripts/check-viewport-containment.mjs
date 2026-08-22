@@ -142,6 +142,11 @@ const cdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 9227);
 const screenshotDir = process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR
   ? resolve(process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR)
   : null;
+// Focused Control-domain captures are opt-in so Lighting/Video geometry can be
+// reviewed independently of the broad viewport screenshot bundle.
+const controlScreenshotDir = process.env.SYNDOCAL_CONTROL_SCREENSHOT_DIR
+  ? resolve(process.env.SYNDOCAL_CONTROL_SCREENSHOT_DIR)
+  : null;
 const primaryOperationalViewport = { width: 1920, height: 1080 };
 const measuredClientSizeViewport = { width: 1920, height: 1032 };
 const extendedCeilingViewport = { width: 2048, height: 1152 };
@@ -2544,7 +2549,7 @@ async function measureTimelinePaneExpansionState(client) {
     const windowControlButtons = windowControls
       ? [...windowControls.querySelectorAll(':scope > [data-window-control]')].filter(isVisible)
       : [];
-    const controlContextHeader = [...document.querySelectorAll('[data-control-context-header]')].find(isVisible);
+    const controlContextHeader = [...document.querySelectorAll('[data-timeline-arranger-header]')].find(isVisible);
     const editDomainNavigation = [...document.querySelectorAll('[data-edit-domain-navigation]')].find(isVisible) ?? null;
     const controlContextFaders = [...document.querySelectorAll('.controlContextPane > .faders')].find(isVisible);
     const timelineOperatorBar = [...document.querySelectorAll('[data-timeline-operator-bar]')].find(isVisible);
@@ -2608,6 +2613,7 @@ async function measureTimelinePaneExpansionState(client) {
       inner.x + inner.width <= outer.x + outer.width + 1
     );
     const contextPaneRect = measuredRect('[data-workspace-pane="lower-right"]');
+    const viewportRect = { x: 0, y: 0, width: innerWidth, height: innerHeight };
     const mixerDisclosurePanelRect = isVisible(mixerDisclosurePanel)
       ? measuredRect('.groupLiveMixerDisclosurePanel')
       : null;
@@ -2641,8 +2647,11 @@ async function measureTimelinePaneExpansionState(client) {
       timelinePaneExpandToggleNamed: Boolean(toggle?.getAttribute('aria-label')),
       timelineLaneFrameRect: measuredRect('.timelineShowSurface > .timelineOverviewFrame'),
       timelineLaneScrollportRect: measuredRect('[data-timeline-layer-scrollport]'),
-      timelinePanelRect: measuredRect('.controlContextPane .timelinePanel'),
-      timelineShowSurfaceRect: measuredRect('.controlContextPane .timelineShowSurface'),
+      timelinePanelRect: measuredRect('[data-timeline-arranger-upper] .timelinePanel'),
+      timelineShowSurfaceRect: measuredRect('[data-timeline-arranger-upper] .timelineShowSurface'),
+      timelineArrangerHeaderRect: measuredRect('[data-timeline-arranger-header]'),
+      timelineArrangerUpperRect: measuredRect('[data-timeline-arranger-upper]'),
+      timelineLivePanelRect: measuredRect('.liveControlPanel'),
       timelineFrameContain: timelineFrameStyle?.contain ?? '',
       timelineFadersGridRows: timelineFaders ? getComputedStyle(timelineFaders).gridTemplateRows : '',
       timelineShowSurfaceGridRows: timelineShowSurface ? getComputedStyle(timelineShowSurface).gridTemplateRows : '',
@@ -2672,9 +2681,9 @@ async function measureTimelinePaneExpansionState(client) {
       toolsDisclosureOpen: toolsDisclosure instanceof HTMLDetailsElement && toolsDisclosure.open,
       toolsDisclosureSummaryRect: measuredRect('.timelineToolsDisclosure > summary'),
       mixerDisclosurePanelRect,
-      mixerDisclosurePanelHorizontallyContained: horizontallyContained(mixerDisclosurePanelRect, contextPaneRect),
+      mixerDisclosurePanelHorizontallyContained: horizontallyContained(mixerDisclosurePanelRect, viewportRect),
       toolsDisclosurePanelRect,
-      toolsDisclosurePanelHorizontallyContained: horizontallyContained(toolsDisclosurePanelRect, contextPaneRect),
+      toolsDisclosurePanelHorizontallyContained: horizontallyContained(toolsDisclosurePanelRect, viewportRect),
       toolsDisclosureInteractiveCount: toolsDisclosurePanel
         ? [...toolsDisclosurePanel.querySelectorAll('button, input, output')].filter(isVisible).length
         : 0,
@@ -2862,9 +2871,7 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   });
   await sleep(160);
   const restored = await measureTimelinePaneExpansionState(client);
-  const beforeContextWidth = before.persistentBandRects.context?.width ?? 0;
-  const expandedContextWidth = expanded.persistentBandRects.context?.width ?? 0;
-  const expandedBandWidth = expanded.persistentBandRect?.width ?? 0;
+  const beforeLaneHeight = before.timelineLaneScrollportRect?.height ?? 0;
   const expandedLaneHeight = expanded.timelineLaneScrollportRect?.height ?? 0;
   const expandedTimelineSurfaceHeight = expanded.timelineShowSurfaceRect?.height ?? 0;
   const expandedLaneHeightRatio = expandedTimelineSurfaceHeight > 0
@@ -2880,10 +2887,25 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   );
   const timelineOperatorIsOneFullSizeRow = Boolean(
     before.timelineOperatorBarRect &&
-    before.timelineOperatorControlCount >= 15 &&
+    before.timelineOperatorControlCount >= 12 &&
     before.timelineOperatorCenterSpread <= 1 &&
-    before.timelineOperatorControlMinimumHeight >= 27 &&
+    before.timelineOperatorControlMinimumHeight >= 44 &&
     before.timelineOperatorContainedInHeader
+  );
+  const timelineArrangerOwnsItsRows = Boolean(
+    before.timelineArrangerHeaderRect &&
+    before.timelineArrangerUpperRect &&
+    before.timelineLivePanelRect &&
+    before.timelineArrangerHeaderRect.height >= 47 &&
+    before.timelineArrangerHeaderRect.height <= 49 &&
+    Math.abs(
+      before.timelineArrangerHeaderRect.y + before.timelineArrangerHeaderRect.height -
+      before.timelineArrangerUpperRect.y
+    ) <= 1 &&
+    Math.abs(
+      before.timelineArrangerHeaderRect.height + before.timelineArrangerUpperRect.height -
+      before.timelineLivePanelRect.height
+    ) <= 2
   );
   const normalDensity = before.t25Density ?? {};
   const topbarIsSingleContainedRow = Boolean(
@@ -2903,7 +2925,7 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     normalDensity.topbarBpmReadoutCount === 1 &&
     normalDensity.topbarTapRect?.width >= 40 &&
     normalDensity.topbarTapRect?.height >= 40 &&
-    normalDensity.liveBpmInputCount === 0
+    normalDensity.topbarTapContained
   );
   const chromeEditDomainNavigationIsCanonical = Boolean(
     normalDensity.directContextModeRowCount === 0 &&
@@ -2911,10 +2933,10 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     normalDensity.visibleChromeEditDomainNavigationCount === 1 &&
     normalDensity.editDomainNavigationDirectlyAfterTopbar &&
     normalDensity.oldLowerControlModeNavigationCount === 0 &&
-    JSON.stringify(normalDensity.editDomainModeIds) === JSON.stringify(['edit', 'mixer']) &&
-    JSON.stringify(normalDensity.editDomainModeLabels) === JSON.stringify(['Lighting', 'Video']) &&
-    normalDensity.editDomainButtonCount === 2 &&
-    normalDensity.editDomainButtonWidths.length === 2 &&
+    JSON.stringify(normalDensity.editDomainModeIds) === JSON.stringify(['edit', 'mixer', 'live']) &&
+    JSON.stringify(normalDensity.editDomainModeLabels) === JSON.stringify(['Lighting', 'Video', 'Timeline']) &&
+    normalDensity.editDomainButtonCount === 3 &&
+    normalDensity.editDomainButtonWidths.length === 3 &&
     normalDensity.editDomainButtonWidths.every((width) => width > 0)
   );
   const splitterAriaMatchesRendered = (state) => Boolean(
@@ -2966,17 +2988,12 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     ['t25LiveMasterRowRemoved', () => normalDensity.liveMasterRowCount === 0],
     ['t25OldLowerModeNavigationRemoved', () => normalDensity.oldLowerControlModeNavigationCount === 0],
     ['t25ChromeSecondaryNavigationUsesStableEditDomains', () => chromeEditDomainNavigationIsCanonical],
-    ['t25DSceneMatrixUsesReleasedHeaderHeight', () => Boolean(
-      normalDensity.sceneMatrixRect?.height > 0 &&
-      normalDensity.liveControlPanelRect?.height > 0 &&
-      before.persistentBandRect?.height > 0 &&
-      normalDensity.liveControlPanelRect.height - normalDensity.sceneMatrixRect.height <= 68
-    )],
+    ['timelineArrangerHeaderAndHostOwnExactRows', () => timelineArrangerOwnsItsRows],
     ['expandToggleClicked', () => Boolean(expandToggleClicked)],
     ['expandedStateApplied', () => Boolean(expanded.timelinePaneExpanded)],
-    ['expandedContextWidthGrew', () => Boolean(expandedContextWidth > beforeContextWidth + 1)],
-    ['expandedContextApproximatelyFullBandWidth', () => Boolean(
-      expandedBandWidth > 0 && Math.abs(expandedBandWidth - expandedContextWidth) <= 4
+    ['expandedUpperArrangerHeightGrew', () => expandedLaneHeight > beforeLaneHeight + 1],
+    ['expandedPersistentLowerBandCollapsed', () => Boolean(
+      (expanded.persistentBandRect?.height ?? Number.POSITIVE_INFINITY) <= 2.5
     )],
     ['expandedLowerLeftPaneAndDrawerHidden', () => Boolean(
       expanded.persistentBandRects.stage === null && expanded.persistentBandRects.selections === null
@@ -2986,7 +3003,7 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     ['expandedUpperSplitterHiddenForLanePriority', () => Boolean(
       before.workspaceSplitterRects.upperLower &&
       expanded.workspaceSplitterRects.upperLower === null &&
-      (expanded.persistentBandRect?.height ?? 0) > (before.persistentBandRect?.height ?? 0) + 1
+      expandedLaneHeight > beforeLaneHeight + 1
     )],
     ['expandedSplitRatiosRemainStable', () => Boolean(
       Math.abs(expanded.workspaceSplitRatios.top - before.workspaceSplitRatios.top) <= 0.001 &&
@@ -22468,16 +22485,85 @@ async function runEditIaVideoViewport(client, viewport) {
       const style = getComputedStyle(element);
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
+    const rect = (element) => {
+      if (!(element instanceof HTMLElement)) return null;
+      const box = element.getBoundingClientRect();
+      return {
+        left: box.left,
+        top: box.top,
+        right: box.right,
+        bottom: box.bottom,
+        width: box.width,
+        height: box.height,
+      };
+    };
+    const contains = (outer, inner) => Boolean(
+      outer && inner &&
+      inner.left >= outer.left - 1 &&
+      inner.top >= outer.top - 1 &&
+      inner.right <= outer.right + 1 &&
+      inner.bottom <= outer.bottom + 1
+    );
+    const intersects = (left, right) => Boolean(
+      left && right &&
+      right.right > left.left + 1 && right.left < left.right - 1 &&
+      right.bottom > left.top + 1 && right.top < left.bottom - 1
+    );
     const app = document.querySelector('.app');
+    const upper = document.querySelector('[data-workspace-pane="upper"]');
     const library = document.querySelector('[data-video-media-library="true"]');
+    const libraryHeader = library?.querySelector(':scope > .panelHeader');
+    const clipPane = library?.querySelector('.videoMixerClipPane');
+    const librarySurface = library?.querySelector('.videoMediaLibrarySurface');
+    const importDisclosure = library?.querySelector('[data-edit-video-import-disclosure]');
+    const importSummary = importDisclosure?.querySelector('summary');
     const preview = document.querySelector('[data-edit-video-preview]');
     const inspector = document.querySelector('[data-edit-video-inspector]');
     const advanced = inspector?.querySelector('.editVideoAdvancedDisclosure');
     const cards = [...document.querySelectorAll('.videoMediaLibraryItem')];
+    const firstVisibleCard = cards.find(visible) ?? null;
+    const upperRect = rect(upper);
+    const libraryRect = rect(library);
+    const clipPaneRect = rect(clipPane);
+    const librarySurfaceRect = rect(librarySurface);
+    const libraryHeaderRect = rect(libraryHeader);
+    const importSummaryRect = rect(importSummary);
+    const cardRect = rect(firstVisibleCard);
+    const primaryViewport = innerWidth >= 1_600 && innerHeight >= 900;
+    const requiredUpperHeight = primaryViewport ? 280 : 220;
+    const requiredLibraryHeight = primaryViewport ? 180 : 120;
+    const requiredCardHeight = primaryViewport ? 72 : 48;
     return {
       libraryVisible: visible(library),
       previewVisible: visible(preview),
       inspectorVisible: visible(inspector),
+      upperRect,
+      libraryRect,
+      clipPaneRect,
+      librarySurfaceRect,
+      libraryHeaderRect,
+      importSummaryRect,
+      cardRect,
+      upperHasMinimumHeight: Boolean(upperRect && upperRect.height >= requiredUpperHeight),
+      libraryOccupiesOnlyUpperPane: contains(upperRect, libraryRect) && Boolean(
+        upperRect && libraryRect && libraryRect.height >= upperRect.height - 24
+      ),
+      clipPaneUsesEffectiveHeight: contains(libraryRect, clipPaneRect) && Boolean(
+        clipPaneRect && clipPaneRect.height >= requiredLibraryHeight
+      ),
+      librarySurfaceVisible: visible(librarySurface),
+      librarySurfaceIsInFlow: getComputedStyle(librarySurface ?? document.body).position !== 'absolute',
+      librarySurfaceContainedInClipPane: contains(clipPaneRect, librarySurfaceRect),
+      librarySurfaceUsesEffectiveHeight: Boolean(
+        librarySurfaceRect && librarySurfaceRect.height >= requiredLibraryHeight
+      ),
+      firstCardVisibleInCatalogViewport: visible(firstVisibleCard) && intersects(librarySurfaceRect, cardRect),
+      cardUsesMinimumHeight: Boolean(cardRect && cardRect.height >= requiredCardHeight),
+      importDisclosureVisible: visible(importDisclosure),
+      importDisclosureClosed: importDisclosure instanceof HTMLDetailsElement && !importDisclosure.open,
+      importSummaryIsReachable: visible(importSummary) && contains(libraryHeaderRect, importSummaryRect) && Boolean(
+        importSummaryRect && importSummaryRect.height >= 44
+      ),
       advancedDisclosure: advanced instanceof HTMLDetailsElement && !advanced.open,
       selectedCardCount: cards.filter((card) => card.classList.contains('selected')).length,
       thumbnailTruthful: Boolean(preview?.querySelector('img, .videoMediaLibraryThumbnailPlaceholder')) &&
@@ -22488,10 +22574,55 @@ async function runEditIaVideoViewport(client, viewport) {
         (!app || app.scrollWidth <= app.clientWidth + 1),
     };
   })()`);
+  let screenshotVerification = null;
+  if (controlScreenshotDir) {
+    mkdirSync(controlScreenshotDir, { recursive: true });
+    screenshotVerification = await captureSettledViewport(
+      client,
+      join(controlScreenshotDir, `control-edit-video-${viewport.width}x${viewport.height}.png`),
+    );
+  }
+  await client.send("Page.navigate", { url: fixtureUrl("vj-empty") });
+  await waitForApp(client);
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "mixer");
+  await waitForClientCondition(client, `Boolean(document.querySelector('[data-video-media-library="true"]'))`, "Empty Edit Video media library");
+  const emptyLibraryImport = await client.evaluate(`(() => {
+    const library = document.querySelector('[data-video-media-library="true"]');
+    const disclosure = library?.querySelector('[data-edit-video-import-disclosure]');
+    const summary = disclosure?.querySelector('summary');
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    return {
+      assetCardCount: library?.querySelectorAll('.videoMediaLibraryItem').length ?? -1,
+      disclosureVisible: visible(disclosure),
+      disclosureClosed: disclosure instanceof HTMLDetailsElement && !disclosure.open,
+      summaryVisible: visible(summary),
+      summaryHeight: summary instanceof HTMLElement ? summary.getBoundingClientRect().height : 0,
+      sourceCreateSurfacePresent: Boolean(disclosure?.querySelector('[data-edit-video-import-surface]')),
+    };
+  })()`);
   const checks = {
     exactDomainTablist: navigation.tablist && JSON.stringify(navigation.ids) === JSON.stringify(['edit', 'mixer', 'live']) && navigation.selectedCount === 1 && navigation.association,
     domainKeyboardRoving: keyboardLighting && keyboardVideo,
     mediaLibraryUpperOnly: layout.libraryVisible,
+    mediaLibraryOwnsUsableUpperPane: layout.upperHasMinimumHeight && layout.libraryOccupiesOnlyUpperPane,
+    mediaLibraryCatalogIsInFlowAndContained: layout.clipPaneUsesEffectiveHeight &&
+      layout.librarySurfaceVisible &&
+      layout.librarySurfaceIsInFlow &&
+      layout.librarySurfaceContainedInClipPane &&
+      layout.librarySurfaceUsesEffectiveHeight,
+    mediaLibraryCardsAreVisibleInUsableCatalog: layout.firstCardVisibleInCatalogViewport && layout.cardUsesMinimumHeight,
+    mediaLibraryImportIsAlwaysReachableFromTheHeader: layout.importDisclosureVisible &&
+      layout.importDisclosureClosed && layout.importSummaryIsReachable,
+    emptyMediaLibraryStillExposesClosedImportControl: emptyLibraryImport.assetCardCount === 0 &&
+      emptyLibraryImport.disclosureVisible && emptyLibraryImport.disclosureClosed &&
+      emptyLibraryImport.summaryVisible && emptyLibraryImport.summaryHeight >= 44 &&
+      emptyLibraryImport.sourceCreateSurfacePresent,
     selectedMediaDrivesThumbnailAndProperties: selected.length > 0 && layout.previewVisible && layout.inspectorVisible && layout.selectedCardCount === 1 && layout.thumbnailTruthful,
     advancedControlsAreClosedDisclosure: layout.advancedDisclosure,
     mediaCardsKeepUsableHitTargets: layout.cardHitTarget >= 24,
@@ -22505,6 +22636,8 @@ async function runEditIaVideoViewport(client, viewport) {
     failedChecks,
     navigation,
     layout,
+    emptyLibraryImport,
+    screenshotVerification,
   };
 }
 
@@ -28619,6 +28752,49 @@ async function runEditLiveViewport(client, viewport) {
     const sceneBand = sceneCard?.querySelector('.sceneMatrixEditStripBand');
     const editStrip = sceneCard?.querySelector('[data-scene-matrix-edit-strip]');
     const app = document.querySelector('.app');
+    const upperPane = document.querySelector('[data-workspace-pane="upper"]');
+    const sceneMatrix = upperPane?.querySelector('.sceneMatrixPanel');
+    const sceneMatrixHeader = sceneMatrix?.querySelector('.sceneMatrixSurfaceHeader');
+    const sceneMatrixScroller = sceneMatrix?.querySelector('.sceneMatrixScroller');
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const rect = (element) => {
+      if (!(element instanceof HTMLElement)) return null;
+      const box = element.getBoundingClientRect();
+      return {
+        left: box.left,
+        top: box.top,
+        right: box.right,
+        bottom: box.bottom,
+        width: box.width,
+        height: box.height,
+      };
+    };
+    const contains = (outer, inner) => Boolean(
+      outer && inner &&
+      inner.left >= outer.left - 1 &&
+      inner.top >= outer.top - 1 &&
+      inner.right <= outer.right + 1 &&
+      inner.bottom <= outer.bottom + 1
+    );
+    const intersects = (left, right) => Boolean(
+      left && right &&
+      right.right > left.left + 1 && right.left < left.right - 1 &&
+      right.bottom > left.top + 1 && right.top < left.bottom - 1
+    );
+    const upperPaneRect = rect(upperPane);
+    const sceneMatrixRect = rect(sceneMatrix);
+    const sceneMatrixHeaderRect = rect(sceneMatrixHeader);
+    const sceneMatrixScrollerRect = rect(sceneMatrixScroller);
+    const sceneCardRect = rect(sceneCard);
+    const primaryViewport = innerWidth >= 1_600 && innerHeight >= 900;
+    const requiredUpperHeight = primaryViewport ? 280 : 220;
+    const requiredScrollerHeight = primaryViewport ? 180 : 120;
+    const requiredCardHeight = primaryViewport ? 60 : 44;
     const headerRect = header?.getBoundingClientRect();
     const sharedHeaderRect = sharedHeader?.getBoundingClientRect();
     const editorBodyRect = editorBody?.getBoundingClientRect();
@@ -28647,6 +28823,27 @@ async function runEditLiveViewport(client, viewport) {
       sceneIdentity: sceneCard
         ? getComputedStyle(sceneCard).getPropertyValue('--cue-identity').trim()
         : '',
+      upperPaneRect,
+      sceneMatrixRect,
+      sceneMatrixHeaderRect,
+      sceneMatrixScrollerRect,
+      sceneCardRect,
+      sceneMatrixVisible: visible(sceneMatrix),
+      upperPaneHasMinimumHeight: Boolean(upperPaneRect && upperPaneRect.height >= requiredUpperHeight),
+      sceneMatrixUsesUpperPane: contains(upperPaneRect, sceneMatrixRect) && Boolean(
+        upperPaneRect && sceneMatrixRect && sceneMatrixRect.height >= upperPaneRect.height - 24
+      ),
+      sceneMatrixHeaderContained: visible(sceneMatrixHeader) && contains(sceneMatrixRect, sceneMatrixHeaderRect) && Boolean(
+        sceneMatrixHeaderRect && sceneMatrixHeaderRect.height >= 28
+      ),
+      sceneMatrixScrollerUsesEffectiveHeight: visible(sceneMatrixScroller) &&
+        contains(sceneMatrixRect, sceneMatrixScrollerRect) && Boolean(
+          sceneMatrixScrollerRect && sceneMatrixScrollerRect.height >= requiredScrollerHeight
+        ),
+      sceneMatrixCardVisibleAndContained: visible(sceneCard) &&
+        intersects(sceneMatrixScrollerRect, sceneCardRect) && Boolean(
+          sceneCardRect && sceneCardRect.height >= requiredCardHeight
+        ),
       headerContained: Boolean(
         headerRect &&
         sharedHeaderRect &&
@@ -28741,6 +28938,14 @@ async function runEditLiveViewport(client, viewport) {
   await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
   await sleep(120);
   initial = await readState();
+  let screenshotVerification = null;
+  if (controlScreenshotDir) {
+    mkdirSync(controlScreenshotDir, { recursive: true });
+    screenshotVerification = await captureSettledViewport(
+      client,
+      join(controlScreenshotDir, `control-edit-lighting-${viewport.width}x${viewport.height}.png`),
+    );
+  }
 
   const liveGesture = await setFirstDimmer(12_000);
   const afterLive = await readState();
@@ -28808,6 +29013,13 @@ async function runEditLiveViewport(client, viewport) {
     ],
     ["liveFaderGestureAvailable", () => liveGesture],
     ["liveLeavesSceneLookUnchanged", () => afterLive.cueTargets === initial.cueTargets],
+    ["lightingUpperPaneHasUsableHeight", () => initial.upperPaneHasMinimumHeight],
+    ["lightingSceneMatrixUsesTheUpperPane", () =>
+      initial.sceneMatrixVisible && initial.sceneMatrixUsesUpperPane
+    ],
+    ["lightingSceneMatrixHeaderIsVisibleAndContained", () => initial.sceneMatrixHeaderContained],
+    ["lightingSceneMatrixScrollerUsesEffectiveHeight", () => initial.sceneMatrixScrollerUsesEffectiveHeight],
+    ["lightingSceneMatrixCardIsVisibleAndContained", () => initial.sceneMatrixCardVisibleAndContained],
     ["editUnselectedStateIsExplicit", () =>
       editUnselected.mode === "edit" &&
       editUnselected.editPressed === "true" &&
@@ -28976,6 +29188,7 @@ async function runEditLiveViewport(client, viewport) {
     selectedTargetVisibility,
     emptyTargetVisibility,
     operatorTargetVisibility,
+    screenshotVerification,
   };
 }
 

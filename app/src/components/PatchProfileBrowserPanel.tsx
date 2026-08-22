@@ -62,6 +62,8 @@ interface PatchProfileBrowserPanelProps extends ProfileImportSourcesProps {
      against the armed profile (the former catalog repair affordance). */
   onOpenWorkbench: () => void;
   repairableFixtureLabel: string | null;
+  /** Shared PATCH/Repair operation lane owned by App. */
+  operationBusy: boolean;
   onRepairSelectedFixture: () => void;
   onProfileDragStart: (item: PatchProfileDragItem) => void;
   onProfileDragEnd: () => void;
@@ -611,7 +613,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
           <button
             type="button"
             onClick={props.onOpenWorkbench}
-            disabled={busy()}
+            disabled={busy() || props.operationBusy}
             title="Create or edit a custom fixture profile."
             data-patch-open-workbench
           >
@@ -620,7 +622,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
           <button
             type="button"
             onClick={() => void refreshLocalProfiles()}
-            disabled={!props.backendAvailable || busy()}
+            disabled={!props.backendAvailable || busy() || props.operationBusy}
           >
             Refresh
           </button>
@@ -636,11 +638,11 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
             <button
               type="button"
               onClick={props.onRepairSelectedFixture}
-              disabled={!props.backendAvailable || busy()}
+              disabled={!props.backendAvailable || busy() || props.operationBusy}
               title="Relink the selected fixture to the armed profile with an exact DMX layout match."
               data-patch-fixture-repair
             >
-              Repair
+              {props.operationBusy ? "Applying…" : "Repair"}
             </button>
           </div>
         )}
@@ -667,7 +669,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
             source="verified"
             fixtures={visibleVerifiedFixtures()}
             searchActive={Boolean(query().trim())}
-            disabled={() => !props.backendAvailable || busy()}
+            disabled={() => !props.backendAvailable || busy() || props.operationBusy}
             draggable={() => true}
             selected={(_fixture, mode) => {
               const entry = verifiedEntryForMode(mode);
@@ -714,7 +716,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
             source="bundled"
             fixtures={visibleBundledFixtures()}
             searchActive={Boolean(query().trim())}
-            disabled={() => !props.backendAvailable || busy()}
+            disabled={() => !props.backendAvailable || busy() || props.operationBusy}
             draggable={() => true}
             selected={(fixture, mode) => selected(
               mode.key,
@@ -788,7 +790,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
             source="cache"
             fixtures={visibleCacheFixtures()}
             searchActive={Boolean(query().trim())}
-            disabled={(fixture) => cacheEntryForTreeFixture(fixture)?.health === "invalid" || busy()}
+            disabled={(fixture) => cacheEntryForTreeFixture(fixture)?.health === "invalid" || busy() || props.operationBusy}
             draggable={() => true}
             selected={(fixture, mode) => {
               const entry = cacheEntryForTreeFixture(fixture);

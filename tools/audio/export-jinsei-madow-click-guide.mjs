@@ -67,11 +67,11 @@ const OUTPUT_DIR = resolve(EXPORT_OPTIONS.output);
 // of the asset's peak RMS, whichever is greater.  The first active window
 // starts the audible interval; the last active window owns all of its 10 ms
 // frames.  This intentionally rounds the audible tail later (never earlier),
-// making the 50 ms end margin safe and deterministic for the current PCM set.
+// making the 150 ms end margin safe and deterministic for the current PCM set.
 const ACTIVITY_WINDOW_FRAMES = Math.round(SAMPLE_RATE * 0.010);
 const ACTIVITY_ABSOLUTE_RMS_FLOOR = 0.004;
 const ACTIVITY_RELATIVE_RMS = 0.02;
-const PERCEPTUAL_END_MARGIN_FRAMES = Math.round(SAMPLE_RATE * 0.050);
+const PERCEPTUAL_END_MARGIN_FRAMES = Math.round(SAMPLE_RATE * 0.150);
 
 const MADOW_METER = new Map([
   [18, 6],
@@ -567,7 +567,7 @@ const connectedGuideEvents = baseConnectedGuideEvents.map((event) => {
     ...event,
     globalFrame: perceptualStart,
     localFrame: perceptualStart - songOffset,
-    placement: "perceptual-audible-end-50ms-before-target",
+    placement: "perceptual-audible-end-150ms-before-target",
   };
 }).sort((left, right) => left.globalFrame - right.globalFrame);
 
@@ -673,7 +673,7 @@ for (const event of connectedGuideEvents) {
     const audibleEndFrame = event.globalFrame + activity.lastActiveFrame;
     assert(
       audibleEndFrame <= event.announcesGlobalFrame - PERCEPTUAL_END_MARGIN_FRAMES,
-      `${event.label} audible tail ends at least 50 ms before its target`,
+      `${event.label} audible tail ends at least 150 ms before its target`,
     );
     assert(
       (event.announcesGlobalFrame - PERCEPTUAL_END_MARGIN_FRAMES) - audibleEndFrame <= 1,
@@ -836,7 +836,7 @@ const manifest = {
     sourceFormat: "PCM16 mono 22050 Hz",
     resampler: "deterministic linear interpolation 22050->48000; outputLength=round(inputFrames*48000/22050)",
     placement: EXPORT_MODE === "perceptual-preview"
-      ? "Opt-in audition mode: every guide except Life Intro is placed so its conservative audible tail ends 50 ms before the announced target downbeat. Life Intro remains frame zero; Madow Intro is silent and Complete remains the sole cross-song cue."
+      ? "Opt-in audition mode: every guide except Life Intro is placed so its conservative audible tail ends 150 ms before the announced target downbeat. Life Intro remains frame zero; Madow Intro is silent and Complete remains the sole cross-song cue."
       : "Section and operational announcements start on the exact previous performance click. Life Intro is the sole frame-zero/no-preroll exception. Madow Intro is intentionally silent and Complete starts on Life's final click.",
     activityRule: {
       description: "10ms forward-looking RMS window; active if RMS >= max(0.004, peakRms*0.02); interval owns every frame in active windows",

@@ -1007,10 +1007,36 @@ export interface ProjectTransactionTicket {
   coalesce_key: string;
 }
 
+/** Durable published-command proof retained with a transaction receipt. */
+export interface ProjectTransactionPatchCommandResult {
+  kind: "patch_fixtures";
+  request_digest: string;
+  fixture_ids: number[];
+}
+
+/** Durable published-command proof for an exact profile relink. */
+export interface ProjectTransactionRepairFixtureProfileCommandResult {
+  kind: "repair_fixture_profile";
+  request_digest: string;
+  fixture_id: number;
+}
+
+export type ProjectTransactionCommandResult =
+  | ProjectTransactionPatchCommandResult
+  | ProjectTransactionRepairFixtureProfileCommandResult;
+
 export type ProjectTransactionRecovery =
-  | { status: "pending"; ticket: ProjectTransactionTicket }
-  | { status: "committed"; mutation: ProjectHistoryMutationResult }
-  | { status: "cancelled"; mutation: ProjectHistoryMutationResult }
+  | {
+    status: "pending";
+    ticket: ProjectTransactionTicket;
+    command_result?: ProjectTransactionCommandResult | null;
+    /** Exact backend admission state for reply-loss recovery. */
+    command_in_flight: boolean;
+    /** Durable backend fault: do not poll, Cancel, or replay this ticket. */
+    command_indeterminate_error: string | null;
+  }
+  | { status: "committed"; mutation: ProjectHistoryMutationResult; command_result?: ProjectTransactionCommandResult | null }
+  | { status: "cancelled"; mutation: ProjectHistoryMutationResult; command_result?: ProjectTransactionCommandResult | null }
   | { status: "acknowledged" };
 
 /** Canonical renderer wire shape; Rust recomputes and compares this tuple. */

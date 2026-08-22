@@ -4,7 +4,7 @@
 > requirement and final-gate authority, but its frozen checkpoint, 75.5% planning
 > roll-up, and Media A1 resume instructions are historical. Use
 > `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for the current dependency order,
-> `1.2.0-alpha.6` version train, warning ratchet, E4 resume point, and checkpoint
+> `1.2.0-alpha.7` version train, warning ratchet, D2 acceptance/D3 resume point, and checkpoint
 > workflow. Do not compare old and current percentages without identical denominators.
 
 > **OutputControl supersession (2026-08-21):** physical six-digit/Raw Input/Enter
@@ -2237,3 +2237,70 @@ autosave Backup. The current autosave is
 `qa-final-save-as.sdc` as source and contains the `QA Backup` fixture group.
 The broader current-Windows denominator is 18/71 (25.4%). This acceptance does
 not close remaining show-core hardware, ASIO, security, or soak work.
+
+## 35. 2026-08-23 alpha.7 D2/UI/Guide integration checkpoint
+
+The next distributed development artifact is `1.2.0-alpha.7`; alpha.6 remains an
+immutable accepted E4 artifact. D2 PATCH/GDTF Repair is independently green at
+P0/P1/P2 zero through its registered production transaction path, including
+whole-batch prevalidation, Published ACK classification, allocator/runtime
+rollback, reply-loss recovery, exact lifecycle truth, and one history result.
+The final backend hashes are main
+`5B91759B9B4789AF17B0376220F094B08603D0AD271DEF9B5CD67AA46103215D`, Engine
+`03685241C9FC35B12F7FDA6A880ADEB64D3EF092F60B63717E8325ACEC0C0C6F`, and
+control plane
+`A0864AB959688F5B857F5F49BF985F82F64036F145C3445FDCFA113E9B480750`.
+The focused backend/frontend matrix and no-default warning gate are green with
+zero first-party warnings.
+
+Lighting/Video/Timeline geometry and screenshot evidence passed four viewports;
+Timeline operator passed five viewports; Timeline Sources retained zero outer/body
+scroll; and the Guide perceptual boundary passed at 150 ms. These checks remain
+automated evidence only and do not replace the final native maximized-window,
+display, audible-device, DMX/MTC/DJ, ASIO, hardware, or soak acceptance.
+
+D2 advances the current Windows denominator to 19/71 (26.8%). D3 is the next
+dependency-ordered project-mutation tranche. No alpha.7 native build or GUI
+verification is claimed here; root owns the synchronized native build and final
+integrated acceptance.
+
+Release metadata self-check, the locked no-default Rust check, the Windows
+frontend warning ratchet, and diff-check are green. First-party warnings are zero
+for both configurations run; no native warning or UI claim is inferred because
+the alpha.7 release build has not yet run.
+
+## 36. 2026-08-23 alpha.7 Control upper-workspace native/UI closure
+
+The reported blank/clipped Control workspaces are repaired without a density
+reduction. Lighting again exposes its populated Scene Matrix upper owner; Video's
+Media Library occupies the upper grid and scrolls within its body; Timeline uses
+a fixed header plus remaining-height upper-content row; and Sources retains a
+full-height outer shelf with body-only scrolling. Tools/Live Mixer disclosure,
+Timeline expansion, and the ordered Escape stack are preserved.
+
+The dedicated browser acceptance is green at exactly 3840x2160, 2560x1440,
+1920x1080, and 1280x720 across 28 captured states. 960x640 remains the product
+minimum configuration only. 860x520 and 1366x768 are historical supplemental
+inputs and do not replace the current four-size matrix. Browser evidence remains
+separate from native evidence.
+
+The exact alpha.7 no-bundle executable, SHA-256
+`00253F26A8D3A933172D7B07923E430B455CA18F98E439CE45C5B62405F86EF4`,
+launched as exactly one responsive maximized `Syndocal` window. Native 1920-class
+screenshots cover Lighting, Video, Video Import, Timeline/Sources, Tools,
+expanded mode, and ordered Escape restoration. 2048x1104 is supplemental. Native
+2560x1440 and 1280x720 were not accepted because a safe verified move to those
+active monitors was unavailable, while 3840x2160 was connected but not active as
+a desktop mode. Those native matrix rows remain open.
+
+Guide timing is fixed and proven at click target minus 7,200 frames (150 ms at
+48 kHz). D2 remains complete and the exercised Windows warning rows remain at
+zero first-party warnings. The two failures in supplemental `check:edit-live`
+(scene-identity badge color and the old <=86 px mode-tab expectation) predate and
+are unrelated to this upper-workspace change; they are not closed by shrinking
+shared controls.
+
+The next dependency-ordered completion work is physical multi-display VJ, DMX,
+MIDI, DJ Link plus Stream Deck Pedal, audible click/Guide, the remaining ASIO
+matrix/licensing/fault paths, and the integrated long soak. This checkpoint does
+not advance those hardware denominators or claim whole-product completion.

@@ -2414,6 +2414,83 @@ impl ProjectSnapshotLoadAdmission {
             false
         }
     }
+
+    fn current_state(&self) -> ProjectSnapshotLoadAdmissionState {
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+struct FixturePatchPublicationError {
+    message: String,
+    allocator_rewind_safe: bool,
+}
+
+/// Truthful publication boundary for a fixture PATCH batch whose provisional
+/// identities have already been reserved. `Definitive` means no batch was
+/// published and the caller may safely cancel its surrounding transaction.
+/// `Indeterminate` means the engine admitted the batch before its ACK channel
+/// disconnected, so callers must retain the reservation and fail closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FixturePatchPublicationFailure {
+    Definitive(String),
+    Indeterminate(String),
+}
+
+impl FixturePatchPublicationFailure {
+    pub fn is_indeterminate(&self) -> bool {
+        matches!(self, Self::Indeterminate(_))
+    }
+}
+
+impl std::fmt::Display for FixturePatchPublicationFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Definitive(message) | Self::Indeterminate(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
+}
+
+fn receive_fixture_patch_allocated_ack(
+    receiver: mpsc::Receiver<Result<(), String>>,
+    admission: &ProjectSnapshotLoadAdmission,
+    deadline: Instant,
+    timeout: Duration,
+) -> Result<(), FixturePatchPublicationError> {
+    let definitive = |message| FixturePatchPublicationError {
+        message,
+        allocator_rewind_safe: true,
+    };
+    let disconnected = || {
+        FixturePatchPublicationError {
+        message: "Fixture PATCH acknowledgement disconnected after engine admission; provisional fixture IDs remain reserved because publication outcome is indeterminate".to_string(),
+        allocator_rewind_safe: admission.current_state()
+            != ProjectSnapshotLoadAdmissionState::Admitted,
+    }
+    };
+    match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(definitive(error)),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            if admission.cancel_if_queued() {
+                Err(definitive(format!(
+                    "project snapshot load acknowledgement timed out after {} ms",
+                    timeout.as_millis()
+                )))
+            } else {
+                match receiver.recv() {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(error)) => Err(definitive(error)),
+                    Err(_) => Err(disconnected()),
+                }
+            }
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(disconnected()),
+    }
 }
 
 fn receive_project_snapshot_load_ack(
@@ -4211,6 +4288,11 @@ pub struct EngineHandle {
     /// cancelled or rejected candidate may leave a skipped range but can
     /// never lower a counter or race an allocator below the candidate max.
     allocator_gate: Arc<Mutex<()>>,
+    /// Fixture PATCH is the one authored insertion path whose returned IDs
+    /// are part of the transaction result. Keep its provisional range
+    /// isolated until the definitive publication ACK so a queued timeout or
+    /// rolled-back B can restore the exact allocator tail without ABA reuse.
+    fixture_allocator_transaction_gate: Arc<Mutex<()>>,
     next_fixture_id: Arc<AtomicU64>,
     next_effect_id: Arc<AtomicU64>,
     next_cue_id: Arc<AtomicU64>,
@@ -4641,6 +4723,7 @@ impl EngineHandle {
         #[cfg(test)]
         let test_media_asset_publication_failed_after_b = Arc::new(AtomicBool::new(false));
         let allocator_gate = Arc::new(Mutex::new(()));
+        let fixture_allocator_transaction_gate = Arc::new(Mutex::new(()));
         let lifetime = Arc::new(EngineLifetime::new(Arc::clone(&wake)));
 
         let runtime_queue = Arc::clone(&queue);
@@ -4705,6 +4788,7 @@ impl EngineHandle {
             timeline_audio_publication_generation,
             output_ownership_gate,
             allocator_gate,
+            fixture_allocator_transaction_gate,
             next_fixture_id,
             next_effect_id,
             next_cue_id,
@@ -4736,6 +4820,10 @@ impl EngineHandle {
     }
 
     pub fn allocate_fixture_id(&self) -> FixtureId {
+        let _fixture_transaction_guard = self
+            .fixture_allocator_transaction_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.allocate_u64_id(&self.next_fixture_id, AllocatorDomain::Fixtures)
     }
 
@@ -5016,6 +5104,10 @@ impl EngineHandle {
         let command = self
             .prepare_command_for_enqueue(command)
             .map_err(EngineError::InvalidAllocatorCapacity)?;
+        self.enqueue_prepared_command(command)
+    }
+
+    fn enqueue_prepared_command(&self, command: EngineCommand) -> Result<(), EngineError> {
         if let EngineCommand::ClearLiveAudioInput { generation }
         | EngineCommand::ClearLiveAudioInputPublished { generation, .. } = &command
         {
@@ -5187,6 +5279,12 @@ impl EngineHandle {
     /// race a concurrent importer below it, while a failed/queued legacy
     /// creator may leave a monotonic allocator gap but never reuse an ID.
     fn prepare_command_for_enqueue(&self, command: EngineCommand) -> Result<EngineCommand, String> {
+        let provided_maxima = self.allocator_maximums_for_command(&command)?;
+        let _fixture_transaction_guard = provided_maxima.fixtures.map(|_| {
+            self.fixture_allocator_transaction_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        });
         let _allocator_guard = self
             .allocator_gate
             .lock()
@@ -5195,7 +5293,6 @@ impl EngineHandle {
         // Validate caller-provided candidates before allocating a compatibility
         // asset. This keeps invalid explicit layer/output IDs from consuming a
         // separate asset identity.
-        let provided_maxima = self.allocator_maximums_for_command(&command)?;
         provided_maxima.validate()?;
 
         let command = match command {
@@ -6076,6 +6173,134 @@ impl EngineHandle {
         self.patch_fixtures_published_with_timeout(candidates, PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT)
     }
 
+    /// Reserve fixture identities and publish the complete PATCH under one
+    /// allocator transaction. The range becomes durable only with the
+    /// definitive shared-snapshot ACK; every pre-admission timeout, queue
+    /// failure, validation rejection, and publication rollback restores the
+    /// exact allocator tail before a competing fixture allocation proceeds.
+    pub fn patch_fixtures_allocated_published(
+        &self,
+        patches: Vec<(PatchFixtureRequest, FixtureProfileSummary)>,
+    ) -> Result<Vec<FixtureId>, String> {
+        self.patch_fixtures_allocated_published_classified(patches)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Same publication as [`Self::patch_fixtures_allocated_published`], but
+    /// preserves whether an ACK failure definitively rolled back or became
+    /// indeterminate after engine admission.
+    pub fn patch_fixtures_allocated_published_classified(
+        &self,
+        patches: Vec<(PatchFixtureRequest, FixtureProfileSummary)>,
+    ) -> Result<Vec<FixtureId>, FixturePatchPublicationFailure> {
+        self.patch_fixtures_allocated_published_classified_with_timeout(
+            patches,
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn patch_fixtures_allocated_published_with_timeout(
+        &self,
+        patches: Vec<(PatchFixtureRequest, FixtureProfileSummary)>,
+        timeout: Duration,
+    ) -> Result<Vec<FixtureId>, String> {
+        self.patch_fixtures_allocated_published_classified_with_timeout(patches, timeout)
+            .map_err(|error| error.to_string())
+    }
+
+    fn patch_fixtures_allocated_published_classified_with_timeout(
+        &self,
+        patches: Vec<(PatchFixtureRequest, FixtureProfileSummary)>,
+        timeout: Duration,
+    ) -> Result<Vec<FixtureId>, FixturePatchPublicationFailure> {
+        let definitive = |message: String| FixturePatchPublicationFailure::Definitive(message);
+        if patches.is_empty() || patches.len() > 256 {
+            return Err(definitive(
+                "Fixture PATCH batch must contain between 1 and 256 fixtures".to_string(),
+            ));
+        }
+        let fixture_count = u64::try_from(patches.len()).map_err(|_| {
+            definitive("Fixture PATCH batch size exceeds allocator capacity".to_string())
+        })?;
+        let _fixture_transaction_guard = self
+            .fixture_allocator_transaction_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let first_fixture_id = {
+            let _allocator_guard = self
+                .allocator_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let first = self.next_fixture_id.load(Ordering::Relaxed);
+            let last = first.checked_add(fixture_count - 1).ok_or_else(|| {
+                definitive(allocator_capacity_error(
+                    AllocatorDomain::Fixtures,
+                    u64::MAX,
+                ))
+            })?;
+            if last > protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER {
+                return Err(definitive(format!(
+                    "fixture allocator candidate {last} exceeds the JavaScript-safe wire maximum {}",
+                    protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER
+                )));
+            }
+            validate_allocator_u64_candidate(AllocatorDomain::Fixtures, last)
+                .map_err(definitive)?;
+            self.next_fixture_id.store(last + 1, Ordering::Relaxed);
+            first
+        };
+        let fixture_ids = (0..fixture_count)
+            .map(|offset| first_fixture_id + offset)
+            .collect::<Vec<_>>();
+        let candidates = fixture_ids
+            .iter()
+            .copied()
+            .zip(patches)
+            .map(|(fixture_id, (request, profile))| FixturePatchCandidate {
+                fixture_id,
+                request,
+                profile,
+            })
+            .collect::<Vec<_>>();
+        let result = self.patch_fixtures_preallocated_published_with_timeout(candidates, timeout);
+        if let Err(error) = result {
+            // The fixture transaction gate excludes both ordinary allocation
+            // and explicit fixture maxima reservation until this rewind.
+            if error.allocator_rewind_safe {
+                self.next_fixture_id
+                    .store(first_fixture_id, Ordering::Relaxed);
+            }
+            return Err(if error.allocator_rewind_safe {
+                FixturePatchPublicationFailure::Definitive(error.message)
+            } else {
+                FixturePatchPublicationFailure::Indeterminate(error.message)
+            });
+        }
+        Ok(fixture_ids)
+    }
+
+    fn patch_fixtures_preallocated_published_with_timeout(
+        &self,
+        candidates: Vec<FixturePatchCandidate>,
+        timeout: Duration,
+    ) -> Result<(), FixturePatchPublicationError> {
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.enqueue_prepared_command(EngineCommand::PatchFixturesPublished {
+            candidates,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| FixturePatchPublicationError {
+            message: error.to_string(),
+            allocator_rewind_safe: true,
+        })?;
+        receive_fixture_patch_allocated_ack(receiver, &admission, deadline, timeout)
+    }
+
     #[doc(hidden)]
     pub fn patch_fixtures_published_with_timeout(
         &self,
@@ -6105,7 +6330,20 @@ impl EngineHandle {
         profile: FixtureProfileSummary,
         mode_name: Option<String>,
     ) -> Result<(), String> {
-        self.repair_fixture_profile_published_with_timeout(
+        self.repair_fixture_profile_published_classified(fixture_id, profile, mode_name)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Classified variant used by the ticketed Repair service so an admitted
+    /// ACK disconnect cannot be mistaken for a definitive no-publication
+    /// failure and followed by an unsafe Cancel.
+    pub fn repair_fixture_profile_published_classified(
+        &self,
+        fixture_id: FixtureId,
+        profile: FixtureProfileSummary,
+        mode_name: Option<String>,
+    ) -> Result<(), FixturePatchPublicationFailure> {
+        self.repair_fixture_profile_published_classified_with_timeout(
             fixture_id,
             profile,
             mode_name,
@@ -6121,6 +6359,19 @@ impl EngineHandle {
         mode_name: Option<String>,
         timeout: Duration,
     ) -> Result<(), String> {
+        self.repair_fixture_profile_published_classified_with_timeout(
+            fixture_id, profile, mode_name, timeout,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn repair_fixture_profile_published_classified_with_timeout(
+        &self,
+        fixture_id: FixtureId,
+        profile: FixtureProfileSummary,
+        mode_name: Option<String>,
+        timeout: Duration,
+    ) -> Result<(), FixturePatchPublicationFailure> {
         let deadline = Instant::now() + timeout;
         let admission = ProjectSnapshotLoadAdmission::new();
         let (ack, receiver) = mpsc::sync_channel(1);
@@ -6132,8 +6383,16 @@ impl EngineHandle {
             admission: admission.clone(),
             ack,
         })
-        .map_err(|error| error.to_string())?;
-        receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
+        .map_err(|error| FixturePatchPublicationFailure::Definitive(error.to_string()))?;
+        receive_fixture_patch_allocated_ack(receiver, &admission, deadline, timeout).map_err(
+            |error| {
+                if error.allocator_rewind_safe {
+                    FixturePatchPublicationFailure::Definitive(error.message)
+                } else {
+                    FixturePatchPublicationFailure::Indeterminate(error.message)
+                }
+            },
+        )
     }
 
     /// Upsert a saved stage-map preset as one admitted, definitive shared
@@ -16932,9 +17191,7 @@ impl EngineRuntime {
             .dmx_modes
             .get(current.mode_index)
             .ok_or_else(|| format!("Fixture {fixture_id} has no active DMX mode to repair"))?;
-        if current.profile.manufacturer != profile.manufacturer
-            || current.profile.name != profile.name
-        {
+        if !fixture_profile_repair_identity_matches(&current.profile, &profile) {
             return Err(format!(
                 "Replacement profile identity '{}' / '{}' does not match fixture {fixture_id}'s '{}' / '{}'",
                 profile.manufacturer,
@@ -42910,6 +43167,23 @@ impl EngineRuntime {
     }
 }
 
+/// Fixture profile repair identity is canonicalized exactly like the product
+/// preflight: surrounding whitespace and ASCII case are presentation-only,
+/// while any other manufacturer or fixture-name change is a new identity.
+fn fixture_profile_repair_identity_matches(
+    current: &FixtureProfileSummary,
+    replacement: &FixtureProfileSummary,
+) -> bool {
+    current
+        .manufacturer
+        .trim()
+        .eq_ignore_ascii_case(replacement.manufacturer.trim())
+        && current
+            .name
+            .trim()
+            .eq_ignore_ascii_case(replacement.name.trim())
+}
+
 fn validate_auto_vj_config_shape(config: &AutoVjConfig) -> Result<(), String> {
     if config.eligible_layer_ids.is_empty() {
         return Err("Auto VJ requires at least one candidate video layer".to_string());
@@ -64110,6 +64384,7 @@ mod tests {
             timeline_audio_publication_generation: Arc::new(AtomicU64::new(1)),
             output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
             allocator_gate: Arc::new(Mutex::new(())),
+            fixture_allocator_transaction_gate: Arc::new(Mutex::new(())),
             next_fixture_id: Arc::new(AtomicU64::new(1)),
             next_effect_id: Arc::new(AtomicU64::new(1)),
             next_cue_id: Arc::new(AtomicU64::new(1)),
@@ -73717,6 +73992,7 @@ mod tests {
             timeline_audio_publication_generation: Arc::new(AtomicU64::new(1)),
             output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
             allocator_gate: Arc::new(Mutex::new(())),
+            fixture_allocator_transaction_gate: Arc::new(Mutex::new(())),
             next_fixture_id: Arc::new(AtomicU64::new(1)),
             next_effect_id: Arc::new(AtomicU64::new(1)),
             next_cue_id: Arc::new(AtomicU64::new(1)),
@@ -87569,6 +87845,129 @@ mod tests {
     }
 
     #[test]
+    fn fixture_patch_allocator_transaction_rolls_back_failures_and_serializes_competitors() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+
+        let timeout = engine.patch_fixtures_allocated_published_with_timeout(
+            vec![(sample_patch_request("Expired", 1), sample_profile())],
+            Duration::ZERO,
+        );
+        assert!(timeout.is_err());
+        assert_eq!(engine.allocate_fixture_id(), 1);
+
+        let conflict = engine.patch_fixtures_allocated_published(vec![
+            (
+                sample_patch_request("Would apply first", 1),
+                sample_profile(),
+            ),
+            (
+                sample_patch_request("Conflicts second", 1),
+                sample_profile(),
+            ),
+        ]);
+        assert!(conflict.is_err());
+        assert_eq!(engine.allocate_fixture_id(), 2);
+
+        engine.force_next_pending_publication_failure_for_tests();
+        let publication = engine.patch_fixtures_allocated_published(vec![(
+            sample_patch_request("Rolled back publication", 1),
+            sample_profile(),
+        )]);
+        assert!(publication.is_err());
+        assert_eq!(engine.allocate_fixture_id(), 3);
+
+        let published_guard = engine.snapshot.read().unwrap();
+        let patch_engine = engine.clone();
+        let patch = thread::spawn(move || {
+            patch_engine.patch_fixtures_allocated_published(vec![(
+                sample_patch_request("Published", 1),
+                sample_profile(),
+            )])
+        });
+        thread::sleep(Duration::from_millis(25));
+        let allocation_engine = engine.clone();
+        let competing = thread::spawn(move || allocation_engine.allocate_fixture_id());
+        thread::sleep(Duration::from_millis(10));
+        assert!(
+            !competing.is_finished(),
+            "a competing fixture allocation must wait for the definitive PATCH result"
+        );
+        drop(published_guard);
+        assert_eq!(patch.join().unwrap().unwrap(), vec![4]);
+        assert_eq!(competing.join().unwrap(), 5);
+    }
+
+    #[test]
+    fn fixture_patch_allocator_exhaustion_is_a_no_panic_no_delta_error() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .next_fixture_id
+            .store(u64::MAX - 1, Ordering::Relaxed);
+        let result = engine.patch_fixtures_allocated_published(vec![(
+            sample_patch_request("Exhausted", 1),
+            sample_profile(),
+        )]);
+        assert!(result.is_err());
+        assert_eq!(engine.next_fixture_id.load(Ordering::Relaxed), u64::MAX - 1);
+        assert!(engine.persistence_snapshot().unwrap().fixtures.is_empty());
+
+        let wire_engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let wire_max = protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER;
+        wire_engine
+            .next_fixture_id
+            .store(wire_max, Ordering::Relaxed);
+        assert_eq!(
+            wire_engine
+                .patch_fixtures_allocated_published(vec![(
+                    sample_patch_request("Wire max", 1),
+                    sample_profile(),
+                )])
+                .unwrap(),
+            vec![wire_max]
+        );
+        let before = wire_engine.persistence_snapshot().unwrap();
+        let above_wire = wire_engine.patch_fixtures_allocated_published(vec![(
+            sample_patch_request("Above wire max", 7),
+            sample_profile(),
+        )]);
+        assert!(above_wire.is_err());
+        assert_eq!(
+            wire_engine.persistence_snapshot().unwrap().fixtures,
+            before.fixtures
+        );
+        assert_eq!(
+            wire_engine.next_fixture_id.load(Ordering::Relaxed),
+            wire_max + 1
+        );
+    }
+
+    #[test]
+    fn admitted_fixture_patch_ack_disconnect_is_not_allocator_rewind_safe() {
+        let admission = ProjectSnapshotLoadAdmission::new();
+        assert!(admission.try_admit_before(Instant::now() + Duration::from_secs(1)));
+        let (sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
+        drop(sender);
+        let error = receive_fixture_patch_allocated_ack(
+            receiver,
+            &admission,
+            Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(!error.allocator_rewind_safe);
+        assert!(error.message.contains("remain reserved"));
+    }
+
+    #[test]
     fn fixture_patch_batch_publication_failure_restores_complete_runtime_a() {
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
@@ -87721,7 +88120,62 @@ mod tests {
     }
 
     #[test]
-    fn fixture_profile_repair_published_rejects_identity_layout_and_missing_fixture_without_b() {
+    fn repaired_fixture_geometry_survives_project_snapshot_reload() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut first = sample_fixture_patch_candidate(1, "Reload", 1);
+        let mut second = sample_fixture_patch_candidate(2, "Unchanged sibling", 10);
+        first.profile.geometries.last_mut().unwrap().beam_angle_deg = Some(18.0);
+        second.profile.geometries.last_mut().unwrap().beam_angle_deg = Some(18.0);
+        engine
+            .patch_fixtures_published(vec![first, second])
+            .unwrap();
+        let mut repaired = sample_repaired_fixture_profile();
+        repaired
+            .geometries
+            .last_mut()
+            .expect("sample repaired profile has Beam geometry")
+            .beam_angle_deg = Some(19.0);
+        engine
+            .repair_fixture_profile_published(1, repaired, Some("Standard".to_string()))
+            .unwrap();
+        let repaired_snapshot = engine.persistence_snapshot().unwrap();
+        assert_eq!(
+            repaired_snapshot.fixtures[0]
+                .geometries
+                .last()
+                .unwrap()
+                .beam_angle_deg,
+            Some(19.0)
+        );
+        assert_eq!(
+            repaired_snapshot.fixtures[1]
+                .geometries
+                .last()
+                .unwrap()
+                .beam_angle_deg,
+            Some(18.0)
+        );
+        engine
+            .load_project_snapshot_and_wait(repaired_snapshot)
+            .unwrap();
+        assert_eq!(
+            engine
+                .persistence_snapshot()
+                .unwrap()
+                .fixtures
+                .iter()
+                .map(|fixture| fixture.geometries.last().unwrap().beam_angle_deg)
+                .collect::<Vec<_>>(),
+            vec![Some(19.0), Some(18.0)]
+        );
+    }
+
+    #[test]
+    fn fixture_profile_repair_published_uses_canonical_identity_and_rejects_real_changes_without_b()
+    {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -87729,7 +88183,18 @@ mod tests {
         engine
             .patch_fixtures_published(vec![sample_fixture_patch_candidate(1, "A", 1)])
             .unwrap();
-        let before = engine.persistence_snapshot().unwrap();
+        let before_case_only = engine.persistence_snapshot().unwrap();
+        let mut case_only_identity = sample_repaired_fixture_profile();
+        case_only_identity.manufacturer = "sYnDoCaL".to_string();
+        case_only_identity.name = "mInI sPoT".to_string();
+        engine
+            .repair_fixture_profile_published(1, case_only_identity, Some("Standard".to_string()))
+            .unwrap();
+        let after_case_only = engine.persistence_snapshot().unwrap();
+        assert_ne!(after_case_only.fixtures, before_case_only.fixtures);
+        assert_eq!(after_case_only.fixtures[0].manufacturer, "sYnDoCaL");
+        assert_eq!(after_case_only.fixtures[0].profile_name, "mInI sPoT");
+        let before_rejections = after_case_only;
 
         let mut wrong_identity = sample_repaired_fixture_profile();
         wrong_identity.name = "Different Fixture".to_string();
@@ -87739,7 +88204,7 @@ mod tests {
         assert!(identity_error.contains("identity"));
         assert_eq!(
             engine.persistence_snapshot().unwrap().fixtures,
-            before.fixtures
+            before_rejections.fixtures
         );
 
         let mut wrong_layout = sample_repaired_fixture_profile();
@@ -87750,7 +88215,7 @@ mod tests {
         assert!(layout_error.contains("does not exactly match"));
         assert_eq!(
             engine.persistence_snapshot().unwrap().fixtures,
-            before.fixtures
+            before_rejections.fixtures
         );
 
         let missing_mode_error = engine
@@ -87763,7 +88228,7 @@ mod tests {
         assert!(missing_mode_error.contains("DMX mode 'Missing' was not found"));
         assert_eq!(
             engine.persistence_snapshot().unwrap().fixtures,
-            before.fixtures
+            before_rejections.fixtures
         );
 
         let missing_error = engine
@@ -87776,7 +88241,7 @@ mod tests {
         assert!(missing_error.contains("was not found"));
         assert_eq!(
             engine.persistence_snapshot().unwrap().fixtures,
-            before.fixtures
+            before_rejections.fixtures
         );
     }
 

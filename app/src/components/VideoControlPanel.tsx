@@ -243,6 +243,14 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
       <div class="panelHeader">
         <h2>{props.libraryOnly ? "Media Library" : "Video Control"}</h2>
         <span>{props.libraryOnly ? `${props.mediaLibrary.assets.length} asset(s)` : `${props.layerCount} layer(s)`}</span>
+        <Show when={props.libraryOnly}>
+          <details class="videoMixerSourceDisclosure" data-edit-video-import-disclosure>
+            <summary aria-label="Import Media">Import Media</summary>
+            <div class="videoMixerSourceCreateSurface" data-edit-video-import-surface>
+              <VideoSourceCreatePanel {...props.sourceCreate} />
+            </div>
+          </details>
+        </Show>
       </div>
       <div class="videoMixerDiagnostics">
         <VideoPreviewDiagnosticsPanel {...props.previewDiagnostics} />

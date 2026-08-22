@@ -22,7 +22,7 @@ use engine::{
     validate_mapping_effect_request as validate_engine_mapping_effect_request,
     validate_move_effect_request as validate_engine_move_effect_request,
     validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
-    EngineHandle, FixtureFlagClearKind, FixturePatchCandidate, MediaAssetImportCandidate,
+    EngineHandle, FixtureFlagClearKind, FixturePatchPublicationFailure, MediaAssetImportCandidate,
     MediaAssetTransaction, OutputOwnershipActivation, VideoClipSlotImportAndAssignCandidate,
     VideoClipSlotImportAssignment, VideoIsfStackMutation,
 };
@@ -17631,11 +17631,37 @@ struct PendingProjectTransaction {
     coalesce_key: String,
     before: ProjectCheckpoint,
     epoch: u64,
+    command_result: Option<ProjectTransactionCommandResult>,
+    command_indeterminate_error: Option<String>,
     /// Explicit retirement fence. The normal command path holds the external
     /// admission gate across the engine call, but this state remains visible
     /// to recovery tests and prevents a late callback from being admitted
     /// after owner retirement starts.
     closing: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ProjectTransactionCommandResult {
+    PatchFixtures {
+        request_digest: String,
+        fixture_ids: Vec<FixtureId>,
+    },
+    RepairFixtureProfile {
+        request_digest: String,
+        fixture_id: FixtureId,
+    },
+}
+
+fn project_transaction_command_request_digest<T: Serialize>(
+    command_name: &str,
+    request: &T,
+) -> Result<String, String> {
+    let canonical =
+        serde_json::to_vec(&(PROJECT_TRANSACTION_SCHEMA_VERSION, command_name, request)).map_err(
+            |error| format!("Project transaction command request could not be encoded: {error}"),
+        )?;
+    Ok(sha256_hex(&canonical))
 }
 
 /// A transaction reservation is scoped to the identity that created it.  The
@@ -17687,6 +17713,8 @@ struct ProjectTransactionReceipt {
     owner_incarnation: u64,
     label: String,
     coalesce_key: String,
+    command_result: Option<ProjectTransactionCommandResult>,
+    command_indeterminate_error: Option<String>,
     state: ProjectTransactionReceiptState,
 }
 
@@ -17695,12 +17723,17 @@ struct ProjectTransactionReceipt {
 enum ProjectTransactionRecovery {
     Pending {
         ticket: ProjectTransactionTicket,
+        command_result: Option<ProjectTransactionCommandResult>,
+        command_in_flight: bool,
+        command_indeterminate_error: Option<String>,
     },
     Committed {
         mutation: ProjectHistoryMutationResult,
+        command_result: Option<ProjectTransactionCommandResult>,
     },
     Cancelled {
         mutation: ProjectHistoryMutationResult,
+        command_result: Option<ProjectTransactionCommandResult>,
     },
     Acknowledged,
 }
@@ -17836,6 +17869,12 @@ struct ProjectExternalCommandAdmission {
     /// no project mutation or recovery capture may create state at an authority
     /// serial that could later change underneath it.
     recovery_authority_faulted: AtomicBool,
+    /// A ticketed PATCH/Repair command was admitted by the engine but its
+    /// definitive publication ACK disconnected. Unlike the durable Save
+    /// journal this is a process-local runtime ambiguity; keep every authored
+    /// mutation closed until process restart instead of letting E4
+    /// reconciliation invent or clear its truth.
+    project_transaction_publication_faulted: AtomicBool,
 }
 
 impl ProjectExternalCommandAdmission {
@@ -18179,6 +18218,16 @@ fn lock_project_transaction_operation_admission<'a>(
                 .to_string(),
         );
     }
+    if state
+        .project_external_command_admission
+        .project_transaction_publication_faulted
+        .load(Ordering::Acquire)
+    {
+        return Err(
+            "Project transaction publication acknowledgement is indeterminate; restart Syndocal before editing or changing the project"
+                .to_string(),
+        );
+    }
     if state.project_transaction_active.load(Ordering::Acquire) {
         let receipts = state
             .project_transaction_receipts
@@ -18213,6 +18262,16 @@ fn lock_project_transaction_owner_lifecycle_admission<'a>(
     {
         return Err(
             "Project recovery authority is awaiting startup reconciliation after an indeterminate Save; restart Syndocal before editing, saving, or changing the project"
+                .to_string(),
+        );
+    }
+    if state
+        .project_external_command_admission
+        .project_transaction_publication_faulted
+        .load(Ordering::Acquire)
+    {
+        return Err(
+            "Project transaction publication acknowledgement is indeterminate; restart Syndocal before editing or changing the project"
                 .to_string(),
         );
     }
@@ -18278,6 +18337,7 @@ fn lock_renderer_ticketed_project_mutation<'a>(
             pending.command_name
         ));
     }
+    ensure_project_operator_authoritative_mutation_allowed(state, &coordinator, &owner_id)?;
     let transaction_admission = admit_project_transaction_command(state, &pending)?;
     Ok((external_admission, coordinator, transaction_admission))
 }
@@ -18301,6 +18361,16 @@ fn lock_project_external_command_admission_inner<'a>(
             .to_string(),
         );
     }
+    if state
+        .project_external_command_admission
+        .project_transaction_publication_faulted
+        .load(Ordering::Acquire)
+    {
+        return Err(
+            "Project transaction publication acknowledgement is indeterminate; restart Syndocal before editing or changing the project"
+                .to_string(),
+        );
+    }
     if !allow_active_display_finalize && state.project_transaction_active.load(Ordering::Acquire) {
         return Err(
             "Project transaction is active; retry after Display output publication".to_string(),
@@ -18315,7 +18385,10 @@ fn try_lock_project_external_command_admission(
     let guard = project_external_command_admission.gate.try_lock().ok()?;
     (!project_external_command_admission
         .recovery_authority_faulted
-        .load(Ordering::Acquire))
+        .load(Ordering::Acquire)
+        && !project_external_command_admission
+            .project_transaction_publication_faulted
+            .load(Ordering::Acquire))
     .then_some(guard)
 }
 
@@ -19989,28 +20062,110 @@ fn repair_fixture_profile(
     project_transaction_id: u64,
     expected_epoch: u64,
     owner_id: String,
-) -> Result<(), String> {
-    let _external_admission = lock_project_external_command_admission_for_display_finalize(&state)?;
-    let coordinator = lock_project_coordinator(&state)?;
+) -> Result<ProjectTransactionCommandResult, String> {
+    repair_fixture_profile_for_window_label_with_resolve_observer(
+        &state,
+        fixture_id,
+        profile_path,
+        mode_name,
+        profile,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+        window.label(),
+        || {},
+    )
+}
+
+fn repair_fixture_profile_for_window_label_with_resolve_observer(
+    state: &AppState,
+    fixture_id: FixtureId,
+    profile_path: String,
+    mode_name: Option<String>,
+    profile: FixtureProfileSummary,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+    window_label: &str,
+    before_resolve: impl FnOnce(),
+) -> Result<ProjectTransactionCommandResult, String> {
+    repair_fixture_profile_for_window_label_with_resolve_and_publish(
+        state,
+        fixture_id,
+        profile_path,
+        mode_name,
+        profile,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+        window_label,
+        before_resolve,
+        |engine, fixture_id, profile, mode_name| {
+            engine.repair_fixture_profile_published_classified(fixture_id, profile, mode_name)
+        },
+    )
+}
+
+fn repair_fixture_profile_for_window_label_with_resolve_and_publish(
+    state: &AppState,
+    fixture_id: FixtureId,
+    profile_path: String,
+    mode_name: Option<String>,
+    profile: FixtureProfileSummary,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+    window_label: &str,
+    before_resolve: impl FnOnce(),
+    publish: impl FnOnce(
+        &EngineHandle,
+        FixtureId,
+        FixtureProfileSummary,
+        Option<String>,
+    ) -> Result<(), FixturePatchPublicationFailure>,
+) -> Result<ProjectTransactionCommandResult, String> {
+    let request_digest = project_transaction_command_request_digest(
+        "repair_fixture_profile",
+        &(&fixture_id, &profile_path, &mode_name, &profile),
+    )?;
+    let (_external_admission, coordinator, transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            window_label,
+            "repair_fixture_profile",
+            project_transaction_id,
+            expected_epoch,
+            &owner_id,
+        )?;
     let pending = project_transaction_for_owner_epoch(
         &coordinator,
         project_transaction_id,
         expected_epoch,
         &owner_id,
     )?;
-    ensure_project_transaction_pending_binding(&state, &pending, window.label(), &owner_id)?;
-    let _transaction_admission = admit_project_transaction_command(&state, &pending)?;
+    if let Some(result) = project_transaction_existing_command_result(
+        &pending,
+        "repair_fixture_profile",
+        &request_digest,
+    )? {
+        return Ok(result);
+    }
+    let prepare_fence = project_checkpoint_for_coordinator(state, &coordinator)?;
     let snapshot = state.engine.persistence_snapshot()?;
+    let custom_profiles = coordinator.ancillary.custom_profiles.clone();
+    drop(coordinator);
+    drop(_external_admission);
+
+    // GDTF/profile resolution can perform filesystem I/O. The transaction
+    // lane remains in flight, but neither global mutation lock is held.
+    before_resolve();
     let fixture = snapshot
         .fixtures
         .iter()
         .find(|fixture| fixture.id == fixture_id)
         .ok_or_else(|| format!("Fixture {fixture_id} was not found"))?;
-    let profile = resolve_patch_profile_against_authority(
-        &profile_path,
-        Some(&profile),
-        &coordinator.ancillary.custom_profiles,
-    )?;
+    let profile =
+        resolve_patch_profile_against_authority(&profile_path, Some(&profile), &custom_profiles)?;
     if !profile
         .manufacturer
         .trim()
@@ -20038,6 +20193,34 @@ fn repair_fixture_profile(
         ));
     }
     let replacement_mode_name = replacement_mode.name.clone();
+    let (_external_admission, mut coordinator, _final_transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            window_label,
+            "repair_fixture_profile",
+            project_transaction_id,
+            expected_epoch,
+            &owner_id,
+        )?;
+    let final_pending = project_transaction_for_owner_epoch(
+        &coordinator,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+    if let Some(result) = project_transaction_existing_command_result(
+        &final_pending,
+        "repair_fixture_profile",
+        &request_digest,
+    )? {
+        return Ok(result);
+    }
+    if project_checkpoint_for_coordinator(state, &coordinator)? != prepare_fence {
+        return Err(
+            "Project changed while resolving the replacement fixture profile; retry Repair"
+                .to_string(),
+        );
+    }
     let mut candidate_ancillary = coordinator.ancillary.clone();
     let source_path = profile.source_path.trim();
     if !source_path.is_empty() {
@@ -20046,27 +20229,46 @@ fn repair_fixture_profile(
             .insert(source_path.to_string(), profile.clone());
     }
     let prepared_ancillary = prepare_direct_project_ancillary_mutation(
-        &state,
+        state,
         &coordinator,
         snapshot,
         candidate_ancillary,
     )?;
+    let prepared_result_publication = prepare_project_transaction_command_result_publication(
+        state,
+        &coordinator,
+        &final_pending,
+    )?;
 
-    // The definitive engine call is wired once the engine-only owner freezes
-    // its API. Until then this branch intentionally remains compile-blocked
-    // rather than falling back to the old queue+poll partial publication.
-    state.engine.repair_fixture_profile_published(
+    match publish(
+        &state.engine,
         fixture_id,
         profile,
         Some(replacement_mode_name),
-    )?;
-    let mut coordinator = coordinator;
+    ) {
+        Ok(()) => {}
+        Err(FixturePatchPublicationFailure::Definitive(error)) => return Err(error),
+        Err(FixturePatchPublicationFailure::Indeterminate(error)) => {
+            return Err(mark_project_transaction_publication_indeterminate(
+                state,
+                &mut coordinator,
+                prepared_result_publication,
+                error,
+            ));
+        }
+    }
     commit_direct_project_ancillary_mutation_after_preflight(
-        &state,
+        state,
         &mut coordinator,
         prepared_ancillary,
     );
-    Ok(())
+    let result = ProjectTransactionCommandResult::RepairFixtureProfile {
+        request_digest,
+        fixture_id,
+    };
+    prepared_result_publication.commit(&mut coordinator, result.clone());
+    drop(transaction_admission);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -20148,30 +20350,6 @@ fn use_fixture_profile(
 }
 
 #[tauri::command]
-fn patch_fixture(
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    request: PatchFixtureRequest,
-    profile: Option<FixtureProfileSummary>,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
-) -> Result<FixtureId, String> {
-    patch_fixtures_in_project_transaction(
-        &state,
-        vec![request],
-        profile.map(|profile| vec![profile]),
-        project_transaction_id,
-        expected_epoch,
-        owner_id,
-        window.label(),
-    )?
-    .into_iter()
-    .next()
-    .ok_or_else(|| "Fixture patch did not allocate a fixture id".to_string())
-}
-
-#[tauri::command]
 fn patch_fixtures(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -20180,7 +20358,7 @@ fn patch_fixtures(
     project_transaction_id: u64,
     expected_epoch: u64,
     owner_id: String,
-) -> Result<Vec<FixtureId>, String> {
+) -> Result<ProjectTransactionCommandResult, String> {
     patch_fixtures_in_project_transaction(
         &state,
         requests,
@@ -20189,6 +20367,7 @@ fn patch_fixtures(
         expected_epoch,
         owner_id,
         window.label(),
+        "patch_fixtures",
     )
 }
 
@@ -20200,49 +20379,128 @@ fn patch_fixtures_in_project_transaction(
     expected_epoch: u64,
     owner_id: String,
     window_label: &str,
-) -> Result<Vec<FixtureId>, String> {
-    // One backend-authoritative boundary owns validation, publication and the
-    // project profile image. Raw IPC cannot bypass the transaction/fault
-    // fence, and callbacks/remotes cannot race the prepared A→B image.
-    let _external_admission = lock_project_external_command_admission_for_display_finalize(state)?;
-    let mut coordinator = lock_project_coordinator(state)?;
+    command_name: &str,
+) -> Result<ProjectTransactionCommandResult, String> {
+    patch_fixtures_in_project_transaction_with_resolve_observer(
+        state,
+        requests,
+        profiles,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+        window_label,
+        command_name,
+        || {},
+    )
+}
+
+fn patch_fixtures_in_project_transaction_with_resolve_observer(
+    state: &AppState,
+    requests: Vec<PatchFixtureRequest>,
+    profiles: Option<Vec<FixtureProfileSummary>>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+    window_label: &str,
+    command_name: &str,
+    before_resolve: impl FnOnce(),
+) -> Result<ProjectTransactionCommandResult, String> {
+    patch_fixtures_in_project_transaction_with_resolve_and_publish(
+        state,
+        requests,
+        profiles,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+        window_label,
+        command_name,
+        before_resolve,
+        |engine, patches| engine.patch_fixtures_allocated_published_classified(patches),
+    )
+}
+
+fn patch_fixtures_in_project_transaction_with_resolve_and_publish(
+    state: &AppState,
+    requests: Vec<PatchFixtureRequest>,
+    profiles: Option<Vec<FixtureProfileSummary>>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+    window_label: &str,
+    command_name: &str,
+    before_resolve: impl FnOnce(),
+    publish: impl FnOnce(
+        &EngineHandle,
+        Vec<(PatchFixtureRequest, FixtureProfileSummary)>,
+    ) -> Result<Vec<FixtureId>, FixturePatchPublicationFailure>,
+) -> Result<ProjectTransactionCommandResult, String> {
+    let request_digest =
+        project_transaction_command_request_digest(command_name, &(&requests, &profiles))?;
+    let (_external_admission, coordinator, transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            window_label,
+            command_name,
+            project_transaction_id,
+            expected_epoch,
+            &owner_id,
+        )?;
     let pending = project_transaction_for_owner_epoch(
         &coordinator,
         project_transaction_id,
         expected_epoch,
         &owner_id,
     )?;
-    ensure_project_transaction_pending_binding(state, &pending, window_label, &owner_id)?;
-    let _transaction_admission = admit_project_transaction_command(state, &pending)?;
-
+    if let Some(result) =
+        project_transaction_existing_command_result(&pending, command_name, &request_digest)?
+    {
+        return Ok(result);
+    }
+    let prepare_fence = project_checkpoint_for_coordinator(state, &coordinator)?;
     let before_snapshot = state.engine.persistence_snapshot()?;
+    let custom_profiles = coordinator.ancillary.custom_profiles.clone();
+    drop(coordinator);
+    drop(_external_admission);
+
+    // Profile resolution may parse GDTF/custom files. Keep only the exact
+    // transaction lane alive while this unbounded work runs; final publish
+    // reacquires and compares the complete checkpoint captured above.
+    before_resolve();
     let prepared = prepare_fixture_patches_against_authority(
         requests,
         profiles.as_deref(),
-        &coordinator.ancillary.custom_profiles,
+        &custom_profiles,
         &before_snapshot.fixtures,
     )?;
+    let (_external_admission, mut coordinator, _final_transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            window_label,
+            command_name,
+            project_transaction_id,
+            expected_epoch,
+            &owner_id,
+        )?;
+    let final_pending = project_transaction_for_owner_epoch(
+        &coordinator,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+    if let Some(result) =
+        project_transaction_existing_command_result(&final_pending, command_name, &request_digest)?
+    {
+        return Ok(result);
+    }
+    if project_checkpoint_for_coordinator(state, &coordinator)? != prepare_fence {
+        return Err("Project changed while resolving fixture profiles; retry PATCH".to_string());
+    }
     for patch in &prepared {
         validate_fixture_group_memberships_against(
             &coordinator.ancillary.fixture_groups,
             &patch.request.group_ids,
         )?;
     }
-
-    let fixture_ids = prepared
-        .iter()
-        .map(|_| state.engine.allocate_fixture_id())
-        .collect::<Vec<_>>();
-    let candidates = fixture_ids
-        .iter()
-        .copied()
-        .zip(prepared.iter())
-        .map(|(fixture_id, patch)| FixturePatchCandidate {
-            fixture_id,
-            request: patch.request.clone(),
-            profile: patch.profile.clone(),
-        })
-        .collect::<Vec<_>>();
 
     let mut candidate_ancillary = coordinator.ancillary.clone();
     for patch in &prepared {
@@ -20259,14 +20517,41 @@ fn patch_fixtures_in_project_transaction(
         before_snapshot,
         candidate_ancillary,
     )?;
-
-    state.engine.patch_fixtures_published(candidates)?;
+    let prepared_result_publication = prepare_project_transaction_command_result_publication(
+        state,
+        &coordinator,
+        &final_pending,
+    )?;
+    let fixture_ids = match publish(
+        &state.engine,
+        prepared
+            .into_iter()
+            .map(|patch| (patch.request, patch.profile))
+            .collect(),
+    ) {
+        Ok(fixture_ids) => fixture_ids,
+        Err(FixturePatchPublicationFailure::Definitive(error)) => return Err(error),
+        Err(FixturePatchPublicationFailure::Indeterminate(error)) => {
+            return Err(mark_project_transaction_publication_indeterminate(
+                state,
+                &mut coordinator,
+                prepared_result_publication,
+                error,
+            ));
+        }
+    };
     commit_direct_project_ancillary_mutation_after_preflight(
         state,
         &mut coordinator,
         prepared_ancillary,
     );
-    Ok(fixture_ids)
+    let result = ProjectTransactionCommandResult::PatchFixtures {
+        request_digest,
+        fixture_ids,
+    };
+    prepared_result_publication.commit(&mut coordinator, result.clone());
+    drop(transaction_admission);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -28915,6 +29200,8 @@ fn prepare_internal_media_asset_commit(
         coalesce_key: coalesce_key.trim().chars().take(240).collect(),
         before,
         epoch: coordinator.epoch,
+        command_result: None,
+        command_indeterminate_error: None,
         closing: false,
     };
     commit_project_history_entry(&mut next_history, pending, after, committed_at_unix_ms)?;
@@ -43005,6 +43292,8 @@ fn begin_project_transaction_for_window_label(
         coalesce_key: normalized_coalesce_key,
         before,
         epoch,
+        command_result: None,
+        command_indeterminate_error: None,
         closing: false,
     };
     coordinator
@@ -43119,79 +43408,20 @@ fn commit_project_transaction_for_window_label(
             "Project transaction request shape does not match its Begin receipt".to_string(),
         );
     }
-    let result = with_retained_project_transaction(
-        &mut coordinator,
-        transaction_id,
-        expected_epoch,
-        |coordinator, pending| {
-            // Commit consumes a pending reservation even for a no-op edit.
-            // Preflight its observable history generation before any fallible
-            // checkpoint/hash work so the success path assigns it exactly once.
-            let next_history_generation =
-                checked_project_history_generation_after_change(coordinator)?;
-            // The single-pending reservation makes all engine mutations between
-            // Begin and Commit one intended transaction. Do not compare the
-            // current hash to `before`: a normal edit necessarily changes it
-            // from A to B.
-            let mut after = project_checkpoint_for_coordinator(state, coordinator)?;
-            let changed = pending.before.project != after.project
-                || pending.before.mappings != after.mappings;
-            let prepared_revision_and_hash = if changed {
-                let revision = checked_project_revision_after_mutation(coordinator)?;
-                let hash = project_checkpoint_hash(&after.project, &after.mappings)?;
-                after.revision = revision;
-                after.hash = hash.clone();
-                Some((revision, hash))
-            } else {
-                None
-            };
-            let next_publication_generation = prepared_revision_and_hash
-                .is_some()
-                .then(|| checked_project_authority_publication_generation_after_change(coordinator))
-                .transpose()?;
-            // Build history on a clone so a fallible entry/coalesce step cannot
-            // alter revision/hash/history while the pending ticket remains
-            // cancellable.
-            let mut next_history = coordinator.history.clone();
-            commit_project_history_entry(
-                &mut next_history,
-                pending,
-                after,
-                current_unix_ms().min(u64::MAX as u128) as u64,
-            )?;
-            next_history.pending.remove(&transaction_id);
-            if let Some((revision, hash)) = prepared_revision_and_hash {
-                coordinator.revision = revision;
-                coordinator.checkpoint_hash = hash;
-                commit_project_authority_publication_after_preflight(
-                    coordinator,
-                    next_publication_generation
-                        .expect("a changed transaction preflights its mutation publication"),
-                    ProjectAuthorityPublicationKind::Mutation,
-                );
-            }
-            coordinator.history = next_history;
-            coordinator.history_generation = next_history_generation;
-            state
-                .project_transaction_active
-                .store(false, Ordering::Release);
-            Ok(ProjectHistoryMutationResult {
-                history_status: project_history_status_for_coordinator(coordinator),
-                authority: project_authority_bundle_from_coordinator(state, coordinator),
-            })
-        },
-    )?;
-    if let Some(receipt) = receipts.get_mut(&client_operation_id) {
-        receipt.state = ProjectTransactionReceiptState::Committed(result.clone());
-    }
-    if let Some(lane) = state
+    let operation_lane = state
         .project_transaction_lanes
         .lock()
         .map_err(|_| "Project transaction lane registry lock was poisoned".to_string())?
         .get(&client_operation_id)
-        .cloned()
-    {
-        lane.close()?;
+        .cloned();
+    let result = commit_pending_project_transaction_locked_with_lane(
+        state,
+        &mut coordinator,
+        pending,
+        operation_lane,
+    )?;
+    if let Some(receipt) = receipts.get_mut(&client_operation_id) {
+        receipt.state = ProjectTransactionReceiptState::Committed(result.clone());
     }
     Ok(result)
 }
@@ -43270,7 +43500,16 @@ fn query_project_transaction_for_window_label(
         window_label,
         owner_incarnation,
     )?;
-    Ok(Some(project_transaction_recovery_from_receipt(receipt)))
+    let command_in_flight = state
+        .project_transaction_lanes
+        .lock()
+        .map_err(|_| "Project transaction lane registry lock was poisoned".to_string())?
+        .get(&client_operation_id)
+        .is_some_and(|lane| lane.in_flight_commands.load(Ordering::Acquire) != 0);
+    Ok(Some(project_transaction_recovery_from_receipt(
+        receipt,
+        command_in_flight,
+    )))
 }
 
 #[tauri::command]
@@ -43293,7 +43532,7 @@ fn adopt_project_transaction(
         owner_id,
     )?
     .ok_or_else(|| "Project transaction receipt was not found".to_string())?;
-    if let ProjectTransactionRecovery::Pending { ref ticket } = recovery {
+    if let ProjectTransactionRecovery::Pending { ref ticket, .. } = recovery {
         let coordinator = lock_project_coordinator(&state)?;
         let pending = project_transaction_for_epoch(
             &coordinator,
@@ -43712,8 +43951,148 @@ fn project_transaction_receipt_from_pending(
         owner_incarnation: pending.owner_incarnation,
         label: pending.label.clone(),
         coalesce_key: pending.coalesce_key.clone(),
+        command_result: pending.command_result.clone(),
+        command_indeterminate_error: pending.command_indeterminate_error.clone(),
         state: ProjectTransactionReceiptState::Pending,
     }
+}
+
+fn project_transaction_existing_command_result(
+    pending: &PendingProjectTransaction,
+    command_name: &str,
+    request_digest: &str,
+) -> Result<Option<ProjectTransactionCommandResult>, String> {
+    let Some(result) = pending.command_result.as_ref() else {
+        return Ok(None);
+    };
+    let matches = match (command_name, result) {
+        (
+            "patch_fixtures",
+            ProjectTransactionCommandResult::PatchFixtures {
+                request_digest: stored,
+                ..
+            },
+        )
+        | (
+            "repair_fixture_profile",
+            ProjectTransactionCommandResult::RepairFixtureProfile {
+                request_digest: stored,
+                ..
+            },
+        ) => stored == request_digest,
+        _ => false,
+    };
+    if !matches {
+        return Err(
+            "Project transaction ticket was replayed with a different published-command request"
+                .to_string(),
+        );
+    }
+    Ok(Some(result.clone()))
+}
+
+struct PreparedProjectTransactionCommandResultPublication<'a> {
+    receipts: std::sync::MutexGuard<'a, HashMap<String, ProjectTransactionReceipt>>,
+    client_operation_id: String,
+    transaction_id: u64,
+}
+
+fn prepare_project_transaction_command_result_publication<'a>(
+    state: &'a AppState,
+    coordinator: &ProjectCoordinator,
+    pending: &PendingProjectTransaction,
+) -> Result<PreparedProjectTransactionCommandResultPublication<'a>, String> {
+    let current = coordinator
+        .history
+        .pending
+        .get(&pending.transaction_id)
+        .ok_or_else(|| {
+            "Project transaction closed before command result publication".to_string()
+        })?;
+    if current.client_operation_id != pending.client_operation_id
+        || current.epoch != pending.epoch
+        || current.command_name != pending.command_name
+    {
+        return Err("Project transaction changed before command result publication".to_string());
+    }
+    if current.command_result.is_some() {
+        return Err("Project transaction already contains a command result".to_string());
+    }
+    if current.command_indeterminate_error.is_some() {
+        return Err("Project transaction command publication is indeterminate".to_string());
+    }
+    let receipts = state
+        .project_transaction_receipts
+        .lock()
+        .map_err(|_| "Project transaction receipt registry lock was poisoned".to_string())?;
+    let receipt = receipts
+        .get(&pending.client_operation_id)
+        .ok_or_else(|| "Project transaction command result has no Begin receipt".to_string())?;
+    if receipt.transaction_id != pending.transaction_id
+        || receipt.project_epoch != pending.epoch
+        || !matches!(receipt.state, ProjectTransactionReceiptState::Pending)
+    {
+        return Err(
+            "Project transaction receipt changed before command result publication".to_string(),
+        );
+    }
+    if receipt.command_result.is_some() {
+        return Err("Project transaction receipt already contains a command result".to_string());
+    }
+    if receipt.command_indeterminate_error.is_some() {
+        return Err("Project transaction receipt publication is indeterminate".to_string());
+    }
+    Ok(PreparedProjectTransactionCommandResultPublication {
+        receipts,
+        client_operation_id: pending.client_operation_id.clone(),
+        transaction_id: pending.transaction_id,
+    })
+}
+
+impl PreparedProjectTransactionCommandResultPublication<'_> {
+    fn commit(
+        mut self,
+        coordinator: &mut ProjectCoordinator,
+        result: ProjectTransactionCommandResult,
+    ) {
+        coordinator
+            .history
+            .pending
+            .get_mut(&self.transaction_id)
+            .expect("prepared command-result pending remains protected by mutation locks")
+            .command_result = Some(result.clone());
+        self.receipts
+            .get_mut(&self.client_operation_id)
+            .expect("prepared command-result receipt remains locked until assignment")
+            .command_result = Some(result);
+    }
+
+    fn mark_indeterminate(mut self, coordinator: &mut ProjectCoordinator, error: String) {
+        coordinator
+            .history
+            .pending
+            .get_mut(&self.transaction_id)
+            .expect("prepared command-result pending remains protected by mutation locks")
+            .command_indeterminate_error = Some(error.clone());
+        self.receipts
+            .get_mut(&self.client_operation_id)
+            .expect("prepared command-result receipt remains locked until assignment")
+            .command_indeterminate_error = Some(error);
+    }
+}
+
+fn mark_project_transaction_publication_indeterminate(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    prepared: PreparedProjectTransactionCommandResultPublication<'_>,
+    error: String,
+) -> String {
+    state
+        .project_external_command_admission
+        .project_transaction_publication_faulted
+        .store(true, Ordering::Release);
+    prepared.mark_indeterminate(coordinator, error.clone());
+    error
 }
 
 fn mark_project_transaction_cancelled_receipt(
@@ -43769,8 +44148,86 @@ fn compact_retired_project_transaction(
     Ok(())
 }
 
+/// Owner/window retirement is a terminal recovery path, not an unconditional
+/// Cancel. A known PATCH/Repair B is committed as its one intended history
+/// result; an indeterminate admitted publication remains pending and blocks
+/// retirement; only a transaction proven to have no command result may become
+/// Cancelled/Interrupted.
+fn finalize_retired_project_transaction_locked(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    pending: PendingProjectTransaction,
+    operation_lane: Option<Arc<ProjectTransactionLane>>,
+    receipts: &mut HashMap<String, ProjectTransactionReceipt>,
+    lanes: &mut HashMap<String, Arc<ProjectTransactionLane>>,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let operation_id = pending.client_operation_id.clone();
+    if operation_id.is_empty() {
+        if pending.command_result.is_some() || pending.command_indeterminate_error.is_some() {
+            return Err(
+                "Published project transaction is missing its durable operation identity"
+                    .to_string(),
+            );
+        }
+        return cancel_pending_project_transaction_locked_with_lane(
+            state,
+            coordinator,
+            pending,
+            operation_lane,
+        );
+    }
+
+    let receipt = receipts.get(&operation_id).ok_or_else(|| {
+        format!("Project transaction owner retirement is missing receipt {operation_id}")
+    })?;
+    if receipt.transaction_id != pending.transaction_id
+        || receipt.project_epoch != pending.epoch
+        || receipt.command_name != pending.command_name
+        || !matches!(receipt.state, ProjectTransactionReceiptState::Pending)
+        || receipt.command_result != pending.command_result
+        || receipt.command_indeterminate_error != pending.command_indeterminate_error
+    {
+        return Err(
+            "Project transaction owner retirement receipt does not match its pending command truth"
+                .to_string(),
+        );
+    }
+    if pending.command_indeterminate_error.is_some() {
+        return Err(
+            "Project transaction command publication is indeterminate and owner retirement cannot cancel it"
+                .to_string(),
+        );
+    }
+    if pending.command_result.is_some() {
+        let result = commit_pending_project_transaction_locked_with_lane(
+            state,
+            coordinator,
+            pending,
+            operation_lane,
+        )?;
+        receipts
+            .get_mut(&operation_id)
+            .expect("retirement holds the validated receipt registry")
+            .state = ProjectTransactionReceiptState::Committed(result.clone());
+        lanes.remove(&operation_id);
+        receipts.remove(&operation_id);
+        return Ok(result);
+    }
+
+    let result = cancel_pending_project_transaction_locked_with_lane(
+        state,
+        coordinator,
+        pending,
+        operation_lane,
+    )?;
+    mark_project_transaction_cancelled_receipt(receipts, &operation_id, &result)?;
+    compact_retired_project_transaction(receipts, lanes, &operation_id)?;
+    Ok(result)
+}
+
 fn project_transaction_recovery_from_receipt(
     receipt: &ProjectTransactionReceipt,
+    command_in_flight: bool,
 ) -> ProjectTransactionRecovery {
     match &receipt.state {
         ProjectTransactionReceiptState::Pending => ProjectTransactionRecovery::Pending {
@@ -43788,15 +44245,20 @@ fn project_transaction_recovery_from_receipt(
                 label: receipt.label.clone(),
                 coalesce_key: receipt.coalesce_key.clone(),
             },
+            command_result: receipt.command_result.clone(),
+            command_in_flight,
+            command_indeterminate_error: receipt.command_indeterminate_error.clone(),
         },
         ProjectTransactionReceiptState::Committed(mutation) => {
             ProjectTransactionRecovery::Committed {
                 mutation: mutation.clone(),
+                command_result: receipt.command_result.clone(),
             }
         }
         ProjectTransactionReceiptState::Cancelled(mutation) => {
             ProjectTransactionRecovery::Cancelled {
                 mutation: mutation.clone(),
+                command_result: receipt.command_result.clone(),
             }
         }
     }
@@ -44781,6 +45243,7 @@ fn ensure_legacy_media_asset_compatibility_operation_current(
     )
 }
 
+#[cfg(test)]
 fn with_retained_project_transaction<T>(
     coordinator: &mut ProjectCoordinator,
     transaction_id: u64,
@@ -44789,8 +45252,6 @@ fn with_retained_project_transaction<T>(
 ) -> Result<T, String> {
     let pending = project_transaction_for_epoch(coordinator, transaction_id, expected_epoch)?;
     let result = finalize(coordinator, pending)?;
-    // All fallible preparation/history work succeeded. Only now can the
-    // caller lose the reservation; an earlier error leaves Cancel available.
     coordinator.history.pending.remove(&transaction_id);
     Ok(result)
 }
@@ -44913,6 +45374,18 @@ fn cancel_project_transaction_for_window_label(
         }
         ProjectTransactionReceiptState::Pending => {}
     }
+    if receipt.command_result.is_some() {
+        return Err(
+            "Project transaction contains a definitive published-command result and must be committed"
+                .to_string(),
+        );
+    }
+    if receipt.command_indeterminate_error.is_some() {
+        return Err(
+            "Project transaction command publication is indeterminate and cannot be cancelled"
+                .to_string(),
+        );
+    }
     let pending = project_transaction_for_epoch(&coordinator, transaction_id, expected_epoch)?;
     ensure_project_transaction_pending_binding(state, &pending, window_label, &owner_id)?;
     if pending.shape_fingerprint != shape_fingerprint
@@ -44921,6 +45394,12 @@ fn cancel_project_transaction_for_window_label(
     {
         return Err(
             "Project transaction request shape does not match its Begin receipt".to_string(),
+        );
+    }
+    if pending.command_indeterminate_error.is_some() {
+        return Err(
+            "Project transaction command publication is indeterminate and cannot be cancelled"
+                .to_string(),
         );
     }
     let result = cancel_pending_project_transaction_locked(state, &mut coordinator, pending)?;
@@ -45077,14 +45556,14 @@ fn register_project_transaction_owner_for_window_label(
                         })
                     })
                     .transpose()?;
-                let result = cancel_pending_project_transaction_locked_with_lane(
+                let result = finalize_retired_project_transaction_locked(
                     &state,
                     coordinator,
                     pending,
                     operation_lane,
+                    &mut receipts,
+                    &mut lanes,
                 )?;
-                mark_project_transaction_cancelled_receipt(&mut receipts, &operation_id, &result)?;
-                compact_retired_project_transaction(&mut receipts, &mut lanes, &operation_id)?;
                 Some(result)
             } else {
                 None
@@ -45286,14 +45765,14 @@ fn retire_project_transaction_owner_for_window_incarnation(
                         })
                     })
                     .transpose()?;
-                let result = cancel_pending_project_transaction_locked_with_lane(
+                let result = finalize_retired_project_transaction_locked(
                     state,
                     coordinator,
                     pending,
                     operation_lane,
+                    &mut receipts,
+                    &mut lanes,
                 )?;
-                mark_project_transaction_cancelled_receipt(&mut receipts, &operation_id, &result)?;
-                compact_retired_project_transaction(&mut receipts, &mut lanes, &operation_id)?;
                 Some(result)
             } else {
                 None
@@ -45517,6 +45996,111 @@ fn cancel_pending_project_transaction_locked(
         .then(|| project_transaction_lane_for_operation(state, &pending.client_operation_id))
         .transpose()?;
     cancel_pending_project_transaction_locked_with_lane(state, coordinator, pending, operation_lane)
+}
+
+fn project_transaction_requires_command_result(command_name: &str) -> bool {
+    matches!(command_name, "patch_fixtures" | "repair_fixture_profile")
+}
+
+fn project_transaction_command_result_matches_name(
+    command_name: &str,
+    result: &ProjectTransactionCommandResult,
+) -> bool {
+    matches!(
+        (command_name, result),
+        (
+            "patch_fixtures",
+            ProjectTransactionCommandResult::PatchFixtures { .. }
+        ) | (
+            "repair_fixture_profile",
+            ProjectTransactionCommandResult::RepairFixtureProfile { .. }
+        )
+    )
+}
+
+/// Complete one already-admitted transaction from either the renderer Commit
+/// route or an owner-retirement recovery. The operation lane is closed before
+/// coordinator mutation, and every fallible checkpoint/history/counter step is
+/// prepared before assigning the authoritative B image.
+fn commit_pending_project_transaction_locked_with_lane(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    pending: PendingProjectTransaction,
+    operation_lane: Option<Arc<ProjectTransactionLane>>,
+) -> Result<ProjectHistoryMutationResult, String> {
+    if pending.command_indeterminate_error.is_some() {
+        return Err(
+            "Project transaction command publication is indeterminate and cannot be committed"
+                .to_string(),
+        );
+    }
+    if project_transaction_requires_command_result(&pending.command_name) {
+        let result = pending.command_result.as_ref().ok_or_else(|| {
+            "Published PATCH/Repair transaction cannot commit before its exact command result"
+                .to_string()
+        })?;
+        if !project_transaction_command_result_matches_name(&pending.command_name, result) {
+            return Err(
+                "Published PATCH/Repair transaction command result does not match its command"
+                    .to_string(),
+            );
+        }
+    } else if let Some(result) = pending.command_result.as_ref() {
+        if !project_transaction_command_result_matches_name(&pending.command_name, result) {
+            return Err(
+                "Project transaction command result does not match its command".to_string(),
+            );
+        }
+    }
+
+    let transaction_id = pending.transaction_id;
+    let next_history_generation = checked_project_history_generation_after_change(coordinator)?;
+    let mut after = project_checkpoint_for_coordinator(state, coordinator)?;
+    let changed =
+        pending.before.project != after.project || pending.before.mappings != after.mappings;
+    let prepared_revision_and_hash = if changed {
+        let revision = checked_project_revision_after_mutation(coordinator)?;
+        let hash = project_checkpoint_hash(&after.project, &after.mappings)?;
+        after.revision = revision;
+        after.hash = hash.clone();
+        Some((revision, hash))
+    } else {
+        None
+    };
+    let next_publication_generation = prepared_revision_and_hash
+        .is_some()
+        .then(|| checked_project_authority_publication_generation_after_change(coordinator))
+        .transpose()?;
+    let mut next_history = coordinator.history.clone();
+    commit_project_history_entry(
+        &mut next_history,
+        pending,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )?;
+    next_history.pending.remove(&transaction_id);
+    if let Some(lane) = operation_lane.as_ref() {
+        lane.close()?;
+    }
+    if let Some((revision, hash)) = prepared_revision_and_hash {
+        coordinator.revision = revision;
+        coordinator.checkpoint_hash = hash;
+        commit_project_authority_publication_after_preflight(
+            coordinator,
+            next_publication_generation
+                .expect("a changed transaction preflights its mutation publication"),
+            ProjectAuthorityPublicationKind::Mutation,
+        );
+    }
+    coordinator.history = next_history;
+    coordinator.history_generation = next_history_generation;
+    state
+        .project_transaction_active
+        .store(false, Ordering::Release);
+    Ok(ProjectHistoryMutationResult {
+        history_status: project_history_status_for_coordinator(coordinator),
+        authority: project_authority_bundle_from_coordinator(state, coordinator),
+    })
 }
 
 /// Retirement already owns the lane registry so it can close and compact the
@@ -45844,6 +46428,12 @@ where
     };
     let mut prepared = prepared.expect("history top was prepared before it was popped");
     prepared.authority_disposition = ProjectAuthorityDisposition::HistoryNavigation;
+    // `prepare_project_load` canonicalizes every embedded fixture profile to
+    // the exact `snapshot://fixture/{id}` identity the Engine publishes. Keep
+    // that canonical project as the moved history image; reusing the authored
+    // source-path spelling from `target_checkpoint` would make the next
+    // reconcile misclassify a successful Undo/Redo as an external mutation.
+    let canonical_target_project = project_file_from_prepared_load(&prepared);
     let mut replacement_result = match replace(state, prepared, coordinator) {
         Ok(result) => result,
         Err(error) => {
@@ -45860,7 +46450,7 @@ where
     // next Undo/Redo validates B→A→B→A rather than comparing stale metadata
     // from the entry's original timeline.
     let actual_target = ProjectCheckpoint {
-        project: target_checkpoint.project,
+        project: canonical_target_project,
         mappings: target_checkpoint.mappings,
         epoch: coordinator.epoch,
         revision: coordinator.revision,
@@ -50984,6 +51574,15 @@ fn prepare_project_load(
             "Legacy dj_transition mapping was ignored; configure DJ Link track triggers instead"
                 .to_string(),
         );
+    }
+    // Runtime fixture profiles are reconstructed from the fully embedded
+    // fixture image. The Engine deliberately publishes their stable snapshot
+    // identity instead of retaining a machine-local GDTF/cache path. Apply the
+    // same canonical form to the prepared persistence image after validation,
+    // so coordinator hashes, history checkpoints, and the acknowledged Engine
+    // snapshot all describe one byte-exact project.
+    for fixture in &mut project.snapshot.fixtures {
+        fixture.profile_source_path = format!("snapshot://fixture/{}", fixture.id);
     }
     let profiles = project.custom_profiles.clone();
     let custom_profiles = project
@@ -80854,6 +81453,7 @@ pub(crate) mod tests {
             gate: Mutex::new(()),
             generation: AtomicU64::new(0),
             recovery_authority_faulted: AtomicBool::new(true),
+            project_transaction_publication_faulted: AtomicBool::new(false),
         };
         assert!(try_lock_project_external_command_admission(&admission).is_none());
 
@@ -84682,6 +85282,8 @@ pub(crate) mod tests {
             coalesce_key: coalesce_key.to_string(),
             epoch: before.epoch,
             before,
+            command_result: None,
+            command_indeterminate_error: None,
             closing: false,
         }
     }
@@ -96607,6 +97209,1605 @@ f 1 2 3
             highlighted: false,
             soloed: false,
             parked: false,
+        }
+    }
+
+    #[test]
+    fn d2_patch_production_transaction_is_one_publication_and_reply_loss_is_idempotent() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d2-patch-window";
+        let owner_id = "d2-patch-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        {
+            let _external = lock_project_external_command_admission(state).unwrap();
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+        }
+        let (epoch, revision) = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (coordinator.epoch, coordinator.revision)
+        };
+        let shape =
+            canonical_project_transaction_shape("patch_fixtures", "PATCH fixture batch", "");
+        let operation_id = "project-op:62001:d2-patch".to_string();
+        let ticket = begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            "PATCH fixture batch".to_string(),
+            String::new(),
+            epoch,
+            revision,
+            owner_id.to_string(),
+            operation_id.clone(),
+            shape.clone(),
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        let profile = sample_patch_profile();
+        let mut second_request = sample_patch_request(0, 10);
+        second_request.label = "New Fixture 2".to_string();
+        let requests = vec![sample_patch_request(0, 1), second_request];
+        let profiles = vec![profile.clone(), profile];
+        let result = patch_fixtures_in_project_transaction_with_resolve_observer(
+            state,
+            requests.clone(),
+            Some(profiles.clone()),
+            ticket.transaction_id,
+            ticket.project_epoch,
+            owner_id.to_string(),
+            window_label,
+            "patch_fixtures",
+            || {
+                assert!(state
+                    .project_external_command_admission
+                    .gate
+                    .try_lock()
+                    .is_ok());
+                assert!(state.project_coordinator.try_lock().is_ok());
+            },
+        )
+        .unwrap();
+        let ProjectTransactionCommandResult::PatchFixtures {
+            request_digest,
+            fixture_ids,
+        } = &result
+        else {
+            panic!("PATCH returned the wrong typed command result");
+        };
+        assert_eq!(fixture_ids, &[1, 2]);
+        assert_eq!(request_digest.len(), 64);
+        assert_eq!(
+            state.engine.persistence_snapshot().unwrap().fixtures.len(),
+            2
+        );
+
+        let pending_recovery = query_project_transaction_for_window_label(
+            state,
+            window_label,
+            operation_id.clone(),
+            shape.clone(),
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            pending_recovery,
+            ProjectTransactionRecovery::Pending {
+                command_result: Some(ref recovered),
+                ..
+            } if recovered == &result
+        ));
+
+        let replay = patch_fixtures_in_project_transaction_with_resolve_observer(
+            state,
+            requests.clone(),
+            Some(profiles.clone()),
+            ticket.transaction_id,
+            ticket.project_epoch,
+            owner_id.to_string(),
+            window_label,
+            "patch_fixtures",
+            || panic!("an exact reply-loss retry must not resolve profiles again"),
+        )
+        .unwrap();
+        assert_eq!(replay, result);
+        assert_eq!(
+            state.engine.persistence_snapshot().unwrap().fixtures.len(),
+            2
+        );
+
+        let mut changed_requests = requests;
+        changed_requests[0].label = "Changed replay".to_string();
+        let changed = patch_fixtures_in_project_transaction_with_resolve_observer(
+            state,
+            changed_requests,
+            Some(profiles),
+            ticket.transaction_id,
+            ticket.project_epoch,
+            owner_id.to_string(),
+            window_label,
+            "patch_fixtures",
+            || panic!("a changed replay must reject before profile I/O"),
+        )
+        .unwrap_err();
+        assert!(changed.contains("different published-command request"));
+        assert_eq!(
+            state.engine.persistence_snapshot().unwrap().fixtures.len(),
+            2
+        );
+
+        let committed = commit_project_transaction_for_window_label(
+            state,
+            window_label,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            operation_id.clone(),
+            shape.clone(),
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(committed.history_status.undo_depth, 1);
+        let committed_recovery = query_project_transaction_for_window_label(
+            state,
+            window_label,
+            operation_id,
+            shape,
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            committed_recovery,
+            ProjectTransactionRecovery::Committed {
+                command_result: Some(ref recovered),
+                ..
+            } if recovered == &result
+        ));
+
+        let patch_image = project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let patch_profiles = state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .custom_profiles
+            .clone();
+        let (repair_epoch, repair_revision) = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (coordinator.epoch, coordinator.revision)
+        };
+        let repair_shape = canonical_project_transaction_shape(
+            "repair_fixture_profile",
+            "Repair fixture profile",
+            "",
+        );
+        let repair_operation_id = "project-op:62002:d2-repair".to_string();
+        let repair_ticket = begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            "Repair fixture profile".to_string(),
+            String::new(),
+            repair_epoch,
+            repair_revision,
+            owner_id.to_string(),
+            repair_operation_id.clone(),
+            repair_shape.clone(),
+            "repair_fixture_profile".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        let mut repaired_profile = sample_patch_profile();
+        repaired_profile.source_path = "memory://custom/Syndocal-Overlap_Test-Repaired".to_string();
+        repaired_profile.manufacturer = "sYnDoCaL".to_string();
+        repaired_profile.name = "oVeRlAp tEsT".to_string();
+        repaired_profile
+            .geometries
+            .last_mut()
+            .expect("sample repaired profile has a Beam geometry")
+            .beam_angle_deg = Some(19.0);
+        let expected_repaired_profile = repaired_profile.clone();
+        let repair_result = repair_fixture_profile_for_window_label_with_resolve_observer(
+            state,
+            fixture_ids[0],
+            repaired_profile.source_path.clone(),
+            Some("Default".to_string()),
+            repaired_profile.clone(),
+            repair_ticket.transaction_id,
+            repair_ticket.project_epoch,
+            owner_id.to_string(),
+            window_label,
+            || {
+                assert!(state
+                    .project_external_command_admission
+                    .gate
+                    .try_lock()
+                    .is_ok());
+                assert!(state.project_coordinator.try_lock().is_ok());
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            repair_result,
+            ProjectTransactionCommandResult::RepairFixtureProfile { fixture_id: 1, .. }
+        ));
+        let repaired_fixture = state
+            .engine
+            .persistence_snapshot()
+            .unwrap()
+            .fixtures
+            .into_iter()
+            .find(|fixture| fixture.id == fixture_ids[0])
+            .expect("case-only identity repair keeps the fixture");
+        assert_eq!(repaired_fixture.manufacturer, "sYnDoCaL");
+        assert_eq!(repaired_fixture.profile_name, "oVeRlAp tEsT");
+        let repair_replay = repair_fixture_profile_for_window_label_with_resolve_observer(
+            state,
+            fixture_ids[0],
+            repaired_profile.source_path.clone(),
+            Some("Default".to_string()),
+            repaired_profile.clone(),
+            repair_ticket.transaction_id,
+            repair_ticket.project_epoch,
+            owner_id.to_string(),
+            window_label,
+            || panic!("an exact Repair retry must not resolve the profile again"),
+        )
+        .unwrap();
+        assert_eq!(repair_replay, repair_result);
+        repaired_profile.source_path.push_str("-changed");
+        let changed_repair = repair_fixture_profile_for_window_label_with_resolve_observer(
+            state,
+            fixture_ids[0],
+            repaired_profile.source_path.clone(),
+            Some("Default".to_string()),
+            repaired_profile,
+            repair_ticket.transaction_id,
+            repair_ticket.project_epoch,
+            owner_id.to_string(),
+            window_label,
+            || panic!("a changed Repair replay must reject before profile I/O"),
+        )
+        .unwrap_err();
+        assert!(changed_repair.contains("different published-command request"));
+        let repair_commit = commit_project_transaction_for_window_label(
+            state,
+            window_label,
+            repair_ticket.transaction_id,
+            repair_ticket.project_epoch,
+            repair_operation_id,
+            repair_shape,
+            "repair_fixture_profile".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(repair_commit.history_status.undo_depth, 2);
+        let repaired_image =
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        assert_ne!(repaired_image, patch_image);
+        assert_eq!(
+            state
+                .project_coordinator
+                .lock()
+                .unwrap()
+                .history
+                .undo
+                .last()
+                .unwrap()
+                .after
+                .project
+                .snapshot
+                .fixtures,
+            repaired_image.fixtures
+        );
+
+        let undo_status = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            project_history_status_for_coordinator(&coordinator)
+        };
+        struct D2HistoryPlatform;
+        impl ProjectReplacementPlatform for D2HistoryPlatform {
+            fn advance_recovery_authority(
+                &self,
+                _state: &AppState,
+                coordinator: &mut ProjectCoordinator,
+                transition: ProjectRecoveryAuthorityTransition,
+            ) -> Result<u64, String> {
+                advance_project_recovery_authority_serial_with_persist(
+                    coordinator,
+                    transition,
+                    |_, _| Ok(()),
+                )
+            }
+            fn fence_and_retire_outputs(&self, _state: &AppState) -> Result<(), String> {
+                Ok(())
+            }
+            fn emit_authority_event(
+                &self,
+                _coordinator_effect: ProjectReplacementCoordinatorEffect,
+                _result: &ProjectLoadResult,
+            ) {
+            }
+        }
+        let undo_navigation = {
+            let _external = lock_project_external_command_admission(state).unwrap();
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            navigate_project_history_with_coordinator(
+                state,
+                &mut coordinator,
+                true,
+                Some(undo_status.project_epoch),
+                undo_status.undo_entry_id,
+                undo_status.undo_checkpoint_hash.clone(),
+                |state, prepared, coordinator| {
+                    replace_prepared_project_snapshot_with_coordinator_and_platform(
+                        state,
+                        prepared,
+                        coordinator,
+                        ProjectReplacementCoordinatorEffect::RevisionMutation,
+                        false,
+                        |_, _, _| Ok(()),
+                        |_, _, _| (),
+                        None,
+                        &D2HistoryPlatform,
+                    )
+                    .map(|(result, (), _)| result)
+                },
+            )
+            .unwrap()
+        };
+        let undone = project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let undone_fixtures = undone.fixtures;
+        let mut expected_patch_fixtures = patch_image.fixtures.clone();
+        for fixture in &mut expected_patch_fixtures {
+            fixture.profile_source_path = format!("snapshot://fixture/{}", fixture.id);
+        }
+        assert_eq!(undone_fixtures, expected_patch_fixtures);
+        assert_eq!(
+            state
+                .project_coordinator
+                .lock()
+                .unwrap()
+                .ancillary
+                .custom_profiles,
+            patch_profiles
+        );
+        assert!(undo_navigation.history_status.can_redo);
+        {
+            let _external = lock_project_external_command_admission(state).unwrap();
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+            let redo_status = project_history_status_for_coordinator(&coordinator);
+            navigate_project_history_with_coordinator(
+                state,
+                &mut coordinator,
+                false,
+                Some(redo_status.project_epoch),
+                redo_status.redo_entry_id,
+                redo_status.redo_checkpoint_hash.clone(),
+                |state, prepared, coordinator| {
+                    let mut expected_repaired_fixtures = repaired_image.fixtures.clone();
+                    for fixture in &mut expected_repaired_fixtures {
+                        fixture.profile_source_path = format!("snapshot://fixture/{}", fixture.id);
+                    }
+                    assert_eq!(prepared.snapshot.fixtures, expected_repaired_fixtures);
+                    let result = replace_prepared_project_snapshot_with_coordinator_and_platform(
+                        state,
+                        prepared,
+                        coordinator,
+                        ProjectReplacementCoordinatorEffect::RevisionMutation,
+                        false,
+                        |_, _, _| Ok(()),
+                        |_, _, _| (),
+                        None,
+                        &D2HistoryPlatform,
+                    )
+                    .map(|(result, (), _)| result);
+                    assert_eq!(
+                        project_snapshot_for_save(state.engine.persistence_snapshot().unwrap())
+                            .fixtures,
+                        expected_repaired_fixtures
+                    );
+                    result
+                },
+            )
+            .unwrap();
+        }
+        let redone = project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let redone_fixtures = redone.fixtures;
+        let mut expected_repaired_fixtures = repaired_image.fixtures;
+        for fixture in &mut expected_repaired_fixtures {
+            fixture.profile_source_path = format!("snapshot://fixture/{}", fixture.id);
+        }
+        assert_eq!(redone_fixtures, expected_repaired_fixtures);
+        let output = state.engine.output_ownership_status();
+        assert_eq!(output.state, protocol::OutputOwnershipState::Ready);
+        assert_eq!(output.role, MachineOutputRole::Standby);
+        assert_eq!(output.effective_role, MachineOutputRole::Standby);
+        assert!(!output.lighting_allowed);
+        assert!(!output.video_allowed);
+        assert_eq!(
+            output.lighting_reason,
+            protocol::OutputOwnershipReason::ProjectSwapDisarmed
+        );
+        assert_eq!(
+            output.video_reason,
+            protocol::OutputOwnershipReason::ProjectSwapDisarmed
+        );
+        let redone_profiles = state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .custom_profiles
+            .clone();
+        assert!(redone_profiles.values().any(|candidate| {
+            let mut candidate = candidate.clone();
+            let mut expected = expected_repaired_profile.clone();
+            candidate.source_path.clear();
+            expected.source_path.clear();
+            candidate == expected
+        }));
+    }
+
+    #[test]
+    fn d2_published_patch_and_repair_owner_lifecycle_commits_one_truthful_history_result() {
+        for command_name in ["patch_fixtures", "repair_fixture_profile"] {
+            for lifecycle in ["rotate", "close"] {
+                let harness = MediaAssetA6CommandHarness::new();
+                let state = &harness.state;
+                let window_label = "d2-lifecycle-window";
+                let owner_id = "d2-lifecycle-owner";
+                register_project_transaction_owner_for_window_label(
+                    state,
+                    window_label,
+                    owner_id.to_string(),
+                )
+                .unwrap();
+                let mut repair_profile = sample_patch_profile();
+                if command_name == "repair_fixture_profile" {
+                    let mut request = sample_patch_request(0, 1);
+                    request.profile_path = "fixture://d2-lifecycle-repair".to_string();
+                    repair_profile.source_path = request.profile_path.clone();
+                    state
+                        .engine
+                        .patch_fixtures_published(vec![engine::FixturePatchCandidate {
+                            fixture_id: 1,
+                            request,
+                            profile: repair_profile.clone(),
+                        }])
+                        .unwrap();
+                }
+                {
+                    let _external = lock_project_external_command_admission(state).unwrap();
+                    let mut coordinator = state.project_coordinator.lock().unwrap();
+                    reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+                }
+                let (epoch, revision, before_undo_depth) = {
+                    let coordinator = state.project_coordinator.lock().unwrap();
+                    (
+                        coordinator.epoch,
+                        coordinator.revision,
+                        coordinator.history.undo.len(),
+                    )
+                };
+                let label = format!("D2 {command_name} {lifecycle}");
+                let shape = canonical_project_transaction_shape(command_name, &label, "");
+                let operation_id = format!(
+                    "project-op:62{}{}:d2-lifecycle",
+                    if command_name == "patch_fixtures" {
+                        1
+                    } else {
+                        2
+                    },
+                    if lifecycle == "rotate" { 1 } else { 2 }
+                );
+                let ticket = begin_project_transaction_for_window_label(
+                    state,
+                    window_label,
+                    label.clone(),
+                    String::new(),
+                    epoch,
+                    revision,
+                    owner_id.to_string(),
+                    operation_id.clone(),
+                    shape.clone(),
+                    command_name.to_string(),
+                    PROJECT_TRANSACTION_SCHEMA_VERSION,
+                )
+                .unwrap();
+                let result = if command_name == "patch_fixtures" {
+                    patch_fixtures_in_project_transaction_with_resolve_observer(
+                        state,
+                        vec![sample_patch_request(0, 10)],
+                        Some(vec![sample_patch_profile()]),
+                        ticket.transaction_id,
+                        ticket.project_epoch,
+                        owner_id.to_string(),
+                        window_label,
+                        command_name,
+                        || {},
+                    )
+                    .unwrap()
+                } else {
+                    repair_profile.geometries.last_mut().unwrap().beam_angle_deg = Some(19.0);
+                    repair_fixture_profile_for_window_label_with_resolve_observer(
+                        state,
+                        1,
+                        repair_profile.source_path.clone(),
+                        Some("Default".to_string()),
+                        repair_profile,
+                        ticket.transaction_id,
+                        ticket.project_epoch,
+                        owner_id.to_string(),
+                        window_label,
+                        || {},
+                    )
+                    .unwrap()
+                };
+                let recovery = query_project_transaction_for_window_label(
+                    state,
+                    window_label,
+                    operation_id.clone(),
+                    shape,
+                    command_name.to_string(),
+                    PROJECT_TRANSACTION_SCHEMA_VERSION,
+                    owner_id.to_string(),
+                )
+                .unwrap()
+                .unwrap();
+                assert!(matches!(
+                    recovery,
+                    ProjectTransactionRecovery::Pending {
+                        command_result: Some(ref recovered),
+                        command_in_flight: false,
+                        command_indeterminate_error: None,
+                        ..
+                    } if recovered == &result
+                ));
+                let published =
+                    project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+                let mutation = if lifecycle == "rotate" {
+                    register_project_transaction_owner_for_window_label(
+                        state,
+                        window_label,
+                        "d2-lifecycle-successor".to_string(),
+                    )
+                    .unwrap()
+                } else {
+                    retire_project_transaction_owner_for_window(state, window_label).unwrap()
+                }
+                .expect("published owner retirement commits one history result");
+                assert_eq!(mutation.history_status.undo_depth, before_undo_depth + 1);
+                assert!(!state.project_transaction_active.load(Ordering::Acquire));
+                assert_eq!(
+                    project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+                    published
+                );
+                let coordinator = state.project_coordinator.lock().unwrap();
+                assert!(coordinator.history.pending.is_empty());
+                assert_eq!(coordinator.history.undo.last().unwrap().label, label);
+                assert!(!coordinator
+                    .history
+                    .undo
+                    .last()
+                    .unwrap()
+                    .label
+                    .starts_with("Interrupted:"));
+                drop(coordinator);
+                assert!(!state
+                    .project_transaction_receipts
+                    .lock()
+                    .unwrap()
+                    .contains_key(&operation_id));
+                assert!(!state
+                    .project_transaction_lanes
+                    .lock()
+                    .unwrap()
+                    .contains_key(&operation_id));
+            }
+        }
+    }
+
+    #[test]
+    fn d2_patch_and_repair_commit_require_their_published_command_result() {
+        for command_name in ["patch_fixtures", "repair_fixture_profile"] {
+            let harness = MediaAssetA6CommandHarness::new();
+            let state = &harness.state;
+            let window_label = "d2-precommand-commit-window";
+            let owner_id = "d2-precommand-commit-owner";
+            register_project_transaction_owner_for_window_label(
+                state,
+                window_label,
+                owner_id.to_string(),
+            )
+            .unwrap();
+            {
+                let _external = lock_project_external_command_admission(state).unwrap();
+                let mut coordinator = state.project_coordinator.lock().unwrap();
+                reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+            }
+            let (epoch, revision, before_history) = {
+                let coordinator = state.project_coordinator.lock().unwrap();
+                (
+                    coordinator.epoch,
+                    coordinator.revision,
+                    project_history_status_for_coordinator(&coordinator),
+                )
+            };
+            let label = format!("D2 pre-command {command_name}");
+            let shape = canonical_project_transaction_shape(command_name, &label, "");
+            let operation_id = format!("project-op:6230{}:d2-precommand", command_name.len());
+            let ticket = begin_project_transaction_for_window_label(
+                state,
+                window_label,
+                label,
+                String::new(),
+                epoch,
+                revision,
+                owner_id.to_string(),
+                operation_id.clone(),
+                shape.clone(),
+                command_name.to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+            )
+            .unwrap();
+            let before_project =
+                project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+            let error = commit_project_transaction_for_window_label(
+                state,
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id.clone(),
+                shape.clone(),
+                command_name.to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id.to_string(),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("cannot commit before its exact command result"),
+                "{error}"
+            );
+            assert_eq!(
+                project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+                before_project
+            );
+            let coordinator = state.project_coordinator.lock().unwrap();
+            assert_eq!(
+                project_history_status_for_coordinator(&coordinator).undo_depth,
+                before_history.undo_depth
+            );
+            assert!(coordinator
+                .history
+                .pending
+                .contains_key(&ticket.transaction_id));
+            drop(coordinator);
+            assert!(state.project_transaction_active.load(Ordering::Acquire));
+            cancel_project_transaction_for_window_label(
+                state,
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id,
+                shape,
+                command_name.to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id.to_string(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn d2_patch_rejections_are_result_free_cancellable_and_apply_no_partial_batch() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d2-reject-window";
+        let owner_id = "d2-reject-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        {
+            let _external = lock_project_external_command_admission(state).unwrap();
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+        }
+        let (epoch, revision, before_history) = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                project_history_status_for_coordinator(&coordinator),
+            )
+        };
+        let shape =
+            canonical_project_transaction_shape("patch_fixtures", "Rejected PATCH batch", "");
+        let operation_id = "project-op:62011:d2-reject".to_string();
+        let ticket = begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            "Rejected PATCH batch".to_string(),
+            String::new(),
+            epoch,
+            revision,
+            owner_id.to_string(),
+            operation_id.clone(),
+            shape.clone(),
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        let profile = sample_patch_profile();
+        let requests = vec![sample_patch_request(0, 1), sample_patch_request(0, 2)];
+        let profiles = Some(vec![profile.clone(), profile]);
+        let before_engine = project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let before_profiles = state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .custom_profiles
+            .clone();
+
+        for (lock_mode, expected_error) in [
+            (OperatorLockMode::Partial, "Partial Lock"),
+            (OperatorLockMode::Full, "Full Lock"),
+        ] {
+            let mut policy = sample_operator_policy();
+            policy.lock_mode = lock_mode;
+            {
+                let mut coordinator = state.project_coordinator.lock().unwrap();
+                coordinator.ancillary.operator_policy = Some(policy.clone());
+                state.project_operator_sessions.lock().unwrap().insert(
+                    owner_id.to_string(),
+                    ProjectOperatorSession {
+                        project_epoch: coordinator.epoch,
+                        policy,
+                        unlocked: false,
+                    },
+                );
+            }
+            let error = patch_fixtures_in_project_transaction(
+                state,
+                requests.clone(),
+                profiles.clone(),
+                ticket.transaction_id,
+                ticket.project_epoch,
+                owner_id.to_string(),
+                window_label,
+                "patch_fixtures",
+            )
+            .unwrap_err();
+            assert!(error.contains(expected_error), "{error}");
+            state
+                .project_operator_sessions
+                .lock()
+                .unwrap()
+                .remove(owner_id);
+            state
+                .project_coordinator
+                .lock()
+                .unwrap()
+                .ancillary
+                .operator_policy = None;
+        }
+
+        for (wrong_window, wrong_owner, wrong_epoch, wrong_command) in [
+            (
+                "other-window",
+                owner_id,
+                ticket.project_epoch,
+                "patch_fixtures",
+            ),
+            (
+                window_label,
+                "other-owner",
+                ticket.project_epoch,
+                "patch_fixtures",
+            ),
+            (
+                window_label,
+                owner_id,
+                ticket.project_epoch.checked_add(1).unwrap(),
+                "patch_fixtures",
+            ),
+            (
+                window_label,
+                owner_id,
+                ticket.project_epoch,
+                "patch_fixture",
+            ),
+        ] {
+            assert!(patch_fixtures_in_project_transaction(
+                state,
+                requests.clone(),
+                profiles.clone(),
+                ticket.transaction_id,
+                wrong_epoch,
+                wrong_owner.to_string(),
+                wrong_window,
+                wrong_command,
+            )
+            .is_err());
+        }
+        let conflict = patch_fixtures_in_project_transaction(
+            state,
+            requests,
+            profiles,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            owner_id.to_string(),
+            window_label,
+            "patch_fixtures",
+        )
+        .unwrap_err();
+        assert!(conflict.contains("conflict") || conflict.contains("overlap"));
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            before_engine
+        );
+        assert_eq!(
+            state
+                .project_coordinator
+                .lock()
+                .unwrap()
+                .ancillary
+                .custom_profiles,
+            before_profiles
+        );
+        let recovery = query_project_transaction_for_window_label(
+            state,
+            window_label,
+            operation_id.clone(),
+            shape.clone(),
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            recovery,
+            ProjectTransactionRecovery::Pending {
+                command_result: None,
+                command_in_flight: false,
+                ..
+            }
+        ));
+        let cancelled = cancel_project_transaction_for_window_label(
+            state,
+            window_label,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            operation_id,
+            shape,
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            cancelled.history_status.undo_depth,
+            before_history.undo_depth
+        );
+        assert!(!state.project_transaction_active.load(Ordering::Acquire));
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            before_engine
+        );
+    }
+
+    #[test]
+    fn d2_repair_changed_identity_is_result_free_cancellable_and_applies_no_b() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d2-repair-identity-window";
+        let owner_id = "d2-repair-identity-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        let mut profile = sample_patch_profile();
+        profile.source_path = "fixture://d2-repair-identity".to_string();
+        let mut request = sample_patch_request(0, 1);
+        request.profile_path = profile.source_path.clone();
+        state
+            .engine
+            .patch_fixtures_published(vec![engine::FixturePatchCandidate {
+                fixture_id: 1,
+                request,
+                profile: profile.clone(),
+            }])
+            .unwrap();
+        {
+            let _external = lock_project_external_command_admission(state).unwrap();
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+        }
+        let (epoch, revision, before_history, before_profiles) = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                project_history_status_for_coordinator(&coordinator),
+                coordinator.ancillary.custom_profiles.clone(),
+            )
+        };
+        let before_project =
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let shape = canonical_project_transaction_shape(
+            "repair_fixture_profile",
+            "Reject changed Repair identity",
+            "",
+        );
+        let operation_id = "project-op:62012:d2-repair-identity".to_string();
+        let ticket = begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            "Reject changed Repair identity".to_string(),
+            String::new(),
+            epoch,
+            revision,
+            owner_id.to_string(),
+            operation_id.clone(),
+            shape.clone(),
+            "repair_fixture_profile".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        let mut changed_identity = profile;
+        changed_identity.source_path = "fixture://changed-identity".to_string();
+        changed_identity.manufacturer = "Different Manufacturer".to_string();
+        let error = repair_fixture_profile_for_window_label_with_resolve_observer(
+            state,
+            1,
+            changed_identity.source_path.clone(),
+            Some("Default".to_string()),
+            changed_identity,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            owner_id.to_string(),
+            window_label,
+            || {},
+        )
+        .unwrap_err();
+        assert!(error.contains("identity"), "{error}");
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            before_project
+        );
+        assert_eq!(
+            state
+                .project_coordinator
+                .lock()
+                .unwrap()
+                .ancillary
+                .custom_profiles,
+            before_profiles
+        );
+        let recovery = query_project_transaction_for_window_label(
+            state,
+            window_label,
+            operation_id.clone(),
+            shape.clone(),
+            "repair_fixture_profile".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            recovery,
+            ProjectTransactionRecovery::Pending {
+                command_result: None,
+                command_in_flight: false,
+                command_indeterminate_error: None,
+                ..
+            }
+        ));
+        let cancelled = cancel_project_transaction_for_window_label(
+            state,
+            window_label,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            operation_id,
+            shape,
+            "repair_fixture_profile".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            cancelled.history_status.undo_depth,
+            before_history.undo_depth
+        );
+        assert!(!state.project_transaction_active.load(Ordering::Acquire));
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            before_project
+        );
+    }
+
+    #[test]
+    fn d2_patch_in_flight_recovery_blocks_cancel_until_published_result_is_visible() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d2-inflight-window";
+        let owner_id = "d2-inflight-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        {
+            let _external = lock_project_external_command_admission(state).unwrap();
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+        }
+        let (epoch, revision) = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (coordinator.epoch, coordinator.revision)
+        };
+        let shape = canonical_project_transaction_shape("patch_fixtures", "Slow PATCH", "");
+        let operation_id = "project-op:62021:d2-inflight".to_string();
+        let ticket = begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            "Slow PATCH".to_string(),
+            String::new(),
+            epoch,
+            revision,
+            owner_id.to_string(),
+            operation_id.clone(),
+            shape.clone(),
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        let profile = sample_patch_profile();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+        let worker_owner_id = owner_id.to_string();
+        let worker_transaction_id = ticket.transaction_id;
+        let worker_epoch = ticket.project_epoch;
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                patch_fixtures_in_project_transaction_with_resolve_observer(
+                    state,
+                    vec![sample_patch_request(0, 1)],
+                    Some(vec![profile]),
+                    worker_transaction_id,
+                    worker_epoch,
+                    worker_owner_id,
+                    window_label,
+                    "patch_fixtures",
+                    || {
+                        ready_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                    },
+                )
+            });
+            ready_rx.recv().unwrap();
+            let recovery = query_project_transaction_for_window_label(
+                state,
+                window_label,
+                operation_id.clone(),
+                shape.clone(),
+                "patch_fixtures".to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id.to_string(),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(matches!(
+                recovery,
+                ProjectTransactionRecovery::Pending {
+                    command_result: None,
+                    command_in_flight: true,
+                    ..
+                }
+            ));
+            resume_tx.send(()).unwrap();
+            worker.join().unwrap().unwrap()
+        });
+        let cancel = cancel_project_transaction_for_window_label(
+            state,
+            window_label,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            operation_id.clone(),
+            shape.clone(),
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap_err();
+        assert!(cancel.contains("must be committed"));
+        commit_project_transaction_for_window_label(
+            state,
+            window_label,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            operation_id,
+            shape,
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            state.engine.persistence_snapshot().unwrap().fixtures.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn d2_patch_cancel_closes_the_in_flight_lane_before_any_late_publication() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d2-cancel-race-window";
+        let owner_id = "d2-cancel-race-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        {
+            let _external = lock_project_external_command_admission(state).unwrap();
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+        }
+        let (epoch, revision, before_history, before_profiles) = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                project_history_status_for_coordinator(&coordinator),
+                coordinator.ancillary.custom_profiles.clone(),
+            )
+        };
+        let before_project =
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let shape =
+            canonical_project_transaction_shape("patch_fixtures", "Cancel in-flight PATCH", "");
+        let operation_id = "project-op:62022:d2-cancel-race".to_string();
+        let ticket = begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            "Cancel in-flight PATCH".to_string(),
+            String::new(),
+            epoch,
+            revision,
+            owner_id.to_string(),
+            operation_id.clone(),
+            shape.clone(),
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+        let worker_owner_id = owner_id.to_string();
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                patch_fixtures_in_project_transaction_with_resolve_observer(
+                    state,
+                    vec![sample_patch_request(0, 1)],
+                    Some(vec![sample_patch_profile()]),
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    worker_owner_id,
+                    window_label,
+                    "patch_fixtures",
+                    || {
+                        ready_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                    },
+                )
+            });
+            ready_rx.recv().unwrap();
+            let first_cancel = cancel_project_transaction_for_window_label(
+                state,
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id.clone(),
+                shape.clone(),
+                "patch_fixtures".to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id.to_string(),
+            )
+            .unwrap_err();
+            assert!(state.project_transaction_active.load(Ordering::Acquire));
+            assert_eq!(
+                project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+                before_project
+            );
+            resume_tx.send(()).unwrap();
+            let worker_error = worker.join().unwrap().unwrap_err();
+            assert!(
+                first_cancel.contains("admitted commands"),
+                "unexpected cancel error: {first_cancel}"
+            );
+            assert!(worker_error.contains("closing") || worker_error.contains("closed"));
+        });
+        let recovery = query_project_transaction_for_window_label(
+            state,
+            window_label,
+            operation_id.clone(),
+            shape.clone(),
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            recovery,
+            ProjectTransactionRecovery::Pending {
+                command_result: None,
+                command_in_flight: false,
+                command_indeterminate_error: None,
+                ..
+            }
+        ));
+        let cancelled = cancel_project_transaction_for_window_label(
+            state,
+            window_label,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            operation_id,
+            shape,
+            "patch_fixtures".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            cancelled.history_status.undo_depth,
+            before_history.undo_depth
+        );
+        assert!(!state.project_transaction_active.load(Ordering::Acquire));
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            before_project
+        );
+        assert_eq!(
+            state
+                .project_coordinator
+                .lock()
+                .unwrap()
+                .ancillary
+                .custom_profiles,
+            before_profiles
+        );
+    }
+
+    #[test]
+    fn d2_patch_and_repair_indeterminate_ack_latch_truth_and_forbid_cancel() {
+        for (index, command_name) in ["patch_fixtures", "repair_fixture_profile"]
+            .into_iter()
+            .enumerate()
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let state = &harness.state;
+            let window_label = "d2-indeterminate-window";
+            let owner_id = "d2-indeterminate-owner";
+            register_project_transaction_owner_for_window_label(
+                state,
+                window_label,
+                owner_id.to_string(),
+            )
+            .unwrap();
+            let repair_profile = (command_name == "repair_fixture_profile").then(|| {
+                let mut request = sample_patch_request(0, 1);
+                request.profile_path = "fixture://indeterminate-repair".to_string();
+                let mut profile = sample_patch_profile();
+                profile.source_path = request.profile_path.clone();
+                state
+                    .engine
+                    .patch_fixtures_published(vec![engine::FixturePatchCandidate {
+                        fixture_id: 1,
+                        request,
+                        profile: profile.clone(),
+                    }])
+                    .unwrap();
+                profile
+            });
+            {
+                let _external = lock_project_external_command_admission(state).unwrap();
+                let mut coordinator = state.project_coordinator.lock().unwrap();
+                reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+            }
+            let (epoch, revision) = {
+                let coordinator = state.project_coordinator.lock().unwrap();
+                (coordinator.epoch, coordinator.revision)
+            };
+            let label = format!("Indeterminate {command_name}");
+            let shape = canonical_project_transaction_shape(command_name, &label, "");
+            let operation_id = format!("project-op:{}:d2-indeterminate", 62_030 + index);
+            let ticket = begin_project_transaction_for_window_label(
+                state,
+                window_label,
+                label,
+                String::new(),
+                epoch,
+                revision,
+                owner_id.to_string(),
+                operation_id.clone(),
+                shape.clone(),
+                command_name.to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+            )
+            .unwrap();
+            let error = "injected admitted ACK disconnect".to_string();
+            let before_project =
+                project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+            let route_error = if let Some(profile) = repair_profile {
+                repair_fixture_profile_for_window_label_with_resolve_and_publish(
+                    state,
+                    1,
+                    profile.source_path.clone(),
+                    Some("Default".to_string()),
+                    profile,
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    owner_id.to_string(),
+                    window_label,
+                    || {},
+                    |_, _, _, _| Err(FixturePatchPublicationFailure::Indeterminate(error.clone())),
+                )
+                .unwrap_err()
+            } else {
+                patch_fixtures_in_project_transaction_with_resolve_and_publish(
+                    state,
+                    vec![sample_patch_request(0, 1)],
+                    Some(vec![sample_patch_profile()]),
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    owner_id.to_string(),
+                    window_label,
+                    command_name,
+                    || {},
+                    |_, patches| {
+                        assert_eq!(patches.len(), 1);
+                        Err(FixturePatchPublicationFailure::Indeterminate(error.clone()))
+                    },
+                )
+                .unwrap_err()
+            };
+            assert_eq!(route_error, error);
+            assert_eq!(
+                project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+                before_project
+            );
+            assert!(state
+                .project_external_command_admission
+                .project_transaction_publication_faulted
+                .load(Ordering::Acquire));
+            assert!(!state
+                .project_external_command_admission
+                .recovery_authority_faulted
+                .load(Ordering::Acquire));
+            let recovery = query_project_transaction_for_window_label(
+                state,
+                window_label,
+                operation_id.clone(),
+                shape.clone(),
+                command_name.to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id.to_string(),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(matches!(
+                recovery,
+                ProjectTransactionRecovery::Pending {
+                    command_result: None,
+                    command_in_flight: false,
+                    command_indeterminate_error: Some(ref recorded),
+                    ..
+                } if recorded == &error
+            ));
+            assert_eq!(
+                state
+                    .project_transaction_receipts
+                    .lock()
+                    .unwrap()
+                    .get(&operation_id)
+                    .and_then(|receipt| receipt.command_indeterminate_error.as_deref()),
+                Some(error.as_str())
+            );
+            let commit_error = commit_project_transaction_for_window_label(
+                state,
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id.clone(),
+                shape.clone(),
+                command_name.to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id.to_string(),
+            )
+            .unwrap_err();
+            assert!(commit_error.contains("indeterminate"), "{commit_error}");
+            let rotate_error = register_project_transaction_owner_for_window_label(
+                state,
+                window_label,
+                "d2-indeterminate-successor".to_string(),
+            )
+            .unwrap_err();
+            assert!(rotate_error.contains("indeterminate"), "{rotate_error}");
+            let close_error =
+                retire_project_transaction_owner_for_window(state, window_label).unwrap_err();
+            assert!(close_error.contains("indeterminate"), "{close_error}");
+            assert_eq!(
+                state
+                    .project_transaction_owners
+                    .lock()
+                    .unwrap()
+                    .get(window_label)
+                    .map(String::as_str),
+                Some(owner_id)
+            );
+            let cancel_error = cancel_project_transaction_for_window_label(
+                state,
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id,
+                shape,
+                command_name.to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id.to_string(),
+            )
+            .unwrap_err();
+            assert!(cancel_error.contains("indeterminate"), "{cancel_error}");
+            assert!(state.project_transaction_active.load(Ordering::Acquire));
+        }
+    }
+
+    #[test]
+    fn d2_patch_stale_resolve_and_result_preflight_fail_before_batch_publication() {
+        for scenario in ["stale_checkpoint", "missing_receipt"] {
+            let harness = MediaAssetA6CommandHarness::new();
+            let state = &harness.state;
+            let window_label = "d2-preflight-window";
+            let owner_id = "d2-preflight-owner";
+            register_project_transaction_owner_for_window_label(
+                state,
+                window_label,
+                owner_id.to_string(),
+            )
+            .unwrap();
+            {
+                let _external = lock_project_external_command_admission(state).unwrap();
+                let mut coordinator = state.project_coordinator.lock().unwrap();
+                reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+            }
+            let (epoch, revision, before_history, before_profiles) = {
+                let coordinator = state.project_coordinator.lock().unwrap();
+                (
+                    coordinator.epoch,
+                    coordinator.revision,
+                    project_history_status_for_coordinator(&coordinator),
+                    coordinator.ancillary.custom_profiles.clone(),
+                )
+            };
+            let label = format!("D2 {scenario}");
+            let shape = canonical_project_transaction_shape("patch_fixtures", &label, "");
+            let operation_id = format!("project-op:6204{}:d2-preflight", scenario.len());
+            let ticket = begin_project_transaction_for_window_label(
+                state,
+                window_label,
+                label,
+                String::new(),
+                epoch,
+                revision,
+                owner_id.to_string(),
+                operation_id.clone(),
+                shape,
+                "patch_fixtures".to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+            )
+            .unwrap();
+            let error = patch_fixtures_in_project_transaction_with_resolve_observer(
+                state,
+                vec![sample_patch_request(0, 1)],
+                Some(vec![sample_patch_profile()]),
+                ticket.transaction_id,
+                ticket.project_epoch,
+                owner_id.to_string(),
+                window_label,
+                "patch_fixtures",
+                || match scenario {
+                    "stale_checkpoint" => {
+                        let mut request = sample_patch_request(0, 100);
+                        request.profile_path = "fixture://injected-stale".to_string();
+                        let mut profile = sample_patch_profile();
+                        profile.source_path = request.profile_path.clone();
+                        state
+                            .engine
+                            .patch_fixtures_published(vec![engine::FixturePatchCandidate {
+                                fixture_id: 77,
+                                request,
+                                profile,
+                            }])
+                            .unwrap()
+                    }
+                    "missing_receipt" => {
+                        state
+                            .project_transaction_receipts
+                            .lock()
+                            .unwrap()
+                            .remove(&operation_id);
+                    }
+                    _ => unreachable!(),
+                },
+            )
+            .unwrap_err();
+            match scenario {
+                "stale_checkpoint" => {
+                    assert!(error.contains("changed while resolving"), "{error}");
+                    assert_eq!(
+                        state
+                            .engine
+                            .persistence_snapshot()
+                            .unwrap()
+                            .fixtures
+                            .iter()
+                            .map(|fixture| fixture.id)
+                            .collect::<Vec<_>>(),
+                        vec![77]
+                    );
+                    assert_eq!(state.engine.allocate_fixture_id(), 78);
+                }
+                "missing_receipt" => {
+                    assert!(error.contains("no Begin receipt"), "{error}");
+                    assert!(state
+                        .engine
+                        .persistence_snapshot()
+                        .unwrap()
+                        .fixtures
+                        .is_empty());
+                    assert_eq!(state.engine.allocate_fixture_id(), 1);
+                }
+                _ => unreachable!(),
+            }
+            let coordinator = state.project_coordinator.lock().unwrap();
+            assert_eq!(coordinator.ancillary.custom_profiles, before_profiles);
+            let after_history = project_history_status_for_coordinator(&coordinator);
+            assert_eq!(after_history.undo_depth, before_history.undo_depth);
+            assert_eq!(
+                coordinator
+                    .history
+                    .pending
+                    .get(&ticket.transaction_id)
+                    .and_then(|pending| pending.command_result.as_ref()),
+                None
+            );
         }
     }
 
@@ -110448,6 +112649,8 @@ mod live_audio_input_tests {
                     coalesce_key: String::new(),
                     epoch: pending_before.epoch,
                     before: pending_before,
+                    command_result: None,
+                    command_indeterminate_error: None,
                     closing: false,
                 },
             );
@@ -112211,7 +114414,6 @@ fn main() {
             save_custom_fixture_profile,
             load_custom_fixture_profile,
             use_fixture_profile,
-            patch_fixture,
             patch_fixtures,
             remove_fixture,
             set_fixture_patch,

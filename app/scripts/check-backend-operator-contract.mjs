@@ -72,7 +72,7 @@ for (const [start, end, label] of [
     `${label} must remain machine/session-only and never mutate project profile authority`,
   );
 }
-const patchCommands = section(backend, "fn patch_fixture(", "fn remove_fixture(");
+const patchCommands = section(backend, "fn patch_fixtures(", "fn remove_fixture(");
 assert.match(
   patchCommands,
   /project_transaction_id:[\s\S]*?expected_epoch:[\s\S]*?owner_id:[\s\S]*?project_transaction_for_owner_epoch/,
@@ -80,7 +80,7 @@ assert.match(
 );
 assert.match(
   patchCommands,
-  /patch_fixtures_published\(candidates\)/,
+  /patch_fixtures_(?:allocated_)?published/,
   "PATCH must publish the complete fixture batch through one definitive engine acknowledgement",
 );
 assert.doesNotMatch(
@@ -111,8 +111,8 @@ assert.doesNotMatch(
 );
 assert.match(
   app,
-  /repair_fixture_profile",\s*\{[\s\S]*?profilePath:\s*profile\.source_path[\s\S]*?profile,/,
-  "profile Repair must pass the exact armed profile instead of a memory URI alone",
+  /const invokeFixtureProfileRepair = async \([\s\S]*?repair_fixture_profile",\s*\{[\s\S]*?fixtureId,[\s\S]*?profilePath:\s*armedProfile\.source_path,[\s\S]*?modeName,[\s\S]*?profile:\s*armedProfile,/,
+  "profile Repair must pass the exact armed profile through the shared typed facade instead of a memory URI alone",
 );
 const stageFileRead = section(backend, "fn load_stage_map_preset_file(", "fn import_stage_map_preset(");
 assert.doesNotMatch(

@@ -230,16 +230,22 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
   };
 
   const handleWindowKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      closeProjectMenu();
-    }
+    if (
+      event.key !== "Escape" ||
+      event.defaultPrevented ||
+      !projectMenuOpen() ||
+      document.querySelector("dialog[open]")
+    ) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    closeProjectMenu();
   };
 
   window.addEventListener("pointerdown", handleWindowPointerDown);
-  window.addEventListener("keydown", handleWindowKeyDown);
+  window.addEventListener("keydown", handleWindowKeyDown, true);
   onCleanup(() => {
     window.removeEventListener("pointerdown", handleWindowPointerDown);
-    window.removeEventListener("keydown", handleWindowKeyDown);
+    window.removeEventListener("keydown", handleWindowKeyDown, true);
   });
 
   return (

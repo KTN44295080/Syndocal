@@ -6,7 +6,7 @@
 - Current implementation checkpoint: `0a3e91ab87d4be4735710234d1ba002e484375ef`
   (`feat: add sample-accurate timeline cue audio`). Push evidence is recorded by
   the documentation follow-up commit containing this line.
-- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.6`.
+- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.7`.
 - **2026-08-22 Windows-only scope:** current completion targets this operator's
   Windows PC. macOS/Linux control/native/warning rows and the six distribution,
   legal, signing, SBOM, clean-machine, updater, and publication rows are deferred
@@ -1528,3 +1528,90 @@ and main
 - E4 is accepted for this Windows tranche; the broader denominator is 18/71
   (25.4%). The product is not complete. Current-PC ASIO/hardware/security/soak and
   later roadmap gates remain.
+
+## 2026-08-23 alpha.7 D2/UI/Guide integration handoff
+
+- Branch/starting HEAD: `codex/syndocal-v1.2` /
+  `da02e3fd20190b1e8656023c09ec532f3b9016d7`. The integrated tree remains
+  intentionally uncommitted for root-owned final validation; unrelated concurrent
+  changes were preserved.
+- Product metadata advances to `1.2.0-alpha.7` because the next integrated native
+  development artifact must not replace alpha.6 bytes. No product-adjacent schema
+  version changes with this ordinal.
+- D2 production PATCH/GDTF Repair is independently accepted at P0/P1/P2 zero.
+  Frozen backend SHA-256 values are main
+  `5B91759B9B4789AF17B0376220F094B08603D0AD271DEF9B5CD67AA46103215D`, Engine
+  `03685241C9FC35B12F7FDA6A880ADEB64D3EF092F60B63717E8325ACEC0C0C6F`, and
+  control plane
+  `A0864AB959688F5B857F5F49BF985F82F64036F145C3445FDCFA113E9B480750`.
+  D2 9/9, project-transaction 4/4, control-plane 25/25, Engine PATCH 10/10,
+  Engine Repair 5/5, D2/frontend inventory/operator checks, format/diff, and the
+  no-default zero-first-party-warning gate passed.
+- Integrated UI evidence passed Lighting/Video/Timeline geometry and screenshots
+  at 1920x1080, 1366x768, 860x520, and 1280x720; Timeline operator passed five
+  viewports; the Timeline Sources lower pane remained at outer-scroll 0 and
+  body-scroll 0. The deterministic Guide perceptual boundary passed at 150 ms.
+- D2 alone advances the accepted Windows denominator from 18/71 to 19/71 (26.8%).
+  The UI and Guide evidence does not close native, hardware, ASIO, MTC/DJ, DMX,
+  three-screen, or soak rows.
+- Native alpha.7 build and GUI verification were not run in this checkpoint.
+  Root must stop only the exact checkout executable, run
+  `pnpm --dir app tauri build --no-bundle`, launch exactly one responsive
+  `Syndocal` window, maximize it, and perform the remaining integrated acceptance.
+  No commit or push was made by this owner.
+- Version/checkpoint gates: `pnpm --dir app run check:release` PASS for exact
+  alpha.7 metadata; `cargo check -p syndocal --locked --bin syndocal
+  --no-default-features` PASS with zero first-party warnings; `pnpm --dir app run
+  check:warnings -- --configuration frontend-typescript-vite-windows` PASS with
+  baseline/current 0/0 total and first-party warnings; `git diff --check` PASS
+  with line-ending notices only.
+
+## 2026-08-23 alpha.7 Control upper-workspace native/UI closure handoff
+
+- Branch/build base: `codex/syndocal-v1.2` /
+  `da02e3fd20190b1e8656023c09ec532f3b9016d7`. D2 remains independently accepted
+  and complete; its accepted denominator is 19/71 (26.8%).
+- Root cause and repair: Lighting's populated Scene Matrix was hidden by a stale
+  upper-panel selector; Video's Media Library had escaped the intended grid/flow;
+  Timeline's header and portalled upper content occupied incompatible rows; and
+  Sources inherited the resulting short header/outer-overflow geometry. The fixed
+  layout restores the populated owners, assigns Timeline a header plus remaining-
+  height content row, keeps the Sources shell contained with body-only scrolling,
+  and preserves Tools/Live Mixer, expansion, and ordered Escape behavior. Shared
+  control, type, spacing, icon, and hit-target sizes were not reduced.
+- Dedicated browser acceptance: PASS at exactly 3840x2160, 2560x1440,
+  1920x1080, and 1280x720, with 28 state screenshots covering Lighting, Video,
+  Video Import, Timeline normal/expanded, Tools, Live Mixer, and Sources. 960x640
+  remains the product minimum configuration only. 860x520 and 1366x768 remain
+  historical supplemental cases, not current acceptance substitutes. Browser PASS
+  is not recorded as native PASS.
+- Native build: after the exact-path process pre-stop,
+  `pnpm --dir app tauri build --no-bundle` passed in 2m46s for
+  `1.2.0-alpha.7`.
+  `target/release/syndocal.exe` SHA-256 is
+  `00253F26A8D3A933172D7B07923E430B455CA18F98E439CE45C5B62405F86EF4`.
+  Launch verification found exactly one responsive `Syndocal` main window at PID
+  `100260` from that path and the window was maximized before native interaction.
+- Native UI evidence: at the 1920 desktop class (1920x1032 work area), screenshots
+  verify non-empty Lighting Scene Matrix, non-empty Video Media Library, contained
+  Video Import, Timeline lanes, full-height Sources, contained Tools, expansion,
+  and Escape close-then-restore. Evidence is under
+  `qa/artifacts/native-ui-alpha7/2026-08-23-1920x1032`. The maximized 2048x1104
+  capture is supplemental. Native 2560x1440 and 1280x720 remain unverified because
+  no safe verified monitor-move route was available; 3840x2160 was connected but
+  not active as a desktop mode.
+- Guide timing: PASS at the exact click target minus 7,200 frames, which is 150 ms
+  at 48 kHz. This does not prove audible playback or physical output routing.
+- Warning boundary: the configurations run for this checkpoint report zero
+  first-party warnings. Supplemental `check:edit-live` remains red only on two
+  existing unrelated assertions: scene-identity badge color and the historical
+  <=86 px mode-tab compactness expectation. It is not evidence of an upper-
+  workspace regression and shared controls were not shrunk to make it pass.
+- Remaining blockers: physical multi-display VJ output/reconnect/soak, DMX,
+  MIDI, DJ Link Agent plus Stream Deck Pedal end-to-end, audible click/Guide
+  device routing, the remaining ASIO device/rate/buffer/channel/licensing/fault
+  matrix, and the integrated long soak. Do not call the product complete until
+  those rows are recorded against their real hardware and exact artifact.
+- No commit or push was made by this documentation owner. Root retains integration,
+  final hash review, checkpoint commit, push, and all native/hardware completion
+  claims.

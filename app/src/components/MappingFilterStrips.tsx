@@ -110,16 +110,21 @@ export function MappingGroupRibbon(props: MappingGroupRibbonProps) {
     setContextMenu(null);
   };
   const closeContextMenuFromKey = (event: KeyboardEvent) => {
-    if (event.key === "Escape" && contextMenu()) {
-      event.preventDefault();
-      setContextMenu(null);
-    }
+    if (
+      event.key !== "Escape" ||
+      event.defaultPrevented ||
+      !contextMenu() ||
+      document.querySelector("dialog[open]")
+    ) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    setContextMenu(null);
   };
   window.addEventListener("pointerdown", closeContextMenu, true);
-  window.addEventListener("keydown", closeContextMenuFromKey);
+  window.addEventListener("keydown", closeContextMenuFromKey, true);
   onCleanup(() => {
     window.removeEventListener("pointerdown", closeContextMenu, true);
-    window.removeEventListener("keydown", closeContextMenuFromKey);
+    window.removeEventListener("keydown", closeContextMenuFromKey, true);
   });
 
   return (

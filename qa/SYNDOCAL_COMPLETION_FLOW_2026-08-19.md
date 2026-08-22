@@ -330,7 +330,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active development train advances from the long-lived `1.1.0` metadata to
-`1.2.0-alpha.6`. The branch name may remain historical; artifact metadata and tags
+`1.2.0-alpha.7`. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from the branch name.
 
 The synchronized product-version surfaces are:
@@ -478,7 +478,7 @@ evidence ledgers, clean reviewed commit, and pushed handoff.
 - [x] E4 Save/Save As/template/backup reservation, journal, mapping flush, atomic
   replacement, and truthful terminal receipt.
 - [x] D1 machine/session cache read purity.
-- [ ] D2 atomic PATCH/GDTF Repair with whole-batch prevalidation, Published ACK,
+- [x] D2 atomic PATCH/GDTF Repair with whole-batch prevalidation, Published ACK,
   allocator/cache/output rollback, and one history result.
 - [ ] D3 server-side admission for every mutation, including raw Tauri paths.
 - [ ] D4 Stage import/mutation identity fence, atomicity, Undo, and error truth.
@@ -1281,3 +1281,101 @@ source is `qa-final-save-as.sdc` and whose payload contains the post-save
 E4 is accepted for the current Windows tranche. The accepted Windows denominator
 is now 18/71 (25.4%). This does not complete the product; later roadmap and
 current-PC hardware/ASIO/soak gates remain open.
+
+## 27. 2026-08-23 alpha.7 D2/UI/Guide integration checkpoint
+
+The next intentionally distributed development artifact advances to
+`1.2.0-alpha.7`; alpha.6 artifact bytes remain immutable. This is a product-version
+advance only. It does not change any project, template, command, API, ABI,
+checkpoint, cache, or audio-asset schema version.
+
+D2 is accepted from the production PATCH/GDTF Repair transaction path. Whole-batch
+profile resolution and validation complete before publication, allocator and
+runtime state roll back on definitive failure, admitted ACK uncertainty remains
+fail-closed, and the exact typed command result survives reply loss so lifecycle
+retirement cannot rewrite a published result as Interrupted history. The final
+fixed backend hashes are main
+`5B91759B9B4789AF17B0376220F094B08603D0AD271DEF9B5CD67AA46103215D`, Engine
+`03685241C9FC35B12F7FDA6A880ADEB64D3EF092F60B63717E8325ACEC0C0C6F`, and
+control plane
+`A0864AB959688F5B857F5F49BF985F82F64036F145C3445FDCFA113E9B480750`.
+Independent review returned P0/P1/P2 zero. Focused evidence passed D2 9/9,
+project-transaction 4/4, control-plane 25/25, Engine fixture PATCH 10/10, Engine
+Repair 5/5, exact frontend invoke inventory 415, the D2 controller, backend
+operator-contract checks, Rust format/diff checks, and the no-default Rust check
+with zero first-party warnings. D2 advances the accepted Windows denominator to
+19/71 (26.8%).
+
+The integrated UI evidence is also green without closing a hardware or whole-UI
+row: Lighting, Video, and Timeline geometry plus screenshots passed at 1920x1080,
+1366x768, 860x520, and 1280x720; the Timeline operator matrix passed five
+viewports; and the Timeline Sources lower pane retained zero outer/body scroll.
+The pinned click/Guide perceptual check passed its 150 ms boundary. These are
+automated/browser/render and deterministic audio proofs, not native release-app,
+audible-device, editor-plus-two-display, DMX, MTC/DJ, ASIO, or soak acceptance.
+
+No alpha.7 native build or GUI operation is claimed at this checkpoint. The next
+stop is the root-owned synchronized `pnpm --dir app tauri build --no-bundle`,
+followed by exactly one responsive maximized `Syndocal` window and the remaining
+current-PC hardware/UI acceptance. Until that succeeds, alpha.7 is an automated
+integration checkpoint only.
+
+The version checkpoint gates passed: `pnpm --dir app run check:release` reported
+exact synchronized alpha.7 metadata; `cargo check -p syndocal --locked --bin
+syndocal --no-default-features` completed with zero first-party warnings; the
+`frontend-typescript-vite-windows` warning ratchet reported baseline/current
+0/0 total and first-party warnings; and `git diff --check` passed with only Git's
+line-ending notices.
+
+## 28. 2026-08-23 alpha.7 Control upper-workspace native/UI closure
+
+The Control upper-workspace regression was traced to layout ownership rather than
+an intentional compact-mode change. Lighting mounted its populated Scene Matrix
+behind a stale selector; Video placed the Media Library outside the intended
+grid/flow; and Timeline split its header and portalled upper content across
+incompatible rows. The Timeline Sources shelf then inherited an undersized header
+track and outer overflow, producing the clipped labels and nested scroll reported
+from the real window. The repair restores the populated upper owner for Lighting,
+puts Video's Media Library back in the upper grid with internal body scrolling,
+gives Timeline a fixed header plus remaining-height content row, and keeps Sources'
+outer shell contained while only its body may scroll. Tools/Live Mixer disclosure,
+expanded Timeline, and ordered Escape unwinding were retained without shrinking
+shared typography, controls, spacing, icons, or hit targets.
+
+The dedicated browser gate and all 28 captured states passed at exactly
+3840x2160, 2560x1440, 1920x1080, and 1280x720. Those four sizes are the current
+Control upper-workspace browser acceptance matrix. 960x640 remains the configured
+product minimum only; 860x520 and 1366x768 are historical supplemental cases and
+are not substituted for this matrix. Browser geometry and screenshots do not by
+themselves establish native acceptance.
+
+The synchronized alpha.7 native build subsequently passed. After the exact
+checkout process pre-stop, `pnpm --dir app tauri build --no-bundle` passed in
+2m46s and produced
+`target/release/syndocal.exe`, SHA-256
+`00253F26A8D3A933172D7B07923E430B455CA18F98E439CE45C5B62405F86EF4`.
+Launch inspection found exactly one responsive `Syndocal` main window at PID
+`100260` from that exact executable and it was maximized before UI interaction.
+At the 1920 desktop
+class (1920x1032 maximized work area), native screenshots verify populated
+Lighting and Video upper workspaces, the Video Import disclosure, Timeline lanes,
+the full-height Sources shelf, contained Tools, expanded Timeline, and the ordered
+Escape path back to the lower panes. A maximized 2048x1104 pass is supplemental.
+Exact native 2560x1440 and 1280x720 placement was not accepted because the window
+could not be moved to those active displays through the verified safe automation
+route; 3840x2160 was connected but not active as a desktop mode. These three native
+sizes therefore remain explicitly unverified even though their browser rows pass.
+
+The deterministic click/Guide check also passes the requested perceptual lead:
+the Guide onset is the authored click target minus 7,200 frames, exactly 150 ms at
+48 kHz. This is sample-frame evidence, not audible-device acceptance. D2 remains
+complete at 19/71, and the Windows configurations exercised by this checkpoint
+report zero first-party warnings. The supplemental `check:edit-live` gate still
+has two pre-existing, unrelated failures (scene-identity badge color and an old
+<=86 px mode-tab compactness expectation); neither is caused by the Control upper
+workspace repair, and the current UI was not shrunk to satisfy that stale rule.
+
+This checkpoint closes the reported Control upper-workspace/native 1920-class
+regression only. Physical multi-display VJ output, DMX, MIDI, DJ Link plus Stream
+Deck Pedal, audible click/Guide routing, the remaining ASIO matrix/licensing/fault
+rows, and the integrated long soak remain mandatory before product completion.

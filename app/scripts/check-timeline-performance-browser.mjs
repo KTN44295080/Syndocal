@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,9 @@ const host = "127.0.0.1";
 const vitePort = 5193;
 const cdpPort = 9243;
 const baseUrl = `http://${host}:${vitePort}/?syndocalViewportFixture=timeline-layered`;
+const screenshotDir = process.env.SYNDOCAL_CONTROL_SCREENSHOT_DIR || process.env.SYNDOCAL_TIMELINE_SCREENSHOT_DIR
+  ? resolve(process.env.SYNDOCAL_CONTROL_SCREENSHOT_DIR || process.env.SYNDOCAL_TIMELINE_SCREENSHOT_DIR)
+  : null;
 const viewports = [
   { width: 1920, height: 1080 },
   { width: 1366, height: 768 },
@@ -335,6 +338,171 @@ const measure = (client) => evaluate(client, `(() => {
   };
 })()`);
 
+const measureArrangerGeometry = (client) => evaluate(client, `(() => {
+  const livePanel = document.querySelector('.layoutSharedWorkspace.controlModeLive > .liveControlPanel');
+  const header = livePanel?.querySelector(':scope > .timelineArrangerHeader');
+  const host = livePanel?.querySelector(':scope > .timelineArrangerUpperHost');
+  const desk = document.querySelector('.faders.timelineDesk-show');
+  const surface = desk?.querySelector('.timelineShowSurface');
+  const frame = surface?.querySelector(':scope > .timelineOverviewFrame');
+  const scrollport = frame?.querySelector('.timelineLayerScrollport');
+  const lowerBand = document.querySelector('.layoutSharedWorkspace.controlModeLive > .mappingPersistentWorkspaceBand');
+  const lowerContext = lowerBand?.querySelector('[data-workspace-pane="lower-right"]');
+  const sourceShelf = lowerContext?.querySelector(':scope > [data-timeline-source-shelf]');
+  const sourceShelfHeader = sourceShelf?.querySelector(':scope > .timelineExternalSourceShelfHeader');
+  const sourceShelfBody = sourceShelf?.querySelector(':scope > [role="tabpanel"]');
+  const rect = (element) => {
+    if (!(element instanceof Element)) return null;
+    const bounds = element.getBoundingClientRect();
+    return [bounds.left, bounds.top, bounds.right, bounds.bottom, bounds.width, bounds.height];
+  };
+  return {
+    live: rect(livePanel),
+    header: rect(header),
+    host: rect(host),
+    desk: rect(desk),
+    surface: rect(surface),
+    frame: rect(frame),
+    scrollport: rect(scrollport),
+    lowerBand: rect(lowerBand),
+    lowerContext: rect(lowerContext),
+    sourceShelf: rect(sourceShelf),
+    sourceShelfHeader: rect(sourceShelfHeader),
+    sourceShelfBody: rect(sourceShelfBody),
+    sourceShelfRows: sourceShelf instanceof HTMLElement ? getComputedStyle(sourceShelf).gridTemplateRows : '',
+    sourceShelfOverflowY: sourceShelf instanceof HTMLElement ? getComputedStyle(sourceShelf).overflowY : '',
+    sourceShelfOuterScroll: sourceShelf instanceof HTMLElement ? [sourceShelf.scrollHeight, sourceShelf.clientHeight] : null,
+    sourceShelfHeaderScroll: sourceShelfHeader instanceof HTMLElement ? [sourceShelfHeader.scrollHeight, sourceShelfHeader.clientHeight] : null,
+    sourceShelfBodyOverflowY: sourceShelfBody instanceof HTMLElement ? getComputedStyle(sourceShelfBody).overflowY : '',
+    liveRows: livePanel instanceof HTMLElement ? getComputedStyle(livePanel).gridTemplateRows : '',
+    hostChildren: host instanceof Element ? [...host.children].map((element) => element.className) : [],
+    deskParent: desk instanceof Element ? desk.parentElement?.className ?? null : null,
+    deskParentTag: desk instanceof Element ? desk.parentElement?.tagName ?? null : null,
+    deskParentRect: desk instanceof Element ? rect(desk.parentElement) : null,
+    deskParentStyle: desk instanceof Element && desk.parentElement ? (() => {
+      const style = getComputedStyle(desk.parentElement);
+      return { display: style.display, width: style.width, height: style.height, rows: style.gridTemplateRows, columns: style.gridTemplateColumns, overflow: style.overflow };
+    })() : null,
+    deskParentMatchesPortalRule: desk instanceof Element && desk.parentElement
+      ? desk.parentElement.matches('.layout.layoutSharedWorkspace.layoutControl.controlModeLive > .liveControlPanel > .timelineArrangerUpperHost > div')
+      : false,
+    deskAncestors: desk instanceof Element ? (() => {
+      const rows = [];
+      let node = desk.parentElement;
+      while (node && rows.length < 5) {
+        rows.push({ tag: node.tagName, className: node.className, rect: rect(node) });
+        node = node.parentElement;
+      }
+      return rows;
+    })() : [],
+    deskRows: desk instanceof HTMLElement ? getComputedStyle(desk).gridTemplateRows : '',
+    surfaceRows: surface instanceof HTMLElement ? getComputedStyle(surface).gridTemplateRows : '',
+    headerShortTargets: header instanceof Element
+      ? [...header.querySelectorAll('button, summary')].filter((element) => {
+          const bounds = element.getBoundingClientRect();
+          return bounds.width > 0 && bounds.height > 0 && bounds.height < 43.5;
+        }).length
+      : -1,
+    shortTargetDetails: header instanceof Element
+      ? [...header.querySelectorAll('button, summary')].map((element) => {
+          const bounds = element.getBoundingClientRect();
+          return bounds.width > 0 && bounds.height > 0 && bounds.height < 43.5
+            ? [element.tagName, element.getAttribute('title') ?? element.getAttribute('aria-label') ?? element.textContent?.trim() ?? '', bounds.width, bounds.height]
+            : null;
+        }).filter(Boolean)
+      : [],
+    duplicateSurfaces: document.querySelectorAll('.timelineShowSurface').length,
+    legacyHeaders: surface?.querySelectorAll(':scope > .panelHeader').length ?? -1,
+    legacyTools: surface?.querySelectorAll(':scope > .timelineToolStrip').length ?? -1,
+  };
+})()`);
+
+const assertArrangerGeometry = (geometry, viewport) => {
+  assert.ok(geometry?.live && geometry.header && geometry.host && geometry.desk && geometry.surface && geometry.frame && geometry.scrollport && geometry.lowerContext && geometry.sourceShelf && geometry.sourceShelfHeader && geometry.sourceShelfBody, `Timeline arranger and lower source shelf geometry are mounted at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  const [liveLeft, liveTop, liveRight, liveBottom, liveWidth] = geometry.live;
+  const [headerLeft, headerTop, headerRight, headerBottom, headerWidth, headerHeight] = geometry.header;
+  const [hostLeft, hostTop, hostRight, hostBottom, hostWidth, hostHeight] = geometry.host;
+  const [deskLeft, deskTop, deskRight, deskBottom] = geometry.desk;
+  const [surfaceLeft, surfaceTop, surfaceRight, surfaceBottom] = geometry.surface;
+  const [frameLeft, frameTop, frameRight, frameBottom, , frameHeight] = geometry.frame;
+  const [scrollLeft, scrollTop, scrollRight, scrollBottom] = geometry.scrollport;
+  const [contextLeft, contextTop, contextRight, contextBottom, , contextHeight] = geometry.lowerContext;
+  const [shelfLeft, shelfTop, shelfRight, shelfBottom, , shelfHeight] = geometry.sourceShelf;
+  const [, sourceHeaderTop, , sourceHeaderBottom, , sourceHeaderHeight] = geometry.sourceShelfHeader;
+  const [, sourceBodyTop, , sourceBodyBottom, , sourceBodyHeight] = geometry.sourceShelfBody;
+  assert.ok(headerHeight >= 47.5 && headerHeight <= 48.5, `Timeline header owns one 48px row at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(Math.abs(headerTop - liveTop) <= 1 && Math.abs(hostTop - headerBottom) <= 1 && Math.abs(hostBottom - liveBottom) <= 1, `Timeline header and arranger are contiguous and consume the Live panel at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(Math.abs(headerLeft - hostLeft) <= 1 && Math.abs(headerRight - hostRight) <= 1 && Math.abs(headerWidth - hostWidth) <= 2 && liveWidth - headerWidth <= 12, `Timeline header and arranger share the Live panel width at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(hostLeft >= liveLeft && hostRight <= liveRight && hostHeight > 0, `Timeline arranger spans the Live panel remainder at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(deskLeft >= hostLeft - 1 && deskRight <= hostRight + 1 && deskTop >= hostTop - 1 && deskBottom <= hostBottom + 1, `Timeline desk stays inside its portal host at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(surfaceLeft >= hostLeft - 1 && surfaceRight <= hostRight + 1 && surfaceTop >= hostTop - 1 && surfaceBottom <= hostBottom + 1, `Timeline surface stays inside its portal host at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(frameLeft >= surfaceLeft - 1 && frameRight <= surfaceRight + 1 && frameTop >= surfaceTop - 1 && frameBottom <= surfaceBottom + 1 && frameHeight >= hostHeight - 3, `Timeline ruler/lane frame fills the arranger instead of collapsing to its bottom edge at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(scrollLeft >= frameLeft - 1 && scrollRight <= frameRight + 1 && scrollTop >= frameTop - 1 && scrollBottom <= frameBottom + 1, `Timeline layer scroll stays internal at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(shelfLeft >= contextLeft - 1 && shelfRight <= contextRight + 1 && shelfTop >= contextTop - 1 && shelfBottom <= contextBottom + 1 && shelfHeight >= contextHeight - 2, `Timeline Sources shelf fills the lower-right pane instead of occupying the stale header row at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(sourceHeaderHeight >= 36 && sourceHeaderTop >= shelfTop && sourceBodyTop >= sourceHeaderBottom && sourceBodyBottom <= shelfBottom + 1 && sourceBodyHeight >= 120, `Timeline Sources header remains readable and its body owns the remaining height at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.sourceShelfOverflowY === 'hidden' && geometry.sourceShelfOuterScroll?.[0] <= geometry.sourceShelfOuterScroll?.[1] + 1 && geometry.sourceShelfHeaderScroll?.[0] <= geometry.sourceShelfHeaderScroll?.[1] + 1 && ['auto', 'scroll'].includes(geometry.sourceShelfBodyOverflowY), `Timeline Sources removes the clipped outer scrollbar and confines overflow to the body at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.deepEqual([geometry.headerShortTargets, geometry.duplicateSurfaces, geometry.legacyHeaders, geometry.legacyTools], [0, 1, 0, 0], `Timeline keeps one arranger, no duplicate legacy chrome, and full-size header controls at ${viewport.width}x${viewport.height}`);
+};
+
+const measureControlDomainGeometry = (client, domain) => evaluate(client, `(() => {
+  const domain = ${JSON.stringify(domain)};
+  const rect = (element) => {
+    if (!(element instanceof Element)) return null;
+    const bounds = element.getBoundingClientRect();
+    return [bounds.left, bounds.top, bounds.right, bounds.bottom, bounds.width, bounds.height];
+  };
+  const visible = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const bounds = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return bounds.width > 0 && bounds.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  };
+  const activeDomain = document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-selected="true"]')?.getAttribute('data-control-mode-option') ?? '';
+  const upper = document.querySelector('[data-workspace-pane="upper"]');
+  const lower = document.querySelector('[data-workspace-pane="lower"]');
+  if (domain === 'edit') {
+    const matrix = upper?.querySelector('.sceneMatrixPanel');
+    const header = matrix?.querySelector('.sceneMatrixSurfaceHeader');
+    const scroller = matrix?.querySelector('.sceneMatrixScroller');
+    const card = scroller?.querySelector('[data-scene-matrix-cue-id]');
+    return { activeDomain, upper: rect(upper), lower: rect(lower), primary: rect(matrix), header: rect(header), content: rect(scroller), item: rect(card), primaryVisible: visible(matrix), contentVisible: visible(scroller), itemVisible: visible(card), primaryPosition: matrix ? getComputedStyle(matrix).position : '' };
+  }
+  const library = upper?.matches('[data-video-media-library="true"]') ? upper : document.querySelector('[data-video-media-library="true"]');
+  const header = library?.querySelector(':scope > .panelHeader');
+  const clip = library?.querySelector('.videoMixerClipPane');
+  const surface = library?.querySelector('.videoMediaLibrarySurface');
+  const card = surface?.querySelector('.videoMediaLibraryItem');
+  const importSummary = library?.querySelector('[data-edit-video-import-disclosure] > summary');
+  return { activeDomain, upper: rect(upper), lower: rect(lower), primary: rect(library), header: rect(header), content: rect(clip), surface: rect(surface), item: rect(card), importSummary: rect(importSummary), primaryVisible: visible(library), contentVisible: visible(clip), surfaceVisible: visible(surface), itemVisible: visible(card), importVisible: visible(importSummary), surfacePosition: surface ? getComputedStyle(surface).position : '', panelRows: library ? getComputedStyle(library).gridTemplateRows : '', clipRow: clip ? getComputedStyle(clip).gridRowStart : '' };
+})()`);
+
+const assertControlDomainGeometry = (geometry, viewport, domain) => {
+  assert.equal(geometry?.activeDomain, domain, `${domain} is the selected Control domain at ${viewport.width}x${viewport.height}`);
+  assert.ok(geometry.upper && geometry.lower && geometry.primary && geometry.header && geometry.content, `${domain} mounts the authored upper surface at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  const [, upperTop, , upperBottom, , upperHeight] = geometry.upper;
+  const [, lowerTop] = geometry.lower;
+  const [primaryLeft, primaryTop, primaryRight, primaryBottom, , primaryHeight] = geometry.primary;
+  const [upperLeft, , upperRight] = geometry.upper;
+  const [contentLeft, contentTop, contentRight, contentBottom, , contentHeight] = geometry.content;
+  assert.ok(upperBottom <= lowerTop + 1, `${domain} upper surface does not overlap the lower band at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.primaryVisible && primaryLeft >= upperLeft - 1 && primaryRight <= upperRight + 1 && primaryTop >= upperTop - 1 && primaryBottom <= upperBottom + 1 && primaryHeight >= upperHeight - 24, `${domain} primary content fills and stays inside the upper pane at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.contentVisible && contentLeft >= primaryLeft - 1 && contentRight <= primaryRight + 1 && contentTop >= primaryTop - 1 && contentBottom <= primaryBottom + 1 && contentHeight >= 120, `${domain} content owns usable height instead of a collapsed rail at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  if (domain === 'edit') {
+    assert.ok(geometry.itemVisible && geometry.item && geometry.item[5] >= 44, `Lighting exposes at least one usable Scene card at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+    return;
+  }
+  assert.ok(geometry.surfaceVisible && geometry.surface && geometry.surfacePosition !== 'absolute' && geometry.surface[5] >= 120, `Video Media Library surface is in-flow and usable at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.itemVisible && geometry.item && geometry.item[5] >= 48, `Video exposes at least one usable media card at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.importVisible && geometry.importSummary && geometry.importSummary[5] >= 43.5, `Video keeps Import Media reachable at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.equal(geometry.clipRow, '2', `Video clip/library pane stays in explicit row 2 at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+};
+
+const saveScreenshot = async (client, name) => {
+  if (!screenshotDir) return;
+  const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, fromSurface: true });
+  await writeFile(join(screenshotDir, name), Buffer.from(screenshot.data, "base64"));
+};
+
 let vite;
 let browser;
 let client;
@@ -354,15 +522,32 @@ try {
   await client.ready();
   await client.send("Page.enable");
   await client.send("Runtime.enable");
+  if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
 
   for (const viewport of viewports) {
     await client.send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
     await client.send("Page.navigate", { url: baseUrl });
     await waitFor(() => evaluate(client, "document.querySelector('.app') && document.readyState === 'complete'"), "app mount");
     assert.equal(await click(client, '[data-workspace-option="control"]'), true);
+
+    assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="edit"]'), true);
+    await waitFor(() => evaluate(client, "document.querySelector('.editDomainUpperPanel > .sceneMatrixPanel')?.getBoundingClientRect().height > 120"), "Lighting Banks and Scenes surface");
+    const lightingGeometry = await measureControlDomainGeometry(client, 'edit');
+    assertControlDomainGeometry(lightingGeometry, viewport, 'edit');
+    await saveScreenshot(client, `control-lighting-${viewport.width}x${viewport.height}.png`);
+
+    assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="mixer"]'), true);
+    await waitFor(() => evaluate(client, "document.querySelector('[data-video-media-library=\"true\"] .videoMediaLibraryItem')?.getBoundingClientRect().height > 48"), "Video Media Library surface");
+    const videoGeometry = await measureControlDomainGeometry(client, 'mixer');
+    assertControlDomainGeometry(videoGeometry, viewport, 'mixer');
+    await saveScreenshot(client, `control-video-${viewport.width}x${viewport.height}.png`);
+
     assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="live"]'), true);
     assert.equal(await waitFor(() => click(client, '[data-timeline-desk-surface="show"]'), "Timeline Show tab"), true);
     await waitFor(() => evaluate(client, "document.querySelectorAll('.timelineVideoClip').length === 1 && document.querySelectorAll('.timelineAudioClip').length === 2"), "authored Timeline media clips");
+    const arrangerGeometry = await measureArrangerGeometry(client);
+    assertArrangerGeometry(arrangerGeometry, viewport);
+    await saveScreenshot(client, `control-timeline-${viewport.width}x${viewport.height}.png`);
     assert.equal(await click(client, '.timelineToolsDisclosure > summary'), true);
     await waitFor(() => evaluate(client, "document.querySelector('.timelineToolsDisclosure[open] .timelinePerformanceEditor')?.getBoundingClientRect().height > 0"), "Timeline performance disclosure");
     assert.equal(await click(client, '.timelinePerformanceEditor [data-timeline-bank] > summary'), true);

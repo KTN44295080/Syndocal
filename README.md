@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.6**
+- 製品名: **Syndocal 1.2.0-alpha.7**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -52,7 +52,7 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.6_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.6_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.7_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.7_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 
@@ -142,7 +142,8 @@ ASIOは既定buildへ含めませんが、Windows製品のリリース完了条�
 - Windows: Pro Audio MMCSS Critical + 1ms timer、macOS: USER_INTERACTIVE QoS
 - 1時間release soak: 108,001フレーム、drop 0、tick jitter p99 0.535ms、command-to-DMX p99 0.476ms、最大13.3MB (ハーネス構成)
 - 大規模Engine gate: 200灯体、8ユニバース、100キュー、20,000ターゲット
-- UI viewport policy: browser 1920x1080とnative F11 1920x1080を運用・見た目の主ゲートにする。Windows最大化は1920x1032の作業領域内で実client 1920x1009（title barを除く）を確認し、Escで同寸法へ復帰させる。1280x720 / 1366x768はcontainment fallback、2048x1152は拡張上限回帰とし、小画面fallbackの通過だけではデザイン合格にしない
+- UI viewport policy: 現行Control上段workspaceのbrowser受入は3840x2160／2560x1440／1920x1080／1280x720の4解像度を必須とする。960x640は製品の最小構成として残すが、この4解像度gateの代替にはしない。860x520／1366x768は過去の補助回帰としてのみ残し、現行受入には数えない。browserのgeometry／screenshot PASSはnative PASSへ読み替えず、nativeはexact executable、最大化window、実画面captureを別に記録する
+- Alpha.7 Control upper-workspace native checkpoint: stale selector／grid-flow／Timeline row ownershipを修復し、1920 classの最大化native画面でLighting Scene Matrix、Video Media Library／Import、Timeline lanes／Sources／Tools／expand／Esc復帰を確認した。2048x1104は補助確認であり、native 2560x1440／1280x720／3840x2160は未受入のまま残す。Guideは48kHzでtarget minus 7,200 frames、すなわち150ms先行をdeterministic gateで確認したが、audible device／実機outputの証明ではない
 - Fullscreen VJ Focus gate: 1920x1080のfullscreen mode fixtureでは重複する外側headerを除き、Clips／Live Monitors + Outputs／Layersを684／811／405px、Preview／Programを317／476px（Program/Preview 1.502）に配分する。live-audio dockは92px、主操作は32px、設定操作は28pxとし、telemetryの切れ・critical overflowを0に固定する。1366x768／1280x720は従来のheader、64px audio rail、Preview／Program 1:1を維持する。専用identifierのcurrent-source native QA buildでも、最大化1913x1080からF11でexact 1920x1080へ移行し、このFocus配置と実ASIO telemetryを確認後、Escで通常配置へ復帰した
 - Populated VJ operator gate: 7 layerを6+1 bankで扱い、各visible layerへBuilt-in FX／選択段のEnable・Bypass／Advancedを固定する。重いISF editorは閉じている間DOM 0件、開いた1 layerだけ最大8段のstack rowと選択段editorをmountする。Event／Bool／Long／Float／Point2D／Color、8/8 Add lock、Event 1→0と履歴不変／busy interlock、選択・focusを保つMove、Remove後の安全な隣接選択、GPU診断更新、段index付きBypass transaction、3 outputのLive／Off／BO rail同期を1920x1080／1366x768／1280x720の英日6ケースで検証し、全操作phaseでunsafe overflow 0／owner外rect 0を要求する
 - ISF stack runtime: 有効段を最大8段まで一つのcommand encoderへ順番に積み、frameごとのhost upload 1回、GPU内ping-pong、最終readback 1回で処理する。変換shader／GPU pipelineは最大64件を再利用し、実行段数、stack render time、段別compile errorを診断へ出す。現行のheadless rendererは最終RGBAをCPUへreadbackし、別deviceのnative outputへ再uploadするため、outputまでのzero-copyやTouchDesigner級GPU-resident graphを示すものではない

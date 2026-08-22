@@ -18,7 +18,8 @@ const SOURCE_RATE = 22_050;
 const ACTIVITY_WINDOW_FRAMES = 480;
 const ACTIVITY_ABSOLUTE_RMS_FLOOR = 0.004;
 const ACTIVITY_RELATIVE_RMS = 0.02;
-const END_MARGIN_FRAMES = 2_400;
+const END_MARGIN_FRAMES = 7_200;
+const CLICK_REARM_QUIET_FRAMES = 480;
 
 const GUIDE_ASSETS = {
   Intro: "intro.wav",
@@ -222,7 +223,7 @@ function verifySemanticSchedule(manifest, expectedMode) {
   assert(manifest.guideSpec.activityRule.windowFrames === ACTIVITY_WINDOW_FRAMES, "manifest describes 10 ms activity windows");
   assert(manifest.guideSpec.activityRule.description.includes("forward-looking"), "activity-window direction is truthful");
   assert(!manifest.guideSpec.activityRule.description.includes("trailing"), "activity rule does not claim a trailing window");
-  assert(manifest.guideSpec.activityRule.perceptualEndMarginFrames === END_MARGIN_FRAMES, "manifest describes a 50 ms perceptual margin");
+  assert(manifest.guideSpec.activityRule.perceptualEndMarginFrames === END_MARGIN_FRAMES, "manifest describes a 150 ms perceptual margin");
   assert(manifest.totals.clickCount === 1492, "click count is 1492");
   assert(manifest.totals.physicalGuideEventCount === 33, "physical guide count is 33");
   const counts = {};
@@ -263,22 +264,51 @@ function assertNoGuideOverlap(manifest, sourceAssets) {
   }
 }
 
-function independentlyResolveTargetFrame(manifest, event) {
-  const target = manifest.clickEvents.find((click) => (
-    click.song === event.announcesSong
-    && click.measure === event.announcesMeasure
-    && click.pass === event.announcesPass
-    && click.beat === event.announcesBeat
-  ));
-  assert(target, `${event.label} semantic target resolves to a click event`);
-  assert(event.announcesGlobalFrame === target.globalFrame, `${event.label} announced global frame matches independently resolved target click`);
-  return target.globalFrame;
+function detectPhysicalClickOnsets(clickWav) {
+  const onsets = [];
+  let quietFrames = CLICK_REARM_QUIET_FRAMES;
+  for (let frame = 0; frame < clickWav.frames; frame += 1) {
+    const sample = clickWav.data.readInt16LE(frame * 2);
+    if (sample === 0) {
+      quietFrames += 1;
+      continue;
+    }
+    if (quietFrames >= CLICK_REARM_QUIET_FRAMES) onsets.push(frame);
+    quietFrames = 0;
+  }
+  return onsets;
+}
+
+function physicalClickTargets(manifest, clickWav) {
+  const clicks = [...manifest.clickEvents].sort((left, right) => left.globalFrame - right.globalFrame);
+  const onsets = detectPhysicalClickOnsets(clickWav);
+  assert(onsets.length === clicks.length, `physical click count is ${clicks.length}`);
+  const targets = new Map();
+  for (let index = 0; index < clicks.length; index += 1) {
+    const click = clicks[index];
+    const physicalOnset = onsets[index];
+    assert(Math.abs(physicalOnset - click.globalFrame) <= 1, `${click.song} m${click.measure} p${click.pass} b${click.beat} manifest click binds to physical PCM onset`);
+    const key = `${click.song}:${click.measure}:${click.pass}:${click.beat}`;
+    assert(!targets.has(key), `${key} identifies one physical click`);
+    targets.set(key, physicalOnset);
+  }
+  return targets;
+}
+
+function independentlyResolveTargetFrame(event, targets) {
+  const key = `${event.announcesSong}:${event.announcesMeasure}:${event.announcesPass}:${event.announcesBeat}`;
+  const target = targets.get(key);
+  assert(target !== undefined, `${event.label} semantic target resolves to a physical click onset`);
+  assert(Math.abs(event.announcesGlobalFrame - target) <= 1, `${event.label} announced global frame matches physical target click onset`);
+  return target;
 }
 
 async function verifyRenderedGuides(directory, manifest, sourceAssets, expectedMode) {
   assertNoGuideOverlap(manifest, sourceAssets);
   const bytes = await readFile(resolve(directory, "connected-guide.wav"));
   const connectedGuide = parsePcm16MonoWav(bytes, SAMPLE_RATE);
+  const connectedClick = parsePcm16MonoWav(await readFile(resolve(directory, "connected-click.wav")), SAMPLE_RATE);
+  const physicalTargets = physicalClickTargets(manifest, connectedClick);
   const activityEvidence = [];
   let completeEvidence;
   for (const event of manifest.guideEvents) {
@@ -295,11 +325,11 @@ async function verifyRenderedGuides(directory, manifest, sourceAssets, expectedM
     assert(Math.abs(renderedActivity.firstActiveFrame - asset.activity.firstActiveFrame) <= 1, `${event.label} rendered audible onset matches source activity within one frame`);
     assert(Math.abs(renderedActivity.lastActiveFrame - asset.activity.lastActiveFrame) <= 1, `${event.label} rendered audible end matches source activity within one frame`);
     const actualAudibleEndGlobalFrame = event.globalFrame + renderedActivity.lastActiveFrame;
-    const independentlyResolvedTargetFrame = independentlyResolveTargetFrame(manifest, event);
+    const independentlyResolvedTargetFrame = independentlyResolveTargetFrame(event, physicalTargets);
     const actualEndMarginFrames = independentlyResolvedTargetFrame - actualAudibleEndGlobalFrame;
     if (expectedMode === "perceptual-preview" && event.label !== "Intro") {
-      assert(actualEndMarginFrames >= END_MARGIN_FRAMES - 1, `${event.label} rendered activity ends at least 50 ms before target`);
-      assert(actualEndMarginFrames <= END_MARGIN_FRAMES + 1, `${event.label} rendered activity aligns within one frame of 50 ms`);
+      assert(actualEndMarginFrames >= END_MARGIN_FRAMES - 1, `${event.label} rendered activity ends at least 150 ms before target`);
+      assert(actualEndMarginFrames <= END_MARGIN_FRAMES + 1, `${event.label} rendered activity aligns within one frame of 150 ms`);
     }
     assert(Math.abs(event.audibleEndGlobalFrame - actualAudibleEndGlobalFrame) <= 1, `${event.label} manifest audible end agrees with independently measured render`);
     assert(Math.abs(event.audibleEndMarginFrames - actualEndMarginFrames) <= 1, `${event.label} manifest audible margin agrees with independently measured render`);
@@ -467,7 +497,7 @@ async function main() {
       renderedPcmMatchesIndependentSource: "PASS",
       clickStemsAndScheduleByteIdenticalToBaseline: "PASS",
       guideNonOverlap: "PASS",
-      renderedAudibleEndAtTargetMinus50ms: "PASS",
+      renderedAudibleEndAtPhysicalClickMinus150ms: "PASS",
       completeMetadataAndTailBothModes: "PASS",
       abExcerptSlices: "PASS",
       semanticsLoopTransComplete: "PASS",
