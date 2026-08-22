@@ -347,7 +347,9 @@ import type {
   ProjectAuthorityBundle,
   ProjectLoadResult,
   ProjectRecoveryAuthorityStatus,
-  ProjectSaveResult,
+  ProjectPublicationRequestV1,
+  ProjectPublicationStatusV1,
+  ProjectPublicationSurfaceV1,
   UserTemplateLoadResult,
   ReferencePaletteSummary,
   RemoteControlConfig,
@@ -663,6 +665,15 @@ import {
   saveRecentProjectPaths,
   touchRecentProjectPath,
 } from "./projectRecentStorage";
+import {
+  acknowledgeProjectPublicationIntent,
+  createProjectPublicationControllerV1,
+  loadProjectPublicationAcknowledgement,
+  settleProjectPublicationStatusV1,
+  type ProjectPublicationAdoptionCommandV1,
+  type ProjectPublicationCommandV1,
+  type ProjectPublicationRequestSeedV1,
+} from "./projectPublicationStorage";
 import {
   clearProjectRecoveryCheckpoint,
   createProjectRecoveryCheckpoint,
@@ -10413,22 +10424,40 @@ export default function App() {
     setApplicationUpdateError(null);
     setApplicationUpdateProgress({ phase: "downloading", downloaded_bytes: 0, total_bytes: null });
     setMessage(`Downloading signed Syndocal ${update.version} update...`);
+    let updateBackup: ProjectPublicationStatusV1 | null = null;
     try {
-      await flushProjectControlMappingsAuthority();
-      await invoke<ProjectBackupSummary>("install_application_update", {
+      // Update admission consumes the exact unacknowledged Backup Success
+      // receipt. The updater must not manufacture a second, raw backup.
+      updateBackup = await startProjectPublication("backup", `before update ${update.version}`, true);
+      if (updateBackup.state !== "succeeded") {
+        throw new Error(updateBackup.error ?? `Update backup is ${updateBackup.state}.`);
+      }
+      await invoke<void>("install_application_update", {
         expectedVersion: update.version,
-        midiMappings: midiMappings(),
-        oscMappings: oscMappings(),
-        dmxMappings: dmxMappings(),
-        djTrackTriggers: djTrackTriggers(),
+        backupRequest: updateBackup.request,
       });
-      await refreshProjectBackups();
       setMessage(`Syndocal ${update.version} was verified and handed to the platform installer.`);
     } catch (error) {
       const detail = String(error);
       setApplicationUpdateError(detail);
       setMessage(`Update install failed: ${detail}`);
     } finally {
+      // A backup success stays unacknowledged while the updater consumes its
+      // receipt, but no updater error may strand that exact local intent.
+      // The durable backup itself remains available to restore either way.
+      if (updateBackup?.state === "succeeded") {
+        try {
+          // The defer path returned the validated terminal without any UI
+          // application, so this finally block owns application, durable local
+          // ACK queuing, and the exact native ACK even when updater admission
+          // or backup-list refresh reports an ancillary failure.
+          await settleProjectPublicationTerminal(updateBackup);
+        } catch (error) {
+          const detail = `Update backup receipt acknowledgement is pending: ${String(error)}`;
+          setApplicationUpdateError(detail);
+          setMessage(detail);
+        }
+      }
       setApplicationUpdateBusy(false);
     }
   };
@@ -10651,7 +10680,10 @@ export default function App() {
       // Every persistence capture sees the same mapping authority as an
       // explicit Save. A debounced mapping edit cannot be omitted from a
       // recovery/autosave image merely because this timer fired first.
-      await flushProjectControlMappingsAuthority();
+      const recoveredMappings = await flushProjectControlMappingsAuthority();
+      if (!recoveredMappings.trusted) {
+        throw new Error("Project control mappings could not be durably synchronized; recovery publication was not started.");
+      }
       const recoveryReadGuard = captureProjectReadGuard();
       const sceneBlockDrafts = dirtyTimelineEventDrafts();
       const draftSignature = JSON.stringify(
@@ -10729,17 +10761,12 @@ export default function App() {
       }
       const now = Date.now();
       if (signature !== lastDesktopBackupSignature && now - lastDesktopBackupAt >= 60_000) {
-        await invoke<ProjectBackupSummary>("save_project_backup", {
-          sourcePath: currentProjectPath(),
-          reason: "autosave",
-        midiMappings: midiMappings(),
-        oscMappings: oscMappings(),
-        dmxMappings: dmxMappings(),
-        djTrackTriggers: djTrackTriggers(),
-        });
+        const backup = await startProjectPublication("backup", "autosave");
+        if (backup.state !== "succeeded") {
+          throw new Error(backup.error ?? `Autosave backup is ${backup.state}.`);
+        }
         lastDesktopBackupSignature = signature;
         lastDesktopBackupAt = now;
-        await refreshProjectBackups();
       }
     } catch (error) {
       setMessage(`Recovery checkpoint failed: ${String(error)}`);
@@ -14289,16 +14316,242 @@ export default function App() {
     }
   };
 
+  const ensureProjectPublicationMutationAllowed = (
+    command: ProjectPublicationCommandV1
+      | ProjectPublicationAdoptionCommandV1
+      | "abandon_project_publication_v1",
+  ) => {
+    if (operatorCommandAllowed(activeOperatorLockMode, command, true)) return;
+    throw new Error(
+      activeOperatorLockMode === "Full"
+        ? "Operator Full Lock allows only status reads and emergency blackout controls."
+        : "Operator Partial Lock blocks programming and project replacement commands.",
+    );
+  };
+
+  /**
+   * V1 publication owns its own durable reservation and final publication
+   * lane. It deliberately bypasses the generic renderer transaction wrapper;
+   * that wrapper would create a second persistence protocol around the exact
+   * request receipt.
+   */
+  const invokeProjectPublicationCommand = async <T,>(
+    command: ProjectPublicationCommandV1
+      | "get_project_publication_receipt_v1"
+      | "acknowledge_project_publication_receipt_v1"
+      | "abandon_project_publication_v1",
+    request: ProjectPublicationRequestV1,
+  ): Promise<T> => {
+    if (!isTauriRuntime()) throw new Error(tauriBackendUnavailableMessage);
+    if (command !== "get_project_publication_receipt_v1"
+      && command !== "acknowledge_project_publication_receipt_v1") {
+      ensureProjectPublicationMutationAllowed(command);
+    } else if (!operatorCommandAllowed(activeOperatorLockMode, command, false)) {
+      throw new Error(
+        activeOperatorLockMode === "Full"
+          ? "Operator Full Lock allows only status reads and emergency blackout controls."
+          : "Operator Partial Lock blocks programming and project replacement commands.",
+      );
+    }
+    return tauriInvoke<T>(command, { request });
+  };
+
+  const acknowledgeProjectPublicationRequest = async (acknowledgement: ProjectPublicationRequestV1) => {
+    // The backend ACK is an exact idempotent tombstone operation. Do not
+    // infer success from a missing query result: that could discard the only
+    // local recovery key after a corrupt/misrouted response. A lost ACK reply
+    // leaves this queue intact and retries the same request after restart.
+    await invokeProjectPublicationCommand<void>(
+      "acknowledge_project_publication_receipt_v1",
+      acknowledgement,
+    );
+    if (!acknowledgeProjectPublicationIntent(acknowledgement)) {
+      throw new Error("The local project publication acknowledgement changed before it was cleared.");
+    }
+  };
+
+  const publishProjectPublicationAcknowledgement = async (): Promise<boolean> => {
+    const acknowledgement = loadProjectPublicationAcknowledgement();
+    if (!acknowledgement) return true;
+    await acknowledgeProjectPublicationRequest(acknowledgement);
+    return true;
+  };
+
+  const adoptProjectPublicationOwner = async (
+    request: ProjectPublicationRequestV1,
+    newOwnerId: string,
+  ): Promise<unknown> => {
+    ensureProjectPublicationMutationAllowed("adopt_project_publication_owner_v1");
+    // Adoption is meaningful only after this Webview owns the new registered
+    // transaction identity. The native command independently verifies the
+    // injected window binding and current owner incarnation.
+    await projectTransactionOwnerRegistration;
+    return tauriInvoke<unknown>("adopt_project_publication_owner_v1", {
+      request,
+      newOwnerId,
+    });
+  };
+
+  const requireTrustedProjectPublicationAuthority = async (): Promise<ProjectPublicationRequestSeedV1> => {
+    if (!projectMappingsAuthorityReady()) {
+      throw new Error("Project authority is still initializing; wait before saving.");
+    }
+    const beforeFlush = captureProjectAuthorityIdentity();
+    const beforeIdentityGeneration = projectAuthoritySync.identityGeneration;
+    const flushed = await flushProjectControlMappingsAuthority();
+    const authority = captureProjectAuthorityIdentity();
+    const provenance = mediaAssetMappingPreflightProvenance(
+      beforeFlush,
+      authority,
+      flushed.ownAcknowledgements,
+    );
+    if (!flushed.trusted
+      || !provenance
+      || beforeIdentityGeneration !== projectAuthoritySync.identityGeneration
+      || !projectMappingsAuthorityReady()
+      || !/^[0-9a-f]{64}$/.test(authority.checkpoint_hash)) {
+      throw new Error("Project control mappings could not be durably synchronized; save was not started.");
+    }
+    return {
+      surface: "save",
+      ownerId: projectTransactionOwnerId,
+      expectedProjectEpoch: authority.project_epoch,
+      expectedProjectRevision: authority.project_revision,
+      expectedCheckpointHash: authority.checkpoint_hash,
+      // The backend's canonical checkpoint hash includes the authoritative
+      // control mappings. Bind the same exact persistence image twice rather
+      // than sending renderer copies of any mapping arrays.
+      mappingAuthorityHash: authority.checkpoint_hash,
+      sourcePath: currentProjectPath(),
+      reason: null,
+      targetPolicy: "current_or_dialog",
+    };
+  };
+
+  const projectPublicationPendingMessage = (status: ProjectPublicationStatusV1) => {
+    switch (status.state) {
+      case "selecting":
+        return "A previous save destination selection is still pending. Retry keeps the same request and will not reopen the dialog.";
+      case "prepared":
+        return "Project publication is awaiting durable reconciliation. Retry or reopen Syndocal to query the exact receipt.";
+      default:
+        return `Project publication is ${status.state}; the exact request remains durable for retry or explicit abandonment.`;
+    }
+  };
+
+  const applyProjectPublicationTerminal = async (
+    status: ProjectPublicationStatusV1,
+  ): Promise<void> => {
+    if (status.state === "indeterminate") {
+      setMessage(`Project publication outcome is indeterminate: ${status.error ?? "restart to reconcile the durable receipt"}`);
+      return;
+    }
+    if (status.state === "cancelled") {
+      setMessage(
+        status.surface === "user_template" ? "Template save canceled." : "Project publication canceled.",
+      );
+      return;
+    }
+    if (status.state === "abandoned") {
+      setMessage("The pending project publication was abandoned.");
+      return;
+    }
+    if (status.state === "failed") {
+      setMessage(`Project publication failed: ${status.error ?? "unknown durable failure"}`);
+      return;
+    }
+    if (status.state !== "succeeded") return;
+
+    if (status.surface === "backup") {
+      await refreshProjectBackups();
+      if (status.warning) {
+        setMessage(`Backup completed, but retention cleanup needs attention: ${status.warning}`);
+      }
+      return;
+    }
+    if (status.surface === "user_template") {
+      setMessage(status.targetPath ? `Saved user template ${status.targetPath}` : "Saved user template.");
+      return;
+    }
+
+    const saved = status.authority;
+    if (saved && projectAuthorityTokenIsCurrent(authorityToken(saved), projectMappingsAuthority())) {
+      // Save changes durable disposition/path, but never rewinds a newer
+      // mapping/input runtime signal that won while the file I/O was pending.
+      applyProjectAuthorityRuntimeStatus(saved, false);
+      if (projectAuthorityTokenIsCurrent(authorityToken(saved), projectMappingsAuthority())) {
+        if (status.targetPath) rememberRecentProjectPath(status.targetPath);
+        setMessage(status.targetPath ? `Saved project ${status.targetPath}` : "Saved project.");
+        return;
+      }
+    }
+    setMessage(
+      status.targetPath
+        ? `Saved an earlier project image to ${status.targetPath}; the current project changed before the acknowledgement arrived.`
+        : "Saved an earlier project image; the current project changed before the acknowledgement arrived.",
+    );
+  };
+
+  const settleProjectPublicationTerminal = async (status: ProjectPublicationStatusV1) =>
+    settleProjectPublicationStatusV1(
+      status,
+      applyProjectPublicationTerminal,
+      acknowledgeProjectPublicationRequest,
+    );
+
+  const projectPublicationController = createProjectPublicationControllerV1({
+    invokeStatus: (command, request) => invokeProjectPublicationCommand<unknown>(command, request),
+    adoptOwner: adoptProjectPublicationOwner,
+    currentOwnerId: projectTransactionOwnerId,
+    publishQueuedAcknowledgement: async () => {
+      await publishProjectPublicationAcknowledgement();
+    },
+    settleTerminal: settleProjectPublicationTerminal,
+    applyIndeterminate: applyProjectPublicationTerminal,
+    captureSeed: requireTrustedProjectPublicationAuthority,
+    ensureMutationAllowed: ensureProjectPublicationMutationAllowed,
+    confirmAbandon: (intent, status) => {
+      const description = intent.request.surface.replaceAll("_", " ");
+      return window.confirm(
+        `A ${description} request is still ${status.state}. Abandon that exact request? This cannot be undone.`,
+      );
+    },
+    onPending: (status) => setMessage(projectPublicationPendingMessage(status)),
+    onMissing: () => setMessage(
+      "A durable project publication request was recorded before dispatch. Retry the same action to resume it.",
+    ),
+    onAbandoned: (intent, requestedSurface) => {
+      const description = intent.request.surface.replaceAll("_", " ");
+      setMessage(
+        `The previous ${description} request was abandoned. Choose ${requestedSurface.replaceAll("_", " ")} again to start a new request.`,
+      );
+    },
+  });
+
+  const startProjectPublication = (
+    surface: ProjectPublicationSurfaceV1,
+    reason: string | null = null,
+    deferTerminalAcknowledgement = false,
+  ): Promise<ProjectPublicationStatusV1> => projectPublicationController.start(
+    surface,
+    reason,
+    deferTerminalAcknowledgement,
+  );
+
+  let projectPublicationStartupRecoveryStarted = false;
+  const initializeProjectPublicationRecovery = async () => {
+    if (!isTauriRuntime() || projectPublicationStartupRecoveryStarted) return;
+    projectPublicationStartupRecoveryStarted = true;
+    try {
+      await projectPublicationController.recover();
+    } catch (error) {
+      setMessage(`Project publication recovery is pending: ${String(error)}`);
+    }
+  };
+
   const saveUserTemplate = async () => {
     try {
-      await flushProjectControlMappingsAuthority();
-      const path = await invoke<string | null>("save_user_template", {
-          midiMappings: midiMappings(),
-          oscMappings: oscMappings(),
-          dmxMappings: dmxMappings(),
-          djTrackTriggers: djTrackTriggers(),
-      });
-      setMessage(path ? `Saved user template ${path}` : "Template save canceled.");
+      await startProjectPublication("user_template");
     } catch (error) {
       setMessage(`Template save failed: ${String(error)}`);
     }
@@ -14333,38 +14586,7 @@ export default function App() {
       return;
     }
     try {
-      await flushProjectControlMappingsAuthority();
-      const capturedAuthority = captureProjectAuthorityIdentity();
-      const capturedApplicationGeneration = projectAuthoritySync.applicationGeneration;
-      const saved = await invoke<ProjectSaveResult | null>("save_project", {
-          midiMappings: midiMappings(),
-          oscMappings: oscMappings(),
-          dmxMappings: dmxMappings(),
-          djTrackTriggers: djTrackTriggers(),
-      });
-      if (saved) {
-        const savedToken = authorityToken(saved.authority);
-        if (projectAuthorityTokenIsCurrent(capturedAuthority, savedToken)
-          && projectAuthorityTokenIsCurrent(savedToken, projectMappingsAuthority())
-          && capturedApplicationGeneration === projectAuthoritySync.applicationGeneration) {
-          // Save changes path/disposition, not input workers. A same-project
-          // Connect/Stop may complete while Save is in flight, so its captured
-          // input snapshot must not overwrite the newer lifecycle result.
-          applyProjectAuthorityRuntimeStatus(saved.authority, false);
-          if (projectAuthorityTokenIsCurrent(savedToken, projectMappingsAuthority())
-            && capturedApplicationGeneration === projectAuthoritySync.applicationGeneration) {
-            rememberRecentProjectPath(saved.path);
-            setMessage(`Saved project ${saved.path}`);
-            return;
-          }
-        }
-        // The A file may be valid, but B won the authority race. Do not mark
-        // B clean/path-adopted from a delayed A reply; polling/event delivery
-        // will converge the visible state to B.
-        setMessage(`Saved an earlier project image to ${saved.path}; the current project changed before the acknowledgement arrived.`);
-        return;
-      }
-      setMessage("Project save canceled.");
+      await startProjectPublication("save");
     } catch (error) {
       setMessage(String(error));
     }
@@ -14376,32 +14598,7 @@ export default function App() {
       return;
     }
     try {
-      await flushProjectControlMappingsAuthority();
-      const capturedAuthority = captureProjectAuthorityIdentity();
-      const capturedApplicationGeneration = projectAuthoritySync.applicationGeneration;
-      const saved = await invoke<ProjectSaveResult | null>("save_project_as", {
-          midiMappings: midiMappings(),
-          oscMappings: oscMappings(),
-          dmxMappings: dmxMappings(),
-          djTrackTriggers: djTrackTriggers(),
-      });
-      if (saved) {
-        const savedToken = authorityToken(saved.authority);
-        if (projectAuthorityTokenIsCurrent(capturedAuthority, savedToken)
-          && projectAuthorityTokenIsCurrent(savedToken, projectMappingsAuthority())
-          && capturedApplicationGeneration === projectAuthoritySync.applicationGeneration) {
-          applyProjectAuthorityRuntimeStatus(saved.authority, false);
-          if (projectAuthorityTokenIsCurrent(savedToken, projectMappingsAuthority())
-            && capturedApplicationGeneration === projectAuthoritySync.applicationGeneration) {
-            rememberRecentProjectPath(saved.path);
-            setMessage(`Saved project ${saved.path}`);
-            return;
-          }
-        }
-        setMessage(`Saved an earlier project image to ${saved.path}; the current project changed before the acknowledgement arrived.`);
-        return;
-      }
-      setMessage("Project save canceled.");
+      await startProjectPublication("save_as");
     } catch (error) {
       setMessage(String(error));
     }
@@ -14948,7 +15145,9 @@ export default function App() {
       setMessage(`Browser recovery is unavailable: ${String(error)}`);
     }
   };
-  void initializeProjectRecoveryAuthority();
+  void initializeProjectRecoveryAuthority().finally(() => {
+    void initializeProjectPublicationRecovery();
+  });
 
   const loadProjectBackup = async (backup: ProjectBackupSummary) => {
     if (!await confirmDiscardProjectChanges("restore a project backup")) {

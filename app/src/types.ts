@@ -1032,6 +1032,57 @@ export interface ProjectSaveResult {
   authority: ProjectAuthorityBundle;
 }
 
+/**
+ * The request is written by the renderer before entering the Tauri command.
+ * Keep its field names aligned with the versioned durable Rust journal rather
+ * than translating a partial UI intent at the IPC boundary.
+ */
+export type ProjectPublicationSurfaceV1 = "save" | "save_as" | "user_template" | "backup";
+export type ProjectPublicationTargetPolicyV1 = "current_or_dialog" | "dialog" | "managed_unique";
+export type ProjectPublicationStateV1 =
+  | "reserved"
+  | "selecting"
+  | "selected"
+  | "prepared"
+  | "succeeded"
+  | "cancelled"
+  | "abandoned"
+  | "failed"
+  | "indeterminate";
+
+export interface ProjectPublicationRequestV1 {
+  schemaVersion: 1;
+  originId: string;
+  requestId: number;
+  /** Registered renderer transaction owner; binds mutation admission end to end. */
+  ownerId: string;
+  surface: ProjectPublicationSurfaceV1;
+  expectedProjectEpoch: number;
+  expectedProjectRevision: number;
+  expectedCheckpointHash: string;
+  mappingAuthorityHash: string;
+  sourcePath: string | null;
+  reason: string | null;
+  targetPolicy: ProjectPublicationTargetPolicyV1;
+}
+
+/** Durable receipt for a Save, Save As, user-template, or backup request. */
+export interface ProjectPublicationStatusV1 {
+  request: ProjectPublicationRequestV1;
+  shapeHash: string;
+  surface: ProjectPublicationSurfaceV1;
+  state: ProjectPublicationStateV1;
+  targetPath: string | null;
+  /** SHA-256 of the prepared/published artifact when one exists. */
+  artifactDigest?: string;
+  backup: ProjectBackupSummary | null;
+  recoveryAuthoritySerial: number;
+  authority: ProjectAuthorityBundle | null;
+  error: string | null;
+  /** A successful backup may retain a non-fatal retention-cleanup warning. */
+  warning?: string;
+}
+
 export interface DvcImportDetail {
   item: string;
   message: string;

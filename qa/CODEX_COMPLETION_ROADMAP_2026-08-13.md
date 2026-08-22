@@ -4,7 +4,7 @@
 > requirement and final-gate authority, but its frozen checkpoint, 75.5% planning
 > roll-up, and Media A1 resume instructions are historical. Use
 > `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for the current dependency order,
-> `1.2.0-alpha.5` version train, warning ratchet, AI3 resume point, and checkpoint
+> `1.2.0-alpha.6` version train, warning ratchet, E4 resume point, and checkpoint
 > workflow. Do not compare old and current percentages without identical denominators.
 
 > **OutputControl supersession (2026-08-21):** physical six-digit/Raw Input/Enter
@@ -2200,3 +2200,17 @@ real Tauri dispatch and browser localStorage, kill/relaunch after B publication
 with reply loss, kill/relaunch after durable ACK before browser cleanup, and then
 record the alpha.5 release executable identity and one responsive maximized
 Syndocal window. No static or headless result is substituted for this evidence.
+
+## 33. 2026-08-23 alpha.6 E4 automated checkpoint
+
+E4 Save durability is implemented across Save, Save As, template, backup, and
+update preflight through one versioned durable publication service. Exact restart
+owner adoption, server-side owner/operator fences, staging cleanup truth, backup
+receipt retention, updater claims, and reply-loss query/ACK convergence have
+independent P0/P1/P2-zero reviews. Focused Rust/frontend/build/warning gates are
+green, including project-publication 15/15 and exact 415 invokes.
+
+The product metadata is advancing to `1.2.0-alpha.6`, and the E4 checker is being
+added to cross-platform CI. E4 is not checked complete until the alpha.6 native
+build, one responsive maximized window, and scratch Save/Save As/template/backup
+operation are recorded. AI4 remains blocked until that acceptance finishes.

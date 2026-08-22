@@ -232,6 +232,11 @@ const OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION: u32 = 1;
 const OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE: &str = "output-lease-receipts.json";
 const MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES: u64 = 8 * 1024 * 1024;
 const PROJECT_RECOVERY_AUTHORITY_STATE_VERSION: u32 = 1;
+const MAX_PROJECT_RECOVERY_AUTHORITY_STATE_BYTES: u64 = 2 * 1024 * 1024;
+const PROJECT_PUBLICATION_REQUEST_SCHEMA_VERSION: u16 = 1;
+const MAX_PROJECT_PUBLICATION_ORIGINS: usize = 32;
+const MAX_PROJECT_PUBLICATION_PENDING: usize = 16;
+const MAX_PROJECT_PUBLICATION_TERMINALS: usize = 64;
 const PROJECT_RECOVERY_AUTHORITY_STATE_FILE: &str = "project-recovery-authority.json";
 const MAX_SHOW_LAN_INTERFACES: usize = 32;
 const APPLICATION_UPDATE_PROGRESS_EVENT: &str = "syndocal://application-update-progress";
@@ -279,6 +284,7 @@ static MEDIA_ASSET_SNAPSHOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 static RDM_TRANSACTION_NUMBER: AtomicU8 = AtomicU8::new(1);
 static LIVE_VIDEO_MONITOR_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static PROJECT_SAVE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static PROJECT_BACKUP_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static NATIVE_VIDEO_OUTPUT_QUARANTINE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static LIVE_VIDEO_OUTPUT_WINDOW_INCARNATION: AtomicU64 = AtomicU64::new(0);
 static LIVE_VIDEO_OUTPUT_WINDOW_TRUTH: LazyLock<
@@ -1264,6 +1270,46 @@ fn dispatch_dj_link_event(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApplicationUpdatePublicationClaim {
+    origin_id: String,
+    request_id: u64,
+    shape_hash: String,
+    backup_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectPublicationReconcileClaimV1 {
+    origin_id: String,
+    request_id: u64,
+    shape_hash: String,
+    recovery_authority_serial: u64,
+    reservation_generation: u64,
+}
+
+struct ProjectPublicationReconcileClaimGuardV1<'a> {
+    slot: &'a Mutex<Option<ProjectPublicationReconcileClaimV1>>,
+    claim: ProjectPublicationReconcileClaimV1,
+}
+
+impl Drop for ProjectPublicationReconcileClaimGuardV1<'_> {
+    fn drop(&mut self) {
+        let mut slot = match self.slot.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if slot.as_ref() == Some(&self.claim) {
+            *slot = None;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProjectPublicationMutationBinding<'a> {
+    window_label: &'a str,
+    owner_id: &'a str,
+}
+
 struct AppState {
     engine: EngineHandle,
     /// The application handle is retained for fenced project replacement so
@@ -1291,6 +1337,15 @@ struct AppState {
     /// Durable terminal evidence for output-lease requests.  This is not
     /// authority and is never used to reconstruct a lease after restart.
     output_lease_durable_receipts: Mutex<OutputLeaseDurableReceiptJournal>,
+    /// Exact unacknowledged backup receipt pinned from the final local
+    /// verification fence until the updater returns. ACK and deletion must not
+    /// retire its evidence while the asynchronous install is in flight.
+    application_update_publication_claim: Mutex<Option<ApplicationUpdatePublicationClaim>>,
+    /// Exact process-local ownership of a Prepared receipt reconciliation.
+    /// It is acquired under `project_save_publication` before query cleanup
+    /// releases the mutation locks, so an original command cannot publish the
+    /// same staging file while the query decides its durable terminal truth.
+    project_publication_reconcile_claim: Mutex<Option<ProjectPublicationReconcileClaimV1>>,
     output_lease_clock_origin: Instant,
     next_output_lease_request_id: AtomicU64,
     /// Process-local DJ Link credential.  `None` is a deliberate fail-closed
@@ -17036,6 +17091,152 @@ struct ProjectSaveResult {
     authority: ProjectAuthorityBundle,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProjectPublicationSurfaceV1 {
+    Save,
+    SaveAs,
+    UserTemplate,
+    Backup,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProjectPublicationTargetPolicyV1 {
+    CurrentOrDialog,
+    Dialog,
+    ManagedUnique,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ProjectPublicationRequestV1 {
+    schema_version: u16,
+    origin_id: String,
+    owner_id: String,
+    request_id: u64,
+    surface: ProjectPublicationSurfaceV1,
+    expected_project_epoch: u64,
+    expected_project_revision: u64,
+    expected_checkpoint_hash: String,
+    mapping_authority_hash: String,
+    source_path: Option<String>,
+    reason: Option<String>,
+    target_policy: ProjectPublicationTargetPolicyV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProjectPublicationPendingPhaseV1 {
+    Reserved,
+    Selecting,
+    Selected,
+    Prepared,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedProjectPublicationOriginV1 {
+    origin_id: String,
+    high_water_request_id: u64,
+    #[serde(default)]
+    acknowledged_request_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    acknowledged_shape_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedProjectPublicationPendingV1 {
+    request: ProjectPublicationRequestV1,
+    shape_hash: String,
+    surface: ProjectPublicationSurfaceV1,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    path_generation: u64,
+    authority_disposition_generation: u64,
+    recovery_authority_serial_before: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_recovery_authority_serial_after: Option<u64>,
+    reservation_generation: u64,
+    source_path: Option<String>,
+    reason: Option<String>,
+    phase: ProjectPublicationPendingPhaseV1,
+    target_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    staging_path: Option<PathBuf>,
+    prepared_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    indeterminate_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProjectPublicationTerminalOutcomeV1 {
+    Succeeded,
+    Cancelled,
+    Abandoned,
+    Failed,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedProjectPublicationTerminalV1 {
+    request: ProjectPublicationRequestV1,
+    shape_hash: String,
+    surface: ProjectPublicationSurfaceV1,
+    outcome: ProjectPublicationTerminalOutcomeV1,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    target_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact_digest: Option<String>,
+    backup: Option<ProjectBackupSummary>,
+    recovery_authority_serial: u64,
+    error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedProjectPublicationJournalV1 {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    origins: Vec<PersistedProjectPublicationOriginV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pending: Vec<PersistedProjectPublicationPendingV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    terminals: Vec<PersistedProjectPublicationTerminalV1>,
+    #[serde(default)]
+    latest_reservation_generation: u64,
+}
+
+impl PersistedProjectPublicationJournalV1 {
+    fn is_empty(&self) -> bool {
+        self.origins.is_empty()
+            && self.pending.is_empty()
+            && self.terminals.is_empty()
+            && self.latest_reservation_generation == 0
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectPublicationStatusV1 {
+    request: ProjectPublicationRequestV1,
+    shape_hash: String,
+    surface: ProjectPublicationSurfaceV1,
+    state: String,
+    target_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artifact_digest: Option<String>,
+    backup: Option<ProjectBackupSummary>,
+    recovery_authority_serial: u64,
+    authority: Option<ProjectAuthorityBundle>,
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
+}
+
 /// App-local state that must move with an engine snapshot. It is deliberately
 /// prepared before the engine request but committed only after its publication
 /// acknowledgement; a later local commit failure restores this complete
@@ -18016,6 +18217,20 @@ fn lock_project_transaction_owner_lifecycle_admission<'a>(
         );
     }
     Ok(guard)
+}
+
+/// Recovery/publication receipt maintenance must serialize with every project
+/// mutation even while an indeterminate publication has latched ordinary
+/// admission. It never authorizes authored mutation; it only resolves or ACKs
+/// the durable evidence which can clear that latch.
+fn lock_project_recovery_maintenance_admission<'a>(
+    state: &'a AppState,
+) -> Result<std::sync::MutexGuard<'a, ()>, String> {
+    state
+        .project_external_command_admission
+        .gate
+        .lock()
+        .map_err(|_| "Project recovery maintenance admission lock was poisoned".to_string())
 }
 
 /// Admit a legacy renderer-ticketed mutation after `Begin` has armed the
@@ -29011,7 +29226,7 @@ fn fresh_authoritative_video_clip_slot_runtime_result(
     expected_authority: &MediaAssetPrepareAuthority,
 ) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
     let (_external_admission, coordinator) = (
-        lock_project_external_command_admission(state)?,
+        lock_project_recovery_maintenance_admission(state)?,
         lock_project_coordinator(state)?,
     );
     ensure_project_transaction_owner_registered(state, owner_id)?;
@@ -39366,69 +39581,6 @@ fn clear_operator_policy_for_window_label(
 }
 
 #[tauri::command]
-fn save_user_template(
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    midi_mappings: Vec<MidiControlMapping>,
-    osc_mappings: Vec<OscControlMapping>,
-    dmx_mappings: Vec<DmxControlMapping>,
-) -> Result<Option<String>, String> {
-    // Reserve before opening the native dialog. A project replacement while
-    // it is visible must reject this export rather than serializing B under
-    // the user's A-era template choice.
-    let ticket = {
-        let _external_admission = lock_project_external_command_admission(&state)?;
-        let mut coordinator = lock_project_coordinator(&state)?;
-        validate_frontend_mappings_match_authority(
-            &coordinator,
-            midi_mappings,
-            osc_mappings,
-            dmx_mappings,
-        )?;
-        reserve_project_save_ticket_for_publication(&state, &mut coordinator)?
-    };
-    let Some(path) = parented_file_dialog(&window)
-        .add_filter("Syndocal User Template", &["sdctemplate"])
-        .set_file_name("show.sdctemplate")
-        .save_file()
-    else {
-        return Ok(None);
-    };
-    let path = normalize_user_template_save_path(path)?;
-    let label = path
-        .file_stem()
-        .and_then(OsStr::to_str)
-        .unwrap_or("Show Template")
-        .trim()
-        .chars()
-        .take(80)
-        .collect::<String>();
-    let template = normalize_user_template_file(UserTemplateFile {
-        version: USER_TEMPLATE_VERSION,
-        app: APP_NAME.to_string(),
-        label,
-        project: ticket.checkpoint.project.clone(),
-        midi_mappings: ticket.checkpoint.mappings.midi_mappings.clone(),
-        osc_mappings: ticket.checkpoint.mappings.osc_mappings.clone(),
-        dmx_mappings: ticket.checkpoint.mappings.dmx_mappings.clone(),
-        dj_track_triggers: ticket.checkpoint.mappings.dj_track_triggers.clone(),
-    })?;
-    let bytes = serde_json::to_vec_pretty(&template).map_err(|error| error.to_string())?;
-    if bytes.len() as u64 > USER_TEMPLATE_MAX_BYTES {
-        return Err(format!(
-            "User template is larger than the {} MiB safety limit",
-            USER_TEMPLATE_MAX_BYTES / 1024 / 1024
-        ));
-    }
-    let temp = prepare_project_save_bytes(&path, &bytes)?;
-    if let Err(error) = finalize_project_export_ticket(&state, &path, &temp, &ticket) {
-        discard_prepared_project_save_write(&temp);
-        return Err(error);
-    }
-    Ok(Some(path.to_string_lossy().to_string()))
-}
-
-#[tauri::command]
 fn load_user_template(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -39495,86 +39647,6 @@ fn load_user_template(
         authority_disposition: loaded.authority_disposition,
         authority: loaded.authority,
     }))
-}
-
-#[tauri::command]
-fn save_project(
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    midi_mappings: Vec<MidiControlMapping>,
-    osc_mappings: Vec<OscControlMapping>,
-    dmx_mappings: Vec<DmxControlMapping>,
-) -> Result<Option<ProjectSaveResult>, String> {
-    let (current_path, ticket) = {
-        let _external_admission = lock_project_external_command_admission(&state)?;
-        let mut coordinator = lock_project_coordinator(&state)?;
-        validate_frontend_mappings_match_authority(
-            &coordinator,
-            midi_mappings.clone(),
-            osc_mappings.clone(),
-            dmx_mappings.clone(),
-        )?;
-        (
-            coordinator.ancillary.current_project_path.clone(),
-            reserve_project_save_ticket_for_publication(&state, &mut coordinator)?,
-        )
-    };
-    if let Some(path) = current_path {
-        let temp = prepare_project_save_ticket_write(&path, &ticket)?;
-        return match finalize_project_save_ticket(&state, &path, &temp, &ticket, false) {
-            Ok(result) => Ok(Some(result)),
-            Err(error) => {
-                discard_prepared_project_save_write(&temp);
-                Err(error)
-            }
-        };
-    }
-    save_project_with_dialog(&window, &state, ticket)
-}
-
-#[tauri::command]
-fn save_project_as(
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    midi_mappings: Vec<MidiControlMapping>,
-    osc_mappings: Vec<OscControlMapping>,
-    dmx_mappings: Vec<DmxControlMapping>,
-) -> Result<Option<ProjectSaveResult>, String> {
-    let ticket = {
-        let _external_admission = lock_project_external_command_admission(&state)?;
-        let mut coordinator = lock_project_coordinator(&state)?;
-        validate_frontend_mappings_match_authority(
-            &coordinator,
-            midi_mappings,
-            osc_mappings,
-            dmx_mappings,
-        )?;
-        reserve_project_save_ticket_for_publication(&state, &mut coordinator)?
-    };
-    save_project_with_dialog(&window, &state, ticket)
-}
-
-fn save_project_with_dialog(
-    window: &WebviewWindow,
-    state: &State<'_, AppState>,
-    ticket: ProjectSaveTicket,
-) -> Result<Option<ProjectSaveResult>, String> {
-    let Some(path) = parented_file_dialog(window)
-        .add_filter("Syndocal Project", &["sdc"])
-        .set_file_name("show.sdc")
-        .save_file()
-    else {
-        return Ok(None);
-    };
-    let path = normalize_project_save_path(path)?;
-    let temp = prepare_project_save_ticket_write(&path, &ticket)?;
-    match finalize_project_save_ticket(state, &path, &temp, &ticket, true) {
-        Ok(result) => Ok(Some(result)),
-        Err(error) => {
-            discard_prepared_project_save_write(&temp);
-            Err(error)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -39783,25 +39855,2147 @@ fn project_save_ticket_for_coordinator(
     })
 }
 
-/// Reserve the final-save lane after capturing an immutable image.  The
-/// reservation is deliberately acquired before a native dialog can block:
-/// when an older dialog returns after S2 has captured, its final replacement
-/// is rejected before touching disk.
-fn reserve_project_save_ticket_for_publication(
+fn project_publication_shape_hash_v1(
+    request: &ProjectPublicationRequestV1,
+) -> Result<String, String> {
+    let bytes = serde_json::to_vec(request)
+        .map_err(|error| format!("Unable to encode project publication shape: {error}"))?;
+    Ok(sha256_hex(&bytes))
+}
+
+#[derive(Debug)]
+enum BeginProjectPublicationV1 {
+    New {
+        ticket: ProjectSaveTicket,
+        pending: PersistedProjectPublicationPendingV1,
+    },
+    Resume {
+        ticket: ProjectSaveTicket,
+        pending: PersistedProjectPublicationPendingV1,
+    },
+    Existing(ProjectPublicationStatusV1),
+}
+
+fn project_publication_request_key_matches(
+    request: &ProjectPublicationRequestV1,
+    other: &ProjectPublicationRequestV1,
+) -> bool {
+    request.origin_id == other.origin_id && request.request_id == other.request_id
+}
+
+fn project_publication_terminal_status_v1(
+    terminal: &PersistedProjectPublicationTerminalV1,
+    authority: Option<ProjectAuthorityBundle>,
+) -> ProjectPublicationStatusV1 {
+    ProjectPublicationStatusV1 {
+        request: terminal.request.clone(),
+        shape_hash: terminal.shape_hash.clone(),
+        surface: terminal.surface,
+        state: match terminal.outcome {
+            ProjectPublicationTerminalOutcomeV1::Succeeded => "succeeded",
+            ProjectPublicationTerminalOutcomeV1::Cancelled => "cancelled",
+            ProjectPublicationTerminalOutcomeV1::Abandoned => "abandoned",
+            ProjectPublicationTerminalOutcomeV1::Failed => "failed",
+            ProjectPublicationTerminalOutcomeV1::Indeterminate => "indeterminate",
+        }
+        .to_string(),
+        target_path: terminal.target_path.clone(),
+        artifact_digest: terminal.artifact_digest.clone(),
+        backup: terminal.backup.clone(),
+        recovery_authority_serial: terminal.recovery_authority_serial,
+        authority,
+        error: terminal.error.clone(),
+        warning: terminal.warning.clone(),
+    }
+}
+
+fn project_publication_pending_status_v1(
+    pending: &PersistedProjectPublicationPendingV1,
+    recovery_authority_serial: u64,
+) -> ProjectPublicationStatusV1 {
+    ProjectPublicationStatusV1 {
+        request: pending.request.clone(),
+        shape_hash: pending.shape_hash.clone(),
+        surface: pending.surface,
+        state: match pending.phase {
+            ProjectPublicationPendingPhaseV1::Reserved => "reserved",
+            ProjectPublicationPendingPhaseV1::Selecting => "selecting",
+            ProjectPublicationPendingPhaseV1::Selected => "selected",
+            ProjectPublicationPendingPhaseV1::Prepared => "prepared",
+        }
+        .to_string(),
+        target_path: pending
+            .target_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string()),
+        artifact_digest: pending.prepared_digest.clone(),
+        backup: None,
+        recovery_authority_serial,
+        authority: None,
+        error: pending.indeterminate_error.clone(),
+        warning: None,
+    }
+}
+
+fn publication_terminal_authority_if_current(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+    terminal: &PersistedProjectPublicationTerminalV1,
+) -> Option<ProjectAuthorityBundle> {
+    let path_is_current = if matches!(
+        terminal.surface,
+        ProjectPublicationSurfaceV1::Save | ProjectPublicationSurfaceV1::SaveAs
+    ) {
+        coordinator.authority_disposition == ProjectAuthorityDisposition::CleanAtPath
+            && coordinator
+                .ancillary
+                .current_project_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                == terminal.target_path
+    } else {
+        true
+    };
+    (terminal.outcome == ProjectPublicationTerminalOutcomeV1::Succeeded
+        && coordinator.epoch == terminal.project_epoch
+        && coordinator.revision == terminal.project_revision
+        && coordinator.checkpoint_hash == terminal.checkpoint_hash
+        && path_is_current)
+        .then(|| project_authority_bundle_from_coordinator(state, coordinator))
+}
+
+fn begin_project_publication_v1(
     state: &AppState,
     coordinator: &mut ProjectCoordinator,
-) -> Result<ProjectSaveTicket, String> {
+    journal_path: &Path,
+    request: ProjectPublicationRequestV1,
+    expected_surface: ProjectPublicationSurfaceV1,
+) -> Result<BeginProjectPublicationV1, String> {
+    let request = normalize_project_publication_request_v1(request)?;
+    if request.surface != expected_surface {
+        return Err("Project publication request was sent to the wrong surface".to_string());
+    }
+    let shape_hash = project_publication_shape_hash_v1(&request)?;
+    let mut durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    if let Some(terminal) = durable
+        .publication_journal
+        .terminals
+        .iter()
+        .find(|terminal| project_publication_request_key_matches(&request, &terminal.request))
+    {
+        if terminal.shape_hash != shape_hash || terminal.surface != expected_surface {
+            return Err(
+                "Project publication request ID was already used with a different shape"
+                    .to_string(),
+            );
+        }
+        return Ok(BeginProjectPublicationV1::Existing(
+            project_publication_terminal_status_v1(
+                terminal,
+                publication_terminal_authority_if_current(state, coordinator, terminal),
+            ),
+        ));
+    }
+    if let Some(pending) = durable
+        .publication_journal
+        .pending
+        .iter()
+        .find(|pending| project_publication_request_key_matches(&request, &pending.request))
+        .cloned()
+    {
+        if pending.shape_hash != shape_hash || pending.surface != expected_surface {
+            return Err(
+                "Project publication request ID was already used with a different shape"
+                    .to_string(),
+            );
+        }
+        if matches!(
+            pending.phase,
+            ProjectPublicationPendingPhaseV1::Selecting
+                | ProjectPublicationPendingPhaseV1::Prepared
+        ) {
+            return Ok(BeginProjectPublicationV1::Existing(
+                project_publication_pending_status_v1(&pending, durable.serial),
+            ));
+        }
+        let mut ticket = project_save_ticket_for_coordinator(state, coordinator)?;
+        if ticket.checkpoint.epoch != pending.project_epoch
+            || ticket.checkpoint.revision != pending.project_revision
+            || ticket.checkpoint.hash != pending.checkpoint_hash
+            || ticket.path_generation != pending.path_generation
+            || ticket.authority_disposition_generation != pending.authority_disposition_generation
+        {
+            return Err(
+                "Project authority changed before the pending publication could resume".to_string(),
+            );
+        }
+        ticket.save_reservation_generation = Some(pending.reservation_generation);
+        coordinator.latest_save_reservation_generation = coordinator
+            .latest_save_reservation_generation
+            .max(durable.publication_journal.latest_reservation_generation);
+        coordinator.next_save_reservation_generation = coordinator
+            .next_save_reservation_generation
+            .max(durable.publication_journal.latest_reservation_generation);
+        return Ok(BeginProjectPublicationV1::Resume { ticket, pending });
+    }
+    if durable.publication_journal.pending.len() >= MAX_PROJECT_PUBLICATION_PENDING
+        || durable
+            .publication_journal
+            .pending
+            .len()
+            .checked_add(durable.publication_journal.terminals.len())
+            .is_none_or(|count| count >= MAX_PROJECT_PUBLICATION_TERMINALS)
+    {
+        return Err(
+            "Project publication receipt capacity is full; acknowledge completed publications or abandon an unresolved request"
+                .to_string(),
+        );
+    }
+    if durable
+        .publication_journal
+        .pending
+        .iter()
+        .any(|pending| pending.request.origin_id == request.origin_id)
+        || durable
+            .publication_journal
+            .terminals
+            .iter()
+            .any(|terminal| terminal.request.origin_id == request.origin_id)
+    {
+        return Err(
+            "Project publication origin already has an unresolved request; query and acknowledge or abandon it before beginning the next request"
+                .to_string(),
+        );
+    }
+    let origin_index = durable
+        .publication_journal
+        .origins
+        .iter()
+        .position(|origin| origin.origin_id == request.origin_id);
+    match origin_index {
+        Some(index) => {
+            let expected = durable.publication_journal.origins[index]
+                .high_water_request_id
+                .checked_add(1)
+                .filter(|value| *value <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
+                .ok_or_else(|| {
+                    "Project publication request sequence is exhausted; create a new renderer origin"
+                        .to_string()
+                })?;
+            if request.request_id != expected {
+                return Err(format!(
+                    "Project publication request sequence must be {expected}, received {}",
+                    request.request_id
+                ));
+            }
+        }
+        None => {
+            if durable.publication_journal.origins.len() >= MAX_PROJECT_PUBLICATION_ORIGINS {
+                return Err("Project publication origin capacity is full".to_string());
+            }
+            if request.request_id != 1 {
+                return Err(
+                    "A new project publication origin must begin with request ID 1".to_string(),
+                );
+            }
+        }
+    }
     let mut ticket = project_save_ticket_for_coordinator(state, coordinator)?;
-    let reservation = coordinator
-        .next_save_reservation_generation
+    if ticket.checkpoint.epoch != request.expected_project_epoch
+        || ticket.checkpoint.revision != request.expected_project_revision
+        || ticket.checkpoint.hash != request.expected_checkpoint_hash
+        || ticket.checkpoint.hash != request.mapping_authority_hash
+    {
+        return Err(
+            "Project authority or mappings changed before publication reservation".to_string(),
+        );
+    }
+    let authoritative_source_path = ticket
+        .current_project_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string());
+    if request.source_path.is_some() && request.source_path != authoritative_source_path {
+        return Err("Project publication source path is stale".to_string());
+    }
+    let reservation_generation = durable
+        .publication_journal
+        .latest_reservation_generation
+        .max(coordinator.latest_save_reservation_generation)
         .checked_add(1)
         .ok_or_else(|| {
-            "Project save reservation space is exhausted; restart Syndocal".to_string()
+            "Project publication reservation space is exhausted; restart Syndocal".to_string()
         })?;
-    coordinator.next_save_reservation_generation = reservation;
-    coordinator.latest_save_reservation_generation = reservation;
-    ticket.save_reservation_generation = Some(reservation);
-    Ok(ticket)
+    ticket.save_reservation_generation = Some(reservation_generation);
+    let pending = PersistedProjectPublicationPendingV1 {
+        request: request.clone(),
+        shape_hash,
+        surface: expected_surface,
+        project_epoch: ticket.checkpoint.epoch,
+        project_revision: ticket.checkpoint.revision,
+        checkpoint_hash: ticket.checkpoint.hash.clone(),
+        path_generation: ticket.path_generation,
+        authority_disposition_generation: ticket.authority_disposition_generation,
+        recovery_authority_serial_before: coordinator.recovery_authority_serial,
+        expected_recovery_authority_serial_after: matches!(
+            expected_surface,
+            ProjectPublicationSurfaceV1::Save | ProjectPublicationSurfaceV1::SaveAs
+        )
+        .then(|| {
+            coordinator
+                .recovery_authority_serial
+                .checked_add(1)
+                .ok_or_else(|| {
+                    "Project recovery authority serial is exhausted; restart Syndocal".to_string()
+                })
+        })
+        .transpose()?,
+        reservation_generation,
+        source_path: request.source_path.clone(),
+        reason: request.reason.clone(),
+        phase: ProjectPublicationPendingPhaseV1::Reserved,
+        target_path: None,
+        staging_path: None,
+        prepared_digest: None,
+        indeterminate_error: None,
+    };
+    let mut candidate = durable.publication_journal.clone();
+    match origin_index {
+        Some(index) => candidate.origins[index].high_water_request_id = request.request_id,
+        None => candidate.origins.push(PersistedProjectPublicationOriginV1 {
+            origin_id: request.origin_id.clone(),
+            high_water_request_id: request.request_id,
+            acknowledged_request_id: 0,
+            acknowledged_shape_hash: None,
+        }),
+    }
+    candidate.latest_reservation_generation = reservation_generation;
+    candidate.pending.push(pending.clone());
+    validate_project_publication_journal_v1(&candidate)?;
+    durable.publication_journal = candidate;
+    persist_project_recovery_authority_state_to_path(journal_path, &durable)?;
+    coordinator.next_save_reservation_generation = reservation_generation;
+    coordinator.latest_save_reservation_generation = reservation_generation;
+    Ok(BeginProjectPublicationV1::New { ticket, pending })
+}
+
+fn persist_project_publication_target_v1(
+    journal_path: &Path,
+    request: &ProjectPublicationRequestV1,
+    shape_hash: &str,
+    target_path: &Path,
+    allow_reserved: bool,
+) -> Result<PersistedProjectPublicationPendingV1, String> {
+    let mut durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    let pending = durable
+        .publication_journal
+        .pending
+        .iter_mut()
+        .find(|pending| project_publication_request_key_matches(request, &pending.request))
+        .ok_or_else(|| "Project publication request is no longer pending".to_string())?;
+    if pending.shape_hash != shape_hash {
+        return Err(
+            "Project publication request shape changed before target selection".to_string(),
+        );
+    }
+    if pending.reservation_generation != durable.publication_journal.latest_reservation_generation {
+        return Err("A newer project publication superseded this target selection".to_string());
+    }
+    if pending.phase != ProjectPublicationPendingPhaseV1::Selecting
+        && !(allow_reserved && pending.phase == ProjectPublicationPendingPhaseV1::Reserved)
+    {
+        if pending.target_path.as_deref() == Some(target_path) {
+            return Ok(pending.clone());
+        }
+        return Err("Project publication request already selected a different target".to_string());
+    }
+    pending.phase = ProjectPublicationPendingPhaseV1::Selected;
+    pending.target_path = Some(target_path.to_path_buf());
+    let result = pending.clone();
+    persist_project_recovery_authority_state_to_path(journal_path, &durable)?;
+    Ok(result)
+}
+
+fn persist_project_publication_selecting_v1(
+    journal_path: &Path,
+    request: &ProjectPublicationRequestV1,
+    shape_hash: &str,
+) -> Result<bool, String> {
+    let mut durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    let pending = durable
+        .publication_journal
+        .pending
+        .iter_mut()
+        .find(|pending| project_publication_request_key_matches(request, &pending.request))
+        .ok_or_else(|| "Project publication request is no longer pending".to_string())?;
+    if pending.shape_hash != shape_hash {
+        return Err("Project publication request shape changed before dialog".to_string());
+    }
+    if pending.reservation_generation != durable.publication_journal.latest_reservation_generation {
+        return Err("A newer project publication superseded this target selection".to_string());
+    }
+    match pending.phase {
+        ProjectPublicationPendingPhaseV1::Reserved => {
+            pending.phase = ProjectPublicationPendingPhaseV1::Selecting;
+            persist_project_recovery_authority_state_to_path(journal_path, &durable)?;
+            Ok(true)
+        }
+        ProjectPublicationPendingPhaseV1::Selecting => Ok(false),
+        ProjectPublicationPendingPhaseV1::Selected | ProjectPublicationPendingPhaseV1::Prepared => {
+            Ok(false)
+        }
+    }
+}
+
+fn persist_project_publication_staging_v1(
+    journal_path: &Path,
+    request: &ProjectPublicationRequestV1,
+    shape_hash: &str,
+    target_path: &Path,
+    staging_path: &Path,
+) -> Result<PersistedProjectPublicationPendingV1, String> {
+    let mut durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    let pending = durable
+        .publication_journal
+        .pending
+        .iter_mut()
+        .find(|pending| project_publication_request_key_matches(request, &pending.request))
+        .ok_or_else(|| "Project publication request is no longer pending".to_string())?;
+    if pending.shape_hash != shape_hash || pending.target_path.as_deref() != Some(target_path) {
+        return Err("Project publication target changed before staging".to_string());
+    }
+    if pending.reservation_generation != durable.publication_journal.latest_reservation_generation {
+        return Err("A newer project publication superseded this staging reservation".to_string());
+    }
+    if let Some(current) = pending.staging_path.as_deref() {
+        if current == staging_path {
+            return Ok(pending.clone());
+        }
+        return Err("Project publication request already reserved different staging".to_string());
+    }
+    if pending.phase != ProjectPublicationPendingPhaseV1::Selected {
+        return Err("Project publication target is not ready for staging".to_string());
+    }
+    pending.staging_path = Some(staging_path.to_path_buf());
+    let result = pending.clone();
+    persist_project_recovery_authority_state_to_path(journal_path, &durable)?;
+    Ok(result)
+}
+
+fn persist_project_publication_prepared_digest_v1(
+    journal_path: &Path,
+    request: &ProjectPublicationRequestV1,
+    shape_hash: &str,
+    target_path: &Path,
+    temporary_path: &Path,
+    prepared_digest: &str,
+) -> Result<PersistedProjectPublicationPendingV1, String> {
+    validate_project_publication_shape_hash(prepared_digest)?;
+    let mut durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    let pending = durable
+        .publication_journal
+        .pending
+        .iter_mut()
+        .find(|pending| project_publication_request_key_matches(request, &pending.request))
+        .ok_or_else(|| "Project publication request is no longer pending".to_string())?;
+    if pending.shape_hash != shape_hash || pending.target_path.as_deref() != Some(target_path) {
+        return Err("Project publication target changed before preparation".to_string());
+    }
+    if pending.staging_path.as_deref() != Some(temporary_path) {
+        return Err("Project publication staging changed before preparation".to_string());
+    }
+    if pending.reservation_generation != durable.publication_journal.latest_reservation_generation {
+        return Err("A newer project publication superseded this prepared file".to_string());
+    }
+    if pending.phase == ProjectPublicationPendingPhaseV1::Prepared {
+        if pending.prepared_digest.as_deref() == Some(prepared_digest) {
+            return Ok(pending.clone());
+        }
+        return Err("Project publication request already prepared different bytes".to_string());
+    }
+    if pending.phase != ProjectPublicationPendingPhaseV1::Selected {
+        return Err("Project publication target has not been selected".to_string());
+    }
+    pending.phase = ProjectPublicationPendingPhaseV1::Prepared;
+    pending.prepared_digest = Some(prepared_digest.to_string());
+    let result = pending.clone();
+    persist_project_recovery_authority_state_to_path(journal_path, &durable)?;
+    Ok(result)
+}
+
+struct ProjectPublicationTerminalCommitV1 {
+    outcome: ProjectPublicationTerminalOutcomeV1,
+    target_path: Option<String>,
+    artifact_digest: Option<String>,
+    backup: Option<ProjectBackupSummary>,
+    recovery_authority_serial: u64,
+    error: Option<String>,
+    warning: Option<String>,
+}
+
+fn persist_project_publication_terminal_v1(
+    journal_path: &Path,
+    request: &ProjectPublicationRequestV1,
+    shape_hash: &str,
+    commit: ProjectPublicationTerminalCommitV1,
+) -> Result<PersistedProjectPublicationTerminalV1, String> {
+    let mut durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    if let Some(terminal) = durable
+        .publication_journal
+        .terminals
+        .iter()
+        .find(|terminal| project_publication_request_key_matches(request, &terminal.request))
+    {
+        if terminal.shape_hash == shape_hash
+            && terminal.outcome == commit.outcome
+            && terminal.target_path == commit.target_path
+            && terminal.artifact_digest == commit.artifact_digest
+            && terminal.backup == commit.backup
+            && terminal.recovery_authority_serial == commit.recovery_authority_serial
+            && terminal.error == commit.error
+            && terminal.warning == commit.warning
+        {
+            return Ok(terminal.clone());
+        }
+        return Err(
+            "Project publication terminal receipt conflicts with durable truth".to_string(),
+        );
+    }
+    let index = durable
+        .publication_journal
+        .pending
+        .iter()
+        .position(|pending| project_publication_request_key_matches(request, &pending.request))
+        .ok_or_else(|| "Project publication request is no longer pending".to_string())?;
+    let pending = durable.publication_journal.pending[index].clone();
+    if pending.shape_hash != shape_hash {
+        return Err("Project publication request shape changed before terminal commit".to_string());
+    }
+    let terminal = PersistedProjectPublicationTerminalV1 {
+        request: request.clone(),
+        shape_hash: shape_hash.to_string(),
+        surface: pending.surface,
+        outcome: commit.outcome,
+        project_epoch: pending.project_epoch,
+        project_revision: pending.project_revision,
+        checkpoint_hash: pending.checkpoint_hash,
+        target_path: commit.target_path,
+        artifact_digest: commit.artifact_digest,
+        backup: commit.backup,
+        recovery_authority_serial: commit.recovery_authority_serial,
+        error: commit.error,
+        warning: commit.warning,
+    };
+    durable.publication_journal.pending.remove(index);
+    durable.publication_journal.terminals.push(terminal.clone());
+    persist_project_recovery_authority_state_to_path(journal_path, &durable)?;
+    Ok(terminal)
+}
+
+fn mark_project_publication_indeterminate_v1(
+    journal_path: &Path,
+    request: &ProjectPublicationRequestV1,
+    shape_hash: &str,
+    error: String,
+) -> Result<(), String> {
+    let mut durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    let pending = durable
+        .publication_journal
+        .pending
+        .iter_mut()
+        .find(|pending| project_publication_request_key_matches(request, &pending.request))
+        .ok_or_else(|| "Project publication request is no longer pending".to_string())?;
+    if pending.shape_hash != shape_hash
+        || pending.phase != ProjectPublicationPendingPhaseV1::Prepared
+    {
+        return Err("Only the exact prepared publication may become indeterminate".to_string());
+    }
+    pending.indeterminate_error = Some(error);
+    persist_project_recovery_authority_state_to_path(journal_path, &durable)
+}
+
+fn project_publication_success_backup_summary(
+    surface: ProjectPublicationSurfaceV1,
+    target: &Path,
+) -> Result<Option<ProjectBackupSummary>, String> {
+    if surface != ProjectPublicationSurfaceV1::Backup {
+        return Ok(None);
+    }
+    let backup = read_project_backup(target)?;
+    let bytes = fs::metadata(target)
+        .map_err(|error| format!("Unable to inspect published backup: {error}"))?
+        .len();
+    Ok(Some(ProjectBackupSummary {
+        id: backup.id,
+        created_at_unix_ms: backup.created_at_unix_ms,
+        source_path: backup.source_path,
+        reason: backup.reason,
+        bytes,
+    }))
+}
+
+#[derive(Debug, Clone)]
+struct PreparedProjectPublicationReconcilePlanV1 {
+    pending: PersistedProjectPublicationPendingV1,
+    recovery_authority_serial: u64,
+}
+
+#[derive(Debug)]
+enum ProjectPublicationLookupV1 {
+    Missing,
+    Status(ProjectPublicationStatusV1),
+    Prepared(PreparedProjectPublicationReconcilePlanV1),
+}
+
+#[derive(Debug)]
+struct PreparedProjectPublicationObservationV1 {
+    actual_digest: Result<Option<String>, String>,
+    backup: Result<Option<ProjectBackupSummary>, String>,
+}
+
+fn snapshot_project_publication_lookup_v1(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+    journal_path: &Path,
+    request: &ProjectPublicationRequestV1,
+    shape_hash: &str,
+) -> Result<ProjectPublicationLookupV1, String> {
+    let durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    if let Some(terminal) = durable
+        .publication_journal
+        .terminals
+        .iter()
+        .find(|terminal| project_publication_request_key_matches(request, &terminal.request))
+    {
+        if terminal.shape_hash != shape_hash {
+            return Err(
+                "Project publication request ID was already used with a different shape"
+                    .to_string(),
+            );
+        }
+        return Ok(ProjectPublicationLookupV1::Status(
+            project_publication_terminal_status_v1(
+                terminal,
+                publication_terminal_authority_if_current(state, coordinator, terminal),
+            ),
+        ));
+    }
+    let Some(pending) = durable
+        .publication_journal
+        .pending
+        .iter()
+        .find(|pending| project_publication_request_key_matches(request, &pending.request))
+        .cloned()
+    else {
+        return Ok(ProjectPublicationLookupV1::Missing);
+    };
+    if pending.shape_hash != shape_hash {
+        return Err(
+            "Project publication request ID was already used with a different shape".to_string(),
+        );
+    }
+    if pending.phase == ProjectPublicationPendingPhaseV1::Prepared {
+        return Ok(ProjectPublicationLookupV1::Prepared(
+            PreparedProjectPublicationReconcilePlanV1 {
+                pending,
+                recovery_authority_serial: durable.serial,
+            },
+        ));
+    }
+    Ok(ProjectPublicationLookupV1::Status(
+        project_publication_pending_status_v1(&pending, durable.serial),
+    ))
+}
+
+fn observe_prepared_project_publication_v1(
+    plan: &PreparedProjectPublicationReconcilePlanV1,
+) -> PreparedProjectPublicationObservationV1 {
+    let target = plan
+        .pending
+        .target_path
+        .as_deref()
+        .expect("validated prepared project publication has a target");
+    let actual_digest = strong_target_file_digest(target);
+    let backup = match &actual_digest {
+        Ok(Some(actual)) if plan.pending.prepared_digest.as_deref() == Some(actual.as_str()) => {
+            project_publication_success_backup_summary(plan.pending.surface, target)
+        }
+        Ok(_) => Ok(None),
+        Err(error) => Err(error.clone()),
+    };
+    PreparedProjectPublicationObservationV1 {
+        actual_digest,
+        backup,
+    }
+}
+
+fn prepared_project_publication_has_durable_ownership_witness_v1(
+    pending: &PersistedProjectPublicationPendingV1,
+    durable: &PersistedProjectRecoveryAuthorityState,
+) -> bool {
+    pending
+        .expected_recovery_authority_serial_after
+        .is_none_or(|expected_serial| {
+            durable.serial == expected_serial
+                && durable.last_transition == ProjectRecoveryAuthorityTransition::CleanSave
+        })
+}
+
+fn prepared_project_publication_observation_will_terminalize_v1(
+    journal_path: &Path,
+    plan: &PreparedProjectPublicationReconcilePlanV1,
+    observation: &PreparedProjectPublicationObservationV1,
+) -> Result<bool, String> {
+    let durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    if durable
+        .publication_journal
+        .terminals
+        .iter()
+        .any(|terminal| {
+            project_publication_request_key_matches(&plan.pending.request, &terminal.request)
+        })
+    {
+        return Ok(false);
+    }
+    let Some(current) = durable.publication_journal.pending.iter().find(|pending| {
+        project_publication_request_key_matches(&plan.pending.request, &pending.request)
+    }) else {
+        return Ok(false);
+    };
+    if current != &plan.pending || durable.serial != plan.recovery_authority_serial {
+        return Ok(false);
+    }
+    let expected_digest = current
+        .prepared_digest
+        .as_deref()
+        .ok_or_else(|| "Prepared project publication is missing its digest".to_string())?;
+    if !prepared_project_publication_has_durable_ownership_witness_v1(current, &durable) {
+        return Ok(durable.pending_clean_save.is_none());
+    }
+    Ok(match &observation.actual_digest {
+        Ok(Some(actual)) if actual == expected_digest => observation.backup.is_ok(),
+        Ok(_) => true,
+        Err(_) => false,
+    })
+}
+
+fn claim_prepared_project_publication_reconciliation_v1<'a>(
+    state: &'a AppState,
+    plan: &PreparedProjectPublicationReconcilePlanV1,
+) -> Result<ProjectPublicationReconcileClaimGuardV1<'a>, String> {
+    let claim = ProjectPublicationReconcileClaimV1 {
+        origin_id: plan.pending.request.origin_id.clone(),
+        request_id: plan.pending.request.request_id,
+        shape_hash: plan.pending.shape_hash.clone(),
+        recovery_authority_serial: plan.recovery_authority_serial,
+        reservation_generation: plan.pending.reservation_generation,
+    };
+    let mut slot = state
+        .project_publication_reconcile_claim
+        .lock()
+        .map_err(|_| "Project publication reconciliation claim was poisoned".to_string())?;
+    if slot.is_some() {
+        return Err(
+            "Another project publication receipt reconciliation is already active; retry"
+                .to_string(),
+        );
+    }
+    *slot = Some(claim.clone());
+    drop(slot);
+    Ok(ProjectPublicationReconcileClaimGuardV1 {
+        slot: &state.project_publication_reconcile_claim,
+        claim,
+    })
+}
+
+fn ensure_no_project_publication_reconciliation_v1(state: &AppState) -> Result<(), String> {
+    if state
+        .project_publication_reconcile_claim
+        .lock()
+        .map_err(|_| "Project publication reconciliation claim was poisoned".to_string())?
+        .is_some()
+    {
+        return Err(
+            "Project publication receipt reconciliation is active; retry publication".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn commit_prepared_project_publication_observation_v1(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    journal_path: &Path,
+    plan: &PreparedProjectPublicationReconcilePlanV1,
+    observation: PreparedProjectPublicationObservationV1,
+) -> Result<ProjectPublicationStatusV1, String> {
+    let durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    if let Some(terminal) = durable
+        .publication_journal
+        .terminals
+        .iter()
+        .find(|terminal| {
+            project_publication_request_key_matches(&plan.pending.request, &terminal.request)
+        })
+    {
+        if terminal.shape_hash != plan.pending.shape_hash {
+            return Err(
+                "Project publication request ID was already used with a different shape"
+                    .to_string(),
+            );
+        }
+        return Ok(project_publication_terminal_status_v1(
+            terminal,
+            publication_terminal_authority_if_current(state, coordinator, terminal),
+        ));
+    }
+    let Some(current) = durable.publication_journal.pending.iter().find(|pending| {
+        project_publication_request_key_matches(&plan.pending.request, &pending.request)
+    }) else {
+        return Err(
+            "Project publication request changed while its target was inspected".to_string(),
+        );
+    };
+    if current != &plan.pending || durable.serial != plan.recovery_authority_serial {
+        return Ok(project_publication_pending_status_v1(
+            current,
+            durable.serial,
+        ));
+    }
+    let expected_digest = current
+        .prepared_digest
+        .as_deref()
+        .ok_or_else(|| "Prepared project publication is missing its digest".to_string())?;
+    if !prepared_project_publication_has_durable_ownership_witness_v1(current, &durable) {
+        // Exact target bytes alone cannot prove that this request replaced a
+        // pre-existing identical Save target. CleanSave's durable serial is
+        // the ownership witness for Save/Save As reconciliation.
+        if durable.pending_clean_save.is_some() {
+            return Ok(project_publication_pending_status_v1(
+                current,
+                durable.serial,
+            ));
+        }
+        let terminal = persist_project_publication_terminal_v1(
+            journal_path,
+            &current.request,
+            &current.shape_hash,
+            ProjectPublicationTerminalCommitV1 {
+                outcome: ProjectPublicationTerminalOutcomeV1::Failed,
+                target_path: None,
+                artifact_digest: None,
+                backup: None,
+                recovery_authority_serial: durable.serial,
+                error: Some(
+                    "Prepared Save did not publish its durable CleanSave ownership witness"
+                        .to_string(),
+                ),
+                warning: None,
+            },
+        )?;
+        refresh_project_publication_fault_latch_v1(state, journal_path)?;
+        return Ok(project_publication_terminal_status_v1(&terminal, None));
+    }
+    match observation.actual_digest {
+        Ok(Some(actual)) if actual == expected_digest => {
+            let backup = observation.backup?;
+            let target = current
+                .target_path
+                .as_deref()
+                .ok_or_else(|| "Prepared project publication is missing its target".to_string())?;
+            let restore_save_effects = matches!(
+                current.surface,
+                ProjectPublicationSurfaceV1::Save | ProjectPublicationSurfaceV1::SaveAs
+            ) && coordinator.epoch == current.project_epoch
+                && coordinator.revision == current.project_revision
+                && coordinator.checkpoint_hash == current.checkpoint_hash
+                && coordinator.path_generation == current.path_generation
+                && coordinator.authority_disposition_generation
+                    == current.authority_disposition_generation;
+            let restored_path_generation = restore_save_effects
+                .then(|| {
+                    if coordinator.ancillary.current_project_path.as_deref() == Some(target) {
+                        Ok(coordinator.path_generation)
+                    } else {
+                        coordinator.path_generation.checked_add(1).ok_or_else(|| {
+                            "Project path generation is exhausted; restart Syndocal before reconciling Save"
+                                .to_string()
+                        })
+                    }
+                })
+                .transpose()?;
+            let restored_disposition_generation = restore_save_effects
+                .then(|| checked_project_authority_disposition_generation_after_change(coordinator))
+                .transpose()?;
+            let mut current_path_mirror = restore_save_effects
+                .then(|| {
+                    state
+                        .current_project_path
+                        .lock()
+                        .map_err(|_| "Current project path lock was poisoned".to_string())
+                })
+                .transpose()?;
+            let terminal = persist_project_publication_terminal_v1(
+                journal_path,
+                &current.request,
+                &current.shape_hash,
+                ProjectPublicationTerminalCommitV1 {
+                    outcome: ProjectPublicationTerminalOutcomeV1::Succeeded,
+                    target_path: Some(target.to_string_lossy().to_string()),
+                    artifact_digest: Some(expected_digest.to_string()),
+                    backup,
+                    recovery_authority_serial: coordinator.recovery_authority_serial,
+                    error: None,
+                    warning: None,
+                },
+            )?;
+            if let (Some(path_generation), Some(disposition_generation)) =
+                (restored_path_generation, restored_disposition_generation)
+            {
+                coordinator.path_generation = path_generation;
+                coordinator.ancillary.current_project_path = Some(target.to_path_buf());
+                if let Some(current_path_mirror) = current_path_mirror.as_mut() {
+                    **current_path_mirror = coordinator.ancillary.current_project_path.clone();
+                }
+                commit_project_authority_disposition_after_preflight(
+                    coordinator,
+                    disposition_generation,
+                    ProjectAuthorityDisposition::CleanAtPath,
+                );
+            }
+            refresh_project_publication_fault_latch_v1(state, journal_path)?;
+            Ok(project_publication_terminal_status_v1(
+                &terminal,
+                publication_terminal_authority_if_current(state, coordinator, &terminal),
+            ))
+        }
+        Ok(_) => {
+            let terminal = persist_project_publication_terminal_v1(
+                journal_path,
+                &current.request,
+                &current.shape_hash,
+                ProjectPublicationTerminalCommitV1 {
+                    outcome: ProjectPublicationTerminalOutcomeV1::Failed,
+                    target_path: None,
+                    artifact_digest: None,
+                    backup: None,
+                    recovery_authority_serial: durable.serial,
+                    error: Some(
+                        "Prepared project publication target is missing or does not match the reserved artifact"
+                            .to_string(),
+                    ),
+                    warning: None,
+                },
+            )?;
+            refresh_project_publication_fault_latch_v1(state, journal_path)?;
+            Ok(project_publication_terminal_status_v1(&terminal, None))
+        }
+        Err(error) => {
+            mark_project_publication_indeterminate_v1(
+                journal_path,
+                &current.request,
+                &current.shape_hash,
+                error.clone(),
+            )?;
+            state
+                .project_external_command_admission
+                .recovery_authority_faulted
+                .store(true, Ordering::Release);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+fn get_project_publication_receipt_v1(
+    state: State<'_, AppState>,
+    request: ProjectPublicationRequestV1,
+) -> Result<Option<ProjectPublicationStatusV1>, String> {
+    let app = project_swap_app_handle(&state)?;
+    let journal_path = project_recovery_authority_state_path(&app)?;
+    get_project_publication_receipt_with_observer_v1(
+        &state,
+        &journal_path,
+        request,
+        observe_prepared_project_publication_v1,
+    )
+}
+
+fn get_project_publication_receipt_with_observer_v1<Observe>(
+    state: &AppState,
+    journal_path: &Path,
+    request: ProjectPublicationRequestV1,
+    observe: Observe,
+) -> Result<Option<ProjectPublicationStatusV1>, String>
+where
+    Observe: FnMut(
+        &PreparedProjectPublicationReconcilePlanV1,
+    ) -> PreparedProjectPublicationObservationV1,
+{
+    get_project_publication_receipt_with_observer_and_cleanup_v1(
+        state,
+        journal_path,
+        request,
+        observe,
+        remove_project_publication_staging_v1,
+    )
+}
+
+fn get_project_publication_receipt_with_observer_and_cleanup_v1<Observe, Cleanup>(
+    state: &AppState,
+    journal_path: &Path,
+    request: ProjectPublicationRequestV1,
+    mut observe: Observe,
+    mut cleanup: Cleanup,
+) -> Result<Option<ProjectPublicationStatusV1>, String>
+where
+    Observe: FnMut(
+        &PreparedProjectPublicationReconcilePlanV1,
+    ) -> PreparedProjectPublicationObservationV1,
+    Cleanup: FnMut(&Path) -> Result<(), String>,
+{
+    let request = normalize_project_publication_request_v1(request)?;
+    let shape_hash = project_publication_shape_hash_v1(&request)?;
+    let lookup = {
+        let _publication = state
+            .project_save_publication
+            .lock()
+            .map_err(|_| "Project publication lock was poisoned".to_string())?;
+        let _external_admission = lock_project_recovery_maintenance_admission(&state)?;
+        let coordinator = lock_project_coordinator(&state)?;
+        snapshot_project_publication_lookup_v1(
+            state,
+            &coordinator,
+            journal_path,
+            &request,
+            &shape_hash,
+        )?
+    };
+    let ProjectPublicationLookupV1::Prepared(plan) = lookup else {
+        return Ok(match lookup {
+            ProjectPublicationLookupV1::Missing => None,
+            ProjectPublicationLookupV1::Status(status) => Some(status),
+            ProjectPublicationLookupV1::Prepared(_) => unreachable!(),
+        });
+    };
+    // Target digest and backup parsing can block on removable/network media.
+    // They deliberately run without publication, external-admission, or
+    // coordinator guards. The exact pending image is revalidated below.
+    let mut observation = observe(&plan);
+    let reconciliation_claim = {
+        let _publication = state
+            .project_save_publication
+            .lock()
+            .map_err(|_| "Project publication lock was poisoned".to_string())?;
+        let _external_admission = lock_project_recovery_maintenance_admission(&state)?;
+        let _coordinator = lock_project_coordinator(&state)?;
+        let will_terminalize = prepared_project_publication_observation_will_terminalize_v1(
+            journal_path,
+            &plan,
+            &observation,
+        )?;
+        will_terminalize
+            .then(|| claim_prepared_project_publication_reconciliation_v1(state, &plan))
+            .transpose()?
+    };
+    let should_cleanup_staging = if reconciliation_claim.is_some() {
+        // A finalizer which already owned the publication lock may have moved
+        // staging to the target after the first outside-lock observation but
+        // before this query acquired its claim. Re-observe after the claim:
+        // subsequent finalizers now fail before target I/O, so this image is
+        // the stable truth used by cleanup and terminal publication.
+        observation = observe(&plan);
+        let _publication = state
+            .project_save_publication
+            .lock()
+            .map_err(|_| "Project publication lock was poisoned".to_string())?;
+        let _external_admission = lock_project_recovery_maintenance_admission(&state)?;
+        let _coordinator = lock_project_coordinator(&state)?;
+        prepared_project_publication_observation_will_terminalize_v1(
+            journal_path,
+            &plan,
+            &observation,
+        )?
+    } else {
+        false
+    };
+    if should_cleanup_staging {
+        if let Some(staging) = plan.pending.staging_path.as_deref() {
+            // Staging can live beside a removable/network target. Never hold
+            // a project mutation lock while deleting it. The exact pending
+            // image and recovery serial are checked again before terminal
+            // publication, so a concurrent replacement cannot consume this
+            // observation.
+            cleanup(staging)?;
+        }
+    }
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_recovery_maintenance_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    commit_prepared_project_publication_observation_v1(
+        state,
+        &mut coordinator,
+        journal_path,
+        &plan,
+        observation,
+    )
+    .map(Some)
+}
+
+#[tauri::command]
+fn acknowledge_project_publication_receipt_v1(
+    state: State<'_, AppState>,
+    request: ProjectPublicationRequestV1,
+) -> Result<(), String> {
+    let request = normalize_project_publication_request_v1(request)?;
+    let shape_hash = project_publication_shape_hash_v1(&request)?;
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_recovery_maintenance_admission(&state)?;
+    let _coordinator = lock_project_coordinator(&state)?;
+    ensure_project_publication_receipt_not_claimed(&state, &request, &shape_hash)?;
+    let app = project_swap_app_handle(&state)?;
+    let journal_path = project_recovery_authority_state_path(&app)?;
+    let mut durable = load_project_recovery_authority_state_from_path(&journal_path)?;
+    let changed =
+        acknowledge_project_publication_receipt_in_state_v1(&mut durable, &request, &shape_hash)?;
+    if changed {
+        persist_project_recovery_authority_state_to_path(&journal_path, &durable)?;
+    }
+    Ok(())
+}
+
+fn ensure_project_publication_receipt_not_claimed(
+    state: &AppState,
+    request: &ProjectPublicationRequestV1,
+    shape_hash: &str,
+) -> Result<(), String> {
+    let claim = state
+        .application_update_publication_claim
+        .lock()
+        .map_err(|_| "Application update publication claim lock was poisoned".to_string())?;
+    if claim.as_ref().is_some_and(|claim| {
+        claim.origin_id == request.origin_id
+            && claim.request_id == request.request_id
+            && claim.shape_hash == shape_hash
+    }) {
+        return Err(
+            "Application update is still using this backup receipt; acknowledge it after the installer returns"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn ensure_project_backup_not_claimed(state: &AppState, backup_id: u64) -> Result<(), String> {
+    let claim = state
+        .application_update_publication_claim
+        .lock()
+        .map_err(|_| "Application update publication claim lock was poisoned".to_string())?;
+    if claim
+        .as_ref()
+        .is_some_and(|claim| claim.backup_id == backup_id)
+    {
+        return Err(
+            "Application update is still using this backup; delete it after the installer returns"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn ensure_project_backup_not_durably_referenced_v1(
+    journal_path: &Path,
+    backup_directory: &Path,
+    backup_id: u64,
+) -> Result<(), String> {
+    let durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    let target = project_backup_path(backup_directory, backup_id);
+    let pending_reference = durable.publication_journal.pending.iter().any(|pending| {
+        pending.surface == ProjectPublicationSurfaceV1::Backup
+            && pending.target_path.as_deref() == Some(target.as_path())
+    });
+    let terminal_reference = durable
+        .publication_journal
+        .terminals
+        .iter()
+        .any(|terminal| {
+            terminal.surface == ProjectPublicationSurfaceV1::Backup
+                && (terminal.target_path.as_deref().map(Path::new) == Some(target.as_path())
+                    || terminal
+                        .backup
+                        .as_ref()
+                        .is_some_and(|backup| backup.id == backup_id))
+        });
+    if pending_reference || terminal_reference {
+        return Err(
+            "Project backup is protected by an unresolved or unacknowledged durable publication receipt"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn acknowledge_project_publication_receipt_in_state_v1(
+    durable: &mut PersistedProjectRecoveryAuthorityState,
+    request: &ProjectPublicationRequestV1,
+    shape_hash: &str,
+) -> Result<bool, String> {
+    let terminal_index = durable
+        .publication_journal
+        .terminals
+        .iter()
+        .position(|terminal| project_publication_request_key_matches(&request, &terminal.request));
+    let origin_index = durable
+        .publication_journal
+        .origins
+        .iter()
+        .position(|origin| origin.origin_id == request.origin_id)
+        .ok_or_else(|| "Project publication receipt origin was not found".to_string())?;
+    let Some(terminal_index) = terminal_index else {
+        let origin = &durable.publication_journal.origins[origin_index];
+        if origin.acknowledged_request_id == request.request_id {
+            if origin.acknowledged_shape_hash.as_deref() == Some(shape_hash) {
+                return Ok(false);
+            }
+            return Err("Project publication receipt acknowledgement shape mismatch".to_string());
+        }
+        return Err("Project publication terminal receipt was not found".to_string());
+    };
+    if durable.publication_journal.terminals[terminal_index].shape_hash != shape_hash {
+        return Err("Project publication receipt acknowledgement shape mismatch".to_string());
+    }
+    if durable.publication_journal.terminals[terminal_index].outcome
+        == ProjectPublicationTerminalOutcomeV1::Indeterminate
+    {
+        return Err("An indeterminate project publication cannot be acknowledged".to_string());
+    }
+    durable.publication_journal.terminals.remove(terminal_index);
+    let origin = &mut durable.publication_journal.origins[origin_index];
+    origin.acknowledged_request_id = request.request_id;
+    origin.acknowledged_shape_hash = Some(shape_hash.to_string());
+    Ok(true)
+}
+
+#[tauri::command]
+fn abandon_project_publication_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: ProjectPublicationRequestV1,
+) -> Result<ProjectPublicationStatusV1, String> {
+    let app = project_swap_app_handle(&state)?;
+    let journal_path = project_recovery_authority_state_path(&app)?;
+    abandon_project_publication_for_window_v1(&state, window.label(), &journal_path, request)
+}
+
+fn abandon_project_publication_for_window_v1(
+    state: &AppState,
+    window_label: &str,
+    journal_path: &Path,
+    request: ProjectPublicationRequestV1,
+) -> Result<ProjectPublicationStatusV1, String> {
+    abandon_project_publication_for_window_with_cleanup_v1(
+        state,
+        window_label,
+        journal_path,
+        request,
+        remove_project_publication_staging_v1,
+    )
+}
+
+fn remove_project_publication_staging_v1(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Unable to retire project publication staging file {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn abandon_project_publication_for_window_with_cleanup_v1<F>(
+    state: &AppState,
+    window_label: &str,
+    journal_path: &Path,
+    request: ProjectPublicationRequestV1,
+    cleanup: F,
+) -> Result<ProjectPublicationStatusV1, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    let request = normalize_project_publication_request_v1(request)?;
+    let shape_hash = project_publication_shape_hash_v1(&request)?;
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    let durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    if let Some(terminal) = durable
+        .publication_journal
+        .terminals
+        .iter()
+        .find(|terminal| project_publication_request_key_matches(&request, &terminal.request))
+    {
+        if terminal.shape_hash != shape_hash {
+            return Err(
+                "Project publication request ID was already used with a different shape"
+                    .to_string(),
+            );
+        }
+        return Ok(project_publication_terminal_status_v1(
+            terminal,
+            publication_terminal_authority_if_current(state, &coordinator, terminal),
+        ));
+    }
+    let pending = durable
+        .publication_journal
+        .pending
+        .iter()
+        .find(|pending| project_publication_request_key_matches(&request, &pending.request))
+        .ok_or_else(|| "Project publication request was not found".to_string())?;
+    if pending.shape_hash != shape_hash {
+        return Err(
+            "Project publication request ID was already used with a different shape".to_string(),
+        );
+    }
+    if pending.phase == ProjectPublicationPendingPhaseV1::Prepared {
+        return Err(
+            "Prepared project publication must be reconciled by receipt query and cannot be abandoned"
+                .to_string(),
+        );
+    }
+    ensure_project_publication_mutation_owner_allowed(
+        state,
+        &coordinator,
+        window_label,
+        &pending.request.owner_id,
+    )?;
+    let staging_path = pending.staging_path.clone();
+    if let Some(staging_path) = staging_path.as_deref() {
+        cleanup(staging_path)?;
+    }
+    let terminal = persist_project_publication_terminal_v1(
+        journal_path,
+        &request,
+        &shape_hash,
+        ProjectPublicationTerminalCommitV1 {
+            outcome: ProjectPublicationTerminalOutcomeV1::Abandoned,
+            target_path: None,
+            artifact_digest: None,
+            backup: None,
+            recovery_authority_serial: coordinator.recovery_authority_serial,
+            error: None,
+            warning: None,
+        },
+    )?;
+    let status = project_publication_terminal_status_v1(&terminal, None);
+    drop(coordinator);
+    drop(_external_admission);
+    drop(_publication);
+    Ok(status)
+}
+
+fn begin_project_publication_command_v1(
+    window: &WebviewWindow,
+    state: &AppState,
+    request: ProjectPublicationRequestV1,
+    surface: ProjectPublicationSurfaceV1,
+) -> Result<(PathBuf, BeginProjectPublicationV1), String> {
+    let owner_id = normalize_project_transaction_owner_id(request.owner_id.clone())?;
+    if owner_id != request.owner_id {
+        return Err("Project publication owner ID must already be canonical".to_string());
+    }
+    let app = project_swap_app_handle(state)?;
+    let journal_path = project_recovery_authority_state_path(&app)?;
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    ensure_project_publication_mutation_owner_allowed(
+        state,
+        &coordinator,
+        window.label(),
+        &owner_id,
+    )?;
+    let begin =
+        begin_project_publication_v1(state, &mut coordinator, &journal_path, request, surface)?;
+    Ok((journal_path, begin))
+}
+
+#[tauri::command]
+fn adopt_project_publication_owner_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: ProjectPublicationRequestV1,
+    new_owner_id: String,
+) -> Result<ProjectPublicationStatusV1, String> {
+    let app = project_swap_app_handle(&state)?;
+    let journal_path = project_recovery_authority_state_path(&app)?;
+    adopt_project_publication_owner_for_window_v1(
+        &state,
+        window.label(),
+        &journal_path,
+        request,
+        new_owner_id,
+    )
+}
+
+fn adopt_project_publication_owner_for_window_v1(
+    state: &AppState,
+    window_label: &str,
+    journal_path: &Path,
+    request: ProjectPublicationRequestV1,
+    new_owner_id: String,
+) -> Result<ProjectPublicationStatusV1, String> {
+    let request = normalize_project_publication_request_v1(request)?;
+    let old_shape_hash = project_publication_shape_hash_v1(&request)?;
+    let new_owner_id = normalize_project_transaction_owner_id(new_owner_id)?;
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    ensure_project_publication_mutation_owner_allowed(
+        state,
+        &coordinator,
+        window_label,
+        &new_owner_id,
+    )?;
+    let mut durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    if durable
+        .publication_journal
+        .terminals
+        .iter()
+        .any(|terminal| project_publication_request_key_matches(&request, &terminal.request))
+    {
+        return Err(
+            "A terminal project publication receipt cannot change its renderer owner".to_string(),
+        );
+    }
+    let pending_index = durable
+        .publication_journal
+        .pending
+        .iter()
+        .position(|pending| project_publication_request_key_matches(&request, &pending.request))
+        .ok_or_else(|| {
+            "Project publication request was not found for owner adoption".to_string()
+        })?;
+    let pending = &durable.publication_journal.pending[pending_index];
+    if pending.request != request || pending.shape_hash != old_shape_hash {
+        return Err(
+            "Project publication owner adoption requires the exact durable request".to_string(),
+        );
+    }
+    if request.owner_id == new_owner_id {
+        return Ok(project_publication_pending_status_v1(
+            pending,
+            durable.serial,
+        ));
+    }
+    {
+        let owners = state
+            .project_transaction_owners
+            .lock()
+            .map_err(|_| "Project transaction owner registry was poisoned".to_string())?;
+        if owners.values().any(|owner| owner == &request.owner_id) {
+            return Err(
+                "Project publication owner adoption requires the previous renderer owner to be retired"
+                    .to_string(),
+            );
+        }
+    }
+    let mut adopted_request = request;
+    adopted_request.owner_id = new_owner_id;
+    let adopted_shape_hash = project_publication_shape_hash_v1(&adopted_request)?;
+    {
+        let pending = &mut durable.publication_journal.pending[pending_index];
+        pending.request = adopted_request;
+        pending.shape_hash = adopted_shape_hash;
+    }
+    validate_project_publication_journal_v1(&durable.publication_journal)?;
+    persist_project_recovery_authority_state_to_path(journal_path, &durable)?;
+    Ok(project_publication_pending_status_v1(
+        &durable.publication_journal.pending[pending_index],
+        durable.serial,
+    ))
+}
+
+fn ensure_project_publication_mutation_owner_allowed(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+    window_label: &str,
+    owner_id: &str,
+) -> Result<(), String> {
+    project_transaction_owner_binding_for_window(state, window_label, owner_id)?;
+    ensure_project_operator_authoritative_mutation_allowed(state, coordinator, owner_id)
+}
+
+fn persist_project_publication_auto_target_v1(
+    state: &AppState,
+    journal_path: &Path,
+    pending: &PersistedProjectPublicationPendingV1,
+    target_path: &Path,
+) -> Result<PersistedProjectPublicationPendingV1, String> {
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let _coordinator = lock_project_coordinator(state)?;
+    persist_project_publication_target_v1(
+        journal_path,
+        &pending.request,
+        &pending.shape_hash,
+        target_path,
+        true,
+    )
+}
+
+enum ProjectPublicationTargetSelectionV1 {
+    Selected(PersistedProjectPublicationPendingV1),
+    Terminal(ProjectPublicationStatusV1),
+}
+
+fn select_project_publication_dialog_target_v1(
+    window: &WebviewWindow,
+    state: &AppState,
+    journal_path: &Path,
+    pending: &PersistedProjectPublicationPendingV1,
+    filter_name: &str,
+    extension: &str,
+    default_file_name: &str,
+    normalize: fn(PathBuf) -> Result<PathBuf, String>,
+) -> Result<ProjectPublicationTargetSelectionV1, String> {
+    if pending.phase == ProjectPublicationPendingPhaseV1::Selected {
+        return Ok(ProjectPublicationTargetSelectionV1::Selected(
+            pending.clone(),
+        ));
+    }
+    let should_open = {
+        let _publication = state
+            .project_save_publication
+            .lock()
+            .map_err(|_| "Project publication lock was poisoned".to_string())?;
+        let _external_admission = lock_project_external_command_admission(state)?;
+        let coordinator = lock_project_coordinator(state)?;
+        ensure_project_publication_mutation_owner_allowed(
+            state,
+            &coordinator,
+            window.label(),
+            &pending.request.owner_id,
+        )?;
+        persist_project_publication_selecting_v1(
+            journal_path,
+            &pending.request,
+            &pending.shape_hash,
+        )?
+    };
+    if !should_open {
+        return Err(
+            "Project publication target selection is already unresolved; query or abandon the durable request"
+                .to_string(),
+        );
+    }
+    let selected = parented_file_dialog(window)
+        .add_filter(filter_name, &[extension])
+        .set_file_name(default_file_name)
+        .save_file();
+    let Some(path) = selected else {
+        let _publication = state
+            .project_save_publication
+            .lock()
+            .map_err(|_| "Project publication lock was poisoned".to_string())?;
+        let _external_admission = lock_project_recovery_maintenance_admission(state)?;
+        let coordinator = lock_project_coordinator(state)?;
+        let terminal = persist_project_publication_terminal_v1(
+            journal_path,
+            &pending.request,
+            &pending.shape_hash,
+            ProjectPublicationTerminalCommitV1 {
+                outcome: ProjectPublicationTerminalOutcomeV1::Cancelled,
+                target_path: None,
+                artifact_digest: None,
+                backup: None,
+                recovery_authority_serial: coordinator.recovery_authority_serial,
+                error: None,
+                warning: None,
+            },
+        )?;
+        return Ok(ProjectPublicationTargetSelectionV1::Terminal(
+            project_publication_terminal_status_v1(&terminal, None),
+        ));
+    };
+    let path = normalize(path)?;
+    let selected = {
+        let _publication = state
+            .project_save_publication
+            .lock()
+            .map_err(|_| "Project publication lock was poisoned".to_string())?;
+        let _external_admission = lock_project_external_command_admission(state)?;
+        let coordinator = lock_project_coordinator(state)?;
+        ensure_project_publication_mutation_owner_allowed(
+            state,
+            &coordinator,
+            window.label(),
+            &pending.request.owner_id,
+        )?;
+        persist_project_publication_target_v1(
+            journal_path,
+            &pending.request,
+            &pending.shape_hash,
+            &path,
+            false,
+        )?
+    };
+    Ok(ProjectPublicationTargetSelectionV1::Selected(selected))
+}
+
+fn persist_project_publication_prepared_v1(
+    state: &AppState,
+    journal_path: &Path,
+    pending: &PersistedProjectPublicationPendingV1,
+    target_path: &Path,
+    temporary_path: &Path,
+) -> Result<PersistedProjectPublicationPendingV1, String> {
+    let digest = strong_target_file_digest(temporary_path)?
+        .ok_or_else(|| "Prepared project publication disappeared before commit".to_string())?;
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let _coordinator = lock_project_coordinator(state)?;
+    persist_project_publication_prepared_digest_v1(
+        journal_path,
+        &pending.request,
+        &pending.shape_hash,
+        target_path,
+        temporary_path,
+        &digest,
+    )
+}
+
+fn persist_project_publication_staging_for_state_v1(
+    state: &AppState,
+    journal_path: &Path,
+    pending: &PersistedProjectPublicationPendingV1,
+    target_path: &Path,
+    staging_path: &Path,
+) -> Result<PersistedProjectPublicationPendingV1, String> {
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let _coordinator = lock_project_coordinator(state)?;
+    persist_project_publication_staging_v1(
+        journal_path,
+        &pending.request,
+        &pending.shape_hash,
+        target_path,
+        staging_path,
+    )
+}
+
+fn persist_project_publication_success_v1(
+    state: &AppState,
+    journal_path: &Path,
+    pending: &PersistedProjectPublicationPendingV1,
+    target_path: &Path,
+    backup: Option<ProjectBackupSummary>,
+    warning: Option<String>,
+) -> Result<ProjectPublicationStatusV1, String> {
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_recovery_maintenance_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    let terminal = match persist_project_publication_terminal_v1(
+        journal_path,
+        &pending.request,
+        &pending.shape_hash,
+        ProjectPublicationTerminalCommitV1 {
+            outcome: ProjectPublicationTerminalOutcomeV1::Succeeded,
+            target_path: Some(target_path.to_string_lossy().to_string()),
+            artifact_digest: pending.prepared_digest.clone(),
+            backup,
+            recovery_authority_serial: coordinator.recovery_authority_serial,
+            error: None,
+            warning,
+        },
+    ) {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            // Target/coordinator publication has already succeeded. Until the
+            // durable terminal exists, ordinary mutations must not obscure
+            // restart/query reconciliation of that exact Prepared record.
+            state
+                .project_external_command_admission
+                .recovery_authority_faulted
+                .store(true, Ordering::Release);
+            return Err(error);
+        }
+    };
+    refresh_project_publication_fault_latch_v1(state, journal_path)?;
+    Ok(project_publication_terminal_status_v1(
+        &terminal,
+        publication_terminal_authority_if_current(state, &coordinator, &terminal),
+    ))
+}
+
+fn persist_project_publication_failed_v1(
+    state: &AppState,
+    journal_path: &Path,
+    pending: &PersistedProjectPublicationPendingV1,
+    error: String,
+) -> Result<ProjectPublicationStatusV1, String> {
+    persist_project_publication_failed_with_cleanup_v1(
+        state,
+        journal_path,
+        pending,
+        error,
+        remove_project_publication_staging_v1,
+    )
+}
+
+fn persist_project_publication_failed_with_cleanup_v1<Cleanup>(
+    state: &AppState,
+    journal_path: &Path,
+    pending: &PersistedProjectPublicationPendingV1,
+    error: String,
+    cleanup: Cleanup,
+) -> Result<ProjectPublicationStatusV1, String>
+where
+    Cleanup: FnOnce(&Path) -> Result<(), String>,
+{
+    let plan = {
+        let _publication = state
+            .project_save_publication
+            .lock()
+            .map_err(|_| "Project publication lock was poisoned".to_string())?;
+        let _external_admission = lock_project_recovery_maintenance_admission(state)?;
+        let coordinator = lock_project_coordinator(state)?;
+        let durable = load_project_recovery_authority_state_from_path(journal_path)?;
+        if let Some(terminal) = durable
+            .publication_journal
+            .terminals
+            .iter()
+            .find(|terminal| {
+                project_publication_request_key_matches(&pending.request, &terminal.request)
+            })
+        {
+            if terminal.shape_hash != pending.shape_hash {
+                return Err(
+                    "Project publication request ID was already used with a different shape"
+                        .to_string(),
+                );
+            }
+            return Ok(project_publication_terminal_status_v1(
+                terminal,
+                publication_terminal_authority_if_current(state, &coordinator, terminal),
+            ));
+        }
+        let current = durable
+            .publication_journal
+            .pending
+            .iter()
+            .find(|current| {
+                project_publication_request_key_matches(&pending.request, &current.request)
+            })
+            .ok_or_else(|| "Project publication request is no longer pending".to_string())?;
+        if current != pending || current.phase != ProjectPublicationPendingPhaseV1::Prepared {
+            return Err(
+                "Project publication changed before failed staging cleanup; retry receipt query"
+                    .to_string(),
+            );
+        }
+        let plan = PreparedProjectPublicationReconcilePlanV1 {
+            pending: current.clone(),
+            recovery_authority_serial: durable.serial,
+        };
+        let claim = claim_prepared_project_publication_reconciliation_v1(state, &plan)?;
+        (plan, claim)
+    };
+    let (plan, _claim) = plan;
+    if let Some(staging) = plan.pending.staging_path.as_deref() {
+        cleanup(staging)?;
+    }
+
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_recovery_maintenance_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    let durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    if let Some(terminal) = durable
+        .publication_journal
+        .terminals
+        .iter()
+        .find(|terminal| {
+            project_publication_request_key_matches(&plan.pending.request, &terminal.request)
+        })
+    {
+        if terminal.shape_hash != plan.pending.shape_hash {
+            return Err(
+                "Project publication request ID was already used with a different shape"
+                    .to_string(),
+            );
+        }
+        return Ok(project_publication_terminal_status_v1(
+            terminal,
+            publication_terminal_authority_if_current(state, &coordinator, terminal),
+        ));
+    }
+    let current = durable
+        .publication_journal
+        .pending
+        .iter()
+        .find(|current| {
+            project_publication_request_key_matches(&plan.pending.request, &current.request)
+        })
+        .ok_or_else(|| "Project publication request is no longer pending".to_string())?;
+    if current != &plan.pending || durable.serial != plan.recovery_authority_serial {
+        return Err(
+            "Project publication changed after failed staging cleanup; retry receipt query"
+                .to_string(),
+        );
+    }
+    let terminal = persist_project_publication_terminal_v1(
+        journal_path,
+        &plan.pending.request,
+        &plan.pending.shape_hash,
+        ProjectPublicationTerminalCommitV1 {
+            outcome: ProjectPublicationTerminalOutcomeV1::Failed,
+            target_path: None,
+            artifact_digest: None,
+            backup: None,
+            recovery_authority_serial: durable.serial,
+            error: Some(error),
+            warning: None,
+        },
+    )?;
+    refresh_project_publication_fault_latch_v1(state, journal_path)?;
+    Ok(project_publication_terminal_status_v1(&terminal, None))
+}
+
+fn refresh_project_publication_fault_latch_v1(
+    state: &AppState,
+    journal_path: &Path,
+) -> Result<(), String> {
+    let durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    let unresolved = durable.pending_clean_save.is_some()
+        || durable
+            .publication_journal
+            .pending
+            .iter()
+            .any(|pending| pending.indeterminate_error.is_some());
+    if !unresolved {
+        state
+            .project_external_command_admission
+            .recovery_authority_faulted
+            .store(false, Ordering::Release);
+    }
+    Ok(())
+}
+
+fn latch_project_publication_failure_v1(
+    state: &AppState,
+    journal_path: &Path,
+    pending: &PersistedProjectPublicationPendingV1,
+    error: &str,
+) -> Result<(), String> {
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_recovery_maintenance_admission(state)?;
+    let _coordinator = lock_project_coordinator(state)?;
+    mark_project_publication_indeterminate_v1(
+        journal_path,
+        &pending.request,
+        &pending.shape_hash,
+        error.to_string(),
+    )?;
+    state
+        .project_external_command_admission
+        .recovery_authority_faulted
+        .store(true, Ordering::Release);
+    Ok(())
+}
+
+fn template_bytes_for_project_publication_v1(
+    ticket: &ProjectSaveTicket,
+    target_path: &Path,
+) -> Result<Vec<u8>, String> {
+    let label = target_path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("Show Template")
+        .trim()
+        .chars()
+        .take(80)
+        .collect::<String>();
+    let template = normalize_user_template_file(UserTemplateFile {
+        version: USER_TEMPLATE_VERSION,
+        app: APP_NAME.to_string(),
+        label,
+        project: ticket.checkpoint.project.clone(),
+        midi_mappings: ticket.checkpoint.mappings.midi_mappings.clone(),
+        osc_mappings: ticket.checkpoint.mappings.osc_mappings.clone(),
+        dmx_mappings: ticket.checkpoint.mappings.dmx_mappings.clone(),
+        dj_track_triggers: ticket.checkpoint.mappings.dj_track_triggers.clone(),
+    })?;
+    let bytes = serde_json::to_vec_pretty(&template).map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > USER_TEMPLATE_MAX_BYTES {
+        return Err(format!(
+            "User template is larger than the {} MiB safety limit",
+            USER_TEMPLATE_MAX_BYTES / 1024 / 1024
+        ));
+    }
+    Ok(bytes)
+}
+
+fn execute_project_save_publication_v1(
+    window: &WebviewWindow,
+    state: &AppState,
+    request: ProjectPublicationRequestV1,
+    surface: ProjectPublicationSurfaceV1,
+) -> Result<ProjectPublicationStatusV1, String> {
+    let (journal_path, begin) =
+        begin_project_publication_command_v1(window, state, request, surface)?;
+    let (ticket, pending) = match begin {
+        BeginProjectPublicationV1::Existing(status) => return Ok(status),
+        BeginProjectPublicationV1::New { ticket, pending }
+        | BeginProjectPublicationV1::Resume { ticket, pending } => (ticket, pending),
+    };
+    let selected = match surface {
+        ProjectPublicationSurfaceV1::Save => {
+            if let Some(path) = ticket.current_project_path.as_deref() {
+                ProjectPublicationTargetSelectionV1::Selected(
+                    persist_project_publication_auto_target_v1(
+                        state,
+                        &journal_path,
+                        &pending,
+                        path,
+                    )?,
+                )
+            } else {
+                select_project_publication_dialog_target_v1(
+                    window,
+                    state,
+                    &journal_path,
+                    &pending,
+                    "Syndocal Project",
+                    "sdc",
+                    "show.sdc",
+                    normalize_project_save_path,
+                )?
+            }
+        }
+        ProjectPublicationSurfaceV1::SaveAs => select_project_publication_dialog_target_v1(
+            window,
+            state,
+            &journal_path,
+            &pending,
+            "Syndocal Project",
+            "sdc",
+            "show.sdc",
+            normalize_project_save_path,
+        )?,
+        ProjectPublicationSurfaceV1::UserTemplate => select_project_publication_dialog_target_v1(
+            window,
+            state,
+            &journal_path,
+            &pending,
+            "Syndocal User Template",
+            "sdctemplate",
+            "show.sdctemplate",
+            normalize_user_template_save_path,
+        )?,
+        ProjectPublicationSurfaceV1::Backup => {
+            return Err("Backup publication must use its managed target service".to_string());
+        }
+    };
+    let ProjectPublicationTargetSelectionV1::Selected(selected) = selected else {
+        let ProjectPublicationTargetSelectionV1::Terminal(status) = selected else {
+            unreachable!()
+        };
+        return Ok(status);
+    };
+    let target = selected
+        .target_path
+        .as_deref()
+        .ok_or_else(|| "Project publication target was not persisted".to_string())?;
+    let temp = selected
+        .staging_path
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(|| project_save_temporary_path(target))?;
+    let staged = persist_project_publication_staging_for_state_v1(
+        state,
+        &journal_path,
+        &selected,
+        target,
+        &temp,
+    )?;
+    let bytes = if surface == ProjectPublicationSurfaceV1::UserTemplate {
+        template_bytes_for_project_publication_v1(&ticket, target)?
+    } else {
+        project_save_ticket_bytes(&ticket)?
+    };
+    if let Err(error) = prepare_project_save_bytes_at(&temp, &bytes) {
+        return Err(error);
+    }
+    let prepared =
+        match persist_project_publication_prepared_v1(state, &journal_path, &staged, target, &temp)
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                remove_project_publication_staging_v1(&temp)?;
+                return Err(error);
+            }
+        };
+    let published = if surface == ProjectPublicationSurfaceV1::UserTemplate {
+        finalize_project_export_ticket(
+            state,
+            target,
+            &temp,
+            &ticket,
+            ProjectPublicationMutationBinding {
+                window_label: window.label(),
+                owner_id: &prepared.request.owner_id,
+            },
+        )
+        .map(|()| None)
+    } else {
+        finalize_project_save_ticket(
+            state,
+            target,
+            &temp,
+            &ticket,
+            surface == ProjectPublicationSurfaceV1::SaveAs
+                || ticket.current_project_path.as_deref() != Some(target),
+            ProjectPublicationMutationBinding {
+                window_label: window.label(),
+                owner_id: &prepared.request.owner_id,
+            },
+        )
+        .map(Some)
+    };
+    match published {
+        Ok(save_result) => {
+            let mut status = persist_project_publication_success_v1(
+                state,
+                &journal_path,
+                &prepared,
+                target,
+                None,
+                None,
+            )?;
+            if let Some(save_result) = save_result {
+                status.authority = Some(save_result.authority);
+            }
+            Ok(status)
+        }
+        Err(error) => {
+            if surface == ProjectPublicationSurfaceV1::UserTemplate {
+                match strong_target_file_digest(target) {
+                    Ok(Some(digest))
+                        if prepared.prepared_digest.as_deref() == Some(digest.as_str()) =>
+                    {
+                        remove_project_publication_staging_v1(&temp)?;
+                        return persist_project_publication_success_v1(
+                            state,
+                            &journal_path,
+                            &prepared,
+                            target,
+                            None,
+                            None,
+                        );
+                    }
+                    Ok(_) => {
+                        return persist_project_publication_failed_v1(
+                            state,
+                            &journal_path,
+                            &prepared,
+                            error,
+                        );
+                    }
+                    Err(read_error) => {
+                        let indeterminate = format!(
+                            "{error}; the template target could not be inspected: {read_error}"
+                        );
+                        latch_project_publication_failure_v1(
+                            state,
+                            &journal_path,
+                            &prepared,
+                            &indeterminate,
+                        )?;
+                        return Err(indeterminate);
+                    }
+                }
+            }
+            if state
+                .project_external_command_admission
+                .recovery_authority_faulted
+                .load(Ordering::Acquire)
+            {
+                latch_project_publication_failure_v1(state, &journal_path, &prepared, &error)?;
+                Err(error)
+            } else {
+                persist_project_publication_failed_v1(state, &journal_path, &prepared, error)
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn save_project_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: ProjectPublicationRequestV1,
+) -> Result<ProjectPublicationStatusV1, String> {
+    execute_project_save_publication_v1(&window, &state, request, ProjectPublicationSurfaceV1::Save)
+}
+
+#[tauri::command]
+fn save_project_as_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: ProjectPublicationRequestV1,
+) -> Result<ProjectPublicationStatusV1, String> {
+    execute_project_save_publication_v1(
+        &window,
+        &state,
+        request,
+        ProjectPublicationSurfaceV1::SaveAs,
+    )
+}
+
+#[tauri::command]
+fn save_user_template_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: ProjectPublicationRequestV1,
+) -> Result<ProjectPublicationStatusV1, String> {
+    execute_project_save_publication_v1(
+        &window,
+        &state,
+        request,
+        ProjectPublicationSurfaceV1::UserTemplate,
+    )
 }
 
 fn project_coordinator_for_initial_snapshot(snapshot: EngineSnapshot) -> ProjectCoordinator {
@@ -39823,10 +42017,7 @@ fn project_coordinator_for_initial_snapshot(snapshot: EngineSnapshot) -> Project
     }
 }
 
-fn prepare_project_save_ticket_write(
-    path: &Path,
-    ticket: &ProjectSaveTicket,
-) -> Result<PathBuf, String> {
+fn project_save_ticket_bytes(ticket: &ProjectSaveTicket) -> Result<Vec<u8>, String> {
     let json = project_json_for_write_with_control_mappings_and_dj(
         &ticket.checkpoint.project,
         ticket.checkpoint.mappings.midi_mappings.clone(),
@@ -39834,10 +42025,17 @@ fn prepare_project_save_ticket_write(
         ticket.checkpoint.mappings.dmx_mappings.clone(),
         ticket.checkpoint.mappings.dj_track_triggers.clone(),
     )?;
-    prepare_project_save_bytes(path, json.as_bytes())
+    Ok(json.into_bytes())
 }
 
+#[cfg(test)]
 fn prepare_project_save_bytes(path: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
+    let temp = project_save_temporary_path(path)?;
+    prepare_project_save_bytes_at(&temp, bytes)?;
+    Ok(temp)
+}
+
+fn project_save_temporary_path(path: &Path) -> Result<PathBuf, String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("Project path has no parent directory: {}", path.display()))?;
@@ -39845,12 +42043,15 @@ fn prepare_project_save_bytes(path: &Path, bytes: &[u8]) -> Result<PathBuf, Stri
         .file_name()
         .and_then(OsStr::to_str)
         .ok_or_else(|| format!("Project path has no file name: {}", path.display()))?;
-    let temp = parent.join(format!(
+    Ok(parent.join(format!(
         ".{file_name}.{}.{}.{}.tmp",
         std::process::id(),
         current_unix_ms(),
         PROJECT_SAVE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed),
-    ));
+    )))
+}
+
+fn prepare_project_save_bytes_at(temp: &Path, bytes: &[u8]) -> Result<(), String> {
     let result = (|| {
         let mut file = fs::OpenOptions::new()
             .write(true)
@@ -39866,16 +42067,12 @@ fn prepare_project_save_bytes(path: &Path, bytes: &[u8]) -> Result<PathBuf, Stri
             .and_then(|_| file.sync_all())
             .map_err(|error| format!("Unable to write project file {}: {error}", temp.display()))?;
         drop(file);
-        Ok(temp.clone())
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
     result
-}
-
-fn discard_prepared_project_save_write(temp: &Path) {
-    let _ = fs::remove_file(temp);
 }
 
 /// The caller must hold its publication/admission/coordinator guards while
@@ -39959,13 +42156,21 @@ fn finalize_project_save_ticket(
     temp: &Path,
     ticket: &ProjectSaveTicket,
     adopt_path: bool,
+    publication_binding: ProjectPublicationMutationBinding<'_>,
 ) -> Result<ProjectSaveResult, String> {
     let _save_publication = state
         .project_save_publication
         .lock()
         .map_err(|_| "Project save publication lock was poisoned".to_string())?;
+    ensure_no_project_publication_reconciliation_v1(state)?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
+    ensure_project_publication_mutation_owner_allowed(
+        state,
+        &coordinator,
+        publication_binding.window_label,
+        publication_binding.owner_id,
+    )?;
     let ticket_is_current = project_save_ticket_is_current(state, &mut coordinator, ticket)?;
     let next_disposition_generation =
         checked_project_authority_disposition_generation_after_change(&coordinator)?;
@@ -40053,13 +42258,21 @@ fn finalize_project_export_ticket(
     path: &Path,
     temp: &Path,
     ticket: &ProjectSaveTicket,
+    publication_binding: ProjectPublicationMutationBinding<'_>,
 ) -> Result<(), String> {
     let _save_publication = state
         .project_save_publication
         .lock()
         .map_err(|_| "Project save publication lock was poisoned".to_string())?;
+    ensure_no_project_publication_reconciliation_v1(state)?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
+    ensure_project_publication_mutation_owner_allowed(
+        state,
+        &coordinator,
+        publication_binding.window_label,
+        publication_binding.owner_id,
+    )?;
     let ticket_is_current = project_save_ticket_is_current(state, &mut coordinator, ticket)?;
     publish_prepared_project_save_if_current(temp, path, ticket_is_current).map_err(|_| {
         "Project changed while the template dialog was open; export was rejected before writing"
@@ -43771,6 +45984,11 @@ struct PersistedProjectRecoveryAuthorityState {
     /// this build writes without a pending stay readable by older builds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_clean_save: Option<PendingProjectCleanSave>,
+    #[serde(
+        default,
+        skip_serializing_if = "PersistedProjectPublicationJournalV1::is_empty"
+    )]
+    publication_journal: PersistedProjectPublicationJournalV1,
 }
 
 /// Durable binding that lets startup decide, without metadata/time heuristics,
@@ -43825,6 +46043,380 @@ fn validate_pending_project_clean_save(
             "Project recovery authority journal has an invalid pending CleanSave target path: {}",
             pending.target_path.display()
         ));
+    }
+    Ok(())
+}
+
+fn validate_project_publication_origin_id(origin: &str) -> Result<(), String> {
+    if origin != origin.trim()
+        || origin.is_empty()
+        || origin.len() > 96
+        || !origin
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(
+            "Project publication origin must contain 1-96 ASCII letters, digits, '-' or '_'"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_project_publication_request_v1(
+    request: &ProjectPublicationRequestV1,
+) -> Result<(), String> {
+    if request.schema_version != PROJECT_PUBLICATION_REQUEST_SCHEMA_VERSION {
+        return Err(format!(
+            "Unsupported project publication request schema version {}",
+            request.schema_version
+        ));
+    }
+    validate_project_publication_origin_id(&request.origin_id)?;
+    if normalize_project_transaction_owner_id(request.owner_id.clone())? != request.owner_id {
+        return Err("Project publication owner ID must already be canonical".to_string());
+    }
+    if request.request_id == 0 || request.request_id > VIDEO_CLIP_RUNTIME_GENERATION_MAX {
+        return Err("Project publication request ID is outside the safe range".to_string());
+    }
+    if request.expected_project_epoch > VIDEO_CLIP_RUNTIME_GENERATION_MAX
+        || request.expected_project_revision > VIDEO_CLIP_RUNTIME_GENERATION_MAX
+    {
+        return Err("Project publication authority is outside the safe range".to_string());
+    }
+    validate_project_publication_shape_hash(&request.expected_checkpoint_hash)?;
+    validate_project_publication_shape_hash(&request.mapping_authority_hash)?;
+    let expected_policy = match request.surface {
+        ProjectPublicationSurfaceV1::Save => ProjectPublicationTargetPolicyV1::CurrentOrDialog,
+        ProjectPublicationSurfaceV1::SaveAs | ProjectPublicationSurfaceV1::UserTemplate => {
+            ProjectPublicationTargetPolicyV1::Dialog
+        }
+        ProjectPublicationSurfaceV1::Backup => ProjectPublicationTargetPolicyV1::ManagedUnique,
+    };
+    if request.target_policy != expected_policy {
+        return Err("Project publication target policy does not match its surface".to_string());
+    }
+    if request
+        .source_path
+        .as_ref()
+        .is_some_and(|path| path.len() > 4096)
+        || request
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.len() > 160)
+    {
+        return Err("Project publication request metadata is too long".to_string());
+    }
+    Ok(())
+}
+
+fn normalize_project_publication_request_v1(
+    request: ProjectPublicationRequestV1,
+) -> Result<ProjectPublicationRequestV1, String> {
+    if let Some(reason) = request.reason.as_deref() {
+        if reason != reason.trim() || reason.is_empty() || reason.chars().count() > 80 {
+            return Err(
+                "Project publication reason must be canonical, nonempty, and at most 80 characters"
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(source_path) = request.source_path.as_deref() {
+        let source = Path::new(source_path);
+        if !source.is_absolute()
+            || source
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+            || !is_syndocal_project_path(source)
+        {
+            return Err(
+                "Project publication source path must be an absolute canonical .sdc path"
+                    .to_string(),
+            );
+        }
+    }
+    validate_project_publication_request_v1(&request)?;
+    Ok(request)
+}
+
+fn validate_project_publication_shape_hash(shape_hash: &str) -> Result<(), String> {
+    if shape_hash.len() != 64
+        || !shape_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("Project publication shape hash is invalid".to_string());
+    }
+    Ok(())
+}
+
+fn validate_project_publication_target_path_v1(
+    surface: ProjectPublicationSurfaceV1,
+    path: &Path,
+) -> Result<(), String> {
+    if !path.is_absolute() || path.file_name().is_none() {
+        return Err("Project publication target path must be absolute".to_string());
+    }
+    let expected_extension = match surface {
+        ProjectPublicationSurfaceV1::Save | ProjectPublicationSurfaceV1::SaveAs => "sdc",
+        ProjectPublicationSurfaceV1::UserTemplate => "sdctemplate",
+        ProjectPublicationSurfaceV1::Backup => "json",
+    };
+    if path.extension() != Some(OsStr::new(expected_extension)) {
+        return Err(format!(
+            "Project publication target must use the .{expected_extension} extension"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_project_publication_journal_v1(
+    journal: &PersistedProjectPublicationJournalV1,
+) -> Result<(), String> {
+    if journal.origins.len() > MAX_PROJECT_PUBLICATION_ORIGINS
+        || journal.pending.len() > MAX_PROJECT_PUBLICATION_PENDING
+        || journal.terminals.len() > MAX_PROJECT_PUBLICATION_TERMINALS
+    {
+        return Err("Project publication receipt journal exceeds its bounded capacity".to_string());
+    }
+    for (index, origin) in journal.origins.iter().enumerate() {
+        validate_project_publication_origin_id(&origin.origin_id)?;
+        if origin.high_water_request_id == 0
+            || origin.high_water_request_id > VIDEO_CLIP_RUNTIME_GENERATION_MAX
+        {
+            return Err(
+                "Project publication receipt journal origin is outside the safe range".to_string(),
+            );
+        }
+        if origin.acknowledged_request_id > origin.high_water_request_id
+            || origin.acknowledged_request_id > VIDEO_CLIP_RUNTIME_GENERATION_MAX
+            || (origin.acknowledged_request_id == 0) != origin.acknowledged_shape_hash.is_none()
+        {
+            return Err(
+                "Project publication receipt journal has an invalid acknowledgement tombstone"
+                    .to_string(),
+            );
+        }
+        if let Some(shape_hash) = origin.acknowledged_shape_hash.as_deref() {
+            validate_project_publication_shape_hash(shape_hash)?;
+        }
+        if journal.origins[index + 1..]
+            .iter()
+            .any(|other| other.origin_id == origin.origin_id)
+        {
+            return Err("Project publication receipt journal has duplicate origins".to_string());
+        }
+    }
+    let mut seen = HashSet::new();
+    for pending in &journal.pending {
+        validate_project_publication_request_v1(&pending.request)?;
+        validate_project_publication_shape_hash(&pending.shape_hash)?;
+        if project_publication_shape_hash_v1(&pending.request)? != pending.shape_hash
+            || pending.request.surface != pending.surface
+        {
+            return Err("Project publication pending receipt has a noncanonical shape".to_string());
+        }
+        if pending.reservation_generation == 0
+            || pending.reservation_generation > journal.latest_reservation_generation
+        {
+            return Err(
+                "Project publication pending receipt has an invalid reservation generation"
+                    .to_string(),
+            );
+        }
+        let expected_clean_save_serial = if matches!(
+            pending.surface,
+            ProjectPublicationSurfaceV1::Save | ProjectPublicationSurfaceV1::SaveAs
+        ) {
+            Some(
+                pending
+                    .recovery_authority_serial_before
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        "Project publication pending receipt exhausted its recovery serial"
+                            .to_string()
+                    })?,
+            )
+        } else {
+            None
+        };
+        if pending.expected_recovery_authority_serial_after != expected_clean_save_serial {
+            return Err(
+                "Project publication pending receipt has an invalid recovery serial fence"
+                    .to_string(),
+            );
+        }
+        let selected = matches!(
+            pending.phase,
+            ProjectPublicationPendingPhaseV1::Selected | ProjectPublicationPendingPhaseV1::Prepared
+        );
+        if selected != pending.target_path.is_some() {
+            return Err(
+                "Project publication pending receipt has inconsistent target selection".to_string(),
+            );
+        }
+        if let Some(staging) = pending.staging_path.as_deref() {
+            let target = pending.target_path.as_deref().ok_or_else(|| {
+                "Project publication pending receipt has staging without a target".to_string()
+            })?;
+            let target_parent = target.parent().ok_or_else(|| {
+                "Project publication target has no parent for staging".to_string()
+            })?;
+            let target_name = target.file_name().and_then(OsStr::to_str).ok_or_else(|| {
+                "Project publication target has no filename for staging".to_string()
+            })?;
+            let staging_name = staging
+                .file_name()
+                .and_then(OsStr::to_str)
+                .ok_or_else(|| "Project publication staging path has no filename".to_string())?;
+            if staging.parent() != Some(target_parent)
+                || !staging_name.starts_with(&format!(".{target_name}."))
+                || !staging_name.ends_with(".tmp")
+            {
+                return Err(
+                    "Project publication pending receipt has an unsafe staging path".to_string(),
+                );
+            }
+        }
+        let prepared = pending.phase == ProjectPublicationPendingPhaseV1::Prepared;
+        if prepared != pending.prepared_digest.is_some() {
+            return Err(
+                "Project publication pending receipt has inconsistent prepared digest".to_string(),
+            );
+        }
+        if prepared && pending.staging_path.is_none() {
+            return Err(
+                "Prepared project publication is missing its durable staging path".to_string(),
+            );
+        }
+        if let Some(digest) = pending.prepared_digest.as_deref() {
+            validate_project_publication_shape_hash(digest)?;
+        }
+        if pending
+            .indeterminate_error
+            .as_deref()
+            .is_some_and(str::is_empty)
+            || (pending.indeterminate_error.is_some()
+                && pending.phase != ProjectPublicationPendingPhaseV1::Prepared)
+        {
+            return Err(
+                "Project publication pending receipt has an invalid indeterminate fault"
+                    .to_string(),
+            );
+        }
+        if let Some(path) = pending.target_path.as_deref() {
+            validate_project_publication_target_path_v1(pending.surface, path)?;
+        }
+        let key = (
+            pending.request.origin_id.clone(),
+            pending.request.request_id,
+        );
+        if !seen.insert(key) {
+            return Err("Project publication receipt journal has duplicate requests".to_string());
+        }
+    }
+    for terminal in &journal.terminals {
+        validate_project_publication_request_v1(&terminal.request)?;
+        validate_project_publication_shape_hash(&terminal.shape_hash)?;
+        if project_publication_shape_hash_v1(&terminal.request)? != terminal.shape_hash
+            || terminal.request.surface != terminal.surface
+        {
+            return Err(
+                "Project publication terminal receipt has a noncanonical shape".to_string(),
+            );
+        }
+        if let Some(path) = terminal.target_path.as_deref() {
+            validate_project_publication_target_path_v1(terminal.surface, Path::new(path))?;
+        }
+        match terminal.outcome {
+            ProjectPublicationTerminalOutcomeV1::Succeeded => {
+                if terminal.target_path.is_none() {
+                    return Err(
+                        "Successful project publication terminal is missing its target".to_string(),
+                    );
+                }
+                let artifact_digest = terminal.artifact_digest.as_deref().ok_or_else(|| {
+                    "Successful project publication terminal is missing its artifact digest"
+                        .to_string()
+                })?;
+                validate_project_publication_shape_hash(artifact_digest)?;
+                if terminal
+                    .warning
+                    .as_deref()
+                    .is_some_and(|warning| warning.is_empty() || warning.len() > 512)
+                {
+                    return Err(
+                        "Successful project publication terminal has an invalid warning"
+                            .to_string(),
+                    );
+                }
+            }
+            ProjectPublicationTerminalOutcomeV1::Cancelled
+            | ProjectPublicationTerminalOutcomeV1::Abandoned => {
+                if terminal.target_path.is_some()
+                    || terminal.backup.is_some()
+                    || terminal.artifact_digest.is_some()
+                    || terminal.error.is_some()
+                    || terminal.warning.is_some()
+                {
+                    return Err(
+                        "Cancelled project publication terminal contains publication data"
+                            .to_string(),
+                    );
+                }
+            }
+            ProjectPublicationTerminalOutcomeV1::Failed
+            | ProjectPublicationTerminalOutcomeV1::Indeterminate => {
+                if terminal.error.as_deref().is_none_or(str::is_empty) {
+                    return Err(
+                        "Failed project publication terminal is missing its error".to_string()
+                    );
+                }
+                if terminal.artifact_digest.is_some() {
+                    return Err(
+                        "Failed project publication terminal contains an artifact digest"
+                            .to_string(),
+                    );
+                }
+                if terminal.warning.is_some() {
+                    return Err(
+                        "Failed project publication terminal contains a success warning"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        if terminal.surface == ProjectPublicationSurfaceV1::Backup {
+            if terminal.outcome == ProjectPublicationTerminalOutcomeV1::Succeeded
+                && terminal.backup.is_none()
+            {
+                return Err("Successful backup terminal is missing its summary".to_string());
+            }
+        } else if terminal.backup.is_some() {
+            return Err("Non-backup project publication contains a backup summary".to_string());
+        }
+        let key = (
+            terminal.request.origin_id.clone(),
+            terminal.request.request_id,
+        );
+        if !seen.insert(key) {
+            return Err("Project publication receipt journal has duplicate requests".to_string());
+        }
+    }
+    for (origin_id, request_id) in seen {
+        let origin = journal
+            .origins
+            .iter()
+            .find(|origin| origin.origin_id == origin_id)
+            .ok_or_else(|| {
+                "Project publication receipt journal has a request without an origin".to_string()
+            })?;
+        if request_id > origin.high_water_request_id {
+            return Err(
+                "Project publication receipt journal high-water mark is behind a request"
+                    .to_string(),
+            );
+        }
     }
     Ok(())
 }
@@ -44182,13 +46774,21 @@ fn load_project_recovery_authority_state_from_path(
     path: &Path,
 ) -> Result<PersistedProjectRecoveryAuthorityState, String> {
     let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
+        Ok(bytes) if bytes.len() as u64 <= MAX_PROJECT_RECOVERY_AUTHORITY_STATE_BYTES => bytes,
+        Ok(_) => {
+            return Err(format!(
+                "Project recovery authority state {} exceeds the {} byte safety limit",
+                path.display(),
+                MAX_PROJECT_RECOVERY_AUTHORITY_STATE_BYTES
+            ))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(PersistedProjectRecoveryAuthorityState {
                 version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
                 serial: 0,
                 last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
                 pending_clean_save: None,
+                publication_journal: PersistedProjectPublicationJournalV1::default(),
             });
         }
         Err(error) => {
@@ -44215,6 +46815,7 @@ fn load_project_recovery_authority_state_from_path(
     if let Some(pending) = state.pending_clean_save.as_ref() {
         validate_pending_project_clean_save(state.serial, pending)?;
     }
+    validate_project_publication_journal_v1(&state.publication_journal)?;
     Ok(state)
 }
 
@@ -44230,6 +46831,8 @@ fn persist_project_recovery_authority_serial_to_path(
             serial,
             last_transition,
             pending_clean_save: None,
+            publication_journal: load_project_recovery_authority_state_from_path(path)?
+                .publication_journal,
         },
     )
 }
@@ -44251,6 +46854,8 @@ fn persist_pending_project_clean_save_to_path(
             serial: committed_serial,
             last_transition: committed_transition,
             pending_clean_save: Some(pending),
+            publication_journal: load_project_recovery_authority_state_from_path(path)?
+                .publication_journal,
         },
     )
 }
@@ -44264,6 +46869,10 @@ fn persist_project_recovery_authority_state_to_path(
     path: &Path,
     state: &PersistedProjectRecoveryAuthorityState,
 ) -> Result<(), String> {
+    if let Some(pending) = state.pending_clean_save.as_ref() {
+        validate_pending_project_clean_save(state.serial, pending)?;
+    }
+    validate_project_publication_journal_v1(&state.publication_journal)?;
     let parent = path.parent().ok_or_else(|| {
         format!(
             "Project recovery authority state path has no parent: {}",
@@ -44278,6 +46887,12 @@ fn persist_project_recovery_authority_state_to_path(
     })?;
     let bytes = serde_json::to_vec(state)
         .map_err(|error| format!("Unable to encode project recovery authority state: {error}"))?;
+    if bytes.len() as u64 > MAX_PROJECT_RECOVERY_AUTHORITY_STATE_BYTES {
+        return Err(format!(
+            "Project recovery authority state exceeds the {} byte safety limit",
+            MAX_PROJECT_RECOVERY_AUTHORITY_STATE_BYTES
+        ));
+    }
     let file_name = path
         .file_name()
         .and_then(OsStr::to_str)
@@ -44701,11 +47316,21 @@ fn install_project_recovery_authority_from_path(
     path: &Path,
 ) -> Result<ProjectRecoveryAuthorityStatus, String> {
     let recovery_authority = load_and_reconcile_project_recovery_authority_state_from_path(path)?;
+    let durable = load_project_recovery_authority_state_from_path(path)?;
+    let unresolved_publication = durable
+        .publication_journal
+        .pending
+        .iter()
+        .any(|pending| pending.phase == ProjectPublicationPendingPhaseV1::Prepared);
     let mut coordinator = state.project_coordinator.lock().map_err(|_| {
         "Project coordinator lock was poisoned during recovery authority initialization".to_string()
     })?;
     coordinator.recovery_authority_serial = recovery_authority.recovery_authority_serial;
     coordinator.recovery_authority_last_transition = recovery_authority.last_transition.clone();
+    state
+        .project_external_command_admission
+        .recovery_authority_faulted
+        .store(unresolved_publication, Ordering::Release);
     Ok(recovery_authority)
 }
 
@@ -44950,6 +47575,23 @@ fn project_backup_path(directory: &Path, id: u64) -> PathBuf {
     directory.join(format!("backup-{id}.json"))
 }
 
+fn project_backup_id_from_reserved_target(directory: &Path, target: &Path) -> Result<u64, String> {
+    if target.parent() != Some(directory) || target.extension() != Some(OsStr::new("json")) {
+        return Err("Reserved project backup target is outside its managed directory".to_string());
+    }
+    let id = target
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .and_then(|stem| stem.strip_prefix("backup-"))
+        .ok_or_else(|| "Reserved project backup target has an invalid filename".to_string())?
+        .parse::<u64>()
+        .map_err(|_| "Reserved project backup target has an invalid ID".to_string())?;
+    if project_backup_path(directory, id) != target {
+        return Err("Reserved project backup target is not canonical".to_string());
+    }
+    Ok(id)
+}
+
 fn application_update_settings_from(
     endpoint: Option<&str>,
     pubkey: Option<&str>,
@@ -45174,99 +47816,256 @@ async fn check_application_update(app: tauri::AppHandle) -> Result<ApplicationUp
     })
 }
 
+fn verify_application_update_backup_artifact_v1(
+    terminal: &PersistedProjectPublicationTerminalV1,
+) -> Result<ProjectBackupSummary, String> {
+    let target = terminal
+        .target_path
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| "Application update backup receipt is missing its target".to_string())?;
+    let expected_digest = terminal
+        .artifact_digest
+        .as_deref()
+        .ok_or_else(|| "Application update backup receipt is missing its digest".to_string())?;
+    let actual_digest = strong_target_file_digest(&target)?
+        .ok_or_else(|| "Application update backup artifact is missing".to_string())?;
+    if actual_digest != expected_digest {
+        return Err(
+            "Application update backup artifact was modified after publication".to_string(),
+        );
+    }
+    let backup =
+        project_publication_success_backup_summary(ProjectPublicationSurfaceV1::Backup, &target)?
+            .ok_or_else(|| "Application update backup artifact could not be verified".to_string())?;
+    if terminal.backup.as_ref() != Some(&backup) {
+        return Err("Application update backup artifact does not match its receipt".to_string());
+    }
+    Ok(backup)
+}
+
+fn revalidate_application_update_publication_claim_v1(
+    state: &AppState,
+    journal_path: &Path,
+    window_label: &str,
+    request: &ProjectPublicationRequestV1,
+    terminal: &PersistedProjectPublicationTerminalV1,
+    update_claim: &ApplicationUpdatePublicationClaim,
+) -> Result<(), String> {
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_recovery_maintenance_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    ensure_project_publication_mutation_owner_allowed(
+        state,
+        &coordinator,
+        window_label,
+        &request.owner_id,
+    )?;
+    let durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    let current = durable
+        .publication_journal
+        .terminals
+        .iter()
+        .find(|candidate| project_publication_request_key_matches(request, &candidate.request))
+        .ok_or_else(|| {
+            "Application update backup receipt changed during verification".to_string()
+        })?;
+    if current != terminal {
+        return Err("Application update backup receipt changed during verification".to_string());
+    }
+    let claim = state
+        .application_update_publication_claim
+        .lock()
+        .map_err(|_| "Application update publication claim lock was poisoned".to_string())?;
+    if claim.as_ref() != Some(update_claim) {
+        return Err("Application update publication claim changed during verification".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn install_application_update(
+    window: WebviewWindow,
     app: tauri::AppHandle,
     expected_version: String,
-    midi_mappings: Vec<MidiControlMapping>,
-    osc_mappings: Vec<OscControlMapping>,
-    dmx_mappings: Vec<DmxControlMapping>,
+    backup_request: ProjectPublicationRequestV1,
 ) -> Result<ProjectBackupSummary, String> {
     let expected_version = expected_version.trim();
     if expected_version.is_empty() || expected_version.chars().count() > 64 {
         return Err("Expected update version must contain 1-64 characters".to_string());
     }
-    let (updater, _) = configured_application_updater(&app)?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "The selected update is no longer available".to_string())?;
-    if update.version != expected_version {
-        return Err(format!(
-            "The available update changed from {expected_version} to {}; check again before installing",
-            update.version
-        ));
-    }
-
-    let backup = {
-        let state = app.state::<AppState>();
-        let (source_path, ticket) = {
-            let _external_admission = lock_project_external_command_admission(&state)?;
-            let mut coordinator = lock_project_coordinator(&state)?;
-            validate_frontend_mappings_match_authority(
-                &coordinator,
-                midi_mappings,
-                osc_mappings,
-                dmx_mappings,
-            )?;
-            (
-                coordinator
-                    .ancillary
-                    .current_project_path
-                    .as_ref()
-                    .map(|path| path.to_string_lossy().to_string()),
-                project_save_ticket_for_coordinator(&state, &mut coordinator)?,
-            )
+    let state = app.state::<AppState>();
+    let request = normalize_project_publication_request_v1(backup_request)?;
+    validate_application_update_backup_request_v1(expected_version, &request)?;
+    let shape_hash = project_publication_shape_hash_v1(&request)?;
+    let journal_path = project_recovery_authority_state_path(&app)?;
+    let (terminal, update_claim) = {
+        let _publication = state
+            .project_save_publication
+            .lock()
+            .map_err(|_| "Project publication lock was poisoned".to_string())?;
+        let _external_admission = lock_project_recovery_maintenance_admission(&state)?;
+        let coordinator = lock_project_coordinator(&state)?;
+        ensure_project_publication_mutation_owner_allowed(
+            &state,
+            &coordinator,
+            window.label(),
+            &request.owner_id,
+        )?;
+        let durable = load_project_recovery_authority_state_from_path(&journal_path)?;
+        let terminal = durable
+            .publication_journal
+            .terminals
+            .iter()
+            .find(|terminal| project_publication_request_key_matches(&request, &terminal.request))
+            .ok_or_else(|| {
+                "Application update requires an unacknowledged durable backup success receipt"
+                    .to_string()
+            })?
+            .clone();
+        if terminal.shape_hash != shape_hash
+            || terminal.surface != ProjectPublicationSurfaceV1::Backup
+            || terminal.outcome != ProjectPublicationTerminalOutcomeV1::Succeeded
+        {
+            return Err(
+                "Application update backup receipt does not match the exact successful request"
+                    .to_string(),
+            );
+        }
+        let backup_id = terminal
+            .backup
+            .as_ref()
+            .map(|backup| backup.id)
+            .ok_or_else(|| {
+                "Application update backup receipt is missing its summary".to_string()
+            })?;
+        let update_claim = ApplicationUpdatePublicationClaim {
+            origin_id: request.origin_id.clone(),
+            request_id: request.request_id,
+            shape_hash: shape_hash.clone(),
+            backup_id,
         };
-        let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
-        write_project_backup_in(
-            &directory,
-            ticket.checkpoint.project,
-            source_path,
-            format!("before update {expected_version}"),
-            ticket.checkpoint.mappings,
-        )?
+        let mut claim = state
+            .application_update_publication_claim
+            .lock()
+            .map_err(|_| "Application update publication claim lock was poisoned".to_string())?;
+        if claim.is_some() {
+            return Err("Another application update install is already in progress".to_string());
+        }
+        *claim = Some(update_claim.clone());
+        (terminal, update_claim)
     };
+    let install_result = async {
+        let backup = verify_application_update_backup_artifact_v1(&terminal)?;
+        revalidate_application_update_publication_claim_v1(
+            &state,
+            &journal_path,
+            window.label(),
+            &request,
+            &terminal,
+            &update_claim,
+        )?;
+        let (updater, _) = configured_application_updater(&app)?;
+        let update = updater
+            .check()
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "The selected update is no longer available".to_string())?;
+        if update.version != expected_version {
+            return Err(format!(
+                "The available update changed from {expected_version} to {}; check again before installing",
+                update.version
+            ));
+        }
 
-    let progress_app = app.clone();
-    let mut downloaded_bytes = 0_u64;
-    let finish_app = app.clone();
-    update
-        .download_and_install(
-            move |chunk_bytes, total_bytes| {
-                downloaded_bytes = downloaded_bytes.saturating_add(chunk_bytes as u64);
-                let _ = progress_app.emit(
-                    APPLICATION_UPDATE_PROGRESS_EVENT,
-                    ApplicationUpdateProgress {
-                        phase: "downloading".to_string(),
-                        downloaded_bytes,
-                        total_bytes,
-                    },
-                );
+        let final_backup = verify_application_update_backup_artifact_v1(&terminal)?;
+        if final_backup != backup {
+            return Err(
+                "Application update backup artifact changed while checking for updates".to_string(),
+            );
+        }
+        revalidate_application_update_publication_claim_v1(
+            &state,
+            &journal_path,
+            window.label(),
+            &request,
+            &terminal,
+            &update_claim,
+        )?;
+
+        let progress_app = app.clone();
+        let mut downloaded_bytes = 0_u64;
+        let finish_app = app.clone();
+        update
+            .download_and_install(
+                move |chunk_bytes, total_bytes| {
+                    downloaded_bytes = downloaded_bytes.saturating_add(chunk_bytes as u64);
+                    let _ = progress_app.emit(
+                        APPLICATION_UPDATE_PROGRESS_EVENT,
+                        ApplicationUpdateProgress {
+                            phase: "downloading".to_string(),
+                            downloaded_bytes,
+                            total_bytes,
+                        },
+                    );
+                },
+                move || {
+                    let _ = finish_app.emit(
+                        APPLICATION_UPDATE_PROGRESS_EVENT,
+                        ApplicationUpdateProgress {
+                            phase: "verifying".to_string(),
+                            downloaded_bytes: 0,
+                            total_bytes: None,
+                        },
+                    );
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let _ = app.emit(
+            APPLICATION_UPDATE_PROGRESS_EVENT,
+            ApplicationUpdateProgress {
+                phase: "verified".to_string(),
+                downloaded_bytes: 0,
+                total_bytes: None,
             },
-            move || {
-                let _ = finish_app.emit(
-                    APPLICATION_UPDATE_PROGRESS_EVENT,
-                    ApplicationUpdateProgress {
-                        phase: "verifying".to_string(),
-                        downloaded_bytes: 0,
-                        total_bytes: None,
-                    },
-                );
-            },
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-    let _ = app.emit(
-        APPLICATION_UPDATE_PROGRESS_EVENT,
-        ApplicationUpdateProgress {
-            phase: "verified".to_string(),
-            downloaded_bytes: 0,
-            total_bytes: None,
-        },
-    );
-    Ok(backup)
+        );
+        Ok::<ProjectBackupSummary, String>(final_backup)
+    }
+    .await;
+    {
+        let mut claim = state
+            .application_update_publication_claim
+            .lock()
+            .map_err(|_| "Application update publication claim lock was poisoned".to_string())?;
+        if claim.as_ref() != Some(&update_claim) {
+            return Err("Application update publication claim changed unexpectedly".to_string());
+        }
+        *claim = None;
+    }
+    install_result
+}
+
+fn validate_application_update_backup_request_v1(
+    expected_version: &str,
+    request: &ProjectPublicationRequestV1,
+) -> Result<(), String> {
+    if request.surface != ProjectPublicationSurfaceV1::Backup {
+        return Err("Application update requires a durable backup publication receipt".to_string());
+    }
+    let expected_backup_reason = format!("before update {expected_version}");
+    if expected_backup_reason.chars().count() > 80
+        || request.reason.as_deref() != Some(expected_backup_reason.as_str())
+    {
+        return Err(
+            "Application update backup receipt is not bound to the selected update version"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn read_project_backup(path: &Path) -> Result<ProjectBackupEnvelope, String> {
@@ -45317,6 +48116,366 @@ fn list_project_backups_in(directory: &Path) -> Result<Vec<ProjectBackupSummary>
     Ok(backups)
 }
 
+fn reserve_unique_project_backup_id(directory: &Path, now_unix_ms: u64) -> Result<u64, String> {
+    let mut observed = PROJECT_BACKUP_ID_SEQUENCE.load(Ordering::Acquire);
+    loop {
+        let mut candidate = now_unix_ms.max(observed.checked_add(1).ok_or_else(|| {
+            "Project backup ID space is exhausted; remove backups and restart Syndocal".to_string()
+        })?);
+        while project_backup_path(directory, candidate).exists() {
+            candidate = candidate.checked_add(1).ok_or_else(|| {
+                "Project backup ID space is exhausted; remove backups and restart Syndocal"
+                    .to_string()
+            })?;
+        }
+        match PROJECT_BACKUP_ID_SEQUENCE.compare_exchange(
+            observed,
+            candidate,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return Ok(candidate),
+            Err(current) => observed = current,
+        }
+    }
+}
+
+fn publish_new_file_atomically(temp: &Path, target: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+
+        let temp_wide = temp
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let target_wide = target
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        unsafe {
+            MoveFileExW(
+                PCWSTR(temp_wide.as_ptr()),
+                PCWSTR(target_wide.as_ptr()),
+                MOVEFILE_WRITE_THROUGH,
+            )
+            .map_err(|error| {
+                format!(
+                    "Unable to publish new project backup {}: {error}",
+                    target.display()
+                )
+            })
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::hard_link(temp, target).map_err(|error| {
+            format!(
+                "Unable to publish new project backup {}: {error}",
+                target.display()
+            )
+        })?;
+        fs::remove_file(temp).map_err(|error| {
+            format!(
+                "Unable to retire prepared project backup {}: {error}",
+                temp.display()
+            )
+        })
+    }
+}
+
+#[derive(Debug)]
+struct PreparedProjectBackupV1 {
+    summary: ProjectBackupSummary,
+    target_path: PathBuf,
+    temporary_path: PathBuf,
+}
+
+fn prepare_project_backup_v1(
+    directory: &Path,
+    ticket: &ProjectSaveTicket,
+    source_path: Option<String>,
+    reason: String,
+    id: u64,
+    temporary_path: &Path,
+) -> Result<PreparedProjectBackupV1, String> {
+    let mappings = ProjectControlMappings {
+        midi_mappings: validate_midi_control_mappings(
+            ticket.checkpoint.mappings.midi_mappings.clone(),
+        )?,
+        osc_mappings: validate_osc_control_mappings(
+            ticket.checkpoint.mappings.osc_mappings.clone(),
+        )?,
+        dmx_mappings: validate_dmx_control_mappings(
+            ticket.checkpoint.mappings.dmx_mappings.clone(),
+        )?,
+        dj_track_triggers: validate_dj_track_triggers(
+            ticket.checkpoint.mappings.dj_track_triggers.clone(),
+        )?,
+        legacy_dj_transition_discarded: false,
+    };
+    validate_dj_track_triggers_against_snapshot(
+        &mappings.dj_track_triggers,
+        &ticket.checkpoint.project.snapshot,
+    )?;
+    let reason = reason.trim().chars().take(80).collect::<String>();
+    let envelope = ProjectBackupEnvelope {
+        version: PROJECT_BACKUP_VERSION,
+        app: APP_NAME.to_string(),
+        id,
+        created_at_unix_ms: id,
+        source_path: source_path.clone(),
+        reason: reason.clone(),
+        project: ticket.checkpoint.project.clone(),
+        midi_mappings: mappings.midi_mappings,
+        osc_mappings: mappings.osc_mappings,
+        dmx_mappings: mappings.dmx_mappings,
+        dj_track_triggers: mappings.dj_track_triggers,
+    };
+    let bytes = serde_json::to_vec_pretty(&envelope).map_err(|error| error.to_string())?;
+    let target_path = project_backup_path(directory, id);
+    prepare_project_save_bytes_at(temporary_path, &bytes)?;
+    Ok(PreparedProjectBackupV1 {
+        summary: ProjectBackupSummary {
+            id,
+            created_at_unix_ms: id,
+            source_path,
+            reason,
+            bytes: bytes.len() as u64,
+        },
+        target_path,
+        temporary_path: temporary_path.to_path_buf(),
+    })
+}
+
+fn finalize_project_backup_publication_v1(
+    state: &AppState,
+    prepared: &PreparedProjectBackupV1,
+    ticket: &ProjectSaveTicket,
+    publication_binding: ProjectPublicationMutationBinding<'_>,
+) -> Result<(), String> {
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    ensure_no_project_publication_reconciliation_v1(state)?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    ensure_project_publication_mutation_owner_allowed(
+        state,
+        &coordinator,
+        publication_binding.window_label,
+        publication_binding.owner_id,
+    )?;
+    if !project_save_ticket_is_current(state, &mut coordinator, ticket)? {
+        return Err(
+            "Project changed while the backup was preparing; the stale backup was rejected before publication"
+                .to_string(),
+        );
+    }
+    publish_new_file_atomically(&prepared.temporary_path, &prepared.target_path)?;
+    Ok(())
+}
+
+fn verify_project_backup_publication_v1(
+    prepared: &PreparedProjectBackupV1,
+) -> Result<ProjectBackupSummary, String> {
+    let published = read_project_backup(&prepared.target_path)?;
+    if published.id != prepared.summary.id
+        || published.created_at_unix_ms != prepared.summary.created_at_unix_ms
+        || published.source_path != prepared.summary.source_path
+        || published.reason != prepared.summary.reason
+    {
+        return Err("Published project backup did not match its reserved receipt".to_string());
+    }
+    Ok(prepared.summary.clone())
+}
+
+fn retain_project_backups_after_publication_v1(
+    directory: &Path,
+    journal_path: &Path,
+) -> Result<(), String> {
+    let durable = load_project_recovery_authority_state_from_path(journal_path)?;
+    let protected = durable
+        .publication_journal
+        .pending
+        .iter()
+        .filter(|pending| pending.surface == ProjectPublicationSurfaceV1::Backup)
+        .filter_map(|pending| pending.target_path.clone())
+        .chain(
+            durable
+                .publication_journal
+                .terminals
+                .iter()
+                .filter(|terminal| terminal.surface == ProjectPublicationSurfaceV1::Backup)
+                .filter_map(|terminal| terminal.target_path.as_deref().map(PathBuf::from)),
+        )
+        .collect::<HashSet<_>>();
+    let backups = list_project_backups_in(directory)?;
+    for expired in backups.iter().skip(PROJECT_BACKUP_RETENTION) {
+        let path = project_backup_path(directory, expired.id);
+        if protected.contains(&path) {
+            continue;
+        }
+        fs::remove_file(&path).map_err(|error| {
+            format!(
+                "Project backup was published, but retention cleanup failed for backup {}: {error}",
+                expired.id
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn complete_project_backup_publication_v1(
+    state: &AppState,
+    journal_path: &Path,
+    pending: &PersistedProjectPublicationPendingV1,
+    prepared: &PreparedProjectBackupV1,
+    directory: &Path,
+) -> Result<ProjectPublicationStatusV1, String> {
+    let summary = match verify_project_backup_publication_v1(prepared) {
+        Ok(summary) => summary,
+        Err(error) => {
+            latch_project_publication_failure_v1(state, journal_path, pending, &error)?;
+            return Err(error);
+        }
+    };
+    let warning = retain_project_backups_after_publication_v1(directory, journal_path).err();
+    persist_project_publication_success_v1(
+        state,
+        journal_path,
+        pending,
+        &prepared.target_path,
+        Some(summary),
+        warning,
+    )
+}
+
+#[tauri::command]
+fn save_project_backup_v1(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    request: ProjectPublicationRequestV1,
+) -> Result<ProjectPublicationStatusV1, String> {
+    let (journal_path, begin) = begin_project_publication_command_v1(
+        &window,
+        &state,
+        request,
+        ProjectPublicationSurfaceV1::Backup,
+    )?;
+    let (ticket, pending) = match begin {
+        BeginProjectPublicationV1::Existing(status) => return Ok(status),
+        BeginProjectPublicationV1::New { ticket, pending }
+        | BeginProjectPublicationV1::Resume { ticket, pending } => (ticket, pending),
+    };
+    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Unable to create project backup directory: {error}"))?;
+    let selected = if pending.target_path.is_some() {
+        pending
+    } else {
+        let backup_id = reserve_unique_project_backup_id(
+            &directory,
+            current_unix_ms().min(u64::MAX as u128) as u64,
+        )?;
+        let target_path = project_backup_path(&directory, backup_id);
+        persist_project_publication_auto_target_v1(&state, &journal_path, &pending, &target_path)?
+    };
+    let target_path = selected
+        .target_path
+        .as_deref()
+        .ok_or_else(|| "Project backup target was not persisted".to_string())?;
+    let backup_id = project_backup_id_from_reserved_target(&directory, target_path)?;
+    let temporary_path = selected
+        .staging_path
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(|| project_save_temporary_path(target_path))?;
+    let staged = persist_project_publication_staging_for_state_v1(
+        &state,
+        &journal_path,
+        &selected,
+        target_path,
+        &temporary_path,
+    )?;
+    let prepared = prepare_project_backup_v1(
+        &directory,
+        &ticket,
+        staged.source_path.clone(),
+        staged.reason.clone().unwrap_or_default(),
+        backup_id,
+        &temporary_path,
+    )?;
+    let prepared_pending = match persist_project_publication_prepared_v1(
+        &state,
+        &journal_path,
+        &staged,
+        &prepared.target_path,
+        &prepared.temporary_path,
+    ) {
+        Ok(pending) => pending,
+        Err(error) => {
+            remove_project_publication_staging_v1(&prepared.temporary_path)?;
+            return Err(error);
+        }
+    };
+    match finalize_project_backup_publication_v1(
+        &state,
+        &prepared,
+        &ticket,
+        ProjectPublicationMutationBinding {
+            window_label: window.label(),
+            owner_id: &prepared_pending.request.owner_id,
+        },
+    ) {
+        Ok(()) => complete_project_backup_publication_v1(
+            &state,
+            &journal_path,
+            &prepared_pending,
+            &prepared,
+            &directory,
+        ),
+        Err(error) => match strong_target_file_digest(&prepared.target_path) {
+            Ok(Some(actual))
+                if prepared_pending.prepared_digest.as_deref() == Some(actual.as_str()) =>
+            {
+                remove_project_publication_staging_v1(&prepared.temporary_path)?;
+                complete_project_backup_publication_v1(
+                    &state,
+                    &journal_path,
+                    &prepared_pending,
+                    &prepared,
+                    &directory,
+                )
+            }
+            Ok(_) => persist_project_publication_failed_v1(
+                &state,
+                &journal_path,
+                &prepared_pending,
+                error,
+            ),
+            Err(read_error) => {
+                let indeterminate =
+                    format!("{error}; the backup target could not be inspected: {read_error}");
+                latch_project_publication_failure_v1(
+                    &state,
+                    &journal_path,
+                    &prepared_pending,
+                    &indeterminate,
+                )?;
+                Err(indeterminate)
+            }
+        },
+    }
+}
+
+#[cfg(test)]
 fn write_project_backup_in(
     directory: &Path,
     project: ProjectFile,
@@ -45378,52 +48537,6 @@ fn write_project_backup_in(
 }
 
 #[tauri::command]
-fn save_project_backup(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    source_path: Option<String>,
-    reason: String,
-    midi_mappings: Vec<MidiControlMapping>,
-    osc_mappings: Vec<OscControlMapping>,
-    dmx_mappings: Vec<DmxControlMapping>,
-) -> Result<ProjectBackupSummary, String> {
-    if let Some(path) = source_path.as_deref() {
-        if !is_syndocal_project_path(Path::new(path)) {
-            return Err("Project backup source path must use the .sdc extension".to_string());
-        }
-    }
-    let ticket = {
-        let _external_admission = lock_project_external_command_admission(&state)?;
-        let mut coordinator = lock_project_coordinator(&state)?;
-        validate_frontend_mappings_match_authority(
-            &coordinator,
-            midi_mappings,
-            osc_mappings,
-            dmx_mappings,
-        )?;
-        project_save_ticket_for_coordinator(&state, &mut coordinator)?
-    };
-    let authoritative_source_path = ticket
-        .current_project_path
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string());
-    if source_path.is_some() && source_path != authoritative_source_path {
-        return Err(
-            "Project backup path changed before capture; refresh before creating a backup"
-                .to_string(),
-        );
-    }
-    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
-    write_project_backup_in(
-        &directory,
-        ticket.checkpoint.project,
-        authoritative_source_path,
-        reason,
-        ticket.checkpoint.mappings,
-    )
-}
-
-#[tauri::command]
 fn list_project_backups(app: tauri::AppHandle) -> Result<Vec<ProjectBackupSummary>, String> {
     let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
     list_project_backups_in(&directory)
@@ -45459,8 +48572,19 @@ fn load_project_backup(
 }
 
 #[tauri::command]
-fn delete_project_backup(app: tauri::AppHandle, backup_id: u64) -> Result<(), String> {
+fn delete_project_backup(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    backup_id: u64,
+) -> Result<(), String> {
     let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    let journal_path = project_recovery_authority_state_path(&app)?;
+    let _publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project publication lock was poisoned".to_string())?;
+    ensure_project_backup_not_claimed(&state, backup_id)?;
+    ensure_project_backup_not_durably_referenced_v1(&journal_path, &directory, backup_id)?;
     let path = project_backup_path(&directory, backup_id);
     if !path.exists() {
         return Ok(());
@@ -66264,6 +69388,8 @@ pub(crate) mod tests {
                 output_lease_durable_receipts: Mutex::new(
                     OutputLeaseDurableReceiptJournal::in_memory(),
                 ),
+                application_update_publication_claim: Mutex::new(None),
+                project_publication_reconcile_claim: Mutex::new(None),
                 output_lease_clock_origin: Instant::now(),
                 next_output_lease_request_id: AtomicU64::new(1),
                 dj_link_token: Mutex::new(generate_dj_link_token().ok()),
@@ -75800,6 +78926,7 @@ pub(crate) mod tests {
                 serial: 8,
                 last_transition: ProjectRecoveryAuthorityTransition::ProjectPublication,
                 pending_clean_save: None,
+                publication_journal: PersistedProjectPublicationJournalV1::default(),
             })
             .unwrap(),
         )
@@ -76332,6 +79459,1204 @@ pub(crate) mod tests {
         assert_eq!(pending.target_path, expected_key);
         assert!(!recovery_authority_journal_temp_leaked(&directory));
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    fn project_publication_request_for_test(
+        surface: ProjectPublicationSurfaceV1,
+        origin_id: &str,
+        request_id: u64,
+        source_path: Option<String>,
+        reason: Option<String>,
+    ) -> ProjectPublicationRequestV1 {
+        ProjectPublicationRequestV1 {
+            schema_version: PROJECT_PUBLICATION_REQUEST_SCHEMA_VERSION,
+            origin_id: origin_id.to_string(),
+            owner_id: format!("owner:{origin_id}"),
+            request_id,
+            surface,
+            expected_project_epoch: 7,
+            expected_project_revision: 11,
+            expected_checkpoint_hash: "a".repeat(64),
+            mapping_authority_hash: "a".repeat(64),
+            source_path,
+            reason,
+            target_policy: match surface {
+                ProjectPublicationSurfaceV1::Save => {
+                    ProjectPublicationTargetPolicyV1::CurrentOrDialog
+                }
+                ProjectPublicationSurfaceV1::SaveAs | ProjectPublicationSurfaceV1::UserTemplate => {
+                    ProjectPublicationTargetPolicyV1::Dialog
+                }
+                ProjectPublicationSurfaceV1::Backup => {
+                    ProjectPublicationTargetPolicyV1::ManagedUnique
+                }
+            },
+        }
+    }
+
+    #[test]
+    fn project_publication_request_requires_exact_canonical_wire_preimage() {
+        let canonical = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::Backup,
+            "renderer_e4",
+            1,
+            None,
+            Some("autosave".to_string()),
+        );
+        assert_eq!(
+            normalize_project_publication_request_v1(canonical.clone()).unwrap(),
+            canonical
+        );
+        let encoded = serde_json::to_value(&canonical).unwrap();
+        assert!(encoded.get("schemaVersion").is_some());
+        assert!(encoded.get("schema_version").is_none());
+        let mut wrong_case = encoded.as_object().unwrap().clone();
+        let schema = wrong_case.remove("schemaVersion").unwrap();
+        wrong_case.insert("schema_version".to_string(), schema);
+        assert!(
+            serde_json::from_value::<ProjectPublicationRequestV1>(Value::Object(wrong_case))
+                .is_err()
+        );
+
+        let mut whitespace_origin = canonical.clone();
+        whitespace_origin.origin_id = " renderer_e4".to_string();
+        assert!(normalize_project_publication_request_v1(whitespace_origin)
+            .unwrap_err()
+            .contains("origin"));
+
+        let mut whitespace_owner = canonical.clone();
+        whitespace_owner.owner_id = " owner:renderer_e4".to_string();
+        assert!(normalize_project_publication_request_v1(whitespace_owner)
+            .unwrap_err()
+            .contains("owner"));
+
+        let mut whitespace_reason = canonical.clone();
+        whitespace_reason.reason = Some(" autosave".to_string());
+        assert!(normalize_project_publication_request_v1(whitespace_reason)
+            .unwrap_err()
+            .contains("canonical"));
+
+        let mut long_reason = canonical;
+        long_reason.reason = Some("x".repeat(81));
+        assert!(normalize_project_publication_request_v1(long_reason)
+            .unwrap_err()
+            .contains("80"));
+
+        let update_request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::Backup,
+            "renderer_update",
+            1,
+            None,
+            Some("before update 1.2.0".to_string()),
+        );
+        validate_application_update_backup_request_v1("1.2.0", &update_request).unwrap();
+        assert!(
+            validate_application_update_backup_request_v1("1.2.1", &update_request)
+                .unwrap_err()
+                .contains("not bound")
+        );
+    }
+
+    #[test]
+    fn project_publication_ack_reply_loss_retries_exact_tombstone_only() {
+        let request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::Backup,
+            "renderer_ack",
+            1,
+            None,
+            Some("autosave".to_string()),
+        );
+        let shape_hash = project_publication_shape_hash_v1(&request).unwrap();
+        let terminal = PersistedProjectPublicationTerminalV1 {
+            request: request.clone(),
+            shape_hash: shape_hash.clone(),
+            surface: ProjectPublicationSurfaceV1::Backup,
+            outcome: ProjectPublicationTerminalOutcomeV1::Succeeded,
+            project_epoch: 7,
+            project_revision: 11,
+            checkpoint_hash: "a".repeat(64),
+            target_path: Some(
+                unique_test_directory("publication-ack")
+                    .join("backup-1.json")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            artifact_digest: Some("b".repeat(64)),
+            backup: Some(ProjectBackupSummary {
+                id: 1,
+                created_at_unix_ms: 1,
+                source_path: None,
+                reason: "autosave".to_string(),
+                bytes: 1,
+            }),
+            recovery_authority_serial: 3,
+            error: None,
+            warning: None,
+        };
+        let mut durable = PersistedProjectRecoveryAuthorityState {
+            version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+            serial: 3,
+            last_transition: ProjectRecoveryAuthorityTransition::ProjectPublication,
+            pending_clean_save: None,
+            publication_journal: PersistedProjectPublicationJournalV1 {
+                origins: vec![PersistedProjectPublicationOriginV1 {
+                    origin_id: request.origin_id.clone(),
+                    high_water_request_id: 1,
+                    acknowledged_request_id: 0,
+                    acknowledged_shape_hash: None,
+                }],
+                pending: Vec::new(),
+                terminals: vec![terminal],
+                latest_reservation_generation: 1,
+            },
+        };
+        let harness = MediaAssetA6CommandHarness::new();
+        *harness
+            .state
+            .application_update_publication_claim
+            .lock()
+            .unwrap() = Some(ApplicationUpdatePublicationClaim {
+            origin_id: request.origin_id.clone(),
+            request_id: request.request_id,
+            shape_hash: shape_hash.clone(),
+            backup_id: 1,
+        });
+        let before_claimed_ack = durable.clone();
+        assert!(ensure_project_publication_receipt_not_claimed(
+            &harness.state,
+            &request,
+            &shape_hash,
+        )
+        .unwrap_err()
+        .contains("still using"));
+        assert!(ensure_project_backup_not_claimed(&harness.state, 1)
+            .unwrap_err()
+            .contains("still using"));
+        assert_eq!(durable, before_claimed_ack);
+        *harness
+            .state
+            .application_update_publication_claim
+            .lock()
+            .unwrap() = None;
+        assert!(acknowledge_project_publication_receipt_in_state_v1(
+            &mut durable,
+            &request,
+            &shape_hash,
+        )
+        .unwrap());
+        assert!(durable.publication_journal.terminals.is_empty());
+        assert!(!acknowledge_project_publication_receipt_in_state_v1(
+            &mut durable,
+            &request,
+            &shape_hash,
+        )
+        .unwrap());
+
+        let mut changed = request;
+        changed.reason = Some("changed".to_string());
+        let changed_shape = project_publication_shape_hash_v1(&changed).unwrap();
+        assert!(acknowledge_project_publication_receipt_in_state_v1(
+            &mut durable,
+            &changed,
+            &changed_shape,
+        )
+        .unwrap_err()
+        .contains("shape mismatch"));
+    }
+
+    #[test]
+    fn application_update_post_check_fence_rejects_owner_rotation_and_operator_lock() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("update-post-check-fence");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("project-backup-1.json");
+        let request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::Backup,
+            "renderer_update_fence",
+            1,
+            None,
+            Some("before update 1.2.0".to_string()),
+        );
+        let shape_hash = project_publication_shape_hash_v1(&request).unwrap();
+        let terminal = PersistedProjectPublicationTerminalV1 {
+            request: request.clone(),
+            shape_hash: shape_hash.clone(),
+            surface: ProjectPublicationSurfaceV1::Backup,
+            outcome: ProjectPublicationTerminalOutcomeV1::Succeeded,
+            project_epoch: 7,
+            project_revision: 11,
+            checkpoint_hash: "a".repeat(64),
+            target_path: Some(target.to_string_lossy().to_string()),
+            artifact_digest: Some("b".repeat(64)),
+            backup: Some(ProjectBackupSummary {
+                id: 1,
+                created_at_unix_ms: 1,
+                source_path: None,
+                reason: "before update 1.2.0".to_string(),
+                bytes: 1,
+            }),
+            recovery_authority_serial: 3,
+            error: None,
+            warning: None,
+        };
+        let durable = PersistedProjectRecoveryAuthorityState {
+            version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+            serial: 3,
+            last_transition: ProjectRecoveryAuthorityTransition::ProjectPublication,
+            pending_clean_save: None,
+            publication_journal: PersistedProjectPublicationJournalV1 {
+                origins: vec![PersistedProjectPublicationOriginV1 {
+                    origin_id: request.origin_id.clone(),
+                    high_water_request_id: 1,
+                    acknowledged_request_id: 0,
+                    acknowledged_shape_hash: None,
+                }],
+                pending: Vec::new(),
+                terminals: vec![terminal.clone()],
+                latest_reservation_generation: 1,
+            },
+        };
+        persist_project_recovery_authority_state_to_path(&journal_path, &durable).unwrap();
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), request.owner_id.clone());
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), 1);
+        let claim = ApplicationUpdatePublicationClaim {
+            origin_id: request.origin_id.clone(),
+            request_id: request.request_id,
+            shape_hash,
+            backup_id: 1,
+        };
+        *harness
+            .state
+            .application_update_publication_claim
+            .lock()
+            .unwrap() = Some(claim.clone());
+        revalidate_application_update_publication_claim_v1(
+            &harness.state,
+            &journal_path,
+            "main",
+            &request,
+            &terminal,
+            &claim,
+        )
+        .unwrap();
+
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), "owner:rotated-after-check".to_string());
+        assert!(revalidate_application_update_publication_claim_v1(
+            &harness.state,
+            &journal_path,
+            "main",
+            &request,
+            &terminal,
+            &claim,
+        )
+        .unwrap_err()
+        .contains("does not match"));
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), request.owner_id.clone());
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .operator_policy = Some(sample_operator_policy());
+        assert!(revalidate_application_update_publication_claim_v1(
+            &harness.state,
+            &journal_path,
+            "main",
+            &request,
+            &terminal,
+            &claim,
+        )
+        .unwrap_err()
+        .contains("Partial Lock"));
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap(),
+            durable
+        );
+        assert_eq!(
+            harness
+                .state
+                .application_update_publication_claim
+                .lock()
+                .unwrap()
+                .as_ref(),
+            Some(&claim)
+        );
+        assert!(
+            ensure_project_backup_not_durably_referenced_v1(&journal_path, &directory, 1,)
+                .unwrap_err()
+                .contains("unacknowledged")
+        );
+        let mut acknowledged = durable.clone();
+        assert!(acknowledge_project_publication_receipt_in_state_v1(
+            &mut acknowledged,
+            &request,
+            &claim.shape_hash,
+        )
+        .unwrap());
+        persist_project_recovery_authority_state_to_path(&journal_path, &acknowledged).unwrap();
+        ensure_project_backup_not_durably_referenced_v1(&journal_path, &directory, 1).unwrap();
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn clean_save_serial_update_preserves_additive_project_publication_journal() {
+        let directory = unique_test_directory("publication-clean-save-rmw");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::Backup,
+            "renderer_rmw",
+            1,
+            None,
+            Some("autosave".to_string()),
+        );
+        let shape_hash = project_publication_shape_hash_v1(&request).unwrap();
+        let publication_journal = PersistedProjectPublicationJournalV1 {
+            origins: vec![PersistedProjectPublicationOriginV1 {
+                origin_id: request.origin_id.clone(),
+                high_water_request_id: 1,
+                acknowledged_request_id: 0,
+                acknowledged_shape_hash: None,
+            }],
+            pending: vec![PersistedProjectPublicationPendingV1 {
+                request,
+                shape_hash,
+                surface: ProjectPublicationSurfaceV1::Backup,
+                project_epoch: 7,
+                project_revision: 11,
+                checkpoint_hash: "a".repeat(64),
+                path_generation: 2,
+                authority_disposition_generation: 3,
+                recovery_authority_serial_before: 4,
+                expected_recovery_authority_serial_after: None,
+                reservation_generation: 1,
+                source_path: None,
+                reason: Some("autosave".to_string()),
+                phase: ProjectPublicationPendingPhaseV1::Reserved,
+                target_path: None,
+                staging_path: None,
+                prepared_digest: None,
+                indeterminate_error: None,
+            }],
+            terminals: Vec::new(),
+            latest_reservation_generation: 1,
+        };
+        persist_project_recovery_authority_state_to_path(
+            &journal_path,
+            &PersistedProjectRecoveryAuthorityState {
+                version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                serial: 4,
+                last_transition: ProjectRecoveryAuthorityTransition::ProjectPublication,
+                pending_clean_save: None,
+                publication_journal: publication_journal.clone(),
+            },
+        )
+        .unwrap();
+        persist_project_recovery_authority_serial_to_path(
+            &journal_path,
+            5,
+            ProjectRecoveryAuthorityTransition::CleanSave,
+        )
+        .unwrap();
+        let reloaded = load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        assert_eq!(reloaded.serial, 5);
+        assert_eq!(reloaded.publication_journal, publication_journal);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn project_publication_staging_is_durable_exact_and_replay_safe() {
+        let directory = unique_test_directory("publication-staging-replay");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("backup-1.json");
+        let staging = directory.join(".backup-1.json.test.tmp");
+        let request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::Backup,
+            "renderer_staging",
+            1,
+            None,
+            Some("autosave".to_string()),
+        );
+        let shape_hash = project_publication_shape_hash_v1(&request).unwrap();
+        let pending = PersistedProjectPublicationPendingV1 {
+            request: request.clone(),
+            shape_hash: shape_hash.clone(),
+            surface: ProjectPublicationSurfaceV1::Backup,
+            project_epoch: 7,
+            project_revision: 11,
+            checkpoint_hash: "a".repeat(64),
+            path_generation: 2,
+            authority_disposition_generation: 3,
+            recovery_authority_serial_before: 0,
+            expected_recovery_authority_serial_after: None,
+            reservation_generation: 1,
+            source_path: None,
+            reason: Some("autosave".to_string()),
+            phase: ProjectPublicationPendingPhaseV1::Selected,
+            target_path: Some(target.clone()),
+            staging_path: None,
+            prepared_digest: None,
+            indeterminate_error: None,
+        };
+        persist_project_recovery_authority_state_to_path(
+            &journal_path,
+            &PersistedProjectRecoveryAuthorityState {
+                version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                serial: 0,
+                last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+                pending_clean_save: None,
+                publication_journal: PersistedProjectPublicationJournalV1 {
+                    origins: vec![PersistedProjectPublicationOriginV1 {
+                        origin_id: request.origin_id.clone(),
+                        high_water_request_id: 1,
+                        acknowledged_request_id: 0,
+                        acknowledged_shape_hash: None,
+                    }],
+                    pending: vec![pending],
+                    terminals: Vec::new(),
+                    latest_reservation_generation: 1,
+                },
+            },
+        )
+        .unwrap();
+        assert!(
+            ensure_project_backup_not_durably_referenced_v1(&journal_path, &directory, 1,)
+                .unwrap_err()
+                .contains("unresolved")
+        );
+
+        let staged = persist_project_publication_staging_v1(
+            &journal_path,
+            &request,
+            &shape_hash,
+            &target,
+            &staging,
+        )
+        .unwrap();
+        assert_eq!(staged.staging_path.as_deref(), Some(staging.as_path()));
+        assert_eq!(
+            persist_project_publication_staging_v1(
+                &journal_path,
+                &request,
+                &shape_hash,
+                &target,
+                &staging,
+            )
+            .unwrap(),
+            staged
+        );
+        let before_wrong = load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        assert!(persist_project_publication_staging_v1(
+            &journal_path,
+            &request,
+            &shape_hash,
+            &target,
+            &directory.join(".backup-1.json.other.tmp"),
+        )
+        .unwrap_err()
+        .contains("different staging"));
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap(),
+            before_wrong
+        );
+
+        let digest = "b".repeat(64);
+        let prepared = persist_project_publication_prepared_digest_v1(
+            &journal_path,
+            &request,
+            &shape_hash,
+            &target,
+            &staging,
+            &digest,
+        )
+        .unwrap();
+        assert_eq!(prepared.phase, ProjectPublicationPendingPhaseV1::Prepared);
+        assert_eq!(prepared.prepared_digest.as_deref(), Some(digest.as_str()));
+        assert_eq!(
+            persist_project_publication_prepared_digest_v1(
+                &journal_path,
+                &request,
+                &shape_hash,
+                &target,
+                &staging,
+                &digest,
+            )
+            .unwrap(),
+            prepared
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn project_publication_direct_failures_require_checked_staging_cleanup() {
+        let harness = MediaAssetA6CommandHarness::new();
+        for (surface, suffix) in [
+            (ProjectPublicationSurfaceV1::Save, "sdc"),
+            (ProjectPublicationSurfaceV1::UserTemplate, "sdctemplate"),
+            (ProjectPublicationSurfaceV1::Backup, "json"),
+        ] {
+            let directory =
+                unique_test_directory(&format!("publication-direct-cleanup-{}", suffix));
+            fs::create_dir_all(&directory).unwrap();
+            let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+            let target = directory.join(format!("target.{suffix}"));
+            let staging = directory.join(format!(".target.{suffix}.test.tmp"));
+            fs::write(&staging, b"prepared bytes").unwrap();
+            let request = project_publication_request_for_test(
+                surface,
+                &format!("renderer_direct_cleanup_{suffix}"),
+                1,
+                None,
+                (surface == ProjectPublicationSurfaceV1::Backup).then(|| "autosave".to_string()),
+            );
+            let pending = PersistedProjectPublicationPendingV1 {
+                shape_hash: project_publication_shape_hash_v1(&request).unwrap(),
+                request: request.clone(),
+                surface,
+                project_epoch: 7,
+                project_revision: 11,
+                checkpoint_hash: "a".repeat(64),
+                path_generation: 2,
+                authority_disposition_generation: 3,
+                recovery_authority_serial_before: 0,
+                expected_recovery_authority_serial_after: matches!(
+                    surface,
+                    ProjectPublicationSurfaceV1::Save | ProjectPublicationSurfaceV1::SaveAs
+                )
+                .then_some(1),
+                reservation_generation: 1,
+                source_path: None,
+                reason: request.reason.clone(),
+                phase: ProjectPublicationPendingPhaseV1::Prepared,
+                target_path: Some(target),
+                staging_path: Some(staging.clone()),
+                prepared_digest: Some(sha256_hex(b"prepared bytes")),
+                indeterminate_error: None,
+            };
+            persist_project_recovery_authority_state_to_path(
+                &journal_path,
+                &PersistedProjectRecoveryAuthorityState {
+                    version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                    serial: 0,
+                    last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+                    pending_clean_save: None,
+                    publication_journal: PersistedProjectPublicationJournalV1 {
+                        origins: vec![PersistedProjectPublicationOriginV1 {
+                            origin_id: request.origin_id.clone(),
+                            high_water_request_id: 1,
+                            acknowledged_request_id: 0,
+                            acknowledged_shape_hash: None,
+                        }],
+                        pending: vec![pending.clone()],
+                        terminals: Vec::new(),
+                        latest_reservation_generation: 1,
+                    },
+                },
+            )
+            .unwrap();
+            let durable_before =
+                load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+            let error = persist_project_publication_failed_with_cleanup_v1(
+                &harness.state,
+                &journal_path,
+                &pending,
+                "definitive publication failure".to_string(),
+                |seen| {
+                    assert_eq!(seen, staging.as_path());
+                    assert!(harness.state.project_save_publication.try_lock().is_ok());
+                    assert!(harness
+                        .state
+                        .project_external_command_admission
+                        .gate
+                        .try_lock()
+                        .is_ok());
+                    assert!(harness.state.project_coordinator.try_lock().is_ok());
+                    Err("injected locked staging cleanup failure".to_string())
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains("injected locked staging cleanup failure"));
+            assert_eq!(
+                load_project_recovery_authority_state_from_path(&journal_path).unwrap(),
+                durable_before
+            );
+            assert!(staging.exists());
+            assert!(harness
+                .state
+                .project_publication_reconcile_claim
+                .lock()
+                .unwrap()
+                .is_none());
+
+            let status = persist_project_publication_failed_v1(
+                &harness.state,
+                &journal_path,
+                &pending,
+                "definitive publication failure".to_string(),
+            )
+            .unwrap();
+            assert_eq!(status.state, "failed");
+            assert!(!staging.exists());
+            let durable = load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+            assert!(durable.publication_journal.pending.is_empty());
+            assert_eq!(durable.publication_journal.terminals.len(), 1);
+            assert_eq!(durable.publication_journal.terminals[0].surface, surface);
+            assert_eq!(
+                durable.publication_journal.terminals[0].outcome,
+                ProjectPublicationTerminalOutcomeV1::Failed
+            );
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+
+    #[test]
+    fn project_backup_same_millisecond_ids_and_prepared_paths_are_unique() {
+        let directory = unique_test_directory("publication-backup-same-ms");
+        fs::create_dir_all(&directory).unwrap();
+        let now = current_unix_ms().min(u64::MAX as u128) as u64;
+        let first = reserve_unique_project_backup_id(&directory, now).unwrap();
+        let second = reserve_unique_project_backup_id(&directory, now).unwrap();
+        assert!(second > first);
+        assert_ne!(
+            project_backup_path(&directory, first),
+            project_backup_path(&directory, second)
+        );
+        assert_eq!(
+            project_backup_id_from_reserved_target(
+                &directory,
+                &project_backup_path(&directory, first),
+            )
+            .unwrap(),
+            first
+        );
+        let first_temp =
+            project_save_temporary_path(&project_backup_path(&directory, first)).unwrap();
+        let second_temp =
+            project_save_temporary_path(&project_backup_path(&directory, first)).unwrap();
+        assert_ne!(first_temp, second_temp);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn save_reconciliation_requires_clean_save_serial_not_preexisting_identical_bytes() {
+        let request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::Save,
+            "renderer_save_witness",
+            1,
+            None,
+            None,
+        );
+        let target = unique_test_directory("save-witness").join("show.sdc");
+        let pending = PersistedProjectPublicationPendingV1 {
+            shape_hash: project_publication_shape_hash_v1(&request).unwrap(),
+            request,
+            surface: ProjectPublicationSurfaceV1::Save,
+            project_epoch: 7,
+            project_revision: 11,
+            checkpoint_hash: "a".repeat(64),
+            path_generation: 2,
+            authority_disposition_generation: 3,
+            recovery_authority_serial_before: 4,
+            expected_recovery_authority_serial_after: Some(5),
+            reservation_generation: 1,
+            source_path: None,
+            reason: None,
+            phase: ProjectPublicationPendingPhaseV1::Prepared,
+            target_path: Some(target.clone()),
+            staging_path: Some(target.with_file_name(".show.sdc.test.tmp")),
+            prepared_digest: Some("b".repeat(64)),
+            indeterminate_error: None,
+        };
+        let mut durable = PersistedProjectRecoveryAuthorityState {
+            version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+            serial: 4,
+            last_transition: ProjectRecoveryAuthorityTransition::ProjectPublication,
+            pending_clean_save: None,
+            publication_journal: PersistedProjectPublicationJournalV1::default(),
+        };
+        assert!(!prepared_project_publication_has_durable_ownership_witness_v1(&pending, &durable));
+        durable.serial = 5;
+        assert!(!prepared_project_publication_has_durable_ownership_witness_v1(&pending, &durable));
+        durable.last_transition = ProjectRecoveryAuthorityTransition::CleanSave;
+        assert!(prepared_project_publication_has_durable_ownership_witness_v1(&pending, &durable));
+
+        let mut backup_pending = pending;
+        backup_pending.surface = ProjectPublicationSurfaceV1::Backup;
+        backup_pending.expected_recovery_authority_serial_after = None;
+        assert!(
+            prepared_project_publication_has_durable_ownership_witness_v1(
+                &backup_pending,
+                &PersistedProjectRecoveryAuthorityState {
+                    serial: 0,
+                    last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+                    ..durable
+                },
+            )
+        );
+    }
+
+    #[test]
+    fn project_publication_restart_reconciliation_restores_exact_save_effects() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("publication-save-restore");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("restored.sdc");
+        let staging = directory.join(".restored.sdc.test.tmp");
+        let mut coordinator = harness.state.project_coordinator.lock().unwrap();
+        let ticket = project_save_ticket_for_coordinator(&harness.state, &mut coordinator).unwrap();
+        let path_generation_before = coordinator.path_generation;
+        let disposition_generation_before = coordinator.authority_disposition_generation;
+        coordinator.recovery_authority_serial = 1;
+        coordinator.recovery_authority_last_transition =
+            ProjectRecoveryAuthorityTransition::CleanSave;
+        let request = ProjectPublicationRequestV1 {
+            schema_version: PROJECT_PUBLICATION_REQUEST_SCHEMA_VERSION,
+            origin_id: "renderer_save_restore".to_string(),
+            owner_id: "owner:renderer_save_restore".to_string(),
+            request_id: 1,
+            surface: ProjectPublicationSurfaceV1::Save,
+            expected_project_epoch: ticket.checkpoint.epoch,
+            expected_project_revision: ticket.checkpoint.revision,
+            expected_checkpoint_hash: ticket.checkpoint.hash.clone(),
+            mapping_authority_hash: ticket.checkpoint.hash.clone(),
+            source_path: ticket
+                .current_project_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            reason: None,
+            target_policy: ProjectPublicationTargetPolicyV1::CurrentOrDialog,
+        };
+        let shape_hash = project_publication_shape_hash_v1(&request).unwrap();
+        let digest = "b".repeat(64);
+        persist_project_recovery_authority_state_to_path(
+            &journal_path,
+            &PersistedProjectRecoveryAuthorityState {
+                version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                serial: 1,
+                last_transition: ProjectRecoveryAuthorityTransition::CleanSave,
+                pending_clean_save: None,
+                publication_journal: PersistedProjectPublicationJournalV1 {
+                    origins: vec![PersistedProjectPublicationOriginV1 {
+                        origin_id: request.origin_id.clone(),
+                        high_water_request_id: 1,
+                        acknowledged_request_id: 0,
+                        acknowledged_shape_hash: None,
+                    }],
+                    pending: vec![PersistedProjectPublicationPendingV1 {
+                        request: request.clone(),
+                        shape_hash,
+                        surface: ProjectPublicationSurfaceV1::Save,
+                        project_epoch: ticket.checkpoint.epoch,
+                        project_revision: ticket.checkpoint.revision,
+                        checkpoint_hash: ticket.checkpoint.hash,
+                        path_generation: path_generation_before,
+                        authority_disposition_generation: disposition_generation_before,
+                        recovery_authority_serial_before: 0,
+                        expected_recovery_authority_serial_after: Some(1),
+                        reservation_generation: 1,
+                        source_path: request.source_path.clone(),
+                        reason: None,
+                        phase: ProjectPublicationPendingPhaseV1::Prepared,
+                        target_path: Some(target.clone()),
+                        staging_path: Some(staging),
+                        prepared_digest: Some(digest.clone()),
+                        indeterminate_error: Some("restart reconciliation required".to_string()),
+                    }],
+                    terminals: Vec::new(),
+                    latest_reservation_generation: 1,
+                },
+            },
+        )
+        .unwrap();
+        harness
+            .state
+            .project_external_command_admission
+            .recovery_authority_faulted
+            .store(true, Ordering::Release);
+        drop(coordinator);
+
+        let status = get_project_publication_receipt_with_observer_v1(
+            &harness.state,
+            &journal_path,
+            request,
+            |_| PreparedProjectPublicationObservationV1 {
+                actual_digest: Ok(Some(digest.clone())),
+                backup: Ok(None),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(status.state, "succeeded");
+        assert!(status.authority.is_some());
+        let coordinator = harness.state.project_coordinator.lock().unwrap();
+        assert_eq!(
+            coordinator.ancillary.current_project_path.as_deref(),
+            Some(target.as_path())
+        );
+        assert_eq!(
+            coordinator.authority_disposition,
+            ProjectAuthorityDisposition::CleanAtPath
+        );
+        assert_eq!(coordinator.path_generation, path_generation_before + 1);
+        assert_eq!(
+            coordinator.authority_disposition_generation,
+            disposition_generation_before + 1
+        );
+        assert_eq!(
+            harness
+                .state
+                .current_project_path
+                .lock()
+                .unwrap()
+                .as_deref(),
+            Some(target.as_path())
+        );
+        assert!(!harness
+            .state
+            .project_external_command_admission
+            .recovery_authority_faulted
+            .load(Ordering::Acquire));
+        drop(coordinator);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn project_publication_preexisting_exact_template_is_idempotent_without_authority_adoption() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("publication-template-idempotent");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("existing.sdctemplate");
+        let staging = directory.join(".existing.sdctemplate.test.tmp");
+        fs::write(&target, b"exact template bytes").unwrap();
+        fs::write(&staging, b"exact template bytes").unwrap();
+        let digest = strong_target_file_digest(&target).unwrap().unwrap();
+        let request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::UserTemplate,
+            "renderer_template_idempotent",
+            1,
+            None,
+            None,
+        );
+        let shape_hash = project_publication_shape_hash_v1(&request).unwrap();
+        persist_project_recovery_authority_state_to_path(
+            &journal_path,
+            &PersistedProjectRecoveryAuthorityState {
+                version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                serial: 0,
+                last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+                pending_clean_save: None,
+                publication_journal: PersistedProjectPublicationJournalV1 {
+                    origins: vec![PersistedProjectPublicationOriginV1 {
+                        origin_id: request.origin_id.clone(),
+                        high_water_request_id: 1,
+                        acknowledged_request_id: 0,
+                        acknowledged_shape_hash: None,
+                    }],
+                    pending: vec![PersistedProjectPublicationPendingV1 {
+                        request: request.clone(),
+                        shape_hash,
+                        surface: ProjectPublicationSurfaceV1::UserTemplate,
+                        project_epoch: 7,
+                        project_revision: 11,
+                        checkpoint_hash: "a".repeat(64),
+                        path_generation: 0,
+                        authority_disposition_generation: 0,
+                        recovery_authority_serial_before: 0,
+                        expected_recovery_authority_serial_after: None,
+                        reservation_generation: 1,
+                        source_path: None,
+                        reason: None,
+                        phase: ProjectPublicationPendingPhaseV1::Prepared,
+                        target_path: Some(target.clone()),
+                        staging_path: Some(staging.clone()),
+                        prepared_digest: Some(digest.clone()),
+                        indeterminate_error: None,
+                    }],
+                    terminals: Vec::new(),
+                    latest_reservation_generation: 1,
+                },
+            },
+        )
+        .unwrap();
+        let (path_before, disposition_before, revision_before, hash_before) = {
+            let coordinator = harness.state.project_coordinator.lock().unwrap();
+            (
+                coordinator.ancillary.current_project_path.clone(),
+                coordinator.authority_disposition,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
+        };
+
+        let durable_before_cleanup =
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        let cleanup_calls = std::cell::Cell::new(0_u32);
+        let error = get_project_publication_receipt_with_observer_and_cleanup_v1(
+            &harness.state,
+            &journal_path,
+            request.clone(),
+            observe_prepared_project_publication_v1,
+            |seen_staging| {
+                cleanup_calls.set(cleanup_calls.get() + 1);
+                assert_eq!(seen_staging, staging.as_path());
+                assert!(harness.state.project_save_publication.try_lock().is_ok());
+                assert!(harness
+                    .state
+                    .project_external_command_admission
+                    .gate
+                    .try_lock()
+                    .is_ok());
+                assert!(harness.state.project_coordinator.try_lock().is_ok());
+                Err("injected template staging cleanup failure".to_string())
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("injected template staging cleanup failure"));
+        assert_eq!(cleanup_calls.get(), 1);
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap(),
+            durable_before_cleanup
+        );
+        assert!(staging.exists());
+
+        let status = get_project_publication_receipt_with_observer_and_cleanup_v1(
+            &harness.state,
+            &journal_path,
+            request.clone(),
+            observe_prepared_project_publication_v1,
+            |seen_staging| {
+                assert_eq!(seen_staging, staging.as_path());
+                assert!(harness.state.project_save_publication.try_lock().is_ok());
+                assert!(harness
+                    .state
+                    .project_external_command_admission
+                    .gate
+                    .try_lock()
+                    .is_ok());
+                assert!(harness.state.project_coordinator.try_lock().is_ok());
+                remove_project_publication_staging_v1(seen_staging)?;
+                let mut newer = load_project_recovery_authority_state_from_path(&journal_path)?;
+                newer.publication_journal.pending[0].indeterminate_error =
+                    Some("newer pending after staging cleanup".to_string());
+                persist_project_recovery_authority_state_to_path(&journal_path, &newer)
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(status.state, "prepared");
+        assert_eq!(
+            status.error.as_deref(),
+            Some("newer pending after staging cleanup")
+        );
+        let mut durable = load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        assert!(durable.publication_journal.terminals.is_empty());
+        assert_eq!(durable.publication_journal.pending.len(), 1);
+        durable.publication_journal.pending[0].indeterminate_error = None;
+        persist_project_recovery_authority_state_to_path(&journal_path, &durable).unwrap();
+
+        let status = get_project_publication_receipt_with_observer_v1(
+            &harness.state,
+            &journal_path,
+            request,
+            observe_prepared_project_publication_v1,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(status.state, "succeeded");
+        assert_eq!(status.artifact_digest.as_deref(), Some(digest.as_str()));
+        assert!(status.authority.is_none());
+        assert_eq!(fs::read(&target).unwrap(), b"exact template bytes");
+        assert!(!staging.exists());
+        let coordinator = harness.state.project_coordinator.lock().unwrap();
+        assert_eq!(coordinator.ancillary.current_project_path, path_before);
+        assert_eq!(coordinator.authority_disposition, disposition_before);
+        assert_eq!(coordinator.revision, revision_before);
+        assert_eq!(coordinator.checkpoint_hash, hash_before);
+        drop(coordinator);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn project_publication_query_reobserves_and_excludes_original_finalizer() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("publication-query-finalizer-race");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("show.sdctemplate");
+        let staging = directory.join(".show.sdctemplate.test.tmp");
+        let captured = {
+            let mut coordinator = harness.state.project_coordinator.lock().unwrap();
+            project_save_ticket_for_coordinator(&harness.state, &mut coordinator).unwrap()
+        };
+        let owner_id = "owner:renderer_query_finalizer".to_string();
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), owner_id.clone());
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), 1);
+        let request = ProjectPublicationRequestV1 {
+            schema_version: PROJECT_PUBLICATION_REQUEST_SCHEMA_VERSION,
+            origin_id: "renderer_query_finalizer".to_string(),
+            owner_id: owner_id.clone(),
+            request_id: 1,
+            surface: ProjectPublicationSurfaceV1::UserTemplate,
+            expected_project_epoch: captured.checkpoint.epoch,
+            expected_project_revision: captured.checkpoint.revision,
+            expected_checkpoint_hash: captured.checkpoint.hash.clone(),
+            mapping_authority_hash: captured.checkpoint.hash.clone(),
+            source_path: captured
+                .current_project_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            reason: None,
+            target_policy: ProjectPublicationTargetPolicyV1::Dialog,
+        };
+        let (ticket, pending) = {
+            let mut coordinator = harness.state.project_coordinator.lock().unwrap();
+            match begin_project_publication_v1(
+                &harness.state,
+                &mut coordinator,
+                &journal_path,
+                request.clone(),
+                ProjectPublicationSurfaceV1::UserTemplate,
+            )
+            .unwrap()
+            {
+                BeginProjectPublicationV1::New { ticket, pending } => (ticket, pending),
+                _ => panic!("query/finalizer race must begin a new publication"),
+            }
+        };
+        let selected = persist_project_publication_target_v1(
+            &journal_path,
+            &request,
+            &pending.shape_hash,
+            &target,
+            true,
+        )
+        .unwrap();
+        let staged = persist_project_publication_staging_v1(
+            &journal_path,
+            &request,
+            &pending.shape_hash,
+            &target,
+            &staging,
+        )
+        .unwrap();
+        assert_eq!(selected.target_path.as_deref(), Some(target.as_path()));
+        assert_eq!(staged.staging_path.as_deref(), Some(staging.as_path()));
+        fs::write(&staging, b"prepared template bytes").unwrap();
+        let digest = strong_target_file_digest(&staging).unwrap().unwrap();
+        persist_project_publication_prepared_digest_v1(
+            &journal_path,
+            &request,
+            &pending.shape_hash,
+            &target,
+            &staging,
+            &digest,
+        )
+        .unwrap();
+
+        let observer_calls = std::cell::Cell::new(0_u32);
+        let status = get_project_publication_receipt_with_observer_and_cleanup_v1(
+            &harness.state,
+            &journal_path,
+            request,
+            |plan| {
+                let observation = observe_prepared_project_publication_v1(plan);
+                if observer_calls.get() == 0 {
+                    // The original command already won the publication lock:
+                    // it lands the target after query observation A but before
+                    // the query can claim reconciliation ownership.
+                    finalize_project_export_ticket(
+                        &harness.state,
+                        &target,
+                        &staging,
+                        &ticket,
+                        ProjectPublicationMutationBinding {
+                            window_label: "main",
+                            owner_id: &owner_id,
+                        },
+                    )
+                    .unwrap();
+                    assert_eq!(fs::read(&target).unwrap(), b"prepared template bytes");
+                    assert!(!staging.exists());
+                }
+                observer_calls.set(observer_calls.get() + 1);
+                observation
+            },
+            |seen_staging| {
+                // After the query claim, even the same exact finalizer cannot
+                // enter target I/O. Missing staging is therefore evidence of
+                // the already-observed successful publication, not failure.
+                let error = finalize_project_export_ticket(
+                    &harness.state,
+                    &target,
+                    &staging,
+                    &ticket,
+                    ProjectPublicationMutationBinding {
+                        window_label: "main",
+                        owner_id: &owner_id,
+                    },
+                )
+                .unwrap_err();
+                assert!(error.contains("reconciliation is active"));
+                assert_eq!(fs::read(&target).unwrap(), b"prepared template bytes");
+                assert!(!staging.exists());
+                remove_project_publication_staging_v1(seen_staging)
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(observer_calls.get(), 2);
+        assert_eq!(status.state, "succeeded");
+        assert_eq!(fs::read(&target).unwrap(), b"prepared template bytes");
+        assert!(!staging.exists());
+        assert!(harness
+            .state
+            .project_publication_reconcile_claim
+            .lock()
+            .unwrap()
+            .is_none());
+        let durable = load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        assert!(durable.publication_journal.pending.is_empty());
+        assert_eq!(durable.publication_journal.terminals.len(), 1);
+        assert_eq!(
+            durable.publication_journal.terminals[0].outcome,
+            ProjectPublicationTerminalOutcomeV1::Succeeded
+        );
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -77898,6 +82223,832 @@ pub(crate) mod tests {
                 1
             )
         ));
+    }
+
+    #[test]
+    fn project_publication_target_digest_runs_outside_all_mutation_locks() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("publication-slow-digest");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::Backup,
+            "renderer_slow_digest",
+            1,
+            None,
+            Some("autosave".to_string()),
+        );
+        let shape_hash = project_publication_shape_hash_v1(&request).unwrap();
+        persist_project_recovery_authority_state_to_path(
+            &journal_path,
+            &PersistedProjectRecoveryAuthorityState {
+                version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                serial: 0,
+                last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+                pending_clean_save: None,
+                publication_journal: PersistedProjectPublicationJournalV1 {
+                    origins: vec![PersistedProjectPublicationOriginV1 {
+                        origin_id: request.origin_id.clone(),
+                        high_water_request_id: 1,
+                        acknowledged_request_id: 0,
+                        acknowledged_shape_hash: None,
+                    }],
+                    pending: vec![PersistedProjectPublicationPendingV1 {
+                        request: request.clone(),
+                        shape_hash,
+                        surface: ProjectPublicationSurfaceV1::Backup,
+                        project_epoch: 7,
+                        project_revision: 11,
+                        checkpoint_hash: "a".repeat(64),
+                        path_generation: 2,
+                        authority_disposition_generation: 3,
+                        recovery_authority_serial_before: 0,
+                        expected_recovery_authority_serial_after: None,
+                        reservation_generation: 1,
+                        source_path: None,
+                        reason: Some("autosave".to_string()),
+                        phase: ProjectPublicationPendingPhaseV1::Prepared,
+                        target_path: Some(directory.join("backup-1.json")),
+                        staging_path: Some(directory.join(".backup-1.json.test.tmp")),
+                        prepared_digest: Some("b".repeat(64)),
+                        indeterminate_error: None,
+                    }],
+                    terminals: Vec::new(),
+                    latest_reservation_generation: 1,
+                },
+            },
+        )
+        .unwrap();
+        let state = Arc::clone(&harness.state);
+        let state_for_worker = Arc::clone(&state);
+        let journal_for_worker = journal_path.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            get_project_publication_receipt_with_observer_v1(
+                &state_for_worker,
+                &journal_for_worker,
+                request,
+                |_| {
+                    ready_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    PreparedProjectPublicationObservationV1 {
+                        actual_digest: Ok(Some("b".repeat(64))),
+                        backup: Ok(Some(ProjectBackupSummary {
+                            id: 1,
+                            created_at_unix_ms: 1,
+                            source_path: None,
+                            reason: "autosave".to_string(),
+                            bytes: 1,
+                        })),
+                    }
+                },
+            )
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("digest observer should reach its outside-lock boundary");
+        assert!(state.project_save_publication.try_lock().is_ok());
+        assert!(state
+            .project_external_command_admission
+            .gate
+            .try_lock()
+            .is_ok());
+        assert!(state.project_coordinator.try_lock().is_ok());
+        let mut newer = load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        newer.publication_journal.pending[0].indeterminate_error =
+            Some("newer durable pending image".to_string());
+        persist_project_recovery_authority_state_to_path(&journal_path, &newer).unwrap();
+        release_tx.send(()).unwrap();
+        let status = worker.join().unwrap().unwrap().unwrap();
+        assert_eq!(status.state, "prepared");
+        assert_eq!(status.error.as_deref(), Some("newer durable pending image"));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn project_publication_origin_allows_only_one_unacknowledged_request() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("publication-single-outstanding");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let mut coordinator = harness.state.project_coordinator.lock().unwrap();
+        let ticket = project_save_ticket_for_coordinator(&harness.state, &mut coordinator).unwrap();
+        let request = ProjectPublicationRequestV1 {
+            schema_version: PROJECT_PUBLICATION_REQUEST_SCHEMA_VERSION,
+            origin_id: "renderer_single".to_string(),
+            owner_id: "owner:renderer_single".to_string(),
+            request_id: 1,
+            surface: ProjectPublicationSurfaceV1::Backup,
+            expected_project_epoch: ticket.checkpoint.epoch,
+            expected_project_revision: ticket.checkpoint.revision,
+            expected_checkpoint_hash: ticket.checkpoint.hash.clone(),
+            mapping_authority_hash: ticket.checkpoint.hash.clone(),
+            source_path: ticket
+                .current_project_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            reason: Some("autosave".to_string()),
+            target_policy: ProjectPublicationTargetPolicyV1::ManagedUnique,
+        };
+        assert!(matches!(
+            begin_project_publication_v1(
+                &harness.state,
+                &mut coordinator,
+                &journal_path,
+                request.clone(),
+                ProjectPublicationSurfaceV1::Backup,
+            )
+            .unwrap(),
+            BeginProjectPublicationV1::New { .. }
+        ));
+        let after_first = load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        let mut second = request.clone();
+        second.request_id = 2;
+        assert!(begin_project_publication_v1(
+            &harness.state,
+            &mut coordinator,
+            &journal_path,
+            second,
+            ProjectPublicationSurfaceV1::Backup,
+        )
+        .unwrap_err()
+        .contains("unresolved request"));
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap(),
+            after_first
+        );
+
+        let mut other_origin = request;
+        other_origin.origin_id = "renderer_other".to_string();
+        assert!(matches!(
+            begin_project_publication_v1(
+                &harness.state,
+                &mut coordinator,
+                &journal_path,
+                other_origin,
+                ProjectPublicationSurfaceV1::Backup,
+            )
+            .unwrap(),
+            BeginProjectPublicationV1::New { .. }
+        ));
+        drop(coordinator);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn project_publication_mutation_requires_exact_window_owner_and_operator_unlock() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let owner_id = "owner:publication".to_string();
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), owner_id.clone());
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), 1);
+        let mut coordinator = harness.state.project_coordinator.lock().unwrap();
+        assert!(ensure_project_publication_mutation_owner_allowed(
+            &harness.state,
+            &coordinator,
+            "main",
+            &owner_id,
+        )
+        .is_ok());
+        assert!(ensure_project_publication_mutation_owner_allowed(
+            &harness.state,
+            &coordinator,
+            "main",
+            "owner:wrong",
+        )
+        .unwrap_err()
+        .contains("does not match"));
+
+        coordinator.ancillary.operator_policy = Some(sample_operator_policy());
+        let before_hash = coordinator.checkpoint_hash.clone();
+        let before_revision = coordinator.revision;
+        let before_pending = coordinator.history.pending.len();
+        let error = ensure_project_publication_mutation_owner_allowed(
+            &harness.state,
+            &coordinator,
+            "main",
+            &owner_id,
+        )
+        .unwrap_err();
+        assert!(error.contains("Partial Lock"));
+        assert_eq!(coordinator.checkpoint_hash, before_hash);
+        assert_eq!(coordinator.revision, before_revision);
+        assert_eq!(coordinator.history.pending.len(), before_pending);
+    }
+
+    #[test]
+    fn project_publication_restart_adopts_only_exact_retired_owner_into_current_window() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("publication-owner-adopt");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let old_owner = "owner:renderer-before-restart".to_string();
+        let new_owner = "owner:renderer-after-restart".to_string();
+        let mut coordinator = harness.state.project_coordinator.lock().unwrap();
+        let ticket = project_save_ticket_for_coordinator(&harness.state, &mut coordinator).unwrap();
+        let request = ProjectPublicationRequestV1 {
+            schema_version: PROJECT_PUBLICATION_REQUEST_SCHEMA_VERSION,
+            origin_id: "renderer_restart_owner".to_string(),
+            owner_id: old_owner.clone(),
+            request_id: 1,
+            surface: ProjectPublicationSurfaceV1::SaveAs,
+            expected_project_epoch: ticket.checkpoint.epoch,
+            expected_project_revision: ticket.checkpoint.revision,
+            expected_checkpoint_hash: ticket.checkpoint.hash.clone(),
+            mapping_authority_hash: ticket.checkpoint.hash.clone(),
+            source_path: ticket
+                .current_project_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            reason: None,
+            target_policy: ProjectPublicationTargetPolicyV1::Dialog,
+        };
+        assert!(matches!(
+            begin_project_publication_v1(
+                &harness.state,
+                &mut coordinator,
+                &journal_path,
+                request.clone(),
+                ProjectPublicationSurfaceV1::SaveAs,
+            )
+            .unwrap(),
+            BeginProjectPublicationV1::New { .. }
+        ));
+        drop(coordinator);
+        {
+            let mut owners = harness.state.project_transaction_owners.lock().unwrap();
+            owners.insert("retired".to_string(), old_owner.clone());
+            owners.insert("main".to_string(), new_owner.clone());
+        }
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), 2);
+        let before_old_live =
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        assert!(adopt_project_publication_owner_for_window_v1(
+            &harness.state,
+            "main",
+            &journal_path,
+            request.clone(),
+            new_owner.clone(),
+        )
+        .unwrap_err()
+        .contains("previous renderer owner"));
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap(),
+            before_old_live
+        );
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .remove("retired");
+        let adopted = adopt_project_publication_owner_for_window_v1(
+            &harness.state,
+            "main",
+            &journal_path,
+            request.clone(),
+            new_owner.clone(),
+        )
+        .unwrap();
+        assert_eq!(adopted.request.owner_id, new_owner);
+        assert_ne!(
+            adopted.shape_hash,
+            project_publication_shape_hash_v1(&request).unwrap()
+        );
+        let adopted_request = adopted.request.clone();
+        let adopted_durable =
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        assert_eq!(
+            adopted_durable.publication_journal.pending[0].request,
+            adopted_request
+        );
+        assert!(adopt_project_publication_owner_for_window_v1(
+            &harness.state,
+            "main",
+            &journal_path,
+            request,
+            new_owner.clone(),
+        )
+        .unwrap_err()
+        .contains("exact durable request"));
+
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .operator_policy = Some(sample_operator_policy());
+        let before_locked = load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        assert!(adopt_project_publication_owner_for_window_v1(
+            &harness.state,
+            "main",
+            &journal_path,
+            adopted_request,
+            new_owner,
+        )
+        .unwrap_err()
+        .contains("Partial Lock"));
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap(),
+            before_locked
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn project_publication_final_export_rechecks_owner_and_operator_before_target_write() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let owner_id = "owner:publication-final".to_string();
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), owner_id.clone());
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), 1);
+        let directory = unique_test_directory("publication-final-owner");
+        fs::create_dir_all(&directory).unwrap();
+        let target = directory.join("show.sdctemplate");
+        let staging = directory.join(".show.sdctemplate.test.tmp");
+        prepare_project_save_bytes_at(&staging, b"exact template bytes").unwrap();
+        let ticket = {
+            let mut coordinator = harness.state.project_coordinator.lock().unwrap();
+            project_save_ticket_for_coordinator(&harness.state, &mut coordinator).unwrap()
+        };
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .operator_policy = Some(sample_operator_policy());
+        let binding = ProjectPublicationMutationBinding {
+            window_label: "main",
+            owner_id: &owner_id,
+        };
+        assert!(finalize_project_export_ticket(
+            &harness.state,
+            &target,
+            &staging,
+            &ticket,
+            binding,
+        )
+        .unwrap_err()
+        .contains("Partial Lock"));
+        assert!(!target.exists());
+
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .operator_policy = None;
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), "owner:rotated".to_string());
+        assert!(finalize_project_export_ticket(
+            &harness.state,
+            &target,
+            &staging,
+            &ticket,
+            binding,
+        )
+        .unwrap_err()
+        .contains("does not match"));
+        assert!(!target.exists());
+
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), owner_id.clone());
+        finalize_project_export_ticket(&harness.state, &target, &staging, &ticket, binding)
+            .unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"exact template bytes");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn project_publication_abandon_requires_exact_window_owner_and_operator_unlock() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("publication-abandon-owner");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let staging_path = directory.join(".show.sdc.test.tmp");
+        prepare_project_save_bytes_at(&staging_path, b"staged publication").unwrap();
+        let request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::SaveAs,
+            "renderer_abandon",
+            1,
+            None,
+            None,
+        );
+        let shape_hash = project_publication_shape_hash_v1(&request).unwrap();
+        let pending = PersistedProjectPublicationPendingV1 {
+            request: request.clone(),
+            shape_hash,
+            surface: ProjectPublicationSurfaceV1::SaveAs,
+            project_epoch: 7,
+            project_revision: 11,
+            checkpoint_hash: "a".repeat(64),
+            path_generation: 2,
+            authority_disposition_generation: 3,
+            recovery_authority_serial_before: 0,
+            expected_recovery_authority_serial_after: Some(1),
+            reservation_generation: 1,
+            source_path: None,
+            reason: None,
+            phase: ProjectPublicationPendingPhaseV1::Selected,
+            target_path: Some(directory.join("show.sdc")),
+            staging_path: Some(staging_path.clone()),
+            prepared_digest: None,
+            indeterminate_error: None,
+        };
+        let durable = PersistedProjectRecoveryAuthorityState {
+            version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+            serial: 0,
+            last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+            pending_clean_save: None,
+            publication_journal: PersistedProjectPublicationJournalV1 {
+                origins: vec![PersistedProjectPublicationOriginV1 {
+                    origin_id: request.origin_id.clone(),
+                    high_water_request_id: 1,
+                    acknowledged_request_id: 0,
+                    acknowledged_shape_hash: None,
+                }],
+                pending: vec![pending],
+                terminals: Vec::new(),
+                latest_reservation_generation: 1,
+            },
+        };
+        persist_project_recovery_authority_state_to_path(&journal_path, &durable).unwrap();
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), request.owner_id.clone());
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), 1);
+        assert!(abandon_project_publication_for_window_v1(
+            &harness.state,
+            "other",
+            &journal_path,
+            request.clone(),
+        )
+        .unwrap_err()
+        .contains("does not match"));
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), "owner:other".to_string());
+        assert!(abandon_project_publication_for_window_v1(
+            &harness.state,
+            "main",
+            &journal_path,
+            request.clone(),
+        )
+        .unwrap_err()
+        .contains("does not match"));
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), request.owner_id.clone());
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .operator_policy = Some(sample_operator_policy());
+        assert!(abandon_project_publication_for_window_v1(
+            &harness.state,
+            "main",
+            &journal_path,
+            request.clone(),
+        )
+        .unwrap_err()
+        .contains("Partial Lock"));
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap(),
+            durable
+        );
+
+        harness
+            .state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .operator_policy = None;
+        let mut prepared = durable.clone();
+        prepared.publication_journal.pending[0].phase = ProjectPublicationPendingPhaseV1::Prepared;
+        prepared.publication_journal.pending[0].prepared_digest = Some("b".repeat(64));
+        persist_project_recovery_authority_state_to_path(&journal_path, &prepared).unwrap();
+        assert!(abandon_project_publication_for_window_v1(
+            &harness.state,
+            "main",
+            &journal_path,
+            request.clone(),
+        )
+        .unwrap_err()
+        .contains("cannot be abandoned"));
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap(),
+            prepared
+        );
+
+        persist_project_recovery_authority_state_to_path(&journal_path, &durable).unwrap();
+        let before_cleanup_failure =
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        assert!(abandon_project_publication_for_window_with_cleanup_v1(
+            &harness.state,
+            "main",
+            &journal_path,
+            request.clone(),
+            |_| Err("injected locked staging file".to_string()),
+        )
+        .unwrap_err()
+        .contains("injected locked staging"));
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&journal_path).unwrap(),
+            before_cleanup_failure
+        );
+        assert!(staging_path.exists());
+        let abandoned = abandon_project_publication_for_window_v1(
+            &harness.state,
+            "main",
+            &journal_path,
+            request,
+        )
+        .unwrap();
+        assert_eq!(abandoned.state, "abandoned");
+        let after = load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        assert!(after.publication_journal.pending.is_empty());
+        assert_eq!(after.publication_journal.terminals.len(), 1);
+        assert!(!staging_path.exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn project_publication_newer_reservation_rejects_stale_template_before_target_write() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("publication-stale-template");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("show.sdctemplate");
+        let staging = directory.join(".show.sdctemplate.test.tmp");
+        let mut coordinator = harness.state.project_coordinator.lock().unwrap();
+        let authoritative =
+            project_save_ticket_for_coordinator(&harness.state, &mut coordinator).unwrap();
+        let request_a = ProjectPublicationRequestV1 {
+            schema_version: PROJECT_PUBLICATION_REQUEST_SCHEMA_VERSION,
+            origin_id: "renderer_template_a".to_string(),
+            owner_id: "owner:renderer_template_a".to_string(),
+            request_id: 1,
+            surface: ProjectPublicationSurfaceV1::UserTemplate,
+            expected_project_epoch: authoritative.checkpoint.epoch,
+            expected_project_revision: authoritative.checkpoint.revision,
+            expected_checkpoint_hash: authoritative.checkpoint.hash.clone(),
+            mapping_authority_hash: authoritative.checkpoint.hash.clone(),
+            source_path: authoritative
+                .current_project_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            reason: None,
+            target_policy: ProjectPublicationTargetPolicyV1::Dialog,
+        };
+        let (ticket_a, pending_a) = match begin_project_publication_v1(
+            &harness.state,
+            &mut coordinator,
+            &journal_path,
+            request_a.clone(),
+            ProjectPublicationSurfaceV1::UserTemplate,
+        )
+        .unwrap()
+        {
+            BeginProjectPublicationV1::New { ticket, pending } => (ticket, pending),
+            _ => panic!("first template request must reserve a new publication"),
+        };
+        let selected_a = persist_project_publication_target_v1(
+            &journal_path,
+            &request_a,
+            &pending_a.shape_hash,
+            &target,
+            true,
+        )
+        .unwrap();
+        let staged_a = persist_project_publication_staging_v1(
+            &journal_path,
+            &request_a,
+            &pending_a.shape_hash,
+            &target,
+            &staging,
+        )
+        .unwrap();
+        assert_eq!(selected_a.target_path.as_deref(), Some(target.as_path()));
+        assert_eq!(staged_a.staging_path.as_deref(), Some(staging.as_path()));
+        prepare_project_save_bytes_at(&staging, b"stale template bytes").unwrap();
+        let digest = strong_target_file_digest(&staging).unwrap().unwrap();
+        let prepared_a = persist_project_publication_prepared_digest_v1(
+            &journal_path,
+            &request_a,
+            &pending_a.shape_hash,
+            &target,
+            &staging,
+            &digest,
+        )
+        .unwrap();
+
+        let request_b = ProjectPublicationRequestV1 {
+            origin_id: "renderer_backup_b".to_string(),
+            surface: ProjectPublicationSurfaceV1::Backup,
+            reason: Some("autosave".to_string()),
+            target_policy: ProjectPublicationTargetPolicyV1::ManagedUnique,
+            ..request_a.clone()
+        };
+        assert!(matches!(
+            begin_project_publication_v1(
+                &harness.state,
+                &mut coordinator,
+                &journal_path,
+                request_b,
+                ProjectPublicationSurfaceV1::Backup,
+            )
+            .unwrap(),
+            BeginProjectPublicationV1::New { .. }
+        ));
+        drop(coordinator);
+
+        harness
+            .state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), request_a.owner_id.clone());
+        harness
+            .state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .insert("main".to_string(), 1);
+
+        let error = finalize_project_export_ticket(
+            &harness.state,
+            &target,
+            &staging,
+            &ticket_a,
+            ProjectPublicationMutationBinding {
+                window_label: "main",
+                owner_id: &request_a.owner_id,
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("Project changed"));
+        assert!(!target.exists());
+        let failed = persist_project_publication_failed_v1(
+            &harness.state,
+            &journal_path,
+            &prepared_a,
+            error,
+        )
+        .unwrap();
+        assert_eq!(failed.state, "failed");
+        assert!(!harness
+            .state
+            .project_external_command_admission
+            .recovery_authority_faulted
+            .load(Ordering::Acquire));
+        let durable = load_project_recovery_authority_state_from_path(&journal_path).unwrap();
+        assert!(durable
+            .publication_journal
+            .pending
+            .iter()
+            .any(|pending| pending.request.origin_id == "renderer_backup_b"));
+        assert!(durable
+            .publication_journal
+            .terminals
+            .iter()
+            .any(
+                |terminal| terminal.request.origin_id == "renderer_template_a"
+                    && terminal.outcome == ProjectPublicationTerminalOutcomeV1::Failed
+            ));
+        remove_project_publication_staging_v1(&staging).unwrap();
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn restarted_prepared_publication_latches_until_exact_query_terminalizes_failure() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("publication-restart-latch");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::Backup,
+            "renderer_restart",
+            1,
+            None,
+            Some("autosave".to_string()),
+        );
+        let shape_hash = project_publication_shape_hash_v1(&request).unwrap();
+        persist_project_recovery_authority_state_to_path(
+            &journal_path,
+            &PersistedProjectRecoveryAuthorityState {
+                version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                serial: 0,
+                last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+                pending_clean_save: None,
+                publication_journal: PersistedProjectPublicationJournalV1 {
+                    origins: vec![PersistedProjectPublicationOriginV1 {
+                        origin_id: request.origin_id.clone(),
+                        high_water_request_id: 1,
+                        acknowledged_request_id: 0,
+                        acknowledged_shape_hash: None,
+                    }],
+                    pending: vec![PersistedProjectPublicationPendingV1 {
+                        request: request.clone(),
+                        shape_hash,
+                        surface: ProjectPublicationSurfaceV1::Backup,
+                        project_epoch: 7,
+                        project_revision: 11,
+                        checkpoint_hash: "a".repeat(64),
+                        path_generation: 2,
+                        authority_disposition_generation: 3,
+                        recovery_authority_serial_before: 0,
+                        expected_recovery_authority_serial_after: None,
+                        reservation_generation: 1,
+                        source_path: None,
+                        reason: Some("autosave".to_string()),
+                        phase: ProjectPublicationPendingPhaseV1::Prepared,
+                        target_path: Some(directory.join("backup-1.json")),
+                        staging_path: Some(directory.join(".backup-1.json.test.tmp")),
+                        prepared_digest: Some("b".repeat(64)),
+                        indeterminate_error: None,
+                    }],
+                    terminals: Vec::new(),
+                    latest_reservation_generation: 1,
+                },
+            },
+        )
+        .unwrap();
+        install_project_recovery_authority_from_path(&harness.state, &journal_path).unwrap();
+        assert!(harness
+            .state
+            .project_external_command_admission
+            .recovery_authority_faulted
+            .load(Ordering::Acquire));
+        let status = get_project_publication_receipt_with_observer_v1(
+            &harness.state,
+            &journal_path,
+            request,
+            |_| PreparedProjectPublicationObservationV1 {
+                actual_digest: Ok(None),
+                backup: Ok(None),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(status.state, "failed");
+        assert!(!harness
+            .state
+            .project_external_command_admission
+            .recovery_authority_faulted
+            .load(Ordering::Acquire));
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -79854,7 +85005,7 @@ pub(crate) mod tests {
             b"B",
             "a rejected older writer must fail before replacing same-target B bytes"
         );
-        discard_prepared_project_save_write(&temp_a);
+        remove_project_publication_staging_v1(&temp_a).unwrap();
 
         // A Save As/template ticket is captured before its native dialog. A
         // fenced identity B published while the dialog is open invalidates
@@ -79878,7 +85029,7 @@ pub(crate) mod tests {
         )
         .is_err());
         assert_eq!(fs::read(&target).unwrap(), b"B");
-        discard_prepared_project_save_write(&temp_dialog_a);
+        remove_project_publication_staging_v1(&temp_dialog_a).unwrap();
         fs::remove_dir_all(&directory).unwrap();
     }
 
@@ -105150,7 +110301,12 @@ mod live_audio_input_tests {
             pending_new_error.to_ascii_lowercase().contains("pending")
                 || pending_new_error
                     .to_ascii_lowercase()
-                    .contains("still being committed"),
+                    .contains("still being committed")
+                // The external-admission gate must precede the coordinator,
+                // so it cannot inspect the pending map while the shared
+                // active flag is armed. A truthful generic active rejection
+                // is therefore also the expected fail-closed outcome.
+                || pending_new_error.to_ascii_lowercase().contains("active"),
             "{pending_new_error}"
         );
         harness
@@ -106714,6 +111870,8 @@ fn main() {
             runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState::default(),
             output_lease_registry: Mutex::new(output_lease_registry),
             output_lease_durable_receipts: Mutex::new(OutputLeaseDurableReceiptJournal::in_memory()),
+            application_update_publication_claim: Mutex::new(None),
+            project_publication_reconcile_claim: Mutex::new(None),
             output_lease_clock_origin: Instant::now(),
             next_output_lease_request_id: AtomicU64::new(1),
             dj_link_token: Mutex::new(generate_dj_link_token().ok()),
@@ -107219,10 +112377,14 @@ fn main() {
             unlock_project_operator_session,
             set_operator_policy,
             clear_operator_policy,
-            save_user_template,
+            save_user_template_v1,
             load_user_template,
-            save_project,
-            save_project_as,
+            save_project_v1,
+            save_project_as_v1,
+            adopt_project_publication_owner_v1,
+            get_project_publication_receipt_v1,
+            acknowledge_project_publication_receipt_v1,
+            abandon_project_publication_v1,
             load_project,
             import_daslight_project,
             import_daslight_project_with_result,
@@ -107247,7 +112409,7 @@ fn main() {
             clear_project_history,
             undo_project_transaction,
             redo_project_transaction,
-            save_project_backup,
+            save_project_backup_v1,
             list_project_backups,
             load_project_backup,
             delete_project_backup,

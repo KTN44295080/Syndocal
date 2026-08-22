@@ -235,6 +235,9 @@ jobs:
       - name: Build frontend
         run: pnpm --dir app build
 
+      - name: Check E4 project publication durability
+        run: pnpm --dir app run check:project-publication-e4
+
       - name: Check Tauri application
         run: cargo check -p syndocal --features libav --locked
 
@@ -335,7 +338,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: syndocal-1.2.0-alpha.5-${{ matrix.os }}
+          name: syndocal-1.2.0-alpha.6-${{ matrix.os }}
           path: target/release/bundle/**
           if-no-files-found: error
           retention-days: 14

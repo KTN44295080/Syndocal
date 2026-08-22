@@ -330,7 +330,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active development train advances from the long-lived `1.1.0` metadata to
-`1.2.0-alpha.5`. The branch name may remain historical; artifact metadata and tags
+`1.2.0-alpha.6`. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from the branch name.
 
 The synchronized product-version surfaces are:
@@ -1236,3 +1236,29 @@ ProductVersion/FileVersion `1.2.0-alpha.5`. PID `113948` provided exactly one
 responsive, maximized `Syndocal` window. The crash-boundary evidence above remains
 bound to the explicitly identified `97C21F...` acceptance executable; the final
 build proves the reviewed checkpoint source still satisfies the native launch gate.
+
+## 26. 2026-08-23 alpha.6 E4 automated checkpoint
+
+The distributed-development ordinal advances to `1.2.0-alpha.6`. E4 adds a
+versioned project-publication request, pending state, terminal receipt, exact query,
+acknowledgement, abandonment, and restart-owner adoption contract. This is an
+additive command and recovery-journal compatibility boundary; it is not hidden by
+the product-version advance. Save, Save As, user template, manual/autosave backup,
+and update preflight now share one durable reservation/freshness/publication lane.
+
+The fixed backend candidate at main SHA-256
+`59AC69E8D91E2D8EA2CEBFCA9374425D048F47218AFEE8B2B470346F2F356AAA` and
+control-plane SHA-256
+`3B73847CAF4F9FC39F84F44D2109BEB5224BA349A10560ECF3232B463CB9BA75`
+received independent P0/P1/P2-zero review. The frontend adoption/controller
+candidate also received independent P0/P1/P2-zero review. Automated evidence is
+green: project-publication 15/15, updater final-fence 1/1, restart reconciliation,
+CleanSave ownership, same-millisecond backup uniqueness, control-plane 25/25,
+the production E4 controller/checker, exact 415 frontend invokes, TypeScript/Vite,
+no-default Cargo check, format/diff checks, and zero first-party warnings in every
+modified configuration run.
+
+E4 remains unchecked until synchronized alpha.6 release metadata, full release
+gates, exact-path native build/launch, and scratch Save/Save As/template/backup
+operation have been recorded. The accepted Windows denominator therefore remains
+17/71 at this automated checkpoint; AI4 remains blocked.

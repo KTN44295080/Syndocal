@@ -142,36 +142,75 @@ assert.match(
   /requestedExpectedEpoch[\s\S]*?requestedExpectedEpoch !== currentEpoch[\s\S]*?nothing was applied/,
   "dialog-based project mutations must reject an identity change before Begin",
 );
-const beginTransactionMatches = [
-  ...app.matchAll(/tauriInvoke<ProjectTransactionTicket>\("begin_project_transaction",\s*\{([\s\S]*?)\}\)/g),
-];
-assert.equal(beginTransactionMatches.length, 3, "all three Begin call sites must remain covered by the owner contract");
-for (const match of beginTransactionMatches) {
-  assert.match(match[1], /ownerId:\s*projectTransactionOwnerId/, "every Begin must bind the renderer owner");
-}
-const finishTransactionMatches = [
-  ...app.matchAll(
-    /tauriInvoke<ProjectHistoryMutationResult>\("(?:commit|cancel)_project_transaction",\s*\{([\s\S]*?)\}\)/g,
-  ),
-];
-assert.equal(
-  finishTransactionMatches.length,
-  6,
-  "all three Commit and all three Cancel call sites must remain covered by the owner contract",
+const beginRecoveryHelper = section(
+  app,
+  "const beginProjectTransactionWithRecovery = async (",
+  "const queryProjectTransactionTerminal = async (",
 );
-for (const match of finishTransactionMatches) {
-  assert.match(match[1], /ownerId:\s*projectTransactionOwnerId/, "every Commit/Cancel must prove the renderer owner");
+assert.match(
+  beginRecoveryHelper,
+  /tauriInvoke<ProjectTransactionTicket>\("begin_project_transaction",\s*beginArgs\)/,
+  "the shared Begin recovery helper must invoke the canonical backend command with its exact arguments",
+);
+const beginTransactionMatches = [...app.matchAll(/\bbeginProjectTransactionWithRecovery\(/g)];
+assert.equal(beginTransactionMatches.length, 3, "all three Begin workflows must use the shared recovery helper");
+const transactionIdentityMatches = [
+  ...app.matchAll(/const transactionIdentity = \{([\s\S]*?)\n\s*\};/g),
+];
+assert.equal(transactionIdentityMatches.length, 3, "all three transaction workflows must define an exact identity");
+for (const match of transactionIdentityMatches) {
+  assert.match(match[1], /ownerId:\s*projectTransactionOwnerId/, "every transaction identity must bind the renderer owner");
 }
+const cancelRecoveryHelper = section(
+  app,
+  "const cancelProjectTransactionWithRecovery = async (",
+  "const commitProjectTransactionWithRecovery = async (",
+);
+assert.match(cancelRecoveryHelper, /ownerId:\s*identity\.ownerId/);
+assert.match(cancelRecoveryHelper, /"cancel_project_transaction",\s*cancelArgs/);
+const commitRecoveryHelper = section(
+  app,
+  "const commitProjectTransactionWithRecovery = async (",
+  "// A convergence poll can briefly leave the old transaction/recovery detail",
+);
+assert.match(commitRecoveryHelper, /ownerId:\s*identity\.ownerId/);
+assert.match(commitRecoveryHelper, /"commit_project_transaction",\s*commitArgs/);
+assert.equal(
+  [...app.matchAll(/\bcancelProjectTransactionWithRecovery\(/g)].length,
+  3,
+  "all three Cancel workflows must use the owner-bound recovery helper",
+);
+assert.equal(
+  [...app.matchAll(/\bcommitProjectTransactionWithRecovery\(/g)].length,
+  2,
+  "the two specialized Commit workflows must use the owner-bound recovery helper",
+);
+const genericCommit = section(app, "transaction = await beginProjectTransactionWithRecovery", "const listen = <T,>");
+assert.match(
+  genericCommit,
+  /"commit_project_transaction"[\s\S]*?ownerId:\s*projectTransactionOwnerId/,
+  "the generic Commit workflow must bind the renderer owner",
+);
 assert.match(
   app,
   /register_project_transaction_owner[\s\S]*?ownerId:\s*projectTransactionOwnerId/,
   "every renderer must register its concrete window generation before starting project work",
 );
 assert.doesNotMatch(app, /register_project_transaction_owner[\s\S]{0,160}!paneWindow/, "pane owners must be registered too");
+const destroyedWindowRetirement = section(
+  backend,
+  "fn handle_destroyed_window_authority_retirement(",
+  "fn transition_project_transaction_window_owner<T>(",
+);
+assert.match(
+  destroyedWindowRetirement,
+  /retire_project_transaction_owner_for_window(?:_incarnation)?/,
+  "the shared destroyed-window boundary must retire its exact project owner",
+);
 assert.match(
   backend,
-  /WindowEvent::Destroyed[\s\S]*?retire_project_transaction_owner_for_window/,
-  "destroying a pane must retire its owner and truthfully finalize any interrupted edit",
+  /(?:tauri::)?WindowEvent::Destroyed[\s\S]*?handle_destroyed_window_authority_retirement/,
+  "destroying a pane must use the shared authority retirement boundary",
 );
 assert.ok(
   app.includes("if (!isTauriRuntime())") && app.includes("throw new Error(tauriBackendUnavailableMessage)"),

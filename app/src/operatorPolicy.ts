@@ -103,6 +103,12 @@ export const verifyOperatorPassword = async (policy: OperatorPolicy, password: s
 
 const fullLockEmergencyCommands = new Set([
   "get_operator_policy",
+  // A durable publication can be awaiting recovery when Full Lock is
+  // engaged. Observation and an exact terminal ACK are maintenance only;
+  // they must not strand an already-finished receipt, while every new save
+  // and explicit abandon remains blocked below.
+  "get_project_publication_receipt_v1",
+  "acknowledge_project_publication_receipt_v1",
   "get_snapshot",
   "get_snapshot_delta",
   "safety_blackout_engage_v1",

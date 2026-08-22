@@ -6,7 +6,7 @@
 - Current implementation checkpoint: `0a3e91ab87d4be4735710234d1ba002e484375ef`
   (`feat: add sample-accurate timeline cue audio`). Push evidence is recorded by
   the documentation follow-up commit containing this line.
-- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.5`.
+- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.6`.
 - **2026-08-22 Windows-only scope:** current completion targets this operator's
   Windows PC. macOS/Linux control/native/warning rows and the six distribution,
   legal, signing, SBOM, clean-machine, updater, and publication rows are deferred
@@ -1468,3 +1468,31 @@ and main
   two crash boundaries remain explicitly bound to the earlier `97C21F...`
   acceptance build; this final launch covers the later behavior-preserving internal
   refactor and strengthened proof gate.
+
+## 2026-08-23 alpha.6 E4 automated handoff
+
+- Branch/starting HEAD: `codex/syndocal-v1.2` /
+  `b012ef6c3634a87d36c755a3d44bf98ef0213711`.
+- Product metadata is advancing to `1.2.0-alpha.6`. E4 intentionally adds a
+  versioned, additive project-publication command/journal/receipt contract; product
+  SemVer remains separate from that compatibility boundary.
+- Save, Save As, user template, backup, and update preflight now share durable
+  reservation, exact mapping/authority freshness, target selection, staging,
+  final publication, query, terminal ACK, and restart recovery behavior.
+- Backend fixed hashes before the version/document patch: main
+  `59AC69E8D91E2D8EA2CEBFCA9374425D048F47218AFEE8B2B470346F2F356AAA` and
+  control plane `3B73847CAF4F9FC39F84F44D2109BEB5224BA349A10560ECF3232B463CB9BA75`.
+  Independent review returned P0/P1/P2 zero.
+- Frontend fixed-hash review also returned P0/P1/P2 zero. App and the executable
+  checker share `createProjectPublicationControllerV1`; restart owner adoption is
+  exact, terminal receipts are never adopted, and durable local rewrite precedes
+  resume.
+- Green automated gates: project-publication 15/15, updater fence 1/1,
+  control-plane 25/25, E4 checker, exact 415 invokes, TypeScript/Vite build,
+  no-default Cargo check, format/diff checks, and zero first-party warnings for the
+  modified frontend/native configurations.
+- Remaining acceptance: run synchronized release/self-tests and full focused
+  matrix, terminate only the exact checkout executable before the native build,
+  build `1.2.0-alpha.6`, launch exactly one responsive maximized window, and use a
+  scratch project for Save, Save As, template, and backup verification. E4 remains
+  unchecked and the denominator remains 17/71 until those steps pass.
