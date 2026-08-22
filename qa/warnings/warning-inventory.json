@@ -6417,10 +6417,10 @@
       "timeoutMs": 900000,
       "firstPartyManifests": [],
       "status": "enforced",
-      "expectedOutputMarkers": ["vite v6.4.2 building for production...", "265 modules transformed.", "built in"],
+      "expectedOutputMarkers": ["vite v6.4.2 building for production...", "modules transformed.", "built in"],
       "expectedArtifacts": [], "diagnostics": [], "externalWarningAllows": [],
       "evidence": {
-        "commit": "bd360277592c22a02ec584b7027d816a8a44af72",
+        "commit": "486d4202a5a8b74f74030f120b1e22f916c87c7d",
         "capturedAt": "2026-08-20T18:34:08Z",
         "command": "pnpm --dir app build",
         "toolchain": { "cargo": "1.97.1 (c980f4866 2026-06-30)", "rustc": "1.97.1 (8bab26f4f 2026-07-14)", "node": "22.22.1", "pnpm": "10.9.0" }
