@@ -4,7 +4,8 @@ import type {
   TimelineFollowRuntimeSummary,
   TimelineFollowAbortFocusFence,
   TimelineFollowSummary,
-  TimelineGuideAudioStatus,
+  MachineTimelineCueAudioSettingsV1,
+  TimelineCueAudioStatus,
   TimelineLoopRegionSummary,
   TimelineLoopRuntimeSummary,
   TimelinePhaseSummary,
@@ -29,8 +30,9 @@ interface TimelineOperatorBarProps {
   countInRemainingMs: number;
   phases: TimelinePhaseSummary[];
   guideEnabled: boolean;
-  guideAudioStatus: TimelineGuideAudioStatus;
-  guideAudioDevices: string[];
+  cueAudioStatus: TimelineCueAudioStatus;
+  cueAudioMutationBusy: boolean;
+  cueAudioLocalError: string | null;
   loopRegion: TimelineLoopRegionSummary | null;
   loopRuntime: TimelineLoopRuntimeSummary;
   timelines: TimelineSnapshot[];
@@ -57,7 +59,8 @@ interface TimelineOperatorBarProps {
   onPlay: () => void | Promise<void>;
   onSetMetronome: (enabled: boolean, countInBeats: number) => void | Promise<void>;
   onSetGuideEnabled: (enabled: boolean) => void | Promise<void>;
-  onConfigureGuideAudio: (enabled: boolean, gain: number, deviceName: string | null) => void | Promise<void>;
+  onConfigureCueAudio: (settings: MachineTimelineCueAudioSettingsV1) => void;
+  onRefreshCueAudio: () => void | Promise<void>;
   onSetPhases: (phases: TimelinePhaseSummary[]) => void | Promise<void>;
   onSetLoopRegion: (region: TimelineLoopRegionSummary | null) => void | Promise<void>;
   onSetLoopEnabled: (enabled: boolean) => void | Promise<void>;
@@ -172,8 +175,8 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
           </output>
         </Show>
         <button type="button" classList={{ active: props.guideEnabled }} aria-pressed={props.guideEnabled} data-timeline-guide title="Announce phases and loop transitions" onClick={() => void props.onSetGuideEnabled(!props.guideEnabled)}>Guide</button>
-        <Show when={props.guideAudioStatus.lastError}>
-          {(error) => <output class="timelineGuideAudioFault" role="status" title={error()}>Guide fault</output>}
+        <Show when={props.cueAudioStatus.lifecycle === "fault" || props.cueAudioStatus.lastError}>
+          {(error) => <output class="timelineCueAudioFault" role="status" title={props.cueAudioStatus.lastError ?? props.cueAudioStatus.faultCode}>Cue fault</output>}
         </Show>
       </div>
       <div class="timelineLoopControls" role="group" aria-label="Timeline A-B loop controls">
@@ -328,8 +331,9 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
             followAbortBusy={props.followAbortBusy}
             followAbortFocusFence={props.followAbortFocusFence}
             loopRegion={props.loopRegion}
-            guideAudioStatus={props.guideAudioStatus}
-            guideAudioDevices={props.guideAudioDevices}
+            cueAudioStatus={props.cueAudioStatus}
+            cueAudioMutationBusy={props.cueAudioMutationBusy}
+            cueAudioLocalError={props.cueAudioLocalError}
             onCreateTimeline={props.onCreateTimeline}
             onDuplicateTimeline={props.onDuplicateTimeline}
             onRemoveTimeline={props.onRemoveTimeline}
@@ -339,7 +343,8 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
             onAbortFollow={props.onAbortFollow}
             onSetPhases={props.onSetPhases}
             onSetLoopRegion={props.onSetLoopRegion}
-            onConfigureGuideAudio={props.onConfigureGuideAudio}
+            onConfigureCueAudio={props.onConfigureCueAudio}
+            onRefreshCueAudio={props.onRefreshCueAudio}
             onSeek={props.onSeek}
           />
         </div>

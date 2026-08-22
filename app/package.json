@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.3",
+  "version": "1.2.0-alpha.4",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
@@ -91,6 +91,8 @@
     "check:terminology": "node scripts/check-ui-terminology.mjs",
     "check:timeline-automation": "node scripts/check-timeline-automation-helpers.mjs",
     "check:timeline-follow-runtime": "node scripts/check-timeline-follow-runtime.mjs",
+    "check:timeline-cue-audio": "node scripts/check-timeline-cue-audio-runtime.mjs",
+    "check:timeline-cue-audio:browser": "node scripts/check-timeline-cue-audio-browser.mjs",
     "check:timeline-transport-runtime": "node scripts/check-timeline-transport-runtime.mjs",
     "check:safety-blackout-runtime": "node scripts/check-safety-blackout-runtime.mjs",
     "check:timeline-overlap-clusters": "node scripts/check-timeline-overlap-clusters.mjs",

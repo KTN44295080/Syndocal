@@ -1239,7 +1239,7 @@ mod tests {
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
         assert_eq!(names.len(), 473);
-        const ENGINE_COMMAND_COUNT: usize = 261;
+        const ENGINE_COMMAND_COUNT: usize = 262;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -1270,7 +1270,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1467);
+        assert_eq!(registry.operations.len(), 1468);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -1574,7 +1574,7 @@ mod tests {
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
         const TAURI_COUNT: usize = 473;
-        const ENGINE_COUNT: usize = 261;
+        const ENGINE_COUNT: usize = 262;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
         const FRONTEND_COUNT: usize = 411;
@@ -1584,8 +1584,8 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1467);
-        assert_eq!(SOURCE_TOTAL, 1500);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1468);
+        assert_eq!(SOURCE_TOTAL, 1501);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 31);
 
@@ -1893,7 +1893,7 @@ mod tests {
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1053);
+        assert_eq!(unclassified.len(), 1054);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -2529,11 +2529,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1467);
+        assert_eq!(legacy.operations.len(), 1468);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1467);
+        assert_eq!(operations.len(), 1468);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

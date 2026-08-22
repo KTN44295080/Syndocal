@@ -3,7 +3,7 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     fs,
-    io::{Cursor, Read, Seek, Write},
+    io::{Read, Seek, Write},
     net::{IpAddr, UdpSocket},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -79,16 +79,16 @@ use protocol::{
     TimelineAudioClipSummary, TimelineEventId, TimelineFollowRuntimeStatusSnapshot,
     TimelineFollowSettlementAck, TimelineFollowSettlementAckResult,
     TimelineFollowSettlementConsumerId, TimelineFollowSettlementDomain,
-    TimelineFollowSettlementState, TimelineFollowSummary, TimelineGuideCueKind,
-    TimelineGuideCueSummary, TimelineId, TimelineItemGroupId, TimelineItemGroupSummary,
-    TimelineItemRef, TimelineLayerKind, TimelineLoopRegionSummary, TimelineLoopScale,
-    TimelinePhaseSummary, TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind,
-    TimelineVideoClipSummary, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
-    VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary, VideoClipTakeDuration,
-    VideoClipTakeKind, VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary,
-    VideoEffectScope, VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary,
-    VideoIsfEffectSummary, VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
+    TimelineFollowSettlementState, TimelineFollowSummary, TimelineGuideAssetKey, TimelineId,
+    TimelineItemGroupId, TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind,
+    TimelineLoopRegionSummary, TimelineLoopScale, TimelinePhaseSummary, TimelineScheduleSource,
+    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoClipSummary,
+    TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary, ValueEffectRequest, Vec3,
+    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoClipRuntimeSnapshot,
+    VideoClipSlotId, VideoClipSlotSummary, VideoClipTakeDuration, VideoClipTakeKind,
+    VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary, VideoEffectScope,
+    VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
+    VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
     VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
     VideoLayerTransitionTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
@@ -119,6 +119,7 @@ mod ndi_transport;
 mod output_lease;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod spout_transport;
+pub mod timeline_cue_audio;
 
 use control_plane_query::{
     get_control_plane_query_capabilities, get_control_plane_query_schema_catalog,
@@ -138,6 +139,14 @@ type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
 >;
 
 const APP_NAME: &str = "Syndocal";
+static TIMELINE_CUE_AUDIO_RUNTIME_INCARNATION: LazyLock<u64> = LazyLock::new(|| {
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(1);
+    (started ^ u64::from(std::process::id()).rotate_left(17)) % VIDEO_CLIP_RUNTIME_GENERATION_MAX
+        + 1
+});
 /// AddDisplay-only read authority. This is intentionally separate from the
 /// public lease lifecycle query so an expired exact Both lease can be shown as
 /// recoverable without mutating or broadening Acquire/Recover.
@@ -1307,6 +1316,7 @@ struct AppState {
     #[cfg(test)]
     authored_effect_enabled_publish_attempts: AtomicU64,
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
+    timeline_cue_audio: Arc<TimelineCueAudioRuntime>,
     program_audio_handoff: Arc<ProgramAudioHandoffCoordinator>,
     _media_audio_sync: MediaAudioSyncRuntime,
     live_audio_input_lifecycle: Mutex<()>,
@@ -12037,6 +12047,1253 @@ fn reset_vj_preview_renderer(state: &State<'_, AppState>) -> Result<(), String> 
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TimelineCueAudioLifecycle {
+    LoadingSettings,
+    DisabledByProject,
+    WaitingForProgramOutput,
+    Applying,
+    Running,
+    MissingDevice,
+    AmbiguousDevice,
+    TopologyChanged,
+    Stalled,
+    Fault,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct TimelineCueAudioEndpointSummary {
+    name: String,
+    occurrences: u32,
+    selectable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TimelineCueAudioStatus {
+    runtime_incarnation: u64,
+    status_revision: u64,
+    desired_settings: timeline_cue_audio::MachineTimelineCueAudioSettingsV1,
+    applied_settings: Option<timeline_cue_audio::MachineTimelineCueAudioSettingsV1>,
+    settings_revision: u64,
+    lifecycle: TimelineCueAudioLifecycle,
+    requested_device_name: Option<String>,
+    resolved_device_name: Option<String>,
+    requested_topology_fingerprint: Option<String>,
+    observed_topology_fingerprint: Option<String>,
+    topology_generation: u64,
+    endpoints: Vec<TimelineCueAudioEndpointSummary>,
+    output_clock_epoch: u64,
+    schedule_generation: u64,
+    source_fence: u64,
+    next_output_frame: u64,
+    callback_live: bool,
+    fault_code: String,
+    fault_count: u64,
+    fault_sequence: u64,
+    last_error: Option<String>,
+    rotation_count: u64,
+    stall_count: u64,
+    config_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TimelineCueEngineIdentity {
+    epoch: u64,
+    transport_generation: u64,
+    schedule_generation: u64,
+    source: TimelineScheduleSource,
+    audio_transport_revision: u64,
+    metronome_enabled: bool,
+    guide_enabled: bool,
+    playing: bool,
+}
+
+struct TimelineCueAudioAttachment {
+    control: timeline_cue_audio::TimelineCueAudioControl,
+    mixer: rodio::mixer::Mixer,
+    _explicit_stream: Option<rodio::OutputStream>,
+    route: timeline_cue_audio::TimelineCueAudioRoute,
+    settings_revision: u64,
+    program_device_generation: Option<u64>,
+    engine_identity: TimelineCueEngineIdentity,
+    output_clock_epoch: u64,
+    source_fence: u64,
+    next_sequence: u64,
+    last_click_key: Option<(u64, u64, u16, bool)>,
+    last_guide_generation: Option<u64>,
+    last_guide_sequence: u64,
+    blocked_event_identity: Option<TimelineCueEngineIdentity>,
+    last_observed_output_frame: u64,
+    last_output_progress_at: Instant,
+}
+
+struct TimelineCueAudioRuntimeState {
+    runtime_incarnation: u64,
+    status_revision: u64,
+    initialized: bool,
+    settings_path: Option<PathBuf>,
+    desired: timeline_cue_audio::MachineTimelineCueAudioSettingsV1,
+    applied: Option<timeline_cue_audio::MachineTimelineCueAudioSettingsV1>,
+    settings_revision: u64,
+    lifecycle: TimelineCueAudioLifecycle,
+    attachment: Option<TimelineCueAudioAttachment>,
+    prepare_job: Option<TimelineCueAudioPrepareJob>,
+    topology_probe: Option<TimelineCueAudioTopologyProbe>,
+    last_topology_probe_at: Instant,
+    blocked_settings_revision: Option<u64>,
+    resolved_device_name: Option<String>,
+    observed_topology_fingerprint: Option<String>,
+    topology_generation: u64,
+    endpoints: Vec<TimelineCueAudioEndpointSummary>,
+    next_output_clock_epoch: u64,
+    next_source_fence: u64,
+    last_error: Option<String>,
+    rotation_count: u64,
+    stall_count: u64,
+    config_count: u64,
+}
+
+impl Default for TimelineCueAudioRuntimeState {
+    fn default() -> Self {
+        Self {
+            runtime_incarnation: *TIMELINE_CUE_AUDIO_RUNTIME_INCARNATION,
+            status_revision: 0,
+            initialized: false,
+            settings_path: None,
+            desired: timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default(),
+            applied: None,
+            settings_revision: 1,
+            lifecycle: TimelineCueAudioLifecycle::LoadingSettings,
+            attachment: None,
+            prepare_job: None,
+            topology_probe: None,
+            last_topology_probe_at: Instant::now(),
+            blocked_settings_revision: None,
+            resolved_device_name: None,
+            observed_topology_fingerprint: None,
+            topology_generation: 0,
+            endpoints: Vec::new(),
+            next_output_clock_epoch: 1,
+            next_source_fence: 1,
+            last_error: None,
+            rotation_count: 0,
+            stall_count: 0,
+            config_count: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+struct TimelineCueAudioRuntime {
+    state: Mutex<TimelineCueAudioRuntimeState>,
+    settings_update: Mutex<()>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TimelineCueAudioPrepareFingerprint {
+    settings_revision: u64,
+    program_device_generation: Option<u64>,
+}
+
+struct TimelineCueAudioPrepareJob {
+    fingerprint: TimelineCueAudioPrepareFingerprint,
+    started_at: Instant,
+    receiver: mpsc::Receiver<
+        Result<
+            (
+                PreparedTimelineCueDestination,
+                Vec<TimelineCueAudioEndpointSummary>,
+            ),
+            String,
+        >,
+    >,
+    timed_out: bool,
+}
+
+struct TimelineCueAudioTopologyProbe {
+    started_at: Instant,
+    timed_out: bool,
+    receiver: mpsc::Receiver<Result<(String, Vec<TimelineCueAudioEndpointSummary>), String>>,
+}
+
+struct TimelineCueProgramDestination {
+    mixer: rodio::mixer::Mixer,
+    output_sample_rate: u32,
+    channels: u16,
+    device_generation: u64,
+    resolved_device_name: Option<String>,
+}
+
+struct PreparedTimelineCueDestination {
+    mixer: rodio::mixer::Mixer,
+    output_sample_rate: u32,
+    channels: u16,
+    program_device_generation: Option<u64>,
+    resolved_device_name: Option<String>,
+    topology_fingerprint: Option<String>,
+    explicit_stream: Option<rodio::OutputStream>,
+    assets: timeline_cue_audio::GuideAssetBank,
+}
+
+fn timeline_cue_audio_topology_fingerprint(names: &[String]) -> String {
+    let mut names = names.to_vec();
+    names.sort();
+    let mut hasher = Sha256::new();
+    hasher.update(b"syndocal.timeline-cue-audio.topology.v1\0");
+    for name in names {
+        hasher.update((name.len() as u64).to_le_bytes());
+        hasher.update(name.as_bytes());
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect()
+}
+
+fn timeline_cue_audio_endpoint_summaries(names: &[String]) -> Vec<TimelineCueAudioEndpointSummary> {
+    let mut counts = BTreeMap::<String, u32>::new();
+    for name in names {
+        let count = counts.entry(name.clone()).or_default();
+        *count = count.saturating_add(1);
+    }
+    counts
+        .into_iter()
+        .map(|(name, occurrences)| TimelineCueAudioEndpointSummary {
+            name,
+            occurrences,
+            selectable: occurrences == 1,
+        })
+        .collect()
+}
+
+fn exact_timeline_cue_audio_device_index(
+    names: &[String],
+    requested_name: &str,
+) -> Result<usize, String> {
+    let matching = names
+        .iter()
+        .enumerate()
+        .filter_map(|(index, name)| (name == requested_name).then_some(index))
+        .collect::<Vec<_>>();
+    match matching.as_slice() {
+        [] => Err(format!(
+            "Timeline cue audio device '{requested_name}' is missing"
+        )),
+        [index] => Ok(*index),
+        _ => Err(format!(
+            "Timeline cue audio device '{requested_name}' is ambiguous ({} exact-name matches)",
+            matching.len()
+        )),
+    }
+}
+
+fn timeline_cue_program_destination(
+    playback: &MediaAudioPlayback,
+) -> Option<TimelineCueProgramDestination> {
+    #[cfg(test)]
+    if playback.stream.is_none() {
+        if let Some(mixer) = playback.timeline_test_mixer.as_ref() {
+            return Some(TimelineCueProgramDestination {
+                mixer: mixer.clone(),
+                output_sample_rate: 48_000,
+                channels: 2,
+                device_generation: playback.audio_device_generation,
+                resolved_device_name: Some("Test Program Mixer".to_string()),
+            });
+        }
+    }
+    let stream = playback.stream.as_ref()?;
+    Some(TimelineCueProgramDestination {
+        mixer: stream.mixer().clone(),
+        output_sample_rate: stream.config().sample_rate(),
+        channels: stream.config().channel_count(),
+        device_generation: playback.audio_device_generation,
+        resolved_device_name: playback.device_name.clone(),
+    })
+}
+
+fn timeline_cue_engine_identity(
+    timeline: &engine::TimelineAudioRuntimeSnapshot,
+) -> Result<TimelineCueEngineIdentity, String> {
+    let expected_source = match timeline.metronome_transport {
+        Some(engine::TimelineMetronomeTransport::DirectChild { cue_id, generation }) => {
+            TimelineScheduleSource::DirectChild { cue_id, generation }
+        }
+        Some(engine::TimelineMetronomeTransport::Root)
+        | Some(engine::TimelineMetronomeTransport::Follow { .. })
+        | None => TimelineScheduleSource::Root,
+    };
+    let mut published_identity = None::<(u64, u64, u64, TimelineScheduleSource)>;
+    for identity in timeline
+        .click_events
+        .iter()
+        .map(|event| {
+            (
+                event.epoch,
+                event.transport_generation,
+                event.schedule_generation,
+                event.source,
+            )
+        })
+        .chain(timeline.guide_cues.iter().map(|cue| {
+            (
+                cue.epoch,
+                cue.transport_generation,
+                cue.schedule_generation,
+                cue.source,
+            )
+        }))
+    {
+        if identity.3 != expected_source {
+            return Err(
+                "Timeline cue event source does not match the active transport".to_string(),
+            );
+        }
+        if published_identity.is_some_and(|expected| expected != identity) {
+            return Err("Timeline cue event batch mixes transport authorities".to_string());
+        }
+        published_identity = Some(identity);
+    }
+    let (epoch, transport_generation, schedule_generation, source) =
+        published_identity.unwrap_or((
+            timeline.source_projection_authority.epoch,
+            timeline.source_projection_authority.generation,
+            timeline.click_schedule_generation.max(1),
+            expected_source,
+        ));
+    if published_identity.is_some()
+        && (epoch != timeline.source_projection_authority.epoch
+            || transport_generation != timeline.source_projection_authority.generation)
+    {
+        return Err(
+            "Timeline cue event transport authority is stale against the published audio source"
+                .to_string(),
+        );
+    }
+    if schedule_generation != timeline.click_schedule_generation.max(1) {
+        return Err("Timeline cue event schedule generation is stale".to_string());
+    }
+    Ok(TimelineCueEngineIdentity {
+        epoch,
+        transport_generation,
+        schedule_generation,
+        source,
+        audio_transport_revision: timeline.transport_revision,
+        metronome_enabled: timeline.metronome_enabled,
+        guide_enabled: timeline.guide_enabled,
+        playing: timeline.playing,
+    })
+}
+
+fn timeline_cue_canonical_frame(position_ms: u64) -> Result<u64, String> {
+    position_ms
+        .checked_mul(u64::from(
+            timeline_cue_audio::TIMELINE_CUE_CANONICAL_SAMPLE_RATE,
+        ))
+        .map(|frames| frames / 1_000)
+        .ok_or_else(|| "Timeline cue audio canonical frame is exhausted".to_string())
+}
+
+fn native_timeline_guide_asset_key(
+    asset: TimelineGuideAssetKey,
+) -> timeline_cue_audio::TimelineGuideAssetKey {
+    match asset {
+        TimelineGuideAssetKey::Intro => timeline_cue_audio::TimelineGuideAssetKey::Intro,
+        TimelineGuideAssetKey::Verse => timeline_cue_audio::TimelineGuideAssetKey::Verse,
+        TimelineGuideAssetKey::PreChorus => timeline_cue_audio::TimelineGuideAssetKey::PreChorus,
+        TimelineGuideAssetKey::Chorus => timeline_cue_audio::TimelineGuideAssetKey::Chorus,
+        TimelineGuideAssetKey::Interlude => timeline_cue_audio::TimelineGuideAssetKey::Interlude,
+        TimelineGuideAssetKey::Bridge => timeline_cue_audio::TimelineGuideAssetKey::Bridge,
+        TimelineGuideAssetKey::Breakdown => timeline_cue_audio::TimelineGuideAssetKey::Breakdown,
+        TimelineGuideAssetKey::Outro => timeline_cue_audio::TimelineGuideAssetKey::Outro,
+        TimelineGuideAssetKey::Looping => timeline_cue_audio::TimelineGuideAssetKey::Looping,
+        TimelineGuideAssetKey::Break => timeline_cue_audio::TimelineGuideAssetKey::Break,
+        TimelineGuideAssetKey::Trans => timeline_cue_audio::TimelineGuideAssetKey::Trans,
+        TimelineGuideAssetKey::Complete => timeline_cue_audio::TimelineGuideAssetKey::Complete,
+    }
+}
+
+fn enumerate_timeline_cue_audio_outputs() -> Result<
+    (
+        Vec<(String, rodio::cpal::Device)>,
+        String,
+        Vec<TimelineCueAudioEndpointSummary>,
+    ),
+    String,
+> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+
+    let mut devices = Vec::new();
+    for device in rodio::cpal::default_host()
+        .output_devices()
+        .map_err(|error| format!("Failed to list Timeline cue audio devices: {error}"))?
+    {
+        let name = device
+            .name()
+            .map_err(|error| format!("Timeline cue audio device name is unavailable: {error}"))?;
+        devices.push((name, device));
+    }
+    let names = devices
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    Ok((
+        devices,
+        timeline_cue_audio_topology_fingerprint(&names),
+        timeline_cue_audio_endpoint_summaries(&names),
+    ))
+}
+
+fn prepare_explicit_timeline_cue_destination(
+    settings: &timeline_cue_audio::MachineTimelineCueAudioSettingsV1,
+) -> Result<
+    (
+        PreparedTimelineCueDestination,
+        Vec<TimelineCueAudioEndpointSummary>,
+    ),
+    String,
+> {
+    use rodio::cpal::traits::DeviceTrait;
+
+    let requested_name = settings
+        .device_name
+        .as_deref()
+        .ok_or_else(|| "Explicit Timeline cue audio route requires a device name".to_string())?;
+    let expected_topology = settings.topology_fingerprint.as_deref().ok_or_else(|| {
+        "Explicit Timeline cue audio selection predates topology fencing; reselect the device"
+            .to_string()
+    })?;
+    let (mut devices, topology_fingerprint, endpoints) = enumerate_timeline_cue_audio_outputs()?;
+    if topology_fingerprint != expected_topology {
+        return Err(format!(
+            "Timeline cue audio topology changed (expected {expected_topology}, observed {topology_fingerprint}); reselect the device"
+        ));
+    }
+    let names = devices
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    let index = exact_timeline_cue_audio_device_index(&names, requested_name)?;
+    let (_, device) = devices.swap_remove(index);
+    let resolved_device_name = device.name().ok();
+    let stream = rodio::OutputStreamBuilder::from_device(device)
+        .and_then(|builder| builder.open_stream())
+        .map_err(|error| format!("Failed to open Timeline cue audio output: {error}"))?;
+    let output_sample_rate = stream.config().sample_rate();
+    let channels = stream.config().channel_count();
+    let mixer = stream.mixer().clone();
+    let assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(output_sample_rate)?;
+    Ok((
+        PreparedTimelineCueDestination {
+            mixer,
+            output_sample_rate,
+            channels,
+            program_device_generation: None,
+            resolved_device_name,
+            topology_fingerprint: Some(topology_fingerprint),
+            explicit_stream: Some(stream),
+            assets,
+        },
+        endpoints,
+    ))
+}
+
+fn prepare_follow_program_timeline_cue_destination(
+    program: TimelineCueProgramDestination,
+) -> Result<PreparedTimelineCueDestination, String> {
+    let assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(program.output_sample_rate)?;
+    Ok(PreparedTimelineCueDestination {
+        mixer: program.mixer,
+        output_sample_rate: program.output_sample_rate,
+        channels: program.channels,
+        program_device_generation: Some(program.device_generation),
+        resolved_device_name: program.resolved_device_name,
+        topology_fingerprint: None,
+        explicit_stream: None,
+        assets,
+    })
+}
+
+const TIMELINE_CUE_AUDIO_PREPARE_TIMEOUT: Duration = Duration::from_millis(750);
+
+impl TimelineCueAudioRuntime {
+    fn initialize(
+        &self,
+        settings_path: PathBuf,
+        loaded: Result<timeline_cue_audio::MachineTimelineCueAudioSettingsV1, String>,
+    ) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.settings_path = Some(settings_path);
+        state.initialized = true;
+        match loaded {
+            Ok(settings) => {
+                state.desired = settings;
+                state.lifecycle = TimelineCueAudioLifecycle::DisabledByProject;
+                state.last_error = None;
+            }
+            Err(error) => {
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.blocked_settings_revision = Some(state.settings_revision);
+                state.last_error = Some(error);
+            }
+        }
+    }
+
+    fn publish_settings(
+        &self,
+        settings: timeline_cue_audio::MachineTimelineCueAudioSettingsV1,
+    ) -> Result<u64, String> {
+        settings.clone().validated()?;
+        let (revision, retired) = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "Timeline cue audio lifecycle lock was poisoned".to_string())?;
+            if state.desired == settings {
+                return Ok(state.settings_revision);
+            }
+            let revision = state
+                .settings_revision
+                .checked_add(1)
+                .ok_or_else(|| "Timeline cue audio settings revision is exhausted".to_string())?;
+            let retired = state.attachment.take();
+            state.desired = settings;
+            state.settings_revision = revision;
+            state.applied = None;
+            state.blocked_settings_revision = None;
+            state.lifecycle = TimelineCueAudioLifecycle::Applying;
+            state.last_error = None;
+            state.config_count = state.config_count.saturating_add(1);
+            (revision, retired)
+        };
+        if let Some(attachment) = retired {
+            attachment.control.retire();
+        }
+        Ok(revision)
+    }
+
+    fn status(&self) -> Result<TimelineCueAudioStatus, String> {
+        let mut state = self
+            .state
+            .try_lock()
+            .map_err(|_| "Timeline cue audio status is busy; retry".to_string())?;
+        let status_revision = state
+            .status_revision
+            .checked_add(1)
+            .filter(|revision| *revision <= VIDEO_CLIP_RUNTIME_GENERATION_MAX)
+            .ok_or_else(|| {
+                "Timeline cue audio status revision is exhausted; restart is required".to_string()
+            })?;
+        state.status_revision = status_revision;
+        let (
+            output_clock_epoch,
+            schedule_generation,
+            source_fence,
+            next_output_frame,
+            fault,
+            callback_live,
+        ) = if let Some(attachment) = state.attachment.as_ref() {
+            (
+                attachment.output_clock_epoch,
+                attachment.engine_identity.schedule_generation,
+                attachment.source_fence,
+                attachment.control.next_output_frame(),
+                attachment.control.fault_status(),
+                attachment.last_observed_output_frame > 0
+                    && attachment.last_output_progress_at.elapsed()
+                        < TIMELINE_CUE_AUDIO_PREPARE_TIMEOUT,
+            )
+        } else {
+            (
+                0,
+                0,
+                0,
+                0,
+                timeline_cue_audio::TimelineCueFaultStatus {
+                    code: timeline_cue_audio::TimelineCueFaultCode::None,
+                    count: 0,
+                    sequence: 0,
+                },
+                false,
+            )
+        };
+        Ok(TimelineCueAudioStatus {
+            runtime_incarnation: state.runtime_incarnation,
+            status_revision,
+            desired_settings: state.desired.clone(),
+            applied_settings: state.applied.clone(),
+            settings_revision: state.settings_revision,
+            lifecycle: state.lifecycle,
+            requested_device_name: state.desired.device_name.clone(),
+            resolved_device_name: state.resolved_device_name.clone(),
+            requested_topology_fingerprint: state.desired.topology_fingerprint.clone(),
+            observed_topology_fingerprint: state.observed_topology_fingerprint.clone(),
+            topology_generation: state.topology_generation,
+            endpoints: state.endpoints.clone(),
+            output_clock_epoch,
+            schedule_generation,
+            source_fence,
+            next_output_frame,
+            callback_live,
+            fault_code: format!("{:?}", fault.code),
+            fault_count: fault.count,
+            fault_sequence: fault.sequence,
+            last_error: state.last_error.clone(),
+            rotation_count: state.rotation_count,
+            stall_count: state.stall_count,
+            config_count: state.config_count,
+        })
+    }
+
+    fn spawn_prepare(
+        &self,
+        fingerprint: TimelineCueAudioPrepareFingerprint,
+        settings: timeline_cue_audio::MachineTimelineCueAudioSettingsV1,
+        program: Option<TimelineCueProgramDestination>,
+    ) -> Result<(), String> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("syndocal-timeline-cue-audio-prepare".to_string())
+            .spawn(move || {
+                let result = match settings.route {
+                    timeline_cue_audio::TimelineCueAudioRoute::FollowProgram => program
+                        .ok_or_else(|| "Program audio output is not available".to_string())
+                        .and_then(prepare_follow_program_timeline_cue_destination)
+                        .map(|destination| (destination, Vec::new())),
+                    timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice => {
+                        prepare_explicit_timeline_cue_destination(&settings)
+                    }
+                };
+                let _ = sender.send(result);
+            })
+            .map_err(|error| {
+                format!("Timeline cue audio prepare worker could not start: {error}")
+            })?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "Timeline cue audio lifecycle lock was poisoned".to_string())?;
+        if state.prepare_job.is_none()
+            && state.topology_probe.is_none()
+            && state.settings_revision == fingerprint.settings_revision
+        {
+            state.prepare_job = Some(TimelineCueAudioPrepareJob {
+                fingerprint,
+                started_at: Instant::now(),
+                receiver,
+                timed_out: false,
+            });
+            state.lifecycle = TimelineCueAudioLifecycle::Applying;
+        }
+        Ok(())
+    }
+
+    fn poll_or_spawn_topology_probe(&self) {
+        let mut retired = None;
+        let mut spawn = false;
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(probe) = state.topology_probe.as_mut() {
+                match probe.receiver.try_recv() {
+                    Ok(Ok((fingerprint, endpoints))) => {
+                        let timed_out = probe.timed_out;
+                        state.topology_probe = None;
+                        state.last_topology_probe_at = Instant::now();
+                        if timed_out {
+                            retired = state.attachment.take();
+                            state.applied = None;
+                            state.blocked_settings_revision = Some(state.settings_revision);
+                            state.lifecycle = TimelineCueAudioLifecycle::Stalled;
+                            state.last_error = Some(
+                                "Timeline cue audio ignored a late topology result after its 750 ms timeout"
+                                    .to_string(),
+                            );
+                        } else {
+                            if state.observed_topology_fingerprint.as_deref() != Some(&fingerprint)
+                            {
+                                state.topology_generation =
+                                    state.topology_generation.saturating_add(1);
+                            }
+                            state.observed_topology_fingerprint = Some(fingerprint.clone());
+                            state.endpoints = endpoints;
+                            let expected = state
+                                .applied
+                                .as_ref()
+                                .and_then(|settings| settings.topology_fingerprint.as_deref());
+                            if expected != Some(&fingerprint) {
+                                retired = state.attachment.take();
+                                state.applied = None;
+                                state.blocked_settings_revision = Some(state.settings_revision);
+                                state.lifecycle = TimelineCueAudioLifecycle::TopologyChanged;
+                                state.last_error = Some(
+                                    "Timeline cue audio topology changed; explicitly reselect the device"
+                                        .to_string(),
+                                );
+                            }
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        state.topology_probe = None;
+                        retired = state.attachment.take();
+                        state.applied = None;
+                        state.blocked_settings_revision = Some(state.settings_revision);
+                        state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                        state.last_error = Some(error);
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        state.topology_probe = None;
+                        retired = state.attachment.take();
+                        state.applied = None;
+                        state.blocked_settings_revision = Some(state.settings_revision);
+                        state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                        state.last_error =
+                            Some("Timeline cue audio topology worker disconnected".to_string());
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
+                        if !probe.timed_out
+                            && probe.started_at.elapsed() >= TIMELINE_CUE_AUDIO_PREPARE_TIMEOUT
+                        {
+                            probe.timed_out = true;
+                            retired = state.attachment.take();
+                            state.applied = None;
+                            state.blocked_settings_revision = Some(state.settings_revision);
+                            state.stall_count = state.stall_count.saturating_add(1);
+                            state.lifecycle = TimelineCueAudioLifecycle::Stalled;
+                            state.last_error = Some(
+                                "Timeline cue audio topology probe exceeded 750 ms; the single worker is quarantined and restart is required"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+            } else if state.prepare_job.is_none()
+                && state.attachment.as_ref().is_some_and(|attachment| {
+                    attachment.route == timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice
+                })
+                && state.last_topology_probe_at.elapsed() >= Duration::from_secs(2)
+            {
+                spawn = true;
+            }
+        }
+        if let Some(attachment) = retired {
+            attachment.control.retire();
+        }
+        if !spawn {
+            return;
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        if std::thread::Builder::new()
+            .name("syndocal-timeline-cue-audio-topology".to_string())
+            .spawn(move || {
+                let result = enumerate_timeline_cue_audio_outputs()
+                    .map(|(_, fingerprint, endpoints)| (fingerprint, endpoints));
+                let _ = sender.send(result);
+            })
+            .is_err()
+        {
+            self.fail_prepare("Timeline cue audio topology worker could not start".to_string());
+            return;
+        }
+        if let Ok(mut state) = self.state.lock() {
+            if state.topology_probe.is_none() && state.prepare_job.is_none() {
+                state.topology_probe = Some(TimelineCueAudioTopologyProbe {
+                    started_at: Instant::now(),
+                    timed_out: false,
+                    receiver,
+                });
+            }
+        }
+    }
+
+    fn sync(
+        &self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+        audio: &Arc<Mutex<MediaAudioPlayback>>,
+    ) {
+        let project_enabled = timeline.metronome_enabled || timeline.guide_enabled;
+        let mut retired = None;
+        if let Ok(mut state) = self.state.lock() {
+            if !state.initialized
+                || (state.blocked_settings_revision == Some(state.settings_revision)
+                    && state.prepare_job.is_none())
+            {
+                return;
+            }
+            if !project_enabled {
+                retired = state.attachment.take();
+                state.lifecycle = TimelineCueAudioLifecycle::DisabledByProject;
+                state.applied = None;
+            }
+        }
+        if let Some(attachment) = retired {
+            attachment.control.retire();
+        }
+        if !project_enabled {
+            return;
+        }
+
+        self.poll_or_spawn_topology_probe();
+
+        let route = match self.state.try_lock() {
+            Ok(state) => state.desired.route,
+            Err(_) => return,
+        };
+        let program = if route == timeline_cue_audio::TimelineCueAudioRoute::FollowProgram {
+            match audio.try_lock() {
+                Ok(playback) => timeline_cue_program_destination(&playback),
+                Err(TryLockError::WouldBlock) => {
+                    // A busy Program mixer is not evidence that the physical
+                    // stream disappeared. Preserve the exact attachment and
+                    // retry this observational capture on the next worker tick.
+                    return;
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    self.fail_prepare("Media audio playback lock was poisoned".to_string());
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
+        let mut completed = None;
+        let mut spawn = None;
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(job) = state.prepare_job.as_mut() {
+                match job.receiver.try_recv() {
+                    Ok(result) => {
+                        completed = Some((job.fingerprint, job.timed_out, result));
+                        state.prepare_job = None;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        completed = Some((
+                            job.fingerprint,
+                            job.timed_out,
+                            Err("Timeline cue audio prepare worker disconnected".to_string()),
+                        ));
+                        state.prepare_job = None;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
+                        if !job.timed_out
+                            && job.started_at.elapsed() >= TIMELINE_CUE_AUDIO_PREPARE_TIMEOUT
+                        {
+                            job.timed_out = true;
+                            state.stall_count = state.stall_count.saturating_add(1);
+                            state.lifecycle = TimelineCueAudioLifecycle::Stalled;
+                            state.blocked_settings_revision = Some(state.settings_revision);
+                            state.last_error = Some(
+                                "Timeline cue audio preparation exceeded 750 ms; the single worker is quarantined"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+            if completed.is_none() {
+                let program_generation = program.as_ref().map(|value| value.device_generation);
+                let attachment_valid = state.attachment.as_ref().is_some_and(|attachment| {
+                    attachment.settings_revision == state.settings_revision
+                        && attachment.route == state.desired.route
+                        && attachment.program_device_generation == program_generation
+                });
+                if !attachment_valid
+                    && state.prepare_job.is_none()
+                    && state.topology_probe.is_none()
+                {
+                    if route == timeline_cue_audio::TimelineCueAudioRoute::FollowProgram
+                        && program.is_none()
+                    {
+                        state.lifecycle = TimelineCueAudioLifecycle::WaitingForProgramOutput;
+                    } else {
+                        spawn = Some((
+                            TimelineCueAudioPrepareFingerprint {
+                                settings_revision: state.settings_revision,
+                                program_device_generation: program_generation,
+                            },
+                            state.desired.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some((fingerprint, timed_out, result)) = completed {
+            if !timed_out {
+                self.complete_prepare(fingerprint, result, timeline, program.as_ref());
+            }
+        }
+        if let Some((fingerprint, settings)) = spawn {
+            if let Err(error) = self.spawn_prepare(fingerprint, settings, program) {
+                self.fail_prepare(error);
+            }
+            return;
+        }
+        self.feed_attachment(timeline, program.as_ref());
+    }
+
+    fn complete_prepare(
+        &self,
+        fingerprint: TimelineCueAudioPrepareFingerprint,
+        result: Result<
+            (
+                PreparedTimelineCueDestination,
+                Vec<TimelineCueAudioEndpointSummary>,
+            ),
+            String,
+        >,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+        program: Option<&TimelineCueProgramDestination>,
+    ) {
+        let current = self
+            .state
+            .try_lock()
+            .ok()
+            .map(|state| TimelineCueAudioPrepareFingerprint {
+                settings_revision: state.settings_revision,
+                program_device_generation: program.map(|value| value.device_generation),
+            });
+        if current != Some(fingerprint) {
+            return;
+        }
+        let (destination, endpoints) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                self.fail_prepare(error);
+                return;
+            }
+        };
+        let identity = match timeline_cue_engine_identity(timeline) {
+            Ok(identity) => identity,
+            Err(error) => {
+                self.fail_prepare(error);
+                return;
+            }
+        };
+        let canonical_anchor_frame = match timeline_cue_canonical_frame(timeline.position_ms) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.fail_prepare(error);
+                return;
+            }
+        };
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => return,
+        };
+        let Some(output_clock_epoch) = state.next_output_clock_epoch.checked_add(1) else {
+            state.lifecycle = TimelineCueAudioLifecycle::Fault;
+            state.last_error = Some("Timeline cue audio output epoch is exhausted".to_string());
+            state.blocked_settings_revision = Some(state.settings_revision);
+            return;
+        };
+        let Some(source_fence) = state.next_source_fence.checked_add(1) else {
+            state.lifecycle = TimelineCueAudioLifecycle::Fault;
+            state.last_error = Some("Timeline cue audio source fence is exhausted".to_string());
+            state.blocked_settings_revision = Some(state.settings_revision);
+            return;
+        };
+        let authority = timeline_cue_audio::TimelineCueAuthority {
+            fence: timeline_cue_audio::TimelineCueFence {
+                output_clock_epoch,
+                schedule_generation: identity.schedule_generation.max(1),
+                source_fence,
+            },
+            clock: timeline_cue_audio::TimelineCueClockMap {
+                canonical_anchor_frame,
+                output_anchor_frame: 0,
+            },
+        };
+        let settings = state.desired.clone();
+        let created = timeline_cue_audio::create_timeline_cue_audio_source(
+            destination.output_sample_rate,
+            destination.channels,
+            timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY,
+            destination.assets,
+            authority,
+            settings.click_gain,
+            settings.guide_gain,
+        );
+        let (control, source) = match created {
+            Ok(created) => created,
+            Err(error) => {
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.last_error = Some(error);
+                state.blocked_settings_revision = Some(state.settings_revision);
+                return;
+            }
+        };
+        destination.mixer.add(source);
+        if let Some(old) = state.attachment.take() {
+            old.control.retire();
+        }
+        state.next_output_clock_epoch = output_clock_epoch;
+        state.next_source_fence = source_fence;
+        state.rotation_count = state.rotation_count.saturating_add(1);
+        state.resolved_device_name = destination.resolved_device_name.clone();
+        state.observed_topology_fingerprint = destination.topology_fingerprint.clone();
+        if !endpoints.is_empty() {
+            state.endpoints = endpoints;
+            state.topology_generation = state.topology_generation.saturating_add(1);
+        }
+        state.applied = Some(settings.clone());
+        state.lifecycle = TimelineCueAudioLifecycle::Running;
+        state.last_error = None;
+        state.attachment = Some(TimelineCueAudioAttachment {
+            control,
+            mixer: destination.mixer,
+            _explicit_stream: destination.explicit_stream,
+            route: settings.route,
+            settings_revision: state.settings_revision,
+            program_device_generation: destination.program_device_generation,
+            engine_identity: identity,
+            output_clock_epoch,
+            source_fence,
+            next_sequence: 1,
+            last_click_key: None,
+            last_guide_generation: None,
+            last_guide_sequence: 0,
+            blocked_event_identity: None,
+            last_observed_output_frame: 0,
+            last_output_progress_at: Instant::now(),
+        });
+        drop(state);
+        self.feed_attachment(timeline, program);
+    }
+
+    fn fail_prepare(&self, error: String) {
+        if let Ok(mut state) = self.state.lock() {
+            state.lifecycle = if error.contains("missing") {
+                TimelineCueAudioLifecycle::MissingDevice
+            } else if error.contains("ambiguous") {
+                TimelineCueAudioLifecycle::AmbiguousDevice
+            } else if error.contains("topology changed") {
+                TimelineCueAudioLifecycle::TopologyChanged
+            } else {
+                TimelineCueAudioLifecycle::Fault
+            };
+            state.blocked_settings_revision = Some(state.settings_revision);
+            state.last_error = Some(error);
+        }
+    }
+
+    fn feed_attachment(
+        &self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+        program: Option<&TimelineCueProgramDestination>,
+    ) {
+        let identity = match timeline_cue_engine_identity(timeline) {
+            Ok(identity) => identity,
+            Err(error) => {
+                if let Ok(mut state) = self.state.try_lock() {
+                    if let Some(attachment) = state.attachment.take() {
+                        attachment.control.retire();
+                    }
+                    state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                    state.last_error = Some(error);
+                    state.blocked_settings_revision = Some(state.settings_revision);
+                }
+                return;
+            }
+        };
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => return,
+        };
+        let Some(mut attachment) = state.attachment.take() else {
+            return;
+        };
+        let observed_output_frame = attachment.control.next_output_frame();
+        if observed_output_frame != attachment.last_observed_output_frame {
+            attachment.last_observed_output_frame = observed_output_frame;
+            attachment.last_output_progress_at = Instant::now();
+        } else if attachment.last_output_progress_at.elapsed() >= TIMELINE_CUE_AUDIO_PREPARE_TIMEOUT
+        {
+            attachment.control.retire();
+            state.applied = None;
+            state.blocked_settings_revision = Some(state.settings_revision);
+            state.lifecycle = TimelineCueAudioLifecycle::Stalled;
+            state.stall_count = state.stall_count.saturating_add(1);
+            state.last_error =
+                Some("Timeline cue audio callback has not advanced for 750 ms".to_string());
+            return;
+        }
+        if attachment.route == timeline_cue_audio::TimelineCueAudioRoute::FollowProgram
+            && program.map(|value| value.device_generation) != attachment.program_device_generation
+        {
+            attachment.control.retire();
+            state.applied = None;
+            state.lifecycle = TimelineCueAudioLifecycle::WaitingForProgramOutput;
+            return;
+        }
+        if identity != attachment.engine_identity {
+            let canonical_anchor_frame = match timeline_cue_canonical_frame(timeline.position_ms) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    attachment.control.retire();
+                    state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                    state.last_error = Some(error);
+                    return;
+                }
+            };
+            let Some(output_clock_epoch) = state.next_output_clock_epoch.checked_add(1) else {
+                attachment.control.retire();
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.last_error = Some("Timeline cue audio output epoch is exhausted".to_string());
+                return;
+            };
+            let Some(source_fence) = state.next_source_fence.checked_add(1) else {
+                attachment.control.retire();
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.last_error = Some("Timeline cue audio source fence is exhausted".to_string());
+                return;
+            };
+            let authority = timeline_cue_audio::TimelineCueAuthority {
+                fence: timeline_cue_audio::TimelineCueFence {
+                    output_clock_epoch,
+                    schedule_generation: identity.schedule_generation.max(1),
+                    source_fence,
+                },
+                clock: timeline_cue_audio::TimelineCueClockMap {
+                    canonical_anchor_frame,
+                    output_anchor_frame: 0,
+                },
+            };
+            if let Err(error) = attachment.control.publish_authority(authority) {
+                attachment.control.retire();
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.last_error = Some(error);
+                return;
+            }
+            match attachment.control.new_source() {
+                Ok(source) => attachment.mixer.add(source),
+                Err(error) => {
+                    attachment.control.retire();
+                    state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                    state.last_error = Some(error);
+                    return;
+                }
+            }
+            attachment.output_clock_epoch = output_clock_epoch;
+            attachment.source_fence = source_fence;
+            attachment.engine_identity = identity.clone();
+            attachment.next_sequence = 1;
+            attachment.last_click_key = None;
+            attachment.last_guide_generation = None;
+            attachment.last_guide_sequence = 0;
+            attachment.blocked_event_identity = None;
+            state.next_output_clock_epoch = output_clock_epoch;
+            state.next_source_fence = source_fence;
+            state.rotation_count = state.rotation_count.saturating_add(1);
+        }
+        let fence = timeline_cue_audio::TimelineCueFence {
+            output_clock_epoch: attachment.output_clock_epoch,
+            schedule_generation: attachment.engine_identity.schedule_generation.max(1),
+            source_fence: attachment.source_fence,
+        };
+        if attachment.blocked_event_identity.as_ref() == Some(&identity) {
+            state.attachment = Some(attachment);
+            return;
+        }
+        let mut pending = Vec::<(u64, u8, timeline_cue_audio::TimelineCueEventKind, u16)>::new();
+        if timeline.metronome_enabled {
+            for click in &timeline.click_events {
+                let key = (
+                    click.sample_frame,
+                    click.measure,
+                    click.beat,
+                    click.count_in,
+                );
+                if attachment.last_click_key.is_some_and(|last| key <= last) {
+                    continue;
+                }
+                pending.push((
+                    click.sample_frame,
+                    1,
+                    timeline_cue_audio::TimelineCueEventKind::Click {
+                        accented: click.downbeat || click.count_in,
+                    },
+                    1_000,
+                ));
+            }
+        }
+        if timeline.guide_enabled {
+            let current_generation = timeline.guide_cues.last().map(|guide| guide.generation);
+            for guide in &timeline.guide_cues {
+                if Some(guide.generation) != current_generation {
+                    continue;
+                }
+                if attachment.last_guide_generation == Some(guide.generation)
+                    && guide.sequence <= attachment.last_guide_sequence
+                {
+                    continue;
+                }
+                pending.push((
+                    guide.sample_frame,
+                    0,
+                    timeline_cue_audio::TimelineCueEventKind::Guide {
+                        asset: native_timeline_guide_asset_key(guide.asset),
+                    },
+                    guide.playback_rate_milli,
+                ));
+            }
+        }
+        pending.sort_by_key(|(frame, priority, _, _)| (*frame, *priority));
+        let mut events = Vec::with_capacity(pending.len());
+        let mut next_sequence = attachment.next_sequence;
+        for (canonical_frame, _, kind, playback_rate_milli) in pending {
+            events.push(timeline_cue_audio::TimelineCueEvent {
+                canonical_frame,
+                sequence: next_sequence,
+                kind,
+                playback_rate_milli,
+            });
+            let Some(next) = next_sequence.checked_add(1) else {
+                attachment.control.retire();
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.last_error =
+                    Some("Timeline cue audio event sequence is exhausted".to_string());
+                return;
+            };
+            next_sequence = next;
+        }
+        if !events.is_empty() {
+            if let Err(error) = attachment.control.enqueue_batch(fence, &events) {
+                attachment.blocked_event_identity = Some(identity.clone());
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.last_error = Some(error);
+            } else {
+                attachment.next_sequence = next_sequence;
+                attachment.last_click_key = timeline.click_events.last().map(|click| {
+                    (
+                        click.sample_frame,
+                        click.measure,
+                        click.beat,
+                        click.count_in,
+                    )
+                });
+                if let Some(guide) = timeline.guide_cues.last() {
+                    attachment.last_guide_generation = Some(guide.generation);
+                    attachment.last_guide_sequence = guide.sequence;
+                }
+            }
+        }
+        let output_frame = attachment.control.next_output_frame();
+        if output_frame != attachment.last_observed_output_frame {
+            attachment.last_observed_output_frame = output_frame;
+            attachment.last_output_progress_at = Instant::now();
+        }
+        if attachment.blocked_event_identity.is_none() {
+            state.lifecycle = TimelineCueAudioLifecycle::Running;
+        }
+        state.attachment = Some(attachment);
+    }
+}
+
 #[derive(Default)]
 struct MediaAudioPlayback {
     stream: Option<rodio::OutputStream>,
@@ -12057,8 +13314,6 @@ struct MediaAudioPlayback {
     timeline_last_resync_at: HashMap<TimelineAudioSinkKey, Instant>,
     timeline_transport: TimelineAudioTransportState,
     timeline_source_projection_authority: Option<engine::TimelineAudioProjectionAuthority>,
-    metronome: TimelineMetronomePlaybackState,
-    guide: TimelineGuideAudioPlayback,
     resync_count: u64,
     last_drift_ms: i64,
     max_abs_drift_ms: u64,
@@ -12070,227 +13325,6 @@ struct MediaAudioPlayback {
     timeline_stop_count: u64,
     #[cfg(test)]
     timeline_last_install_source_position_ms: HashMap<TimelineAudioSinkKey, u64>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-struct TimelineGuideAudioStatus {
-    enabled: bool,
-    gain: f32,
-    requested_device_name: Option<String>,
-    resolved_device_name: Option<String>,
-    active_generation: Option<u64>,
-    last_sequence: u64,
-    last_spoken_label: Option<String>,
-    spoken_count: u64,
-    last_error: Option<String>,
-}
-
-struct TimelineGuideAudioPlayback {
-    enabled: bool,
-    gain: f32,
-    requested_device_name: Option<String>,
-    resolved_device_name: Option<String>,
-    stream: Option<rodio::OutputStream>,
-    sink: Option<rodio::Sink>,
-    suppress_existing_on_next_sync: bool,
-    /// The engine publishes this revision even when no Guide cue is queued;
-    /// it is the authoritative cancellation fence for a replaced Follow
-    /// generation/project image.
-    last_transport_revision: Option<u64>,
-    active_generation: Option<u64>,
-    last_sequence: u64,
-    last_spoken_label: Option<String>,
-    spoken_count: u64,
-    last_error: Option<String>,
-}
-
-impl Default for TimelineGuideAudioPlayback {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            gain: 0.8,
-            requested_device_name: None,
-            resolved_device_name: None,
-            stream: None,
-            sink: None,
-            suppress_existing_on_next_sync: false,
-            last_transport_revision: None,
-            active_generation: None,
-            last_sequence: 0,
-            last_spoken_label: None,
-            spoken_count: 0,
-            last_error: None,
-        }
-    }
-}
-
-impl TimelineGuideAudioPlayback {
-    fn status(&self) -> TimelineGuideAudioStatus {
-        TimelineGuideAudioStatus {
-            enabled: self.enabled,
-            gain: self.gain,
-            requested_device_name: self.requested_device_name.clone(),
-            resolved_device_name: self.resolved_device_name.clone(),
-            active_generation: self.active_generation,
-            last_sequence: self.last_sequence,
-            last_spoken_label: self.last_spoken_label.clone(),
-            spoken_count: self.spoken_count,
-            last_error: self.last_error.clone(),
-        }
-    }
-
-    fn configure(
-        &mut self,
-        enabled: bool,
-        gain: f32,
-        device_name: Option<String>,
-    ) -> Result<(), String> {
-        if !gain.is_finite() {
-            return Err("Timeline Guide gain must be finite".to_string());
-        }
-        let device_name = device_name
-            .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty());
-        let device_changed = self.requested_device_name != device_name;
-        self.enabled = enabled;
-        self.gain = gain.clamp(0.0, 2.0);
-        self.requested_device_name = device_name;
-        if device_changed || !enabled {
-            self.cancel_pending();
-            self.suppress_existing_on_next_sync = true;
-            self.stream = None;
-            self.resolved_device_name = None;
-        } else if let Some(sink) = self.sink.as_ref() {
-            sink.set_volume(self.gain);
-        }
-        self.last_error = None;
-        Ok(())
-    }
-
-    fn cancel_pending(&mut self) {
-        if let Some(sink) = self.sink.take() {
-            sink.stop();
-        }
-        self.active_generation = None;
-        self.last_sequence = 0;
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct TimelineMetronomePlaybackState {
-    transport: Option<engine::TimelineMetronomeTransport>,
-    last_count_in_step: Option<u8>,
-    last_beat_index: Option<u64>,
-}
-
-fn timeline_metronome_click_action(
-    state: &mut TimelineMetronomePlaybackState,
-    timeline: &engine::TimelineAudioRuntimeSnapshot,
-) -> Option<bool> {
-    let active =
-        timeline.playing && timeline.metronome_enabled && timeline.metronome_transport.is_some();
-    if !active {
-        *state = TimelineMetronomePlaybackState::default();
-        return None;
-    }
-
-    if state.transport != timeline.metronome_transport {
-        *state = TimelineMetronomePlaybackState {
-            transport: timeline.metronome_transport,
-            ..TimelineMetronomePlaybackState::default()
-        };
-    }
-
-    let beat_ms = (60_000.0 / f64::from(timeline.bpm.clamp(20.0, 300.0))).max(1.0);
-    if timeline.count_in_remaining_ms > 0 && timeline.count_in_beats > 0 {
-        let remaining_beats = ((timeline.count_in_remaining_ms as f64) / beat_ms)
-            .ceil()
-            .clamp(1.0, f64::from(timeline.count_in_beats)) as u8;
-        let step = timeline.count_in_beats.saturating_sub(remaining_beats);
-        if state.last_count_in_step == Some(step) {
-            return None;
-        }
-        state.last_count_in_step = Some(step);
-        state.last_beat_index = None;
-        return Some(step == 0);
-    }
-
-    let beat_index = ((timeline.position_ms as f64) / beat_ms).floor() as u64;
-    if state.last_beat_index == Some(beat_index) {
-        return None;
-    }
-    state.last_count_in_step = None;
-    state.last_beat_index = Some(beat_index);
-    Some(beat_index % 4 == 0)
-}
-
-const TIMELINE_GUIDE_INTRO_WAV: &[u8] = include_bytes!("../assets/timeline-guide/en/intro.wav");
-const TIMELINE_GUIDE_VERSE_WAV: &[u8] = include_bytes!("../assets/timeline-guide/en/verse.wav");
-const TIMELINE_GUIDE_PRE_CHORUS_WAV: &[u8] =
-    include_bytes!("../assets/timeline-guide/en/pre_chorus.wav");
-const TIMELINE_GUIDE_CHORUS_WAV: &[u8] = include_bytes!("../assets/timeline-guide/en/chorus.wav");
-const TIMELINE_GUIDE_BRIDGE_WAV: &[u8] = include_bytes!("../assets/timeline-guide/en/bridge.wav");
-const TIMELINE_GUIDE_BREAKDOWN_WAV: &[u8] =
-    include_bytes!("../assets/timeline-guide/en/breakdown.wav");
-const TIMELINE_GUIDE_OUTRO_WAV: &[u8] = include_bytes!("../assets/timeline-guide/en/outro.wav");
-const TIMELINE_GUIDE_LOOPING_WAV: &[u8] = include_bytes!("../assets/timeline-guide/en/looping.wav");
-const TIMELINE_GUIDE_BREAK_WAV: &[u8] =
-    include_bytes!("../assets/timeline-guide/en/break_word.wav");
-const TIMELINE_GUIDE_TRANS_WAV: &[u8] = include_bytes!("../assets/timeline-guide/en/trans.wav");
-
-fn normalized_timeline_guide_label(label: &str) -> String {
-    label
-        .trim()
-        .chars()
-        .filter(|character| !character.is_ascii_whitespace() && *character != '-')
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
-fn timeline_guide_audio_asset(cue: &TimelineGuideCueSummary) -> Result<&'static [u8], String> {
-    match cue.cue {
-        TimelineGuideCueKind::Looping => Ok(TIMELINE_GUIDE_LOOPING_WAV),
-        TimelineGuideCueKind::Break => Ok(TIMELINE_GUIDE_BREAK_WAV),
-        TimelineGuideCueKind::Trans => Ok(TIMELINE_GUIDE_TRANS_WAV),
-        TimelineGuideCueKind::Phase { .. } => {
-            match normalized_timeline_guide_label(&cue.label).as_str() {
-                "intro" => Ok(TIMELINE_GUIDE_INTRO_WAV),
-                "verse" => Ok(TIMELINE_GUIDE_VERSE_WAV),
-                "prechorus" => Ok(TIMELINE_GUIDE_PRE_CHORUS_WAV),
-                "chorus" => Ok(TIMELINE_GUIDE_CHORUS_WAV),
-                "bridge" => Ok(TIMELINE_GUIDE_BRIDGE_WAV),
-                "breakdown" => Ok(TIMELINE_GUIDE_BREAKDOWN_WAV),
-                "outro" => Ok(TIMELINE_GUIDE_OUTRO_WAV),
-                _ => Err(format!(
-                    "Timeline Guide has no offline voice asset for custom Phase '{}'",
-                    cue.label
-                )),
-            }
-        }
-    }
-}
-
-fn timeline_guide_cue_delta(
-    active_generation: Option<u64>,
-    last_sequence: u64,
-    cues: &[TimelineGuideCueSummary],
-) -> (Option<u64>, Vec<TimelineGuideCueSummary>) {
-    let Some(generation) = cues.last().map(|cue| cue.generation) else {
-        return (active_generation, Vec::new());
-    };
-    let sequence_fence = if active_generation == Some(generation) {
-        last_sequence
-    } else {
-        0
-    };
-    (
-        Some(generation),
-        cues.iter()
-            .filter(|cue| cue.generation == generation && cue.sequence > sequence_fence)
-            .cloned()
-            .collect(),
-    )
 }
 
 /// Root clips retain their historic id domain. Child clips are isolated by the root activation,
@@ -13275,10 +14309,12 @@ impl MediaAudioSyncRuntime {
         engine: EngineHandle,
         audio: Arc<Mutex<MediaAudioPlayback>>,
         program_handoff: Arc<ProgramAudioHandoffCoordinator>,
+        timeline_cue_audio: Arc<TimelineCueAudioRuntime>,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker_handoff = Arc::clone(&program_handoff);
+        let worker_timeline_cue_audio = Arc::clone(&timeline_cue_audio);
         let worker = std::thread::Builder::new()
             .name("syndocal-media-audio-sync".to_string())
             .spawn(move || {
@@ -13332,15 +14368,13 @@ impl MediaAudioSyncRuntime {
                         | TimelineAudioPreparePoll::Quarantined
                         | TimelineAudioPreparePoll::Obsolete => None,
                     };
+                    let current = engine.video_audio_runtime_snapshot();
+                    worker_timeline_cue_audio.sync(&current.timeline_audio, &audio);
                     let active = audio
                         .try_lock()
-                        .map(|mut playback| {
-                            let current = engine.video_audio_runtime_snapshot();
-                            playback.sync_metronome(&current.timeline_audio);
-                            playback.sync_timeline_guide(&current.timeline_audio);
+                        .map(|playback| {
                             !playback.sinks.is_empty()
                                 || !playback.timeline_sinks.is_empty()
-                                || playback.guide.sink.is_some()
                                 || current.timeline_audio.playing
                         })
                         .unwrap_or(false);
@@ -15469,155 +16503,6 @@ impl MediaAudioPlayback {
         timeline: &engine::TimelineAudioRuntimeSnapshot,
     ) -> Result<(), String> {
         self.sync_to_timeline_audio_evidenced_with_fence(timeline, || true)
-    }
-
-    fn play_metronome_click(&mut self, accented: bool) -> Result<(), String> {
-        use rodio::Source;
-
-        let requested_device_name = self.requested_device_name.clone();
-        self.ensure_output_stream(requested_device_name.as_deref())?;
-        let stream = self
-            .stream
-            .as_ref()
-            .ok_or_else(|| "Audio output stream was not initialized".to_string())?;
-        let sink = rodio::Sink::connect_new(stream.mixer());
-        let frequency = if accented { 1_320.0 } else { 880.0 };
-        let gain = if accented { 0.22 } else { 0.16 };
-        sink.append(
-            rodio::source::SineWave::new(frequency)
-                .take_duration(Duration::from_millis(42))
-                .amplify(gain),
-        );
-        sink.detach();
-        Ok(())
-    }
-
-    fn sync_metronome(&mut self, timeline: &engine::TimelineAudioRuntimeSnapshot) {
-        if let Some(accented) = timeline_metronome_click_action(&mut self.metronome, timeline) {
-            if let Err(error) = self.play_metronome_click(accented) {
-                self.timeline_last_sync_error = Some(format!("Timeline click failed: {error}"));
-            }
-        }
-    }
-
-    fn sync_timeline_guide(&mut self, timeline: &engine::TimelineAudioRuntimeSnapshot) {
-        // `guide_cues` is intentionally allowed to be empty for a newly
-        // published Follow generation. Transport revision is the durable
-        // engine fence, so it must cancel queued speech before we inspect the
-        // cue delta.
-        if self.guide.last_transport_revision != Some(timeline.transport_revision) {
-            self.guide.cancel_pending();
-            self.guide.last_transport_revision = Some(timeline.transport_revision);
-        }
-        if !self.guide.enabled || !timeline.guide_enabled {
-            self.guide.cancel_pending();
-            self.guide.suppress_existing_on_next_sync = true;
-            return;
-        }
-        if self.guide.suppress_existing_on_next_sync {
-            if let Some(cue) = timeline.guide_cues.last() {
-                self.guide.active_generation = Some(cue.generation);
-                self.guide.last_sequence = cue.sequence;
-            }
-            self.guide.suppress_existing_on_next_sync = false;
-            return;
-        }
-        let previous_generation = self.guide.active_generation;
-        let (generation, pending) = timeline_guide_cue_delta(
-            previous_generation,
-            self.guide.last_sequence,
-            &timeline.guide_cues,
-        );
-        let Some(generation) = generation else {
-            return;
-        };
-        if previous_generation != Some(generation) {
-            self.guide.cancel_pending();
-            self.guide.active_generation = Some(generation);
-        }
-        if pending.is_empty() {
-            return;
-        }
-
-        // Advance the receipt fence before touching the output device. A missing
-        // device or unsupported custom label is a terminal, visible playback
-        // fault for this cue, not a 40 Hz retry storm. Reconfiguring the Guide
-        // bus resets the fence and may replay cues still retained by the engine.
-        self.guide.last_sequence = pending
-            .last()
-            .map(|cue| cue.sequence)
-            .unwrap_or(self.guide.last_sequence);
-        if let Err(error) = self.play_timeline_guide_cues(&pending) {
-            self.guide.last_error = Some(error);
-        }
-    }
-
-    fn play_timeline_guide_cues(&mut self, cues: &[TimelineGuideCueSummary]) -> Result<(), String> {
-        use rodio::cpal::traits::{DeviceTrait, HostTrait};
-
-        let mut assets = Vec::new();
-        let mut unsupported = Vec::new();
-        for cue in cues {
-            match timeline_guide_audio_asset(cue) {
-                Ok(bytes) => assets.push((cue, bytes)),
-                Err(error) => unsupported.push(error),
-            }
-        }
-        if assets.is_empty() {
-            return Err(unsupported.join("; "));
-        }
-
-        if self.guide.stream.is_none() {
-            let host = rodio::cpal::default_host();
-            let requested = self.guide.requested_device_name.as_deref();
-            let device = match requested {
-                Some(name) => host
-                    .output_devices()
-                    .map_err(|error| format!("Failed to list Timeline Guide devices: {error}"))?
-                    .find(|device| device.name().ok().as_deref() == Some(name))
-                    .ok_or_else(|| format!("Timeline Guide device '{name}' was not found"))?,
-                None => host
-                    .default_output_device()
-                    .ok_or_else(|| "No Timeline Guide output device is available".to_string())?,
-            };
-            let resolved_name = device.name().ok();
-            let stream = rodio::OutputStreamBuilder::from_device(device)
-                .and_then(|builder| builder.open_stream())
-                .map_err(|error| format!("Failed to open Timeline Guide output: {error}"))?;
-            self.guide.resolved_device_name = resolved_name;
-            self.guide.stream = Some(stream);
-        }
-        if self.guide.sink.is_none() {
-            let stream =
-                self.guide.stream.as_ref().ok_or_else(|| {
-                    "Timeline Guide output stream was not initialized".to_string()
-                })?;
-            let sink = rodio::Sink::connect_new(stream.mixer());
-            sink.set_volume(self.guide.gain);
-            self.guide.sink = Some(sink);
-        }
-        let sink = self
-            .guide
-            .sink
-            .as_ref()
-            .ok_or_else(|| "Timeline Guide sink was not initialized".to_string())?;
-        for (cue, bytes) in assets {
-            let decoder = rodio::Decoder::try_from(Cursor::new(bytes)).map_err(|error| {
-                format!(
-                    "Timeline Guide asset '{}' could not be decoded: {error}",
-                    cue.label
-                )
-            })?;
-            sink.append(decoder);
-            self.guide.last_spoken_label = Some(cue.label.clone());
-            self.guide.spoken_count = self.guide.spoken_count.saturating_add(1);
-        }
-        if unsupported.is_empty() {
-            self.guide.last_error = None;
-            Ok(())
-        } else {
-            Err(unsupported.join("; "))
-        }
     }
 
     fn reconfigure_active(
@@ -32641,33 +33526,47 @@ fn set_program_audio_handoff_config(
 }
 
 #[tauri::command]
-fn set_timeline_guide_audio_config(
+async fn set_machine_timeline_cue_audio_settings(
     state: State<'_, AppState>,
-    enabled: bool,
-    gain: f32,
-    device_name: Option<String>,
-) -> Result<TimelineGuideAudioStatus, String> {
-    let status = {
-        let mut audio = state
-            .media_audio
+    settings: timeline_cue_audio::MachineTimelineCueAudioSettingsV1,
+) -> Result<TimelineCueAudioStatus, String> {
+    let runtime = Arc::clone(&state.timeline_cue_audio);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _update = runtime
+            .settings_update
             .lock()
-            .map_err(|_| "Media audio playback lock was poisoned".to_string())?;
-        audio.guide.configure(enabled, gain, device_name)?;
-        audio.guide.status()
-    };
+            .map_err(|_| "Timeline cue audio settings update lock was poisoned".to_string())?;
+        let settings = settings.validated()?;
+        if settings.route == timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice
+            && settings.topology_fingerprint.is_none()
+        {
+            return Err(
+                "Explicit Timeline cue audio selection requires the current topology fingerprint"
+                    .to_string(),
+            );
+        }
+        let path = runtime
+            .state
+            .lock()
+            .map_err(|_| "Timeline cue audio lifecycle lock was poisoned".to_string())?
+            .settings_path
+            .clone()
+            .ok_or_else(|| "Timeline cue audio settings are still loading".to_string())?;
+        timeline_cue_audio::persist_timeline_cue_audio_settings_to_path(&path, &settings)?;
+        runtime.publish_settings(settings)?;
+        runtime.status()
+    })
+    .await
+    .map_err(|error| format!("Timeline cue audio settings task failed: {error}"))??;
     state.program_audio_handoff.wake.notify_all();
-    Ok(status)
+    state.timeline_cue_audio.status()
 }
 
 #[tauri::command]
-fn get_timeline_guide_audio_status(
+async fn get_timeline_cue_audio_status(
     state: State<'_, AppState>,
-) -> Result<TimelineGuideAudioStatus, String> {
-    state
-        .media_audio
-        .lock()
-        .map(|audio| audio.guide.status())
-        .map_err(|_| "Media audio playback lock was poisoned".to_string())
+) -> Result<TimelineCueAudioStatus, String> {
+    state.timeline_cue_audio.status()
 }
 
 #[tauri::command]
@@ -32833,17 +33732,47 @@ fn play_video_layer_audio_monitor(
 }
 
 #[tauri::command]
-fn list_audio_output_devices() -> Result<Vec<String>, String> {
-    use rodio::cpal::traits::{DeviceTrait, HostTrait};
-
-    let mut names = rodio::cpal::default_host()
-        .output_devices()
-        .map_err(|error| format!("Failed to list audio output devices: {error}"))?
-        .filter_map(|device| device.name().ok())
-        .collect::<Vec<_>>();
-    names.sort();
-    names.dedup();
-    Ok(names)
+async fn list_audio_output_devices(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let runtime = Arc::clone(&state.timeline_cue_audio);
+    tauri::async_runtime::spawn_blocking(move || {
+        let (devices, fingerprint, endpoints) = enumerate_timeline_cue_audio_outputs()?;
+        let names = devices
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        let mut retired = None;
+        if let Ok(mut lifecycle) = runtime.state.lock() {
+            if lifecycle.observed_topology_fingerprint.as_deref() != Some(&fingerprint) {
+                lifecycle.topology_generation = lifecycle.topology_generation.saturating_add(1);
+            }
+            lifecycle.observed_topology_fingerprint = Some(fingerprint);
+            lifecycle.endpoints = endpoints;
+            let topology_changed = lifecycle
+                .applied
+                .as_ref()
+                .filter(|settings| {
+                    settings.route == timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice
+                })
+                .and_then(|settings| settings.topology_fingerprint.as_deref())
+                != lifecycle.observed_topology_fingerprint.as_deref();
+            if topology_changed {
+                retired = lifecycle.attachment.take();
+                lifecycle.applied = None;
+                lifecycle.blocked_settings_revision = Some(lifecycle.settings_revision);
+                lifecycle.lifecycle = TimelineCueAudioLifecycle::TopologyChanged;
+                lifecycle.last_error = Some(
+                    "Timeline cue audio topology changed; explicitly reselect the device"
+                        .to_string(),
+                );
+            }
+        }
+        if let Some(attachment) = retired {
+            attachment.control.retire();
+        }
+        Ok(names)
+    })
+    .await
+    .map_err(|error| format!("Audio output inventory task failed: {error}"))?
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -64040,188 +64969,311 @@ pub(crate) mod tests {
     const TEST_UPDATE_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVBQTZGNUI4MkEzRDkzQjEKUldTeGt6MHF1UFdtV3FzQUs5OEZubTdXcGNIeTQycmZEQmdseEVub3BHeGtyMUdVVU1Rb3Q3SEIK";
 
     #[test]
-    fn metronome_action_emits_one_click_per_count_in_and_playback_beat() {
-        let mut state = TimelineMetronomePlaybackState::default();
-        let mut timeline = engine::TimelineAudioRuntimeSnapshot {
-            clips: Vec::new(),
-            child_clips: Vec::new(),
-            playing: true,
-            position_ms: 0,
-            muted: false,
-            transport_revision: 0,
-            source_projection_authority: engine::TimelineAudioProjectionAuthority::default(),
-            publication_generation: 0,
-            bpm: 120.0,
-            metronome_enabled: true,
-            count_in_beats: 4,
-            count_in_remaining_ms: 2_000,
-            metronome_transport: Some(engine::TimelineMetronomeTransport::Root),
-            guide_enabled: false,
-            guide_cues: Vec::new(),
-        };
-
+    fn timeline_cue_device_inventory_preserves_duplicates_and_requires_exact_cardinality() {
+        let names = vec!["Program".to_string(), "Cue".to_string(), "Cue".to_string()];
+        let endpoints = timeline_cue_audio_endpoint_summaries(&names);
         assert_eq!(
-            timeline_metronome_click_action(&mut state, &timeline),
-            Some(true)
+            endpoints,
+            vec![
+                TimelineCueAudioEndpointSummary {
+                    name: "Cue".to_string(),
+                    occurrences: 2,
+                    selectable: false,
+                },
+                TimelineCueAudioEndpointSummary {
+                    name: "Program".to_string(),
+                    occurrences: 1,
+                    selectable: true,
+                },
+            ]
         );
-        assert_eq!(timeline_metronome_click_action(&mut state, &timeline), None);
-        for remaining_ms in [1_500, 1_000, 500] {
-            timeline.count_in_remaining_ms = remaining_ms;
-            assert_eq!(
-                timeline_metronome_click_action(&mut state, &timeline),
-                Some(false)
-            );
-            assert_eq!(timeline_metronome_click_action(&mut state, &timeline), None);
-        }
-
-        timeline.count_in_remaining_ms = 0;
         assert_eq!(
-            timeline_metronome_click_action(&mut state, &timeline),
-            Some(true)
+            exact_timeline_cue_audio_device_index(&names, "Program").unwrap(),
+            0
         );
-        timeline.position_ms = 499;
-        assert_eq!(timeline_metronome_click_action(&mut state, &timeline), None);
-        timeline.position_ms = 500;
-        assert_eq!(
-            timeline_metronome_click_action(&mut state, &timeline),
-            Some(false)
-        );
-
-        timeline.playing = false;
-        assert_eq!(timeline_metronome_click_action(&mut state, &timeline), None);
-        assert_eq!(state.transport, None);
-    }
-
-    #[test]
-    fn timeline_guide_assets_are_embedded_decodable_and_custom_labels_fail_visible() {
-        use rodio::Source;
-
-        let cases = [
-            (
-                TimelineGuideCueKind::Phase {
-                    phase_id: protocol::TimelinePhaseId(1),
-                },
-                "Intro",
-            ),
-            (
-                TimelineGuideCueKind::Phase {
-                    phase_id: protocol::TimelinePhaseId(2),
-                },
-                "Verse",
-            ),
-            (
-                TimelineGuideCueKind::Phase {
-                    phase_id: protocol::TimelinePhaseId(3),
-                },
-                "Pre-Chorus",
-            ),
-            (
-                TimelineGuideCueKind::Phase {
-                    phase_id: protocol::TimelinePhaseId(4),
-                },
-                "Chorus",
-            ),
-            (
-                TimelineGuideCueKind::Phase {
-                    phase_id: protocol::TimelinePhaseId(5),
-                },
-                "Bridge",
-            ),
-            (
-                TimelineGuideCueKind::Phase {
-                    phase_id: protocol::TimelinePhaseId(6),
-                },
-                "Breakdown",
-            ),
-            (
-                TimelineGuideCueKind::Phase {
-                    phase_id: protocol::TimelinePhaseId(7),
-                },
-                "Outro",
-            ),
-            (TimelineGuideCueKind::Looping, "Looping"),
-            (TimelineGuideCueKind::Break, "Break"),
-            (TimelineGuideCueKind::Trans, "Trans"),
-        ];
-        for (index, (kind, label)) in cases.into_iter().enumerate() {
-            let cue = TimelineGuideCueSummary {
-                generation: 8,
-                sequence: index as u64 + 1,
-                at_ms: index as u64 * 100,
-                label: label.to_string(),
-                cue: kind,
-            };
-            let bytes = timeline_guide_audio_asset(&cue).unwrap();
-            assert_eq!(&bytes[..4], b"RIFF");
-            let decoder = rodio::Decoder::try_from(Cursor::new(bytes)).unwrap();
-            assert!(decoder.channels() > 0);
-            assert!(decoder.sample_rate() > 0);
-            assert!(decoder
-                .total_duration()
-                .is_some_and(|duration| !duration.is_zero()));
-        }
-
-        let custom = TimelineGuideCueSummary {
-            generation: 9,
-            sequence: 1,
-            at_ms: 0,
-            label: "Guitar Solo".to_string(),
-            cue: TimelineGuideCueKind::Phase {
-                phase_id: protocol::TimelinePhaseId(8),
-            },
-        };
-        assert!(timeline_guide_audio_asset(&custom)
+        assert!(exact_timeline_cue_audio_device_index(&names, "Cue")
             .unwrap_err()
-            .contains("custom Phase 'Guitar Solo'"));
+            .contains("ambiguous (2 exact-name matches)"));
+        assert!(exact_timeline_cue_audio_device_index(&names, "Missing")
+            .unwrap_err()
+            .contains("is missing"));
+        assert_eq!(
+            timeline_cue_audio_topology_fingerprint(&names),
+            timeline_cue_audio_topology_fingerprint(&[
+                "Cue".to_string(),
+                "Program".to_string(),
+                "Cue".to_string(),
+            ])
+        );
+        assert_ne!(
+            timeline_cue_audio_topology_fingerprint(&names),
+            timeline_cue_audio_topology_fingerprint(&["Cue".to_string(), "Program".to_string(),])
+        );
     }
 
     #[test]
-    fn timeline_guide_cue_delta_is_exact_and_generation_cancels_stale_speech() {
-        let cue = |generation, sequence, label: &str| TimelineGuideCueSummary {
-            generation,
-            sequence,
-            at_ms: sequence * 100,
-            label: label.to_string(),
-            cue: TimelineGuideCueKind::Looping,
-        };
-        let cues = vec![cue(4, 1, "old"), cue(5, 1, "Intro"), cue(5, 2, "Verse")];
-        let (generation, pending) = timeline_guide_cue_delta(Some(4), 1, &cues);
-        assert_eq!(generation, Some(5));
-        assert_eq!(
-            pending.iter().map(|cue| cue.sequence).collect::<Vec<_>>(),
-            vec![1, 2]
-        );
-
-        let (generation, pending) = timeline_guide_cue_delta(Some(5), 1, &cues);
-        assert_eq!(generation, Some(5));
-        assert_eq!(
-            pending.iter().map(|cue| cue.sequence).collect::<Vec<_>>(),
-            vec![2]
-        );
-        let (_, pending) = timeline_guide_cue_delta(Some(5), 2, &cues);
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn timeline_guide_transport_revision_cancels_even_when_no_cues_are_published() {
-        let mut playback = MediaAudioPlayback::default();
-        playback.guide.enabled = true;
-        playback.guide.last_transport_revision = Some(41);
-        playback.guide.active_generation = Some(41);
-        playback.guide.last_sequence = 9;
+    fn timeline_cue_empty_batch_identity_uses_direct_transport_and_project_flags_only() {
         let timeline = engine::TimelineAudioRuntimeSnapshot {
-            transport_revision: 42,
-            guide_enabled: true,
-            guide_cues: Vec::new(),
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 41,
+                generation: 73,
+            },
+            transport_revision: 9,
+            click_schedule_generation: 14,
+            metronome_transport: Some(engine::TimelineMetronomeTransport::DirectChild {
+                cue_id: 5,
+                generation: 8,
+            }),
+            metronome_enabled: true,
+            guide_enabled: false,
+            playing: true,
             ..engine::TimelineAudioRuntimeSnapshot::default()
         };
+        assert_eq!(
+            timeline_cue_engine_identity(&timeline),
+            Ok(TimelineCueEngineIdentity {
+                epoch: 41,
+                transport_generation: 73,
+                schedule_generation: 14,
+                source: TimelineScheduleSource::DirectChild {
+                    cue_id: 5,
+                    generation: 8,
+                },
+                audio_transport_revision: 9,
+                metronome_enabled: true,
+                guide_enabled: false,
+                playing: true,
+            })
+        );
+        let mut mixed = timeline.clone();
+        mixed.click_events = vec![
+            protocol::TimelineClickEventSummary {
+                epoch: 41,
+                transport_generation: 73,
+                schedule_generation: 14,
+                source: TimelineScheduleSource::DirectChild {
+                    cue_id: 5,
+                    generation: 8,
+                },
+                ..protocol::TimelineClickEventSummary::default()
+            },
+            protocol::TimelineClickEventSummary {
+                epoch: 41,
+                transport_generation: 74,
+                schedule_generation: 14,
+                source: TimelineScheduleSource::DirectChild {
+                    cue_id: 5,
+                    generation: 8,
+                },
+                ..protocol::TimelineClickEventSummary::default()
+            },
+        ];
+        assert!(timeline_cue_engine_identity(&mixed)
+            .unwrap_err()
+            .contains("mixes transport authorities"));
+        let mut stale = timeline.clone();
+        stale.click_events = vec![protocol::TimelineClickEventSummary {
+            epoch: 40,
+            transport_generation: 73,
+            schedule_generation: 14,
+            source: TimelineScheduleSource::DirectChild {
+                cue_id: 5,
+                generation: 8,
+            },
+            ..protocol::TimelineClickEventSummary::default()
+        }];
+        assert!(timeline_cue_engine_identity(&stale)
+            .unwrap_err()
+            .contains("stale against the published audio source"));
 
-        playback.sync_timeline_guide(&timeline);
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        runtime.sync(&engine::TimelineAudioRuntimeSnapshot::default(), &audio);
+        assert_eq!(
+            runtime.status().unwrap().lifecycle,
+            TimelineCueAudioLifecycle::DisabledByProject
+        );
+        runtime.sync(&timeline, &audio);
+        assert_eq!(
+            runtime.status().unwrap().lifecycle,
+            TimelineCueAudioLifecycle::WaitingForProgramOutput
+        );
+        assert!(
+            runtime.state.lock().unwrap().prepare_job.is_none(),
+            "FollowProgram must not open a default output when Program is absent"
+        );
+    }
 
-        assert_eq!(playback.guide.last_transport_revision, Some(42));
-        assert_eq!(playback.guide.active_generation, None);
-        assert_eq!(playback.guide.last_sequence, 0);
-        assert!(playback.guide.sink.is_none());
+    #[test]
+    fn timeline_cue_settings_exact_retry_keeps_one_revision() {
+        let runtime = TimelineCueAudioRuntime::default();
+        let path = PathBuf::from("C:/test/timeline-cue-audio-settings.json");
+        let initial = timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default();
+        runtime.initialize(path, Ok(initial.clone()));
+        assert_eq!(runtime.publish_settings(initial.clone()).unwrap(), 1);
+        let mut changed = initial;
+        changed.click_gain = 0.8;
+        assert_eq!(runtime.publish_settings(changed.clone()).unwrap(), 2);
+        assert_eq!(runtime.publish_settings(changed).unwrap(), 2);
+        {
+            let state = runtime.state.lock().unwrap();
+            assert_eq!(state.settings_revision, 2);
+            assert_eq!(state.config_count, 1);
+        }
+        let first = runtime.status().unwrap();
+        let second = runtime.status().unwrap();
+        assert_ne!(first.runtime_incarnation, 0);
+        assert!(first.runtime_incarnation <= VIDEO_CLIP_RUNTIME_GENERATION_MAX);
+        assert_eq!(second.runtime_incarnation, first.runtime_incarnation);
+        assert_eq!(second.status_revision, first.status_revision + 1);
+        runtime.state.lock().unwrap().status_revision = VIDEO_CLIP_RUNTIME_GENERATION_MAX;
+        assert!(runtime
+            .status()
+            .unwrap_err()
+            .contains("status revision is exhausted"));
+        assert_eq!(
+            runtime.state.lock().unwrap().status_revision,
+            VIDEO_CLIP_RUNTIME_GENERATION_MAX
+        );
+    }
+
+    #[test]
+    fn timeline_cue_late_topology_result_after_timeout_is_not_applied() {
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender
+            .send(Ok((
+                "late-topology".to_string(),
+                vec![TimelineCueAudioEndpointSummary {
+                    name: "Late Device".to_string(),
+                    occurrences: 1,
+                    selectable: true,
+                }],
+            )))
+            .unwrap();
+        {
+            let mut state = runtime.state.lock().unwrap();
+            state.lifecycle = TimelineCueAudioLifecycle::Running;
+            state.topology_probe = Some(TimelineCueAudioTopologyProbe {
+                started_at: Instant::now() - Duration::from_secs(1),
+                timed_out: true,
+                receiver,
+            });
+        }
+
+        runtime.poll_or_spawn_topology_probe();
+
+        let state = runtime.state.lock().unwrap();
+        assert_eq!(state.observed_topology_fingerprint, None);
+        assert!(state.endpoints.is_empty());
+        assert_eq!(
+            state.blocked_settings_revision,
+            Some(state.settings_revision)
+        );
+        assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Stalled);
+        assert!(state
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("ignored a late topology result")));
+    }
+
+    #[test]
+    fn timeline_cue_follow_program_attaches_one_source_to_the_existing_mixer() {
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        let (mixer, mut mixed) = rodio::mixer::mixer(2, 48_000);
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback {
+            timeline_test_mixer: Some(mixer),
+            audio_device_generation: 17,
+            ..MediaAudioPlayback::default()
+        }));
+        let mut timeline = engine::TimelineAudioRuntimeSnapshot {
+            playing: true,
+            metronome_enabled: true,
+            click_schedule_generation: 3,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 41,
+                generation: 73,
+            },
+            click_events: vec![protocol::TimelineClickEventSummary {
+                epoch: 41,
+                transport_generation: 73,
+                sample_frame: 0,
+                measure: 1,
+                beat: 1,
+                downbeat: true,
+                schedule_generation: 3,
+                ..protocol::TimelineClickEventSummary::default()
+            }],
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+        for _ in 0..100 {
+            runtime.sync(&timeline, &audio);
+            if runtime.state.lock().unwrap().attachment.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let first = runtime.status().unwrap();
+        assert_eq!(first.lifecycle, TimelineCueAudioLifecycle::Running);
+        assert_eq!(first.rotation_count, 1);
+        assert_ne!(first.runtime_incarnation, 0);
+        let audio_guard = audio.lock().unwrap();
+        runtime.sync(&timeline, &audio);
+        drop(audio_guard);
+        assert_eq!(runtime.status().unwrap().rotation_count, 1);
+        let peak = (0..4_800)
+            .filter_map(|_| mixed.next())
+            .map(f32::abs)
+            .fold(0.0_f32, f32::max);
+        assert!(
+            peak > 0.01,
+            "the production scheduler batch did not reach the Program mixer"
+        );
+        timeline
+            .click_events
+            .push(protocol::TimelineClickEventSummary {
+                epoch: 41,
+                transport_generation: 73,
+                sample_frame: 1,
+                measure: 2,
+                beat: 1,
+                downbeat: true,
+                schedule_generation: 3,
+                ..protocol::TimelineClickEventSummary::default()
+            });
+        runtime.sync(&timeline, &audio);
+        let failed = runtime.status().unwrap();
+        assert_eq!(failed.lifecycle, TimelineCueAudioLifecycle::Fault);
+        let fault_count = failed.fault_count;
+        runtime.sync(&timeline, &audio);
+        assert_eq!(runtime.status().unwrap().fault_count, fault_count);
+
+        {
+            let mut state = runtime.state.lock().unwrap();
+            let attachment = state.attachment.as_mut().unwrap();
+            attachment.last_observed_output_frame = attachment.control.next_output_frame();
+            attachment.last_output_progress_at = Instant::now() - Duration::from_secs(1);
+        }
+        runtime.sync(&timeline, &audio);
+        let stalled = runtime.status().unwrap();
+        assert_eq!(stalled.lifecycle, TimelineCueAudioLifecycle::Stalled);
+        assert_eq!(stalled.applied_settings, None);
+        assert_eq!(stalled.runtime_incarnation, first.runtime_incarnation);
+        assert!(stalled.status_revision > first.status_revision);
+        assert_eq!(stalled.next_output_frame, 0);
+        assert!(runtime.state.lock().unwrap().attachment.is_none());
     }
 
     #[test]
@@ -64268,65 +65320,6 @@ pub(crate) mod tests {
             TimelineFollowSettlementAckResult::Applied,
         )
         .is_none());
-    }
-
-    #[test]
-    fn timeline_guide_audio_config_is_independent_and_fail_closed() {
-        let mut guide = TimelineGuideAudioPlayback::default();
-        assert!(guide.configure(true, f32::NAN, None).is_err());
-        guide
-            .configure(true, 3.0, Some("  Cue Monitor  ".to_string()))
-            .unwrap();
-        assert_eq!(guide.gain, 2.0);
-        assert_eq!(guide.requested_device_name.as_deref(), Some("Cue Monitor"));
-        guide.active_generation = Some(7);
-        guide.last_sequence = 11;
-        guide.configure(false, 0.5, None).unwrap();
-        assert_eq!(guide.active_generation, None);
-        assert_eq!(guide.last_sequence, 0);
-        assert!(!guide.enabled);
-        assert!(guide.suppress_existing_on_next_sync);
-
-        let mut playback = MediaAudioPlayback::default();
-        playback.guide.enabled = false;
-        let mut timeline = engine::TimelineAudioRuntimeSnapshot {
-            guide_enabled: true,
-            guide_cues: vec![TimelineGuideCueSummary {
-                generation: 12,
-                sequence: 4,
-                at_ms: 100,
-                label: "Verse".to_string(),
-                cue: TimelineGuideCueKind::Phase {
-                    phase_id: protocol::TimelinePhaseId(2),
-                },
-            }],
-            ..engine::TimelineAudioRuntimeSnapshot::default()
-        };
-        playback.sync_timeline_guide(&timeline);
-        playback.guide.configure(true, 0.8, None).unwrap();
-        playback.sync_timeline_guide(&timeline);
-        assert_eq!(playback.guide.active_generation, Some(12));
-        assert_eq!(playback.guide.last_sequence, 4);
-        assert!(playback.guide.stream.is_none());
-        timeline.guide_cues.push(TimelineGuideCueSummary {
-            generation: 12,
-            sequence: 5,
-            at_ms: 200,
-            label: "Custom".to_string(),
-            cue: TimelineGuideCueKind::Phase {
-                phase_id: protocol::TimelinePhaseId(3),
-            },
-        });
-        // Unsupported custom labels advance the receipt fence without opening
-        // a retry loop; the UI still retains the text cue and shows the fault.
-        playback.sync_timeline_guide(&timeline);
-        assert_eq!(playback.guide.last_sequence, 5);
-        assert!(playback
-            .guide
-            .last_error
-            .as_deref()
-            .is_some_and(|error| error.contains("custom Phase 'Custom'")));
-        assert!(playback.guide.stream.is_none());
     }
 
     fn unique_test_directory(label: &str) -> PathBuf {
@@ -64465,6 +65458,7 @@ pub(crate) mod tests {
                 video_effect_catalog_authoritative_publish_attempts: AtomicU64::new(0),
                 authored_effect_enabled_publish_attempts: AtomicU64::new(0),
                 media_audio,
+                timeline_cue_audio: Arc::new(TimelineCueAudioRuntime::default()),
                 program_audio_handoff: Arc::clone(&program_audio_handoff),
                 _media_audio_sync: MediaAudioSyncRuntime::idle_for_tests(program_audio_handoff),
                 live_audio_input_lifecycle: Mutex::new(()),
@@ -95961,6 +96955,7 @@ mod live_audio_input_tests {
             destination_bpm: None,
             preroll_ms: 0,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = TimelineSnapshot {
@@ -103470,11 +104465,13 @@ fn main() {
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     let app_video_decoder = app_video_decoder.with_spout_inputs(Arc::clone(&spout_inputs));
     let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    let timeline_cue_audio = Arc::new(TimelineCueAudioRuntime::default());
     let program_audio_handoff = Arc::new(ProgramAudioHandoffCoordinator::default());
     let media_audio_sync = MediaAudioSyncRuntime::start(
         engine.clone(),
         Arc::clone(&media_audio),
         Arc::clone(&program_audio_handoff),
+        Arc::clone(&timeline_cue_audio),
     );
     let control_plane_query_state = ControlPlaneQueryState::new()
         .expect("OS randomness must initialize the local control-plane query session");
@@ -103614,6 +104611,25 @@ fn main() {
                 *configured_directory = Some(directory);
             }
             let state = app.state::<AppState>();
+            let cue_settings_path = timeline_cue_audio::timeline_cue_audio_settings_path(
+                &app.path()
+                    .app_local_data_dir()
+                    .map_err(|error| format!("Unable to resolve Timeline cue audio settings directory: {error}"))?,
+            );
+            let cue_runtime = Arc::clone(&state.timeline_cue_audio);
+            let cue_handoff = Arc::clone(&state.program_audio_handoff);
+            let load_path = cue_settings_path.clone();
+            std::thread::Builder::new()
+                .name("syndocal-timeline-cue-audio-settings-load".to_string())
+                .spawn(move || {
+                    let loaded =
+                        timeline_cue_audio::load_timeline_cue_audio_settings_from_path(&load_path);
+                    cue_runtime.initialize(load_path, loaded);
+                    cue_handoff.wake.notify_all();
+                })
+                .map_err(|error| {
+                    format!("Timeline cue audio settings worker could not start: {error}")
+                })?;
             // Install the single media-operation reaper up front so expired
             // prepared handles are released at TTL for the whole session.
             install_media_asset_operation_reaper(
@@ -103696,6 +104712,7 @@ fn main() {
             #[cfg(test)]
             authored_effect_enabled_publish_attempts: AtomicU64::new(0),
             media_audio,
+            timeline_cue_audio,
             program_audio_handoff,
             _media_audio_sync: media_audio_sync,
             live_audio_input_lifecycle: Mutex::new(()),
@@ -104085,8 +105102,8 @@ fn main() {
             set_auto_vj_armed,
             set_auto_vj_hold,
             set_program_audio_handoff_config,
-            set_timeline_guide_audio_config,
-            get_timeline_guide_audio_status,
+            set_machine_timeline_cue_audio_settings,
+            get_timeline_cue_audio_status,
             set_video_ab_mix,
             stop_video_clip,
             play_video_layer_audio_monitor,

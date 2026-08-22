@@ -2048,6 +2048,7 @@ mod tests {
             destination_bpm: None,
             preroll_ms: 0,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = protocol::TimelineSnapshot {
@@ -2211,6 +2212,7 @@ mod tests {
             destination_bpm: None,
             preroll_ms: 0,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = protocol::TimelineSnapshot {

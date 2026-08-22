@@ -504,7 +504,7 @@
 }
 
 @container (max-width: 680px) {
-  .timelineGuideAudioEditorBody {
+  .timelineCueAudioEditorBody {
     grid-template-columns: 1fr;
   }
 
@@ -4561,18 +4561,18 @@ h3 {
   color: #63d7ba;
 }
 
-.timelineGuideAudioFault,
-.timelineGuideAudioEditor summary output.fault {
+.timelineCueAudioFault,
+.timelineCueAudioEditor summary output.fault {
   color: #ff8c7b;
 }
 
-.timelineGuideAudioEditor {
+.timelineCueAudioEditor {
   min-width: 0;
   border: 1px solid #24282b;
   background: #151719;
 }
 
-.timelineGuideAudioEditor > summary {
+.timelineCueAudioEditor > summary {
   display: flex;
   min-height: 44px;
   align-items: center;
@@ -4583,7 +4583,7 @@ h3 {
   font-size: 11px;
 }
 
-.timelineGuideAudioEditorBody {
+.timelineCueAudioEditorBody {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
@@ -4591,21 +4591,24 @@ h3 {
   padding: 8px;
 }
 
-.timelineGuideAudioEditorBody > label {
+.timelineCueAudioEditorBody > label {
   display: grid;
   min-width: 0;
   gap: 4px;
 }
 
-.timelineGuideAudioEditorBody > .toggleRow {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
+.timelineCueAudioEditorBody > button {
+  min-height: 44px;
 }
 
-.timelineGuideAudioEditorBody > output,
-.timelineGuideAudioEditorBody > p {
+.timelineCueAudioEditorBody > output,
+.timelineCueAudioEditorBody > p {
   grid-column: 1 / -1;
   margin: 0;
+}
+
+.timelineCueAudioAuthority {
+  color: #b7c2cb;
 }
 
 .timelinePhaseEditor {

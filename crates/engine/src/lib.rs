@@ -103,9 +103,10 @@ use protocol::StageObjectKind;
 use protocol::{
     normalize_legacy_video_clip_slots, normalize_legacy_video_effect_chains,
     normalize_legacy_video_media_assets, normalize_timeline_bank,
-    set_video_output_mapping_field_value, validate_engine_ready_video_clip_slots,
-    validate_engine_ready_video_effect_chains, validate_timeline_authoring, validate_timeline_bank,
-    validate_timeline_follow_settlement_ack, validate_video_clip_runtime_against_authored_slots,
+    set_video_output_mapping_field_value, validate_child_timeline_tempo_meter_map,
+    validate_engine_ready_video_clip_slots, validate_engine_ready_video_effect_chains,
+    validate_timeline_authoring, validate_timeline_bank, validate_timeline_follow_settlement_ack,
+    validate_timeline_tempo_meter_map, validate_video_clip_runtime_against_authored_slots,
     validate_video_layer_transition_runtime, ActiveFadeSummary, AttributeControl,
     AttributeResolution, AttributeValueSummary, AudioAnalysisSummary, AudioReactiveCurve,
     AudioReactiveFeature, AudioSpectrumBand, AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction,
@@ -137,16 +138,18 @@ use protocol::{
     RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
     StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAdvancedAuthoringSummary,
     TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
-    TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatusSnapshot,
-    TimelineFollowRuntimeSummary, TimelineFollowSettlementAck, TimelineFollowSettlementAckResult,
-    TimelineFollowSettlementConsumerId, TimelineFollowSettlementConsumerSummary,
-    TimelineFollowSettlementDomain, TimelineFollowSettlementDomainSummary,
-    TimelineFollowSettlementState, TimelineFollowSettlementSummary, TimelineFollowSummary,
+    TimelineClickEventSummary, TimelineCueEventSummary, TimelineEventId,
+    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineFollowSettlementAck,
+    TimelineFollowSettlementAckResult, TimelineFollowSettlementConsumerId,
+    TimelineFollowSettlementConsumerSummary, TimelineFollowSettlementDomain,
+    TimelineFollowSettlementDomainSummary, TimelineFollowSettlementState,
+    TimelineFollowSettlementSummary, TimelineFollowSummary, TimelineGuideAssetKey,
     TimelineGuideCueKind, TimelineGuideCueSummary, TimelineId, TimelineItemGroupId,
     TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind, TimelineLayerSummary,
     TimelineLoopRegionSummary, TimelineLoopRuntimeStatus, TimelineLoopRuntimeSummary,
-    TimelineLoopScale, TimelinePhaseId, TimelinePhaseSummary, TimelineSnapRequest,
-    TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary, TimelineVideoClipId,
+    TimelineLoopScale, TimelinePhaseId, TimelinePhaseSummary, TimelineScheduleSource,
+    TimelineSnapRequest, TimelineSnapshot, TimelineTempoInterpolation, TimelineTempoMeterPoint,
+    TimelineTrackKind, TimelineVideoAutomationSummary, TimelineVideoClipId,
     TimelineVideoClipSummary, TouchFeaturePresetTarget, TouchSurfaceSummary, Transform2D,
     ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
     ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode,
@@ -211,6 +214,1085 @@ pub const SUPPORTED_EFFECT_ENVELOPE_HZ: u32 = 44;
 /// to admit the replacement snapshot. Once admitted, the caller waits for the
 /// definitive publication acknowledgement rather than synthesizing a timeout.
 pub const PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Published click metadata for the next native audio-bus tranche.  This
+/// module intentionally does not synthesize or open an audio device.
+pub const TIMELINE_CLICK_SAMPLE_RATE: u32 = 48_000;
+pub const TIMELINE_CLICK_LOOKAHEAD_MS: u64 = 600;
+pub const TIMELINE_CLICK_WAVEFORM: &str = "square";
+pub const TIMELINE_CLICK_DOWNBEAT_FREQUENCY_HZ: u16 = 1_320;
+pub const TIMELINE_CLICK_BEAT_FREQUENCY_HZ: u16 = 920;
+pub const TIMELINE_CLICK_DURATION_MS: u64 = 50;
+pub const TIMELINE_CLICK_DECAY_MS: u64 = 45;
+pub const TIMELINE_CLICK_START_GAIN: f32 = 0.1;
+pub const TIMELINE_CLICK_END_GAIN: f32 = 0.0001;
+pub const TIMELINE_CLICK_EXPONENTIAL_DECAY: bool = true;
+/// Same-source timecode corrections up to 250 ms are treated as normal
+/// clock tracking. A larger forward locate is a discontinuity and rotates
+/// the Timeline output fence so no pre-locate frames survive.
+pub const TIMELINE_TIMECODE_FORWARD_DISCONTINUITY_THRESHOLD_MS: u64 = 250;
+const TIMELINE_CLICK_QUEUE_CAPACITY: usize = 4096;
+const TIMELINE_CLICK_BATCH_CAPACITY: usize = 4096;
+const TIMELINE_CLICK_QUARTER_UNITS: u64 = 16;
+const TIMELINE_CLICK_SIXTEENTH_UNITS: u64 = 4;
+
+fn timeline_guide_playback_rate_milli(bpm: f64) -> Result<u16, String> {
+    if !bpm.is_finite() {
+        return Err("Timeline Guide boundary BPM must be finite".to_string());
+    }
+    Ok(((1.0 + (bpm - 170.0) / 600.0) * 1_000.0)
+        .round()
+        .clamp(920.0, 1_080.0) as u16)
+}
+
+struct TimelineClickSourceSelection {
+    source: TimelineScheduleSource,
+    authority: TimelineTempoMeterAuthority,
+    position_ms: u64,
+    count_in_start_units: Option<u64>,
+}
+
+#[derive(Clone)]
+struct TimelinePlannedJump {
+    at_ms: u64,
+    source_event_index: usize,
+    target_event_index: usize,
+    target: RuntimeTimelineEvent,
+}
+
+#[derive(Clone, Default)]
+struct TimelineTickDiscontinuityPlan {
+    loop_wraps: u128,
+    jump: Option<TimelinePlannedJump>,
+}
+
+pub type TimelineClickEvent = TimelineClickEventSummary;
+
+/// ABA identity attached to every queued click.  The schedule generation is
+/// engine-owned and checked/non-wrapping; epoch and transport generation are
+/// the public Timeline transport fence.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TimelineClickScheduleIdentity {
+    pub epoch: u64,
+    pub transport_generation: u64,
+    pub schedule_generation: u64,
+    pub source: TimelineScheduleSource,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TimelineClickCursor {
+    next_units: u64,
+    measure: u64,
+    beat: u16,
+    numerator: u8,
+    denominator: u8,
+}
+
+/// Pure, engine-owned musical authority.  It is deliberately independent of
+/// the 25 ms UI/media poll and can therefore be reused by the future native
+/// audio worker without duplicating tempo or meter arithmetic.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimelineTempoMeterAuthority {
+    fallback_bpm: f64,
+    points: Vec<TimelineTempoMeterPoint>,
+}
+
+impl TimelineTempoMeterAuthority {
+    pub fn new(fallback_bpm: f64, points: Vec<TimelineTempoMeterPoint>) -> Result<Self, String> {
+        if !fallback_bpm.is_finite()
+            || !(protocol::TIMELINE_TEMPO_MIN_BPM..=protocol::TIMELINE_TEMPO_MAX_BPM)
+                .contains(&fallback_bpm)
+        {
+            return Err("Timeline fallback BPM must be finite and within 20..=300".to_string());
+        }
+        validate_timeline_tempo_meter_map(protocol::TIMELINE_TEMPO_METER_MAP_VERSION, &points)?;
+        Ok(Self {
+            fallback_bpm,
+            points,
+        })
+    }
+
+    pub fn from_timeline(timeline: &TimelineSnapshot, fallback_bpm: f64) -> Result<Self, String> {
+        if timeline.tempo_meter_map_version > protocol::TIMELINE_TEMPO_METER_MAP_VERSION {
+            return Err(format!(
+                "Timeline tempo/meter map version {} is newer than supported version {}",
+                timeline.tempo_meter_map_version,
+                protocol::TIMELINE_TEMPO_METER_MAP_VERSION
+            ));
+        }
+        if timeline.tempo_meter_map.is_empty() {
+            return Self::new(fallback_bpm, Vec::new());
+        }
+        validate_timeline_tempo_meter_map(
+            timeline.tempo_meter_map_version,
+            &timeline.tempo_meter_map,
+        )?;
+        Self::new(fallback_bpm, timeline.tempo_meter_map.clone())
+    }
+
+    pub fn fallback_bpm(&self) -> f64 {
+        self.fallback_bpm
+    }
+
+    pub fn points(&self) -> &[TimelineTempoMeterPoint] {
+        &self.points
+    }
+
+    pub fn bpm_at_quarter_beat(&self, quarter_beat: f64) -> Result<f64, String> {
+        if !quarter_beat.is_finite() || quarter_beat < 0.0 {
+            return Err(
+                "Timeline quarter-beat position must be finite and non-negative".to_string(),
+            );
+        }
+        let mut previous_position = 0.0;
+        let mut previous_bpm = self.fallback_bpm;
+        for (index, point) in self.points.iter().enumerate() {
+            let position = timeline_point_quarter_beats(point)?;
+            if quarter_beat < position {
+                return Ok(previous_bpm);
+            }
+            if quarter_beat == position {
+                return Ok(point.bpm);
+            }
+            let Some(next) = self.points.get(index + 1) else {
+                return Ok(point.bpm);
+            };
+            if quarter_beat < timeline_point_quarter_beats(next)? {
+                return Ok(interpolate_timeline_bpm(
+                    point,
+                    next,
+                    quarter_beat - position,
+                )?);
+            }
+            previous_position = position;
+            previous_bpm = point.bpm;
+        }
+        let _ = previous_position;
+        Ok(previous_bpm)
+    }
+
+    pub fn meter_at_quarter_beat(&self, quarter_beat: f64) -> Result<(u8, u8), String> {
+        if !quarter_beat.is_finite() || quarter_beat < 0.0 {
+            return Err(
+                "Timeline quarter-beat position must be finite and non-negative".to_string(),
+            );
+        }
+        let mut meter = (4, 4);
+        for point in &self.points {
+            if quarter_beat < timeline_point_quarter_beats(point)? {
+                break;
+            }
+            meter = (point.numerator, point.denominator);
+        }
+        Ok(meter)
+    }
+
+    /// Return elapsed seconds from the Timeline origin using exact analytic
+    /// integration for linear BPM slew.  `round` is deliberately deferred to
+    /// sample-frame conversion so phase remains continuous across segments.
+    pub fn seconds_at_quarter_beat(&self, quarter_beat: f64) -> Result<f64, String> {
+        if !quarter_beat.is_finite() || quarter_beat < 0.0 {
+            return Err(
+                "Timeline quarter-beat position must be finite and non-negative".to_string(),
+            );
+        }
+        let Some(first) = self.points.first() else {
+            return finite_seconds(timeline_bpm_segment_seconds(
+                self.fallback_bpm,
+                quarter_beat,
+                self.fallback_bpm,
+                TimelineTempoInterpolation::Step,
+            )?);
+        };
+        let first_position = timeline_point_quarter_beats(first)?;
+        if quarter_beat <= first_position {
+            return finite_seconds(timeline_bpm_segment_seconds(
+                self.fallback_bpm,
+                quarter_beat,
+                self.fallback_bpm,
+                TimelineTempoInterpolation::Step,
+            )?);
+        }
+        let mut elapsed = if first_position > 0.0 {
+            timeline_bpm_segment_seconds(
+                self.fallback_bpm,
+                first_position,
+                self.fallback_bpm,
+                TimelineTempoInterpolation::Step,
+            )?
+        } else {
+            0.0
+        };
+        for (index, point) in self.points.iter().enumerate() {
+            let start = timeline_point_quarter_beats(point)?;
+            let Some(next) = self.points.get(index + 1) else {
+                elapsed += timeline_bpm_segment_seconds(
+                    point.bpm,
+                    quarter_beat - start,
+                    point.bpm,
+                    TimelineTempoInterpolation::Step,
+                )?;
+                return finite_seconds(elapsed);
+            };
+            let end = timeline_point_quarter_beats(next)?;
+            if quarter_beat <= start {
+                return finite_seconds(elapsed);
+            }
+            if quarter_beat < end {
+                let partial_span = quarter_beat - start;
+                let partial_end_bpm = match point.interpolation {
+                    TimelineTempoInterpolation::Step => point.bpm,
+                    TimelineTempoInterpolation::Linear => {
+                        interpolate_timeline_bpm(point, next, partial_span)?
+                    }
+                };
+                elapsed += timeline_bpm_segment_seconds(
+                    point.bpm,
+                    partial_span,
+                    partial_end_bpm,
+                    point.interpolation,
+                )?;
+                return finite_seconds(elapsed);
+            }
+            elapsed += timeline_bpm_segment_seconds(
+                point.bpm,
+                end - start,
+                next.bpm,
+                point.interpolation,
+            )?;
+        }
+        finite_seconds(elapsed)
+    }
+
+    pub fn sample_frame_at_quarter_beat(
+        &self,
+        quarter_beat: f64,
+        sample_rate: u32,
+    ) -> Result<u64, String> {
+        if sample_rate == 0 {
+            return Err("Timeline click sample rate must be non-zero".to_string());
+        }
+        let frames = self.seconds_at_quarter_beat(quarter_beat)? * f64::from(sample_rate);
+        if !frames.is_finite() || frames < 0.0 || frames >= u64::MAX as f64 {
+            return Err("Timeline click sample-frame conversion overflowed".to_string());
+        }
+        Ok(frames.round() as u64)
+    }
+
+    pub fn quarter_beat_at_seconds(&self, seconds: f64) -> Result<f64, String> {
+        if !seconds.is_finite() || seconds < 0.0 {
+            return Err("Timeline elapsed seconds must be finite and non-negative".to_string());
+        }
+        if seconds == 0.0 {
+            return Ok(0.0);
+        }
+        let mut high = (seconds * self.fallback_bpm / 60.0).max(1.0) + 1.0;
+        for _ in 0..64 {
+            if self.seconds_at_quarter_beat(high)? >= seconds {
+                break;
+            }
+            high *= 2.0;
+            if !high.is_finite()
+                || high > (protocol::TIMELINE_TEMPO_METER_MAX_SIXTEENTH_STEPS as f64 / 4.0)
+            {
+                return Err("Timeline elapsed position exceeds checked musical range".to_string());
+            }
+        }
+        let mut low = 0.0;
+        for _ in 0..80 {
+            let middle = (low + high) * 0.5;
+            if self.seconds_at_quarter_beat(middle)? < seconds {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        Ok(high)
+    }
+
+    pub fn quarter_beat_at_sample_frame(
+        &self,
+        sample_frame: u64,
+        sample_rate: u32,
+    ) -> Result<f64, String> {
+        if sample_rate == 0 {
+            return Err("Timeline click sample rate must be non-zero".to_string());
+        }
+        self.quarter_beat_at_seconds(sample_frame as f64 / f64::from(sample_rate))
+    }
+
+    /// Compare the audible click schedule over the native lookahead window.
+    /// A MIDI-clock PLL may perturb its floating BPM estimate on every one of
+    /// the 24 pulses per quarter note.  Replacing a future batch is only
+    /// semantic when that perturbation moves a queued onset by more than one
+    /// output frame (or changes its meter identity).
+    fn differs_audibly_within_lookahead(
+        &self,
+        candidate: &Self,
+        position_ms: u64,
+        sample_rate: u32,
+        lookahead_frames: u64,
+    ) -> Result<bool, String> {
+        let schedule = |authority: &Self| -> Result<Vec<(u64, u64, u16, u8, u8)>, String> {
+            let position_seconds = position_ms as f64 / 1_000.0;
+            let start_quarter = authority.quarter_beat_at_seconds(position_seconds)?;
+            let start_frame = authority.sample_frame_at_quarter_beat(start_quarter, sample_rate)?;
+            let end_frame = start_frame
+                .checked_add(lookahead_frames)
+                .ok_or_else(|| "Timeline click lookahead frame overflowed".to_string())?;
+            let end_quarter = authority.quarter_beat_at_sample_frame(end_frame, sample_rate)?;
+            let start_units =
+                (start_quarter * f64::from(TIMELINE_CLICK_QUARTER_UNITS as u32)).ceil();
+            let end_units = (end_quarter * f64::from(TIMELINE_CLICK_QUARTER_UNITS as u32)).ceil();
+            if !start_units.is_finite()
+                || !end_units.is_finite()
+                || start_units < 0.0
+                || end_units < 0.0
+                || end_units >= u64::MAX as f64
+            {
+                return Err("Timeline click PLL comparison overflowed".to_string());
+            }
+            let minimum_end = (start_units as u64)
+                .checked_add(1)
+                .ok_or_else(|| "Timeline click PLL comparison overflowed".to_string())?;
+            let comparison_identity = TimelineClickScheduleIdentity::default();
+            let events = authority
+                .enumerate_clicks(
+                    start_units as u64,
+                    (end_units as u64).max(minimum_end),
+                    sample_rate,
+                    comparison_identity,
+                )?
+                .into_iter()
+                .filter_map(|event| {
+                    event.sample_frame.checked_sub(start_frame).map(|relative| {
+                        (
+                            relative,
+                            event.measure,
+                            event.beat,
+                            event.numerator,
+                            event.denominator,
+                        )
+                    })
+                })
+                .filter(|event| event.0 <= lookahead_frames)
+                .collect::<Vec<_>>();
+            Ok(events)
+        };
+        let current = schedule(self)?;
+        let candidate = schedule(candidate)?;
+        if current.len() != candidate.len() {
+            return Ok(true);
+        }
+        Ok(current.iter().zip(candidate).any(|(current, candidate)| {
+            current.1 != candidate.1
+                || current.2 != candidate.2
+                || current.3 != candidate.3
+                || current.4 != candidate.4
+                || current.0.abs_diff(candidate.0) > 1
+        }))
+    }
+
+    /// Resolve the performance click immediately before an authored Guide
+    /// boundary. The caller supplies a canonical sample frame, never a
+    /// millisecond value, so Guide placement is derived from the same musical
+    /// map and rounding path as metronome events. Frame zero is the sole
+    /// no-preroll exception decided by the caller.
+    fn guide_onset_before_frame(
+        &self,
+        declared_frame: u64,
+        sample_rate: u32,
+        identity: TimelineClickScheduleIdentity,
+    ) -> Result<Option<u64>, String> {
+        if declared_frame == 0 {
+            return Ok(None);
+        }
+        let declared_quarter = self.quarter_beat_at_sample_frame(declared_frame, sample_rate)?;
+        let declared_units =
+            (declared_quarter * f64::from(TIMELINE_CLICK_QUARTER_UNITS as u32)).ceil();
+        if !declared_units.is_finite() || declared_units < 0.0 || declared_units >= u64::MAX as f64
+        {
+            return Err("Timeline Guide musical boundary overflowed".to_string());
+        }
+        let declared_units = declared_units as u64;
+        let start_units = declared_units.saturating_sub(TIMELINE_CLICK_QUARTER_UNITS * 8);
+        let end_units = declared_units
+            .checked_add(TIMELINE_CLICK_QUARTER_UNITS)
+            .ok_or_else(|| "Timeline Guide musical boundary overflowed".to_string())?;
+        Ok(self
+            .enumerate_clicks(start_units, end_units, sample_rate, identity)?
+            .into_iter()
+            .filter(|event| event.sample_frame < declared_frame)
+            .map(|event| event.sample_frame)
+            .max())
+    }
+
+    /// Enumerate every denominator-note click in a bounded quarter-beat
+    /// range.  The caller may poll repeatedly with overlapping ranges; the
+    /// returned event identity is stable and the scheduler owns de-duplication.
+    pub fn enumerate_clicks(
+        &self,
+        start_quarter_units: u64,
+        end_quarter_units: u64,
+        sample_rate: u32,
+        identity: TimelineClickScheduleIdentity,
+    ) -> Result<Vec<TimelineClickEventSummary>, String> {
+        if end_quarter_units < start_quarter_units {
+            return Err("Timeline click lookahead end precedes its start".to_string());
+        }
+        if end_quarter_units == start_quarter_units {
+            return Ok(Vec::new());
+        }
+        if sample_rate == 0 {
+            return Err("Timeline click sample rate must be non-zero".to_string());
+        }
+        let (mut cursor, mut segment_index) = self.cursor_at_units(start_quarter_units)?;
+        let mut events = Vec::new();
+        loop {
+            let segment_end = match self.points.get(segment_index) {
+                Some(point) => timeline_point_units(point)?,
+                None => end_quarter_units,
+            };
+            let limit = end_quarter_units.min(segment_end);
+            while cursor.next_units < limit {
+                if events.len() >= TIMELINE_CLICK_BATCH_CAPACITY {
+                    return Err(
+                        "Timeline click lookahead exceeded its bounded event batch".to_string()
+                    );
+                }
+                let quarter_beat =
+                    cursor.next_units as f64 / f64::from(TIMELINE_CLICK_QUARTER_UNITS as u32);
+                let sample_frame = self.sample_frame_at_quarter_beat(quarter_beat, sample_rate)?;
+                let downbeat = cursor.beat == 1;
+                events.push(TimelineClickEventSummary {
+                    sample_frame,
+                    measure: cursor.measure,
+                    beat: cursor.beat,
+                    numerator: cursor.numerator,
+                    denominator: cursor.denominator,
+                    downbeat,
+                    frequency_hz: if downbeat {
+                        TIMELINE_CLICK_DOWNBEAT_FREQUENCY_HZ
+                    } else {
+                        TIMELINE_CLICK_BEAT_FREQUENCY_HZ
+                    },
+                    duration_frames: ((u64::from(sample_rate) * TIMELINE_CLICK_DURATION_MS)
+                        / 1_000)
+                        .try_into()
+                        .map_err(|_| "Timeline click duration exceeded frame bounds".to_string())?,
+                    epoch: identity.epoch,
+                    transport_generation: identity.transport_generation,
+                    schedule_generation: identity.schedule_generation,
+                    source: identity.source,
+                    count_in: false,
+                });
+                self.advance_click_cursor(&mut cursor)?;
+            }
+            if limit >= end_quarter_units {
+                break;
+            }
+            // A meter point is an exact new measure boundary.  Tempo-only
+            // points preserve the current beat phase and therefore do not
+            // duplicate a downbeat.
+            if let Some(point) = self.points.get(segment_index) {
+                if (point.numerator, point.denominator) != (cursor.numerator, cursor.denominator)
+                    || point.measure_number.is_some()
+                {
+                    self.move_cursor_to_measure_boundary(&mut cursor, point)?;
+                }
+            }
+            segment_index = segment_index.saturating_add(1);
+            if segment_index > self.points.len() {
+                break;
+            }
+        }
+        Ok(events)
+    }
+
+    /// Generate one exact count-in measure.  The returned frame positions are
+    /// relative to count-in start, so the first event is frame zero and the
+    /// caller can offset the batch to the native playback start frame.
+    pub fn count_in_clicks(
+        &self,
+        playback_start_quarter_units: u64,
+        sample_rate: u32,
+        identity: TimelineClickScheduleIdentity,
+    ) -> Result<Vec<TimelineClickEventSummary>, String> {
+        if sample_rate == 0 {
+            return Err("Timeline click sample rate must be non-zero".to_string());
+        }
+        let quarter =
+            playback_start_quarter_units as f64 / f64::from(TIMELINE_CLICK_QUARTER_UNITS as u32);
+        let (numerator, denominator) = self.meter_at_quarter_beat(quarter)?;
+        let cadence_quarter_beats = 4.0 / f64::from(denominator);
+        let bpm = self.bpm_at_quarter_beat(quarter)?;
+        let cadence_frames = (60.0 * cadence_quarter_beats / bpm * f64::from(sample_rate)).round();
+        if !cadence_frames.is_finite() || cadence_frames < 1.0 || cadence_frames >= u64::MAX as f64
+        {
+            return Err("Timeline count-in frame cadence overflowed".to_string());
+        }
+        let cadence_frames = cadence_frames as u64;
+        let (cursor, _) = self.cursor_at_units(playback_start_quarter_units)?;
+        let measure = cursor.measure;
+        let mut events = Vec::with_capacity(usize::from(numerator));
+        for index in 0..numerator {
+            let frame = cadence_frames
+                .checked_mul(u64::from(index))
+                .ok_or_else(|| "Timeline count-in frame position overflowed".to_string())?;
+            events.push(TimelineClickEventSummary {
+                sample_frame: frame,
+                measure,
+                beat: u16::from(index) + 1,
+                numerator,
+                denominator,
+                downbeat: index == 0,
+                frequency_hz: if index == 0 {
+                    TIMELINE_CLICK_DOWNBEAT_FREQUENCY_HZ
+                } else {
+                    TIMELINE_CLICK_BEAT_FREQUENCY_HZ
+                },
+                duration_frames: ((u64::from(sample_rate) * TIMELINE_CLICK_DURATION_MS) / 1_000)
+                    .try_into()
+                    .map_err(|_| "Timeline click duration exceeded frame bounds".to_string())?,
+                epoch: identity.epoch,
+                transport_generation: identity.transport_generation,
+                schedule_generation: identity.schedule_generation,
+                source: identity.source,
+                count_in: true,
+            });
+        }
+        Ok(events)
+    }
+
+    fn cursor_at_units(&self, target: u64) -> Result<(TimelineClickCursor, usize), String> {
+        let mut cursor = TimelineClickCursor {
+            next_units: 0,
+            measure: 1,
+            beat: 1,
+            numerator: 4,
+            denominator: 4,
+        };
+        let mut segment_index = 0usize;
+        if let Some(first) = self.points.first() {
+            let first_units = timeline_point_units(first)?;
+            if first_units == 0 {
+                cursor.numerator = first.numerator;
+                cursor.denominator = first.denominator;
+                cursor.measure = first.measure_number.unwrap_or(1);
+                segment_index = 1;
+            }
+        }
+        loop {
+            let segment_end = match self.points.get(segment_index) {
+                Some(point) => timeline_point_units(point)?,
+                None => target.max(cursor.next_units).saturating_add(1),
+            };
+            let limit = target.min(segment_end);
+            self.advance_cursor_before(&mut cursor, limit)?;
+            if target < segment_end || segment_index >= self.points.len() {
+                return Ok((cursor, segment_index));
+            }
+            let point = &self.points[segment_index];
+            if (point.numerator, point.denominator) != (cursor.numerator, cursor.denominator)
+                || point.measure_number.is_some()
+            {
+                self.move_cursor_to_measure_boundary(&mut cursor, point)?;
+            }
+            segment_index = segment_index.saturating_add(1);
+        }
+    }
+
+    fn move_cursor_to_measure_boundary(
+        &self,
+        cursor: &mut TimelineClickCursor,
+        point: &TimelineTempoMeterPoint,
+    ) -> Result<(), String> {
+        let boundary = timeline_point_units(point)?;
+        let measure = match point.measure_number {
+            Some(measure) => measure,
+            None if cursor.beat == 1 => cursor.measure,
+            None => cursor
+                .measure
+                .checked_add(1)
+                .ok_or_else(|| "Timeline click measure overflowed".to_string())?,
+        };
+        cursor.next_units = boundary;
+        cursor.numerator = point.numerator;
+        cursor.denominator = point.denominator;
+        cursor.beat = 1;
+        cursor.measure = measure;
+        Ok(())
+    }
+
+    fn advance_cursor_before(
+        &self,
+        cursor: &mut TimelineClickCursor,
+        limit: u64,
+    ) -> Result<(), String> {
+        if cursor.next_units >= limit {
+            return Ok(());
+        }
+        let cadence = TIMELINE_CLICK_QUARTER_UNITS
+            .checked_mul(4)
+            .and_then(|value| value.checked_div(u64::from(cursor.denominator)))
+            .ok_or_else(|| "Timeline click cadence overflowed".to_string())?;
+        let steps = (limit - cursor.next_units - 1)
+            .checked_div(cadence)
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| "Timeline click cursor overflowed".to_string())?;
+        cursor.next_units = cursor
+            .next_units
+            .checked_add(
+                cadence
+                    .checked_mul(steps)
+                    .ok_or_else(|| "Timeline click cursor span overflowed".to_string())?,
+            )
+            .ok_or_else(|| "Timeline click cursor overflowed".to_string())?;
+        advance_measure_beat(cursor, steps)
+    }
+
+    fn advance_click_cursor(&self, cursor: &mut TimelineClickCursor) -> Result<(), String> {
+        let cadence = TIMELINE_CLICK_QUARTER_UNITS
+            .checked_mul(4)
+            .and_then(|value| value.checked_div(u64::from(cursor.denominator)))
+            .ok_or_else(|| "Timeline click cadence overflowed".to_string())?;
+        cursor.next_units = cursor
+            .next_units
+            .checked_add(cadence)
+            .ok_or_else(|| "Timeline click cursor overflowed".to_string())?;
+        advance_measure_beat(cursor, 1)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TimelineClickScheduler {
+    sample_rate: u32,
+    lookahead_frames: u64,
+    authority: Option<TimelineTempoMeterAuthority>,
+    identity: TimelineClickScheduleIdentity,
+    queue: VecDeque<TimelineClickEventSummary>,
+    armed: bool,
+    count_in_active: bool,
+    last_position_units: Option<u64>,
+    overflow: Option<String>,
+}
+
+impl TimelineClickScheduler {
+    pub fn new() -> Self {
+        Self {
+            sample_rate: TIMELINE_CLICK_SAMPLE_RATE,
+            lookahead_frames: u64::from(TIMELINE_CLICK_SAMPLE_RATE)
+                .saturating_mul(TIMELINE_CLICK_LOOKAHEAD_MS)
+                / 1_000,
+            authority: None,
+            identity: TimelineClickScheduleIdentity {
+                epoch: 1,
+                transport_generation: 1,
+                schedule_generation: 1,
+                source: TimelineScheduleSource::Root,
+            },
+            queue: VecDeque::with_capacity(TIMELINE_CLICK_QUEUE_CAPACITY),
+            armed: false,
+            count_in_active: false,
+            last_position_units: None,
+            overflow: None,
+        }
+    }
+
+    pub fn identity(&self) -> TimelineClickScheduleIdentity {
+        self.identity
+    }
+
+    pub fn queued_events(&self) -> &VecDeque<TimelineClickEventSummary> {
+        &self.queue
+    }
+
+    pub fn overflow(&self) -> Option<&str> {
+        self.overflow.as_deref()
+    }
+
+    pub fn configure_authority(
+        &mut self,
+        authority: TimelineTempoMeterAuthority,
+    ) -> Result<(), String> {
+        self.authority = Some(authority);
+        Ok(())
+    }
+
+    fn next_identity(
+        &self,
+        source: TimelineScheduleSource,
+    ) -> Result<TimelineClickScheduleIdentity, String> {
+        Ok(TimelineClickScheduleIdentity {
+            epoch: self.identity.epoch,
+            transport_generation: self.identity.transport_generation,
+            schedule_generation: self
+                .identity
+                .schedule_generation
+                .checked_add(1)
+                .ok_or_else(|| "Timeline click schedule generation is exhausted".to_string())?,
+            source,
+        })
+    }
+
+    fn clear_for_identity(&mut self, identity: TimelineClickScheduleIdentity) {
+        self.identity = identity;
+        self.authority = None;
+        self.queue.clear();
+        self.armed = false;
+        self.count_in_active = false;
+        self.last_position_units = None;
+        self.overflow = None;
+    }
+
+    /// Rotate only the engine-owned schedule generation.  This is used for
+    /// source/map/count-in/toggle changes that keep the public transport
+    /// epoch and generation stable but must cancel already-issued frames.
+    pub fn rotate_schedule_generation(&mut self) -> Result<(), String> {
+        let identity = self.next_identity(self.identity.source)?;
+        self.clear_for_identity(identity);
+        Ok(())
+    }
+
+    pub fn preflight_schedule_generation_rotation(&self) -> Result<(), String> {
+        self.next_identity(self.identity.source).map(|_| ())
+    }
+
+    pub fn rotate_source(&mut self, source: TimelineScheduleSource) -> Result<(), String> {
+        if self.identity.source == source {
+            return Ok(());
+        }
+        let identity = self.next_identity(source)?;
+        self.clear_for_identity(identity);
+        Ok(())
+    }
+
+    pub fn rotate_identity(&mut self, epoch: u64, transport_generation: u64) -> Result<(), String> {
+        let schedule_generation = self
+            .identity
+            .schedule_generation
+            .checked_add(1)
+            .ok_or_else(|| "Timeline click schedule generation is exhausted".to_string())?;
+        self.identity = TimelineClickScheduleIdentity {
+            epoch,
+            transport_generation,
+            schedule_generation,
+            source: self.identity.source,
+        };
+        self.queue.clear();
+        self.armed = false;
+        self.count_in_active = false;
+        self.last_position_units = None;
+        self.overflow = None;
+        Ok(())
+    }
+
+    pub fn disarm(&mut self) {
+        self.queue.clear();
+        self.armed = false;
+        self.count_in_active = false;
+        self.last_position_units = None;
+        self.overflow = None;
+    }
+
+    pub fn invalidate(&mut self, epoch: u64, transport_generation: u64) -> Result<(), String> {
+        self.rotate_identity(epoch, transport_generation)
+    }
+
+    pub fn rearm(
+        &mut self,
+        authority: TimelineTempoMeterAuthority,
+        current_position_units: u64,
+        lookahead_end_units: u64,
+    ) -> Result<usize, String> {
+        let events = match authority.enumerate_clicks(
+            current_position_units,
+            lookahead_end_units,
+            self.sample_rate,
+            self.identity,
+        ) {
+            Ok(events) => events,
+            Err(error) => {
+                self.overflow = Some(error.clone());
+                return Err(error);
+            }
+        };
+        if events.len() > TIMELINE_CLICK_QUEUE_CAPACITY {
+            let error = "Timeline click queue capacity exceeded".to_string();
+            self.overflow = Some(error.clone());
+            return Err(error);
+        }
+        self.authority = Some(authority);
+        self.queue = events.into_iter().collect();
+        self.overflow = None;
+        self.armed = true;
+        self.count_in_active = false;
+        self.last_position_units = Some(current_position_units);
+        Ok(self.queue.len())
+    }
+
+    pub fn rearm_count_in(&mut self, playback_start_units: u64) -> Result<usize, String> {
+        let Some(authority) = self.authority.as_ref() else {
+            return Ok(0);
+        };
+        let next_identity = self.next_identity(self.identity.source)?;
+        let events = match authority.count_in_clicks(
+            playback_start_units,
+            self.sample_rate,
+            next_identity,
+        ) {
+            Ok(events) => events,
+            Err(error) => {
+                self.overflow = Some(error.clone());
+                return Err(error);
+            }
+        };
+        if events.len() > TIMELINE_CLICK_QUEUE_CAPACITY {
+            let error = "Timeline count-in exceeded click queue capacity".to_string();
+            self.overflow = Some(error.clone());
+            return Err(error);
+        }
+        self.queue.clear();
+        self.queue.extend(events);
+        self.identity = next_identity;
+        self.armed = true;
+        self.count_in_active = true;
+        self.last_position_units = Some(playback_start_units);
+        Ok(self.queue.len())
+    }
+
+    pub fn end_count_in(&mut self) -> Result<(), String> {
+        if self.count_in_active {
+            self.rotate_schedule_generation()?;
+        }
+        Ok(())
+    }
+
+    pub fn poll(
+        &mut self,
+        current_position_units: u64,
+        lookahead_end_units: u64,
+    ) -> Result<usize, String> {
+        if !self.armed {
+            return Ok(0);
+        }
+        if current_position_units < self.last_position_units.unwrap_or(current_position_units) {
+            return Err(
+                "Timeline click poll moved backwards without a transport rearm".to_string(),
+            );
+        }
+        let previous_queue = self.queue.clone();
+        let previous_position = self.last_position_units;
+        self.last_position_units = Some(current_position_units);
+        if let Some(authority) = self.authority.as_ref() {
+            let current_frame = authority.sample_frame_at_quarter_beat(
+                current_position_units as f64 / f64::from(TIMELINE_CLICK_QUARTER_UNITS as u32),
+                self.sample_rate,
+            )?;
+            self.queue
+                .retain(|event| event.sample_frame >= current_frame);
+        }
+        match self.fill(current_position_units, lookahead_end_units) {
+            Ok(added) => Ok(added),
+            Err(error) => {
+                self.queue = previous_queue;
+                self.last_position_units = previous_position;
+                self.overflow = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    fn fill(&mut self, start_units: u64, end_units: u64) -> Result<usize, String> {
+        let Some(authority) = self.authority.as_ref() else {
+            return Ok(0);
+        };
+        let events = match authority.enumerate_clicks(
+            start_units,
+            end_units,
+            self.sample_rate,
+            self.identity,
+        ) {
+            Ok(events) => events,
+            Err(error) => {
+                self.overflow = Some(error.clone());
+                return Err(error);
+            }
+        };
+        let mut new_events = Vec::new();
+        for event in events {
+            if self.queue.iter().any(|queued| {
+                queued.sample_frame == event.sample_frame
+                    && queued.epoch == event.epoch
+                    && queued.transport_generation == event.transport_generation
+                    && queued.schedule_generation == event.schedule_generation
+                    && queued.source == event.source
+                    && queued.count_in == event.count_in
+            }) {
+                continue;
+            }
+            new_events.push(event);
+        }
+        if self
+            .queue
+            .len()
+            .checked_add(new_events.len())
+            .is_none_or(|length| length > TIMELINE_CLICK_QUEUE_CAPACITY)
+        {
+            let error = "Timeline click queue capacity exceeded".to_string();
+            self.overflow = Some(error.clone());
+            return Err(error);
+        }
+        let added = new_events.len();
+        self.queue.extend(new_events);
+        Ok(added)
+    }
+
+    pub fn take_current_events(
+        &mut self,
+        identity: TimelineClickScheduleIdentity,
+    ) -> Vec<TimelineClickEventSummary> {
+        // An overflow is a visible, fail-closed producer fault.  Preserve the
+        // queued image for diagnostics/retry, but never let a native consumer
+        // emit a partial or stale batch while the fault is latched.
+        if identity != self.identity || self.overflow.is_some() {
+            return Vec::new();
+        }
+        let mut events = Vec::with_capacity(self.queue.len());
+        while let Some(event) = self.queue.pop_front() {
+            if event.epoch == identity.epoch
+                && event.transport_generation == identity.transport_generation
+                && event.schedule_generation == identity.schedule_generation
+                && event.source == identity.source
+            {
+                events.push(event);
+            }
+        }
+        events
+    }
+}
+
+fn advance_measure_beat(cursor: &mut TimelineClickCursor, count: u64) -> Result<(), String> {
+    let numerator = u64::from(cursor.numerator);
+    let beat = u64::from(cursor.beat);
+    let first = numerator
+        .checked_sub(beat)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| "Timeline click beat state is invalid".to_string())?;
+    if count < first {
+        cursor.beat =
+            beat.checked_add(count)
+                .ok_or_else(|| "Timeline click beat overflowed".to_string())? as u16;
+        return Ok(());
+    }
+    let remainder = count - first;
+    cursor.measure = cursor
+        .measure
+        .checked_add(1 + remainder / numerator)
+        .ok_or_else(|| "Timeline click measure overflowed".to_string())?;
+    cursor.beat = (remainder % numerator + 1)
+        .try_into()
+        .map_err(|_| "Timeline click beat overflowed".to_string())?;
+    Ok(())
+}
+
+fn timeline_point_units(point: &TimelineTempoMeterPoint) -> Result<u64, String> {
+    point
+        .position_sixteenth_steps
+        .checked_mul(TIMELINE_CLICK_SIXTEENTH_UNITS)
+        .ok_or_else(|| "Timeline tempo/meter point span overflowed".to_string())
+}
+
+fn timeline_measure_start_sixteenth_steps(
+    points: &[TimelineTempoMeterPoint],
+    target_measure: u64,
+) -> Result<u64, String> {
+    let anchor = points
+        .iter()
+        .filter_map(|point| point.measure_number.map(|measure| (measure, point)))
+        .filter(|(measure, _)| *measure <= target_measure)
+        .max_by_key(|(measure, _)| *measure)
+        .ok_or_else(|| "Timeline Guide target measure has no authored anchor".to_string())?;
+    let (mut measure, anchor_point) = anchor;
+    let mut position = anchor_point.position_sixteenth_steps;
+    while measure < target_measure {
+        let meter = points
+            .iter()
+            .take_while(|point| point.position_sixteenth_steps <= position)
+            .last()
+            .unwrap_or(anchor_point);
+        let span = u64::from(meter.numerator)
+            .checked_mul(16)
+            .and_then(|value| value.checked_div(u64::from(meter.denominator)))
+            .filter(|span| *span > 0)
+            .ok_or_else(|| "Timeline Guide target measure span overflowed".to_string())?;
+        position = position
+            .checked_add(span)
+            .ok_or_else(|| "Timeline Guide target measure position overflowed".to_string())?;
+        measure = measure
+            .checked_add(1)
+            .ok_or_else(|| "Timeline Guide target measure identity overflowed".to_string())?;
+    }
+    Ok(position)
+}
+
+fn timeline_point_quarter_beats(point: &TimelineTempoMeterPoint) -> Result<f64, String> {
+    Ok(timeline_point_units(point)? as f64 / TIMELINE_CLICK_QUARTER_UNITS as f64)
+}
+
+fn interpolate_timeline_bpm(
+    point: &TimelineTempoMeterPoint,
+    next: &TimelineTempoMeterPoint,
+    offset: f64,
+) -> Result<f64, String> {
+    let span = timeline_point_quarter_beats(next)? - timeline_point_quarter_beats(point)?;
+    if span <= 0.0 || !span.is_finite() {
+        return Err("Timeline tempo points have an ambiguous or zero span".to_string());
+    }
+    let value = match point.interpolation {
+        TimelineTempoInterpolation::Step => point.bpm,
+        TimelineTempoInterpolation::Linear => point.bpm + (next.bpm - point.bpm) * offset / span,
+    };
+    if value.is_finite() && value > 0.0 {
+        Ok(value)
+    } else {
+        Err("Timeline tempo interpolation produced a non-finite BPM".to_string())
+    }
+}
+
+fn timeline_bpm_segment_seconds(
+    start_bpm: f64,
+    span_quarter_beats: f64,
+    end_bpm: f64,
+    interpolation: TimelineTempoInterpolation,
+) -> Result<f64, String> {
+    if span_quarter_beats < 0.0 || !span_quarter_beats.is_finite() {
+        return Err("Timeline tempo segment span is invalid".to_string());
+    }
+    if span_quarter_beats == 0.0 {
+        return Ok(0.0);
+    }
+    let seconds = match interpolation {
+        TimelineTempoInterpolation::Step => 60.0 * span_quarter_beats / start_bpm,
+        TimelineTempoInterpolation::Linear => {
+            let slope = (end_bpm - start_bpm) / span_quarter_beats;
+            if slope.abs() < f64::EPSILON {
+                60.0 * span_quarter_beats / start_bpm
+            } else {
+                60.0 / slope * (end_bpm / start_bpm).ln()
+            }
+        }
+    };
+    finite_seconds(seconds)
+}
+
+fn finite_seconds(seconds: f64) -> Result<f64, String> {
+    if seconds.is_finite() && seconds >= 0.0 {
+        Ok(seconds)
+    } else {
+        Err("Timeline tempo conversion produced a non-finite duration".to_string())
+    }
+}
 
 const OUTPUT_OWNERSHIP_TRANSITION_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -3213,6 +4295,9 @@ pub struct TimelineAudioRuntimeSnapshot {
     pub count_in_beats: u8,
     pub count_in_remaining_ms: u64,
     pub metronome_transport: Option<TimelineMetronomeTransport>,
+    pub click_events: Vec<TimelineClickEventSummary>,
+    pub click_schedule_generation: u64,
+    pub click_queue_overflow: Option<String>,
     /// Runtime-only operator Guide cues. The backend audio worker consumes
     /// these from the same snapshot read as the Timeline transport so speech
     /// can never be paired with a stale playhead or retired project image.
@@ -3223,7 +4308,14 @@ pub struct TimelineAudioRuntimeSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineMetronomeTransport {
     Root,
-    DirectChild { cue_id: CueId, generation: u64 },
+    DirectChild {
+        cue_id: CueId,
+        generation: u64,
+    },
+    Follow {
+        timeline_id: TimelineId,
+        generation: u64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -6587,7 +7679,33 @@ impl EngineHandle {
                     transport_revision
                 };
                 let (metronome_enabled, count_in_beats, count_in_remaining_ms, metronome_transport) =
-                    if snapshot.timeline.playing {
+                    if follow_transitioning {
+                        let target = snapshot
+                            .timeline
+                            .follow_runtime
+                            .target_timeline_id
+                            .and_then(|target_id| {
+                                snapshot
+                                    .timeline_bank
+                                    .iter()
+                                    .find(|timeline| timeline.id == target_id)
+                            });
+                        (
+                            target.is_some_and(|timeline| timeline.metronome_enabled),
+                            target.map(|timeline| timeline.count_in_beats).unwrap_or(0),
+                            0,
+                            snapshot
+                                .timeline
+                                .follow_runtime
+                                .target_timeline_id
+                                .map(|timeline_id| {
+                                    TimelineMetronomeTransport::Follow {
+                                        timeline_id,
+                                        generation: snapshot.timeline.follow_runtime.generation,
+                                    }
+                                }),
+                        )
+                    } else if snapshot.timeline.playing {
                         (
                             snapshot.timeline.metronome_enabled,
                             snapshot.timeline.count_in_beats,
@@ -6654,6 +7772,9 @@ impl EngineHandle {
                         count_in_beats,
                         count_in_remaining_ms,
                         metronome_transport,
+                        click_events: snapshot.timeline.click_events.clone(),
+                        click_schedule_generation: snapshot.timeline.click_schedule_generation,
+                        click_queue_overflow: snapshot.timeline.click_queue_overflow.clone(),
                         guide_enabled: snapshot.timeline.guide_enabled,
                         guide_cues: snapshot.timeline.guide_cues.clone(),
                     },
@@ -14214,6 +15335,8 @@ struct RuntimeChildTransport {
     activation_generation: u64,
     metronome_enabled: bool,
     count_in_beats: u8,
+    tempo_meter_map: Vec<TimelineTempoMeterPoint>,
+    tempo_meter_map_version: u8,
     activated_events: Vec<bool>,
 }
 
@@ -14252,6 +15375,7 @@ struct RuntimeTimelineFollowTransition {
     fault_policy: protocol::TimelineFollowFaultPolicy,
     admission_reason: protocol::TimelineFollowAdmissionReason,
     trans_cadence_bars: u16,
+    trans_target_measures: Vec<u64>,
     guide_enabled: bool,
     guide_generation: u64,
     last_trans_beat_ordinal: Option<u64>,
@@ -14819,6 +15943,7 @@ enum PendingCommandRollback {
         position_ms: u64,
         transport_epoch: u64,
         transport_generation: u64,
+        click_scheduler: TimelineClickScheduler,
         last_error: Option<String>,
     },
     /// Complete A image for the one runtime-only canonical Play/Pause lane.
@@ -14861,6 +15986,7 @@ enum PendingCommandRollback {
         video_layers: Vec<RuntimeVideoLayer>,
         video_layer_fades: Vec<RuntimeVideoLayerFade>,
         clock: BpmClock,
+        click_scheduler: TimelineClickScheduler,
         last_error: Option<String>,
     },
 }
@@ -15080,6 +16206,9 @@ struct EngineRuntime {
     timeline_audio_muted: bool,
     timeline_metronome_enabled: bool,
     timeline_count_in_beats: u8,
+    timeline_tempo_meter_map: Vec<TimelineTempoMeterPoint>,
+    timeline_tempo_meter_map_version: u8,
+    timeline_click_scheduler: TimelineClickScheduler,
     timeline_audio_transport_revision: u64,
     timeline_audio_projection_authority: TimelineAudioProjectionAuthority,
     timeline_audio_projection_signature: TimelineAudioProjectionSignature,
@@ -15442,6 +16571,9 @@ impl EngineRuntime {
             timeline_audio_muted: false,
             timeline_metronome_enabled: false,
             timeline_count_in_beats: 4,
+            timeline_tempo_meter_map: Vec::new(),
+            timeline_tempo_meter_map_version: protocol::TIMELINE_TEMPO_METER_MAP_VERSION,
+            timeline_click_scheduler: TimelineClickScheduler::new(),
             timeline_audio_transport_revision: 0,
             timeline_audio_projection_authority: TimelineAudioProjectionAuthority::default(),
             timeline_audio_projection_signature: TimelineAudioProjectionSignature::default(),
@@ -15905,6 +17037,7 @@ impl EngineRuntime {
         &mut self,
         mut snapshot: EngineSnapshot,
     ) -> Result<(), String> {
+        let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
         snapshot = normalized_engine_snapshot_video_for_load(snapshot)?;
         // Runtime authority is never imported with project JSON or an
         // in-memory authored image. The live process owns its epoch.
@@ -15934,6 +17067,7 @@ impl EngineRuntime {
             self.last_error = Some(error.clone());
             error
         })?;
+        validate_project_child_tempo_meter_maps(&snapshot.cues)?;
         // A legacy layer ISF is an exact renderer projection of its canonical
         // Layer chain, not a second authored shader allocation.  Count every
         // canonical entity and preset once, then use legacy data only for a
@@ -16127,8 +17261,9 @@ impl EngineRuntime {
         self.timeline_audio_muted = snapshot.timeline.audio_muted;
         self.timeline_metronome_enabled = snapshot.timeline.metronome_enabled;
         self.timeline_count_in_beats = snapshot.timeline.count_in_beats.min(16);
-        self.timeline_audio_transport_revision =
-            self.timeline_audio_transport_revision.wrapping_add(1);
+        self.timeline_tempo_meter_map = snapshot.timeline.tempo_meter_map.clone();
+        self.timeline_tempo_meter_map_version = snapshot.timeline.tempo_meter_map_version;
+        self.timeline_audio_transport_revision = next_audio_transport_revision;
         self.timeline_audio_clips = snapshot.timeline.audio_clips.clone();
         self.timeline_audio_clips_derived = false;
         if self.timeline_audio_clips.is_empty() && self.timeline_audio.is_some() {
@@ -18186,27 +19321,49 @@ impl EngineRuntime {
                 self.last_error = None;
             }
             EngineCommand::SetBpm(bpm) => {
+                let next_bpm = clamp_bpm(bpm);
+                let tempo_changed = self.clock.bpm != next_bpm;
+                if tempo_changed {
+                    if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                }
                 self.clock.set_bpm(bpm, Instant::now());
+                if tempo_changed {
+                    self.invalidate_timeline_transport_authority()
+                        .expect("BPM preflight must reserve a transport authority successor");
+                }
                 if self.timeline_has_conformed_events() {
                     let current_bpm = self.clock.bpm;
                     self.last_error = self.reconform_timeline_events_to_bpm(current_bpm).err();
                 }
             }
             EngineCommand::TapBpm => {
+                if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
+                    self.last_error = Some(error);
+                    return;
+                }
                 self.clock.tap(Instant::now());
+                self.invalidate_timeline_transport_authority()
+                    .expect("BPM tap preflight must reserve a transport authority successor");
                 if self.timeline_has_conformed_events() {
                     let current_bpm = self.clock.bpm;
                     self.last_error = self.reconform_timeline_events_to_bpm(current_bpm).err();
                 }
             }
             EngineCommand::MidiClockPulse => {
-                self.clock.midi_clock_pulse(Instant::now());
+                self.apply_midi_clock_pulse_at(Instant::now());
             }
             EngineCommand::SyncExternalClock {
                 bpm,
                 beat_phase,
                 source,
             } => {
+                if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
+                    self.last_error = Some(error);
+                    return;
+                }
                 if self.timeline_follow_is_abortable() {
                     self.abort_timeline_follow(
                         protocol::TimelineFollowAbortReason::ClockDiscontinuity,
@@ -18215,6 +19372,9 @@ impl EngineRuntime {
                 }
                 self.clock
                     .sync_external_clock(bpm, beat_phase, source, Instant::now());
+                self.invalidate_timeline_transport_authority().expect(
+                    "external clock preflight must reserve a transport authority successor",
+                );
                 self.last_error = None;
             }
             EngineCommand::MidiSongPositionPointer(sixteenth_notes) => {
@@ -21282,6 +22442,7 @@ impl EngineRuntime {
                     position_ms: self.timeline_position_ms,
                     transport_epoch: self.timeline_transport_epoch,
                     transport_generation: self.timeline_transport_generation,
+                    click_scheduler: self.timeline_click_scheduler.clone(),
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -21529,10 +22690,20 @@ impl EngineRuntime {
                 enabled,
                 count_in_beats,
             } => {
+                let next_count_in_beats = count_in_beats.min(16);
+                let semantic_change = self.timeline_metronome_enabled != enabled
+                    || self.timeline_count_in_beats != next_count_in_beats;
+                if semantic_change {
+                    if let Err(error) = self.timeline_click_scheduler.rotate_schedule_generation() {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                }
                 self.timeline_metronome_enabled = enabled;
-                self.timeline_count_in_beats = count_in_beats.min(16);
+                self.timeline_count_in_beats = next_count_in_beats;
                 if !enabled || count_in_beats == 0 {
                     self.timeline_count_in_until = None;
+                    self.timeline_click_scheduler.disarm();
                 }
                 self.last_error = None;
             }
@@ -21771,6 +22942,16 @@ impl EngineRuntime {
             }
             EngineCommand::SeekTimeline(position_ms) => {
                 let now = Instant::now();
+                let revision_successors = 1 + u64::from(self.timeline_follow_is_abortable());
+                let next_audio_transport_revision = match self
+                    .reserve_timeline_audio_transport_revision_successors(revision_successors)
+                {
+                    Ok(revision) => revision,
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                };
                 if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
                     self.last_error = Some(error);
                     return;
@@ -21790,10 +22971,10 @@ impl EngineRuntime {
                 self.timeline_follow_natural_boundary_armed =
                     self.timeline_position_ms < self.timeline_duration_ms();
                 self.timeline_last_announced_phase_id = None;
+                self.timeline_guide_cues.clear();
                 self.refresh_timeline_loop_runtime_status();
                 self.announce_timeline_phase_at(self.timeline_position_ms);
-                self.timeline_audio_transport_revision =
-                    self.timeline_audio_transport_revision.wrapping_add(1);
+                self.timeline_audio_transport_revision = next_audio_transport_revision;
                 self.timeline_evaluated_boundary_position_ms = None;
                 self.timeline_playhead_boundary_armed = self.timeline_playing;
                 self.apply_timeline_automations();
@@ -21818,6 +22999,16 @@ impl EngineRuntime {
             }
             EngineCommand::SeekTimelineBeat { direction } => {
                 let now = Instant::now();
+                let revision_successors = 1 + u64::from(self.timeline_follow_is_abortable());
+                let next_audio_transport_revision = match self
+                    .reserve_timeline_audio_transport_revision_successors(revision_successors)
+                {
+                    Ok(revision) => revision,
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                };
                 if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
                     self.last_error = Some(error);
                     return;
@@ -21838,8 +23029,7 @@ impl EngineRuntime {
                 self.announce_timeline_phase_at(self.timeline_position_ms);
                 self.establish_child_transports_at_position(now);
                 self.apply_child_timeline_automations();
-                self.timeline_audio_transport_revision =
-                    self.timeline_audio_transport_revision.wrapping_add(1);
+                self.timeline_audio_transport_revision = next_audio_transport_revision;
                 self.invalidate_timeline_transport_authority()
                     .expect("beat seek preflight must reserve a transport authority successor");
             }
@@ -21848,9 +23038,30 @@ impl EngineRuntime {
                 source,
             } => {
                 let now = Instant::now();
-                if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
-                    self.last_error = Some(error);
-                    return;
+                let source_changed = self.timeline_external_sync_source.as_ref() != Some(&source);
+                let forward_jump = position_ms.saturating_sub(self.timeline_position_ms)
+                    > TIMELINE_TIMECODE_FORWARD_DISCONTINUITY_THRESHOLD_MS;
+                let discontinuity = source_changed
+                    || position_ms < self.timeline_position_ms
+                    || forward_jump
+                    || self.timeline_follow_is_abortable();
+                let next_audio_transport_revision = if discontinuity {
+                    let successors = 1 + u64::from(self.timeline_follow_is_abortable());
+                    match self.reserve_timeline_audio_transport_revision_successors(successors) {
+                        Ok(revision) => Some(revision),
+                        Err(error) => {
+                            self.last_error = Some(error);
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
+                if discontinuity {
+                    if let Err(error) = self.preflight_timeline_transport_authority_invalidation() {
+                        self.last_error = Some(error);
+                        return;
+                    }
                 }
                 if self.timeline_follow_is_abortable() {
                     self.abort_timeline_follow(
@@ -21862,8 +23073,8 @@ impl EngineRuntime {
                 self.timeline_jump_landed_event_id = None;
                 self.timeline_playhead_boundary_armed = false;
                 self.timeline_follow_natural_boundary_armed = false;
-                let source_changed = self.timeline_external_sync_source.as_ref() != Some(&source);
-                let reestablish_child = source_changed || position_ms < self.timeline_position_ms;
+                let reestablish_child =
+                    source_changed || position_ms < self.timeline_position_ms || forward_jump;
                 if reestablish_child {
                     self.deactivate_all_timeline_effect_activations();
                     self.deactivate_all_child_transports();
@@ -21871,6 +23082,12 @@ impl EngineRuntime {
                 self.timeline_external_sync_source = Some(source.clone());
                 self.sync_timeline_position(position_ms, source_changed, now);
                 self.timeline_last_announced_phase_id = None;
+                // Tracking corrections retain the queued/in-progress Guide
+                // word. A real locate owns a new transport generation and
+                // cancels every pre-locate future cue without catch-up.
+                if discontinuity {
+                    self.timeline_guide_cues.clear();
+                }
                 self.refresh_timeline_loop_runtime_status();
                 self.announce_timeline_phase_at(self.timeline_position_ms);
                 self.clock.mark_timecode_sync(source, now);
@@ -21882,8 +23099,12 @@ impl EngineRuntime {
                     self.advance_child_transports(now);
                 }
                 self.apply_child_timeline_automations();
-                self.invalidate_timeline_transport_authority()
-                    .expect("timecode preflight must reserve a transport authority successor");
+                if discontinuity {
+                    self.timeline_audio_transport_revision =
+                        next_audio_transport_revision.expect("discontinuity reserves revision");
+                    self.invalidate_timeline_transport_authority()
+                        .expect("timecode preflight must reserve a transport authority successor");
+                }
             }
             EngineCommand::SetAutoVjConfig(config) => {
                 let _ = self.set_auto_vj_config(config);
@@ -23892,14 +25113,24 @@ impl EngineRuntime {
                 position_ms,
                 transport_epoch,
                 transport_generation,
+                click_scheduler,
                 last_error,
             } => {
                 if let Ok((active, runtime_events)) = self.prepare_timeline_bank_entry(active) {
                     self.timeline_bank = timelines;
-                    self.install_timeline_bank_entry(active, runtime_events, playing, position_ms);
+                    if let Err(error) = self.install_timeline_bank_entry(
+                        active,
+                        runtime_events,
+                        playing,
+                        position_ms,
+                    ) {
+                        self.last_error = Some(error);
+                        return;
+                    }
                 }
                 self.timeline_transport_epoch = transport_epoch;
                 self.timeline_transport_generation = transport_generation;
+                self.timeline_click_scheduler = click_scheduler;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreTimelineTransport {
@@ -23939,6 +25170,7 @@ impl EngineRuntime {
                 video_layers,
                 video_layer_fades,
                 clock,
+                click_scheduler,
                 last_error,
             } => {
                 self.timeline_playing = playing;
@@ -23977,6 +25209,7 @@ impl EngineRuntime {
                 self.video_layers = video_layers;
                 self.video_layer_fades = video_layer_fades;
                 self.clock = clock;
+                self.timeline_click_scheduler = click_scheduler;
                 self.last_error = last_error;
             }
         }
@@ -25080,6 +26313,8 @@ impl EngineRuntime {
         self.advance_video_isf_event_resets(now);
         self.advance_timeline(now);
         self.advance_timeline_follow(now);
+        self.advance_timeline_click_scheduler();
+        self.advance_timeline_guide_lookahead_at(now);
         self.advance_pending_cue(now);
         self.apply_timeline_video_clips();
         self.apply_timeline_automations();
@@ -26245,6 +27480,11 @@ impl EngineRuntime {
         owner_cue_id: CueId,
         child: &mut ChildTimelineSummary,
     ) -> Result<(), String> {
+        validate_child_timeline_tempo_meter_map(child).map_err(|error| {
+            format!("Cue {owner_cue_id} child timeline tempo/meter map: {error}")
+        })?;
+        let mut visited = HashSet::from([owner_cue_id]);
+        self.validate_nested_child_tempo_meter_maps(child, &mut visited)?;
         normalize_and_validate_timeline_layers(&mut child.layers, &child.events)
             .map_err(|error| format!("Cue {owner_cue_id} child timeline: {error}"))?;
         normalize_and_validate_timeline_audio_clips(&child.layers, &mut child.audio_clips)
@@ -26290,6 +27530,32 @@ impl EngineRuntime {
                     ));
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn validate_nested_child_tempo_meter_maps(
+        &self,
+        child: &ChildTimelineSummary,
+        visited: &mut HashSet<CueId>,
+    ) -> Result<(), String> {
+        for event in &child.events {
+            let Some(referenced) = self.cues.iter().find(|cue| cue.id == event.cue_id) else {
+                continue;
+            };
+            if !visited.insert(referenced.id) {
+                continue;
+            }
+            let Some(nested) = referenced.child_timeline.as_ref() else {
+                continue;
+            };
+            validate_child_timeline_tempo_meter_map(nested).map_err(|error| {
+                format!(
+                    "Cue {} nested child timeline tempo/meter map: {error}",
+                    referenced.id
+                )
+            })?;
+            self.validate_nested_child_tempo_meter_maps(nested, visited)?;
         }
         Ok(())
     }
@@ -26692,6 +27958,8 @@ impl EngineRuntime {
             activation_generation: 0,
             metronome_enabled: child.metronome_enabled,
             count_in_beats: child.count_in_beats.min(16),
+            tempo_meter_map: child.tempo_meter_map.clone(),
+            tempo_meter_map_version: child.tempo_meter_map_version,
         })
     }
 
@@ -30058,6 +31326,9 @@ impl EngineRuntime {
         timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
         timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
         timeline.guide_cues.clear();
+        timeline.click_events.clear();
+        timeline.click_schedule_generation = 0;
+        timeline.click_queue_overflow = None;
         validate_timeline_authoring(&timeline, &self.media_assets)?;
 
         let mut runtime_events = timeline
@@ -30084,7 +31355,10 @@ impl EngineRuntime {
         runtime_events: Vec<RuntimeTimelineEvent>,
         playing: bool,
         position_ms: u64,
-    ) {
+    ) -> Result<(), String> {
+        let revision_successors = 1 + u64::from(self.timeline_follow_is_abortable());
+        let next_audio_transport_revision =
+            self.reserve_timeline_audio_transport_revision_successors(revision_successors)?;
         let abort_runtime = matches!(
             self.timeline_follow_runtime.status,
             protocol::TimelineFollowRuntimeStatus::Aborting
@@ -30149,6 +31423,8 @@ impl EngineRuntime {
         self.timeline_audio_muted = timeline.audio_muted;
         self.timeline_metronome_enabled = timeline.metronome_enabled;
         self.timeline_count_in_beats = timeline.count_in_beats.min(16);
+        self.timeline_tempo_meter_map = timeline.tempo_meter_map.clone();
+        self.timeline_tempo_meter_map_version = timeline.tempo_meter_map_version;
         self.timeline_position_ms = position_ms.min(self.timeline_duration_ms());
         self.timeline_follow_natural_boundary_armed = self.timeline_position_ms == 0
             || self.timeline_position_ms < self.timeline_duration_ms();
@@ -30162,8 +31438,7 @@ impl EngineRuntime {
         self.timeline_due_cues.clear();
         self.timeline_last_announced_phase_id = None;
         self.timeline_guide_cues.clear();
-        self.timeline_audio_transport_revision =
-            self.timeline_audio_transport_revision.wrapping_add(1);
+        self.timeline_audio_transport_revision = next_audio_transport_revision;
         let generation = next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
         self.timeline_loop_runtime = TimelineLoopRuntimeSummary {
             generation,
@@ -30193,6 +31468,7 @@ impl EngineRuntime {
         self.apply_timeline_video_clips();
         self.apply_timeline_automations();
         self.apply_timeline_video_automations();
+        Ok(())
     }
 
     fn apply_timeline_bank_state(
@@ -30224,6 +31500,9 @@ impl EngineRuntime {
         validate_timeline_bank(&validation, &self.media_assets)?;
 
         self.preflight_timeline_transport_authority_invalidation()?;
+        self.reserve_timeline_audio_transport_revision_successors(
+            1 + u64::from(self.timeline_follow_is_abortable()),
+        )?;
 
         // Installing a new authored bank is a runtime identity boundary even
         // when no transition is presently active. Do not allow a delayed ACK
@@ -30237,7 +31516,7 @@ impl EngineRuntime {
         }
         self.invalidate_timeline_transport_authority()?;
         self.timeline_bank = validation.timeline_bank;
-        self.install_timeline_bank_entry(active, runtime_events, play, 0);
+        self.install_timeline_bank_entry(active, runtime_events, play, 0)?;
         Ok(())
     }
 
@@ -30245,6 +31524,10 @@ impl EngineRuntime {
         &mut self,
         candidate: TimelineAdvancedAuthoringSummary,
     ) -> Result<(), String> {
+        let revision_successors = 1 + u64::from(self.timeline_follow_is_abortable());
+        let next_audio_transport_revision =
+            self.reserve_timeline_audio_transport_revision_successors(revision_successors)?;
+        let guide_enabled_changed = self.timeline_guide_enabled != candidate.guide_enabled;
         let current_timeline = self.timeline_snapshot();
         let mut timeline = current_timeline.clone();
         if let Some(layers) = &candidate.layers {
@@ -30424,6 +31707,9 @@ impl EngineRuntime {
         self.timeline_loop_region = candidate.loop_region;
         self.timeline_follow = candidate.follow;
         self.timeline_guide_enabled = candidate.guide_enabled;
+        if guide_enabled_changed {
+            self.timeline_guide_cues.clear();
+        }
         let generation = next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
         self.timeline_loop_runtime = TimelineLoopRuntimeSummary {
             generation,
@@ -30454,8 +31740,7 @@ impl EngineRuntime {
         self.timeline_guide_cues.clear();
         self.timeline_last_announced_phase_id = None;
         self.refresh_timeline_audio_duration();
-        self.timeline_audio_transport_revision =
-            self.timeline_audio_transport_revision.wrapping_add(1);
+        self.timeline_audio_transport_revision = next_audio_transport_revision;
         self.clamp_timeline_position_after_edit();
         self.apply_timeline_video_clips();
         Ok(())
@@ -33175,7 +34460,15 @@ impl EngineRuntime {
             self.last_error = Some(format!("Cue {cue_id} has no child timeline"));
             return;
         };
-        let (metronome_enabled, count_in_beats, active, paused, direct_generation) = {
+        let (
+            metronome_enabled,
+            count_in_beats,
+            active,
+            paused,
+            direct_generation,
+            tempo_meter_map,
+            tempo_meter_map_version,
+        ) = {
             let transport = &self.direct_child_transports[transport_index];
             (
                 transport.metronome_enabled,
@@ -33183,9 +34476,23 @@ impl EngineRuntime {
                 transport.active,
                 transport.direct_paused,
                 transport.direct_generation,
+                transport.tempo_meter_map.clone(),
+                transport.tempo_meter_map_version,
             )
         };
         if metronome_enabled && count_in_beats > 0 {
+            let (_, count_in_duration) = match self.timeline_count_in_duration_for_map(
+                &tempo_meter_map,
+                tempo_meter_map_version,
+                0,
+                count_in_beats,
+            ) {
+                Ok(duration) => duration,
+                Err(error) => {
+                    self.last_error = Some(error);
+                    return;
+                }
+            };
             if active && !paused {
                 self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
                 self.direct_child_transports[transport_index].direct_paused = true;
@@ -33198,9 +34505,7 @@ impl EngineRuntime {
             };
             self.direct_child_count_in = Some(RuntimeDirectChildCountIn {
                 cue_id,
-                until: now
-                    .checked_add(timeline_count_in_duration(self.clock.bpm, count_in_beats))
-                    .unwrap_or(now),
+                until: now.checked_add(count_in_duration).unwrap_or(now),
                 generation,
             });
             self.last_error = None;
@@ -33973,6 +35278,7 @@ impl EngineRuntime {
                 "Timeline Follow target is no longer the next Timeline in bank order".to_string()
             })?;
         let (target, _runtime_events) = self.prepare_timeline_bank_entry(target)?;
+        let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
         let resolved_duration_ms = resolve_video_clip_take_duration_ms(
             follow.video_kind,
             follow.duration,
@@ -33989,6 +35295,8 @@ impl EngineRuntime {
             tempo_driven: false,
             metronome_enabled: target.metronome_enabled,
             count_in_beats: target.count_in_beats,
+            tempo_meter_map: target.tempo_meter_map.clone(),
+            tempo_meter_map_version: target.tempo_meter_map_version,
             duration_ms: target.duration_ms,
         };
         let cue_dispatch = self.build_cue_dispatch_index();
@@ -34051,8 +35359,7 @@ impl EngineRuntime {
         // Cancel any source Timeline Guide cue before publishing transition
         // cues. The captured value remains the fence for the full Follow,
         // even if authored Guide settings change after admission.
-        self.timeline_audio_transport_revision =
-            self.timeline_audio_transport_revision.wrapping_add(1);
+        self.timeline_audio_transport_revision = next_audio_transport_revision;
         let guide_generation = self.timeline_audio_transport_revision;
         let transition_effect_chain = self
             .video_effect_chains
@@ -34085,6 +35392,7 @@ impl EngineRuntime {
             fault_policy: follow.fault_policy,
             admission_reason,
             trans_cadence_bars: follow.trans_cadence_bars,
+            trans_target_measures: follow.trans_target_measures.clone(),
             guide_enabled: self.timeline_guide_enabled,
             guide_generation,
             last_trans_beat_ordinal: None,
@@ -34514,6 +35822,9 @@ impl EngineRuntime {
     fn reserve_timeline_transport_authority_invalidation(
         &self,
     ) -> Result<TimelineTransportAuthority, String> {
+        if self.timeline_click_scheduler.identity().schedule_generation == u64::MAX {
+            return Err("Timeline click schedule generation is exhausted".to_string());
+        }
         self.next_timeline_transport_authority()
     }
 
@@ -34532,6 +35843,9 @@ impl EngineRuntime {
         );
         self.timeline_transport_epoch = reserved.epoch;
         self.timeline_transport_generation = reserved.generation;
+        self.timeline_click_scheduler
+            .invalidate(reserved.epoch, reserved.generation)
+            .expect("Timeline click schedule preflight must reserve a generation successor");
     }
 
     /// No invalidating runtime path may mutate transport state unless the
@@ -34569,63 +35883,166 @@ impl EngineRuntime {
         Ok(())
     }
 
-    /// Conservative upper bound for loop-boundary invalidations a single
-    /// local Timeline tick can require. It intentionally ignores cue jumps:
-    /// over-reserving at the terminal pair is fail-closed, while under-
-    /// reserving could mutate one wrap before discovering a second has no
-    /// successor.
-    fn timeline_loop_wraps_for_next_tick(&self) -> u128 {
+    /// Exact ordered discontinuities for the next production Timeline tick.
+    /// Jump discovery uses the same inclusive/exclusive segment contract as
+    /// `advance_timeline_segment`: a jump terminates the tick, while a loop B
+    /// boundary is excluded before the wrap and loop A is re-armed only after
+    /// a completed wrap. This plan is reserved once before any tick mutation.
+    fn planned_timeline_jump_between(
+        &self,
+        previous_position: u64,
+        current_position: u64,
+        include_previous: bool,
+        include_current: bool,
+    ) -> Option<TimelinePlannedJump> {
+        self.first_timeline_jump_between(
+            previous_position,
+            current_position,
+            include_previous,
+            include_current,
+        )
+        .map(
+            |(at_ms, source_event_index, target_event_index, target)| TimelinePlannedJump {
+                at_ms,
+                source_event_index,
+                target_event_index,
+                target,
+            },
+        )
+    }
+
+    fn timeline_tick_discontinuity_plan(&self) -> TimelineTickDiscontinuityPlan {
         if !self.timeline_playing
             || self.timeline_external_sync_source.is_some()
             || self.timeline_count_in_until.is_some()
         {
-            return 0;
+            return TimelineTickDiscontinuityPlan::default();
         }
-        let Some((a_ms, b_ms)) = (match self.timeline_loop_runtime.status {
+        let duration = self.timeline_duration_ms();
+        let position = self.timeline_position_ms;
+        if duration == 0 || position >= duration {
+            return TimelineTickDiscontinuityPlan::default();
+        }
+        let delta_ms = self
+            .last_tick_interval
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        let include_position = self.timeline_playhead_boundary_armed;
+        let loop_bounds = match self.timeline_loop_runtime.status {
             TimelineLoopRuntimeStatus::Disabled => None,
             TimelineLoopRuntimeStatus::Armed | TimelineLoopRuntimeStatus::Looping => self
                 .timeline_loop_runtime
                 .a_ms
-                .zip(self.timeline_loop_runtime.b_ms),
-        }) else {
-            return 0;
+                .zip(self.timeline_loop_runtime.b_ms)
+                .filter(|(a_ms, b_ms)| *a_ms < *b_ms && *b_ms <= duration),
         };
-        let duration = self.timeline_duration_ms();
-        let position = self.timeline_position_ms;
-        if duration == 0
-            || a_ms >= duration
-            || b_ms > duration
-            || b_ms <= a_ms
-            || position >= duration
-            || position >= b_ms
-        {
-            return 0;
-        }
-        let delta_ms = self.last_tick_interval.as_millis().min(u64::MAX as u128);
-        let cycle_ms = u128::from(b_ms - a_ms);
-        let position = u128::from(position);
-        let a_ms = u128::from(a_ms);
-        let b_ms = u128::from(b_ms);
+        let Some((a_ms, b_ms)) = loop_bounds else {
+            let end = position.saturating_add(delta_ms).min(duration);
+            return TimelineTickDiscontinuityPlan {
+                loop_wraps: 0,
+                jump: self.planned_timeline_jump_between(position, end, include_position, true),
+            };
+        };
+
+        // After entry at A or a completed wrap, one full A..B segment proves
+        // whether any jump can terminate this or any later identical cycle.
+        let plan_from_loop_start = |remaining_ms: u64,
+                                    include_a: bool,
+                                    wraps_before: u128|
+         -> TimelineTickDiscontinuityPlan {
+            if remaining_ms == 0 {
+                return TimelineTickDiscontinuityPlan {
+                    loop_wraps: wraps_before,
+                    jump: None,
+                };
+            }
+            let cycle_ms = b_ms - a_ms;
+            if remaining_ms < cycle_ms {
+                let end = a_ms + remaining_ms;
+                return TimelineTickDiscontinuityPlan {
+                    loop_wraps: wraps_before,
+                    jump: self.planned_timeline_jump_between(a_ms, end, include_a, true),
+                };
+            }
+            if let Some(jump) = self.planned_timeline_jump_between(a_ms, b_ms, include_a, false) {
+                return TimelineTickDiscontinuityPlan {
+                    loop_wraps: wraps_before,
+                    jump: Some(jump),
+                };
+            }
+            TimelineTickDiscontinuityPlan {
+                loop_wraps: wraps_before + u128::from(remaining_ms / cycle_ms),
+                jump: None,
+            }
+        };
+
         if position < a_ms {
             let distance_to_a = a_ms - position;
-            if delta_ms <= distance_to_a {
-                return 0;
+            let consumed = delta_ms.min(distance_to_a);
+            let end = position + consumed;
+            if let Some(jump) =
+                self.planned_timeline_jump_between(position, end, include_position, true)
+            {
+                return TimelineTickDiscontinuityPlan {
+                    loop_wraps: 0,
+                    jump: Some(jump),
+                };
             }
-            return (delta_ms - distance_to_a) / cycle_ms;
+            if consumed == delta_ms {
+                return TimelineTickDiscontinuityPlan::default();
+            }
+            return plan_from_loop_start(delta_ms - consumed, false, 0);
+        }
+        if position >= b_ms {
+            let end = position.saturating_add(delta_ms).min(duration);
+            return TimelineTickDiscontinuityPlan {
+                loop_wraps: 0,
+                jump: self.planned_timeline_jump_between(position, end, include_position, true),
+            };
         }
 
         let distance_to_b = b_ms - position;
         if delta_ms < distance_to_b {
-            0
-        } else {
-            1 + (delta_ms - distance_to_b) / cycle_ms
+            let end = position + delta_ms;
+            return TimelineTickDiscontinuityPlan {
+                loop_wraps: 0,
+                jump: self.planned_timeline_jump_between(position, end, include_position, true),
+            };
         }
+        if let Some(jump) =
+            self.planned_timeline_jump_between(position, b_ms, include_position, false)
+        {
+            return TimelineTickDiscontinuityPlan {
+                loop_wraps: 0,
+                jump: Some(jump),
+            };
+        }
+        plan_from_loop_start(delta_ms - distance_to_b, true, 1)
+    }
+
+    #[cfg(test)]
+    fn timeline_loop_wraps_for_next_tick(&self) -> u128 {
+        self.timeline_tick_discontinuity_plan().loop_wraps
     }
 
     fn invalidate_timeline_transport_authority(&mut self) -> Result<(), String> {
         let reserved = self.reserve_timeline_transport_authority_invalidation()?;
         self.commit_reserved_timeline_transport_authority(reserved);
         Ok(())
+    }
+
+    fn reserve_timeline_audio_transport_revision(&self) -> Result<u64, String> {
+        self.reserve_timeline_audio_transport_revision_successors(1)
+    }
+
+    fn reserve_timeline_audio_transport_revision_successors(
+        &self,
+        successors: u64,
+    ) -> Result<u64, String> {
+        self.timeline_audio_transport_revision
+            .checked_add(successors)
+            .ok_or_else(|| "Timeline audio transport revision is exhausted".to_string())
     }
 
     /// Capture every runtime field the Play/Pause transition is permitted to
@@ -34670,6 +36087,7 @@ impl EngineRuntime {
             video_layers: self.video_layers.clone(),
             video_layer_fades: self.video_layer_fades.clone(),
             clock: self.clock.clone(),
+            click_scheduler: self.timeline_click_scheduler.clone(),
             last_error: self.last_error.clone(),
         }
     }
@@ -34715,13 +36133,22 @@ impl EngineRuntime {
                 self.shift_timeline_effect_clocks(paused_at, now);
             }
             self.timeline_count_in_until =
-                (self.timeline_metronome_enabled && self.timeline_count_in_beats > 0).then(|| {
-                    now.checked_add(timeline_count_in_duration(
-                        self.clock.bpm,
+                if self.timeline_metronome_enabled && self.timeline_count_in_beats > 0 {
+                    let position_units = self
+                        .timeline_click_authority()
+                        .and_then(|authority| self.timeline_position_quarter_units(&authority))
+                        .unwrap_or(0);
+                    self.timeline_count_in_duration_for_map(
+                        &self.timeline_tempo_meter_map,
+                        self.timeline_tempo_meter_map_version,
+                        position_units,
                         self.timeline_count_in_beats,
-                    ))
-                    .unwrap_or(now)
-                });
+                    )
+                    .ok()
+                    .map(|(_, duration)| now.checked_add(duration).unwrap_or(now))
+                } else {
+                    None
+                };
             if self.timeline_count_in_until.is_some() {
                 self.timeline_paused_at = Some(now);
             } else if self
@@ -34792,6 +36219,14 @@ impl EngineRuntime {
 
         if changed {
             self.invalidate_timeline_transport_authority()?;
+            if playing && !was_playing {
+                // Admit click/Guide lookahead on the command publication edge,
+                // before the first 44 Hz tick advances past a frame-zero or
+                // one-beat-early onset.  The transport successor above is the
+                // exact identity consumed by both bounded queues.
+                self.advance_timeline_click_scheduler();
+                self.advance_timeline_guide_lookahead();
+            }
             Ok(TimelineTransportSetPlayingDisposition::Applied)
         } else {
             // Legacy same-value calls intentionally preserve the historical
@@ -35139,6 +36574,7 @@ impl EngineRuntime {
             .as_ref()
             .cloned()
             .ok_or_else(|| "Timeline Follow settlement has no active transition".to_string())?;
+        self.reserve_timeline_audio_transport_revision_successors(2)?;
         let runtime_events = transition
             .settlement_target_events
             .clone()
@@ -35149,12 +36585,25 @@ impl EngineRuntime {
         // accepted, so commit it before retiring the source or installing the
         // target.
         self.commit_reserved_timeline_transport_authority(reserved);
-        self.retire_timeline_follow_transport(now, None);
+        self.retire_timeline_follow_transport(now, None)?;
+        self.timeline_follow_runtime.status = protocol::TimelineFollowRuntimeStatus::Idle;
         self.install_timeline_bank_entry(
             transition.target.clone(),
             runtime_events,
             true,
             target_position_ms,
+        )?;
+        // Complete is an event-domain terminal cue, not a visual-end cue.
+        // It is published only after the successful settlement has installed
+        // the target image and exactly once on this committed path.
+        self.push_timeline_guide_cue_with_generation(
+            transition.guide_enabled,
+            transition.guide_generation,
+            target_position_ms,
+            "Complete".to_string(),
+            TimelineGuideCueKind::Complete,
+            false,
+            None,
         );
         if !self.timeline_follow_bpm_is_externally_owned() {
             self.clock
@@ -35174,7 +36623,14 @@ impl EngineRuntime {
             settlement: None,
         };
         self.timeline_last_announced_phase_id = None;
-        self.announce_timeline_phase_at(target_position_ms);
+        // Complete is the sole spoken boundary cue for a successful Follow.
+        // Keep the newly installed visual phase state current, but suppress a
+        // destination Intro/Phase voice at the same frame.
+        self.timeline_last_announced_phase_id = self
+            .timeline_phases
+            .iter()
+            .find(|phase| phase.start_ms <= target_position_ms && target_position_ms < phase.end_ms)
+            .map(|phase| phase.id);
         self.refresh_timeline_follow_video_render_snapshot();
         Ok(())
     }
@@ -35274,17 +36730,6 @@ impl EngineRuntime {
         Self::recompute_timeline_follow_settlement(&mut settlement);
         let terminal_state = settlement.state;
         let fault_text = settlement.fault.clone();
-        // Do not commit the final consumer result until the terminal action
-        // has a successor to fence every authority minted during Settling.
-        // This must precede both the accepted-ACK ledger and the published
-        // settlement copy: on terminal exhaustion the exact retry sees the
-        // same Pending consumer and returns the same typed error.
-        let reserved_terminal_authority = match terminal_state {
-            TimelineFollowSettlementState::Applied | TimelineFollowSettlementState::Fault => {
-                Some(self.reserve_timeline_transport_authority_invalidation()?)
-            }
-            _ => None,
-        };
         let terminal_transition = self
             .timeline_follow_transition
             .as_ref()
@@ -35296,6 +36741,32 @@ impl EngineRuntime {
             return Err(
                 "Timeline Follow settlement acknowledgement generation is stale".to_string(),
             );
+        }
+        // Do not commit the final consumer result until the terminal action
+        // has a successor to fence every authority minted during Settling.
+        // This must precede both the accepted-ACK ledger and the published
+        // settlement copy: on terminal exhaustion the exact retry sees the
+        // same Pending consumer and returns the same typed error.
+        let reserved_terminal_authority = match terminal_state {
+            TimelineFollowSettlementState::Applied | TimelineFollowSettlementState::Fault => {
+                Some(self.reserve_timeline_transport_authority_invalidation()?)
+            }
+            _ => None,
+        };
+        if matches!(
+            terminal_state,
+            TimelineFollowSettlementState::Applied | TimelineFollowSettlementState::Fault
+        ) {
+            let successors = if terminal_state == TimelineFollowSettlementState::Applied
+                || matches!(
+                    terminal_transition.fault_policy,
+                    protocol::TimelineFollowFaultPolicy::Cut
+                ) {
+                2
+            } else {
+                1
+            };
+            self.reserve_timeline_audio_transport_revision_successors(successors)?;
         }
         // Record the accepted physical acknowledgement before completion can
         // retire the Follow child. The transition only admits captured
@@ -35458,7 +36929,12 @@ impl EngineRuntime {
         let _ = self.acknowledge_timeline_follow_settlement(acknowledgement, now);
     }
 
-    fn retire_timeline_follow_transport(&mut self, now: Instant, source_bpm: Option<f32>) {
+    fn retire_timeline_follow_transport(
+        &mut self,
+        now: Instant,
+        source_bpm: Option<f32>,
+    ) -> Result<(), String> {
+        let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
         if self.timeline_follow_transport.is_some() {
             self.deactivate_child_transport_by_id(RuntimeChildTransportId::Follow);
         }
@@ -35469,14 +36945,14 @@ impl EngineRuntime {
         {
             self.clock.set_bpm_preserving_beat_position(source_bpm, now);
         }
-        self.timeline_audio_transport_revision =
-            self.timeline_audio_transport_revision.wrapping_add(1);
+        self.timeline_audio_transport_revision = next_audio_transport_revision;
         self.timeline_guide_cues.clear();
         // Abort/fault/complete all retire the dual Follow transport. Clear
         // the Handle-only presenter input at that same runtime boundary; a
         // caller must never render an already-retired incoming child while
         // waiting for the next 44 Hz tick.
         self.refresh_timeline_follow_video_render_snapshot();
+        Ok(())
     }
 
     fn settle_timeline_follow_failure(
@@ -35519,11 +36995,20 @@ impl EngineRuntime {
         admission_reason: protocol::TimelineFollowAdmissionReason,
         reserved: TimelineTransportAuthority,
     ) -> Result<(), String> {
+        let revision_successors =
+            if matches!(fault_policy, protocol::TimelineFollowFaultPolicy::Cut) && target.is_some()
+            {
+                2
+            } else {
+                1
+            };
+        self.reserve_timeline_audio_transport_revision_successors(revision_successors)?;
         // A Cut installs and starts the target directly. Invalidate before
         // retiring/installing so an authority issued during Settling cannot
         // survive either the successful Cut or its Hold/Fault fallback.
         self.commit_reserved_timeline_transport_authority(reserved);
-        self.retire_timeline_follow_transport(now, source_bpm);
+        self.retire_timeline_follow_transport(now, source_bpm)?;
+        self.timeline_follow_runtime.status = protocol::TimelineFollowRuntimeStatus::Idle;
         self.timeline_follow_abort_ticks_remaining = 0;
         self.timeline_follow_natural_boundary_armed = false;
         let target_timeline_id = target.as_ref().map(|target| target.id);
@@ -35533,22 +37018,26 @@ impl EngineRuntime {
                     self.prepare_timeline_bank_entry(target.clone())
                 {
                     let target_timeline_id = target.id;
-                    self.install_timeline_bank_entry(target, runtime_events, true, 0);
-                    self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
-                        generation,
-                        status: protocol::TimelineFollowRuntimeStatus::Idle,
-                        admission_reason: Some(admission_reason),
-                        outcome: Some(protocol::TimelineFollowOutcome::Cut),
-                        source_timeline_id: Some(source_timeline_id),
-                        target_timeline_id: Some(target_timeline_id),
-                        progress_millis: 1000,
-                        fault: Some(error.clone()),
-                        ..TimelineFollowRuntimeSummary::default()
-                    };
-                    self.timeline_last_announced_phase_id = None;
-                    self.announce_timeline_phase_at(0);
-                    self.last_error = Some(error);
-                    return Ok(());
+                    if self
+                        .install_timeline_bank_entry(target, runtime_events, true, 0)
+                        .is_ok()
+                    {
+                        self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+                            generation,
+                            status: protocol::TimelineFollowRuntimeStatus::Idle,
+                            admission_reason: Some(admission_reason),
+                            outcome: Some(protocol::TimelineFollowOutcome::Cut),
+                            source_timeline_id: Some(source_timeline_id),
+                            target_timeline_id: Some(target_timeline_id),
+                            progress_millis: 1000,
+                            fault: Some(error.clone()),
+                            ..TimelineFollowRuntimeSummary::default()
+                        };
+                        self.timeline_last_announced_phase_id = None;
+                        self.announce_timeline_phase_at(0);
+                        self.last_error = Some(error);
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -35642,10 +37131,13 @@ impl EngineRuntime {
             .as_ref()
             .map(|transition| transition.admission_reason)
             .or(self.timeline_follow_runtime.admission_reason);
-        self.retire_timeline_follow_transport(
+        if let Err(error) = self.retire_timeline_follow_transport(
             now,
             transition.as_ref().map(|transition| transition.source_bpm),
-        );
+        ) {
+            self.last_error = Some(error);
+            return false;
+        }
         self.timeline_follow_natural_boundary_armed = false;
         self.timeline_follow_abort_ticks_remaining = 2;
         self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
@@ -35677,7 +37169,11 @@ impl EngineRuntime {
             .cloned()
             .expect("checked Timeline Follow transition");
         if transition.generation != self.timeline_follow_runtime.generation {
-            self.retire_timeline_follow_transport(now, Some(transition.source_bpm));
+            if let Err(error) =
+                self.retire_timeline_follow_transport(now, Some(transition.source_bpm))
+            {
+                self.last_error = Some(error);
+            }
             return;
         }
 
@@ -35697,6 +37193,20 @@ impl EngineRuntime {
                         return;
                     }
                 };
+                let revision_successors = if matches!(
+                    transition.fault_policy,
+                    protocol::TimelineFollowFaultPolicy::Cut
+                ) {
+                    2
+                } else {
+                    1
+                };
+                if let Err(error) =
+                    self.reserve_timeline_audio_transport_revision_successors(revision_successors)
+                {
+                    self.last_error = Some(error);
+                    return;
+                }
                 if let Some(settlement) = self.timeline_follow_runtime.settlement.as_mut() {
                     for domain in &mut settlement.domains {
                         for consumer in &mut domain.consumers {
@@ -35728,7 +37238,11 @@ impl EngineRuntime {
             self.timeline_follow_runtime.status,
             protocol::TimelineFollowRuntimeStatus::Transitioning
         ) {
-            self.retire_timeline_follow_transport(now, Some(transition.source_bpm));
+            if let Err(error) =
+                self.retire_timeline_follow_transport(now, Some(transition.source_bpm))
+            {
+                self.last_error = Some(error);
+            }
             return;
         }
 
@@ -35749,27 +37263,6 @@ impl EngineRuntime {
         self.timeline_follow_runtime.progress_millis =
             (progress * 1000.0).round().clamp(0.0, 1000.0) as u16;
 
-        let cadence_beats = u64::from(transition.trans_cadence_bars.max(1)) * 4;
-        let beat_ordinal = self.clock.snapshot(now).beat_counter / cadence_beats;
-        let should_announce = self
-            .timeline_follow_transition
-            .as_ref()
-            .is_some_and(|active| {
-                active.generation == transition.generation
-                    && active.last_trans_beat_ordinal != Some(beat_ordinal)
-            });
-        if should_announce {
-            if let Some(active) = self.timeline_follow_transition.as_mut() {
-                active.last_trans_beat_ordinal = Some(beat_ordinal);
-            }
-            self.push_timeline_guide_cue_with_generation(
-                transition.guide_enabled,
-                transition.guide_generation,
-                self.timeline_position_ms,
-                "Trans".to_string(),
-                TimelineGuideCueKind::Trans,
-            );
-        }
         if elapsed < transition.duration {
             return;
         }
@@ -35838,12 +37331,54 @@ impl EngineRuntime {
     }
 
     fn push_timeline_guide_cue(&mut self, at_ms: u64, label: String, cue: TimelineGuideCueKind) {
+        let predictive = matches!(cue, TimelineGuideCueKind::Phase { .. });
         self.push_timeline_guide_cue_with_generation(
             self.timeline_guide_enabled,
             self.timeline_audio_transport_revision,
             at_ms,
             label,
             cue,
+            predictive,
+            None,
+        );
+    }
+
+    fn push_predicted_timeline_guide_cue(
+        &mut self,
+        guide_enabled: bool,
+        generation: u64,
+        at_ms: u64,
+        label: String,
+        cue: TimelineGuideCueKind,
+    ) {
+        self.push_timeline_guide_cue_with_generation(
+            guide_enabled,
+            generation,
+            at_ms,
+            label,
+            cue,
+            true,
+            None,
+        );
+    }
+
+    fn push_exact_predicted_timeline_guide_cue(
+        &mut self,
+        guide_enabled: bool,
+        generation: u64,
+        at_ms: u64,
+        sample_frame: u64,
+        label: String,
+        cue: TimelineGuideCueKind,
+    ) {
+        self.push_timeline_guide_cue_with_generation(
+            guide_enabled,
+            generation,
+            at_ms,
+            label,
+            cue,
+            true,
+            Some(sample_frame),
         );
     }
 
@@ -35854,14 +37389,76 @@ impl EngineRuntime {
         at_ms: u64,
         label: String,
         cue: TimelineGuideCueKind,
+        predictive: bool,
+        declared_frame_override: Option<u64>,
     ) {
         if !guide_enabled {
             return;
         }
-        let sequence = self
-            .timeline_guide_cues
-            .last()
-            .map_or(1, |entry| entry.sequence.saturating_add(1));
+        let asset = match self.timeline_guide_asset(&cue) {
+            Ok(asset) => asset,
+            Err(error) => {
+                self.last_error = Some(error);
+                return;
+            }
+        };
+        let schedule = self.timeline_guide_schedule_coordinates(
+            at_ms,
+            asset,
+            predictive,
+            declared_frame_override,
+        );
+        let (sample_frame, identity, playback_rate_milli) = match schedule {
+            Ok(schedule) => schedule,
+            Err(error) => {
+                // Invalid authored maps and checked frame overflow are visible
+                // producer faults; do not publish a cue with a guessed
+                // millisecond-derived sound coordinate.
+                self.last_error = Some(error);
+                return;
+            }
+        };
+        if let TimelineGuideCueKind::Phase { phase_id } = &cue {
+            if self.timeline_guide_cues.iter().any(|entry| {
+                entry.generation == generation
+                    && entry.epoch == identity.epoch
+                    && entry.transport_generation == identity.transport_generation
+                    && entry.schedule_generation == identity.schedule_generation
+                    && matches!(
+                        entry.cue,
+                        TimelineGuideCueKind::Phase { phase_id: existing } if existing == *phase_id
+                    )
+            }) {
+                return;
+            }
+        }
+        let sequence = match self.timeline_guide_cues.last() {
+            Some(entry) => match entry.sequence.checked_add(1) {
+                Some(sequence) => sequence,
+                None => {
+                    self.last_error = Some("Timeline Guide sequence is exhausted".to_string());
+                    return;
+                }
+            },
+            None => 1,
+        };
+        if self.timeline_guide_cues.len() >= 64 {
+            let current_frame = self
+                .timeline_position_ms
+                .checked_mul(u64::from(TIMELINE_CLICK_SAMPLE_RATE))
+                .and_then(|frames_ms| frames_ms.checked_div(1_000));
+            if let Some(index) = current_frame.and_then(|current_frame| {
+                self.timeline_guide_cues
+                    .iter()
+                    .position(|entry| entry.sample_frame < current_frame)
+            }) {
+                self.timeline_guide_cues.remove(index);
+            }
+        }
+        if self.timeline_guide_cues.len() >= 64 {
+            self.last_error = Some("Timeline Guide queue capacity exceeded".to_string());
+            return;
+        }
         self.timeline_guide_cues.push(TimelineGuideCueSummary {
             // The caller supplies the captured Follow or ordinary Timeline
             // audio transport generation. It is monotonic across a runtime
@@ -35871,9 +37468,408 @@ impl EngineRuntime {
             at_ms,
             label,
             cue,
+            asset,
+            playback_rate_milli,
+            sample_frame,
+            epoch: identity.epoch,
+            transport_generation: identity.transport_generation,
+            schedule_generation: identity.schedule_generation,
+            source: identity.source,
         });
-        if self.timeline_guide_cues.len() > 64 {
-            self.timeline_guide_cues.remove(0);
+    }
+
+    fn timeline_guide_asset(
+        &self,
+        cue: &TimelineGuideCueKind,
+    ) -> Result<TimelineGuideAssetKey, String> {
+        let phase_asset = |role: &protocol::TimelinePhaseRole,
+                           legacy_label: &str|
+         -> Option<TimelineGuideAssetKey> {
+            match role {
+                protocol::TimelinePhaseRole::Intro => Some(TimelineGuideAssetKey::Intro),
+                protocol::TimelinePhaseRole::Verse => Some(TimelineGuideAssetKey::Verse),
+                protocol::TimelinePhaseRole::PreChorus => Some(TimelineGuideAssetKey::PreChorus),
+                protocol::TimelinePhaseRole::Chorus => Some(TimelineGuideAssetKey::Chorus),
+                protocol::TimelinePhaseRole::Interlude => Some(TimelineGuideAssetKey::Interlude),
+                protocol::TimelinePhaseRole::Bridge => Some(TimelineGuideAssetKey::Bridge),
+                protocol::TimelinePhaseRole::Breakdown => Some(TimelineGuideAssetKey::Breakdown),
+                protocol::TimelinePhaseRole::Outro => Some(TimelineGuideAssetKey::Outro),
+                protocol::TimelinePhaseRole::Custom => {
+                    match legacy_label.trim().to_ascii_lowercase().as_str() {
+                        "intro" => Some(TimelineGuideAssetKey::Intro),
+                        "verse" => Some(TimelineGuideAssetKey::Verse),
+                        "pre chorus" | "pre-chorus" | "pre_chorus" => {
+                            Some(TimelineGuideAssetKey::PreChorus)
+                        }
+                        "chorus" => Some(TimelineGuideAssetKey::Chorus),
+                        "interlude" => Some(TimelineGuideAssetKey::Interlude),
+                        "bridge" => Some(TimelineGuideAssetKey::Bridge),
+                        "breakdown" => Some(TimelineGuideAssetKey::Breakdown),
+                        "outro" => Some(TimelineGuideAssetKey::Outro),
+                        _ => None,
+                    }
+                }
+            }
+        };
+        match cue {
+            TimelineGuideCueKind::Phase { phase_id } => {
+                let phase = self
+                    .timeline_phases
+                    .iter()
+                    .find(|phase| phase.id == *phase_id)
+                    .ok_or_else(|| format!("Timeline Guide phase {} is missing", phase_id.0))?;
+                phase_asset(&phase.role, &phase.label).ok_or_else(|| {
+                    format!(
+                        "Timeline Guide phase '{}' has no supported offline asset",
+                        phase.label
+                    )
+                })
+            }
+            TimelineGuideCueKind::Looping => Ok(TimelineGuideAssetKey::Looping),
+            TimelineGuideCueKind::Break => Ok(TimelineGuideAssetKey::Break),
+            TimelineGuideCueKind::Trans => Ok(TimelineGuideAssetKey::Trans),
+            TimelineGuideCueKind::Complete => Ok(TimelineGuideAssetKey::Complete),
+        }
+    }
+
+    fn timeline_guide_schedule_coordinates(
+        &self,
+        at_ms: u64,
+        asset: TimelineGuideAssetKey,
+        predictive: bool,
+        declared_frame_override: Option<u64>,
+    ) -> Result<(u64, TimelineClickScheduleIdentity, u16), String> {
+        let selection =
+            self.timeline_click_source_selection()?
+                .unwrap_or(TimelineClickSourceSelection {
+                    source: TimelineScheduleSource::Root,
+                    authority: self.timeline_click_authority()?,
+                    position_ms: self.timeline_position_ms,
+                    count_in_start_units: None,
+                });
+        let identity = self.timeline_click_scheduler.identity();
+        if identity.source != selection.source {
+            return Err(
+                "Timeline Guide source is not synchronized with the click authority".to_string(),
+            );
+        }
+        let declared_frame = match declared_frame_override {
+            Some(frame) => frame,
+            None => at_ms
+                .checked_mul(u64::from(TIMELINE_CLICK_SAMPLE_RATE))
+                .and_then(|frames_ms| frames_ms.checked_div(1_000))
+                .ok_or_else(|| "Timeline Guide declared frame overflowed".to_string())?,
+        };
+        let declared_quarter = selection
+            .authority
+            .quarter_beat_at_sample_frame(declared_frame, TIMELINE_CLICK_SAMPLE_RATE)?;
+        let boundary_bpm = selection.authority.bpm_at_quarter_beat(declared_quarter)?;
+        // Voice assets are authored at the 170 BPM Life reference. Preserve
+        // the natural voice (pitch follows speed) while keeping the bounded
+        // show-approved rate range: 170 => 1.00, 194 => 1.04.
+        let playback_rate_milli = timeline_guide_playback_rate_milli(boundary_bpm)?;
+        let sample_frame = if !predictive {
+            // Manual Break and a settlement-late Complete are runtime-state
+            // receipts whose truth did not exist one beat earlier. Publish at
+            // the first exact frame of the newly true state; never backdate.
+            declared_frame
+        } else if declared_frame == 0 && asset == TimelineGuideAssetKey::Intro {
+            0
+        } else {
+            selection
+                .authority
+                .guide_onset_before_frame(declared_frame, TIMELINE_CLICK_SAMPLE_RATE, identity)?
+                .ok_or_else(|| {
+                    "Timeline Guide boundary has no preceding performance beat".to_string()
+                })?
+        };
+        Ok((sample_frame, identity, playback_rate_milli))
+    }
+
+    /// Publish authored Phase cues before their musical onset. This is a
+    /// bounded producer queue independent of the click queue: Guide overflow
+    /// or unsupported phase data cannot remove or rotate metronome events.
+    fn advance_timeline_guide_lookahead(&mut self) {
+        self.advance_timeline_guide_lookahead_at(Instant::now());
+    }
+
+    fn advance_timeline_guide_lookahead_at(&mut self, now: Instant) {
+        let timecode_owned = matches!(
+            self.timeline_external_sync_source,
+            Some(ClockSource::MidiTimecode | ClockSource::Ltc)
+        );
+        if (!self.timeline_playing && !timecode_owned)
+            || !self.timeline_guide_enabled
+            || self.timeline_count_in_until.is_some()
+        {
+            return;
+        }
+        let identity = self.timeline_click_scheduler.identity();
+        let current_frame = match self
+            .timeline_position_ms
+            .checked_mul(u64::from(TIMELINE_CLICK_SAMPLE_RATE))
+            .and_then(|frames_ms| frames_ms.checked_div(1_000))
+        {
+            Some(frame) => frame,
+            None => {
+                self.last_error = Some("Timeline Guide lookahead frame overflowed".to_string());
+                return;
+            }
+        };
+        let lookahead_end = match current_frame.checked_add(
+            u64::from(TIMELINE_CLICK_SAMPLE_RATE) * TIMELINE_CLICK_LOOKAHEAD_MS / 1_000,
+        ) {
+            Some(frame) => frame,
+            None => {
+                self.last_error = Some("Timeline Guide lookahead frame overflowed".to_string());
+                return;
+            }
+        };
+        self.retire_timeline_guide_history(current_frame);
+
+        // A-B loop bounds are authored before playback, so every future wrap
+        // can be admitted on the performance beat immediately preceding B.
+        // If the first onset is already behind the callback clock, skip it
+        // instead of backdating; the next wrap is admitted after A is restored.
+        if !matches!(
+            self.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ) {
+            if let Some(b_ms) = self.timeline_loop_runtime.b_ms {
+                let cue = TimelineGuideCueKind::Looping;
+                let duplicate = self.timeline_guide_cues.iter().any(|entry| {
+                    entry.generation == self.timeline_audio_transport_revision
+                        && entry.epoch == identity.epoch
+                        && entry.transport_generation == identity.transport_generation
+                        && entry.schedule_generation == identity.schedule_generation
+                        && entry.at_ms == b_ms
+                        && matches!(entry.cue, TimelineGuideCueKind::Looping)
+                });
+                if !duplicate {
+                    if let Ok((onset, cue_identity, _)) = self.timeline_guide_schedule_coordinates(
+                        b_ms,
+                        TimelineGuideAssetKey::Looping,
+                        true,
+                        None,
+                    ) {
+                        if cue_identity == identity
+                            && onset >= current_frame
+                            && onset <= lookahead_end
+                        {
+                            self.push_predicted_timeline_guide_cue(
+                                self.timeline_guide_enabled,
+                                self.timeline_audio_transport_revision,
+                                b_ms,
+                                "Looping".to_string(),
+                                cue,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Explicit semantic Trans points are authoritative for a pinned show
+        // chart (Life uses 149/151/153/155). Only maps with no such point use
+        // the captured generic cadence.
+        if let Some(transition) = self.timeline_follow_transition.clone() {
+            if transition.guide_enabled {
+                let explicit_targets = if transition.trans_target_measures.is_empty() {
+                    Ok(Vec::new())
+                } else {
+                    self.timeline_click_authority().and_then(|authority| {
+                        transition
+                            .trans_target_measures
+                            .iter()
+                            .map(|measure| {
+                                let steps = timeline_measure_start_sixteenth_steps(
+                                    &self.timeline_tempo_meter_map,
+                                    *measure,
+                                )?;
+                                let quarter = steps as f64 / 4.0;
+                                let frame = authority.sample_frame_at_quarter_beat(
+                                    quarter,
+                                    TIMELINE_CLICK_SAMPLE_RATE,
+                                )?;
+                                let at_ms = frame
+                                    .checked_mul(1_000)
+                                    .and_then(|frames_ms| {
+                                        frames_ms.checked_div(u64::from(TIMELINE_CLICK_SAMPLE_RATE))
+                                    })
+                                    .ok_or_else(|| {
+                                        "Timeline Guide exact Trans target overflowed".to_string()
+                                    })?;
+                                Ok((*measure, at_ms, frame))
+                            })
+                            .collect::<Result<Vec<_>, String>>()
+                    })
+                };
+                let mut explicit_targets = match explicit_targets {
+                    Ok(targets) => targets,
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                };
+                explicit_targets.sort_by_key(|target| target.0);
+                let mut explicit_target = None;
+                for (measure, at_ms, target_frame) in &explicit_targets {
+                    if transition
+                        .last_trans_beat_ordinal
+                        .is_some_and(|last| *measure <= last)
+                    {
+                        continue;
+                    }
+                    match self.timeline_guide_schedule_coordinates(
+                        *at_ms,
+                        TimelineGuideAssetKey::Trans,
+                        true,
+                        Some(*target_frame),
+                    ) {
+                        Ok((onset, cue_identity, _))
+                            if cue_identity == identity && onset >= current_frame =>
+                        {
+                            explicit_target = Some((*measure, *at_ms, onset, Some(*target_frame)));
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            self.last_error = Some(error);
+                            return;
+                        }
+                    }
+                }
+                let generic_target = if transition.trans_target_measures.is_empty() {
+                    let clock = self.clock.snapshot(now);
+                    let cadence_beats = u64::from(transition.trans_cadence_bars.max(1)) * 4;
+                    let target_beat = clock
+                        .beat_counter
+                        .checked_div(cadence_beats)
+                        .and_then(|group| group.checked_add(1))
+                        .and_then(|group| group.checked_mul(cadence_beats));
+                    target_beat.and_then(|target_beat| {
+                        if transition.last_trans_beat_ordinal == Some(target_beat) {
+                            return None;
+                        }
+                        let current_beat = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+                        let beats_until = target_beat as f64 - current_beat;
+                        let millis_until = beats_until * 60_000.0 / f64::from(clock.bpm.max(1.0));
+                        if !millis_until.is_finite() || millis_until < 0.0 {
+                            return None;
+                        }
+                        let millis_until = millis_until.ceil() as u64;
+                        let elapsed_ms =
+                            now.saturating_duration_since(transition.started_at)
+                                .as_millis()
+                                .min(u128::from(u64::MAX)) as u64;
+                        let transition_ms =
+                            transition.duration.as_millis().min(u128::from(u64::MAX)) as u64;
+                        if elapsed_ms.saturating_add(millis_until) > transition_ms {
+                            return None;
+                        }
+                        let declared_ms = self.timeline_position_ms.checked_add(millis_until)?;
+                        match self.timeline_guide_schedule_coordinates(
+                            declared_ms,
+                            TimelineGuideAssetKey::Trans,
+                            true,
+                            None,
+                        ) {
+                            Ok((onset, cue_identity, _)) if cue_identity == identity => {
+                                Some((target_beat, declared_ms, onset, None))
+                            }
+                            Ok(_) => None,
+                            Err(error) => {
+                                self.last_error = Some(error);
+                                None
+                            }
+                        }
+                    })
+                } else {
+                    None
+                };
+                if let Some((target_identity, declared_ms, onset, exact_target_frame)) =
+                    explicit_target.or(generic_target)
+                {
+                    if onset >= current_frame && onset <= lookahead_end {
+                        let before = self.timeline_guide_cues.len();
+                        match exact_target_frame {
+                            Some(target_frame) => self.push_exact_predicted_timeline_guide_cue(
+                                transition.guide_enabled,
+                                transition.guide_generation,
+                                declared_ms,
+                                target_frame,
+                                "Trans".to_string(),
+                                TimelineGuideCueKind::Trans,
+                            ),
+                            None => self.push_predicted_timeline_guide_cue(
+                                transition.guide_enabled,
+                                transition.guide_generation,
+                                declared_ms,
+                                "Trans".to_string(),
+                                TimelineGuideCueKind::Trans,
+                            ),
+                        }
+                        if self.timeline_guide_cues.len() > before {
+                            if let Some(active) = self.timeline_follow_transition.as_mut() {
+                                if active.generation == transition.generation {
+                                    active.last_trans_beat_ordinal = Some(target_identity);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut pending = self.timeline_phases.clone();
+        pending.sort_by_key(|phase| (phase.start_ms, phase.id));
+        for phase in pending {
+            if self.timeline_guide_cues.iter().any(|entry| {
+                entry.generation == self.timeline_audio_transport_revision
+                    && entry.epoch == identity.epoch
+                    && entry.transport_generation == identity.transport_generation
+                    && entry.schedule_generation == identity.schedule_generation
+                    && matches!(
+                        entry.cue,
+                        TimelineGuideCueKind::Phase { phase_id } if phase_id == phase.id
+                    )
+            }) {
+                continue;
+            }
+            let phase_cue = TimelineGuideCueKind::Phase { phase_id: phase.id };
+            let asset = match self.timeline_guide_asset(&phase_cue) {
+                Ok(asset) => asset,
+                Err(error) => {
+                    self.last_error = Some(error);
+                    continue;
+                }
+            };
+            let Ok((onset, cue_identity, _playback_rate_milli)) =
+                self.timeline_guide_schedule_coordinates(phase.start_ms, asset, true, None)
+            else {
+                continue;
+            };
+            if cue_identity != identity || onset < current_frame || onset > lookahead_end {
+                continue;
+            }
+            self.push_timeline_guide_cue(phase.start_ms, phase.label, phase_cue);
+        }
+    }
+
+    fn retire_timeline_guide_history(&mut self, current_frame: u64) {
+        let retention_frames =
+            u64::from(TIMELINE_CLICK_SAMPLE_RATE) * TIMELINE_CLICK_LOOKAHEAD_MS / 1_000;
+        let cutoff = current_frame.saturating_sub(retention_frames);
+        let newest_expired = self
+            .timeline_guide_cues
+            .iter()
+            .filter(|entry| entry.sample_frame < cutoff)
+            .max_by_key(|entry| entry.sequence)
+            .cloned();
+        self.timeline_guide_cues
+            .retain(|entry| entry.sample_frame >= cutoff);
+        if let Some(watermark) = newest_expired {
+            self.timeline_guide_cues.insert(0, watermark);
         }
     }
 
@@ -35891,27 +37887,18 @@ impl EngineRuntime {
             return;
         }
         self.timeline_last_announced_phase_id = Some(phase.id);
-        self.push_timeline_guide_cue(
-            position_ms,
-            phase.label,
-            TimelineGuideCueKind::Phase { phase_id: phase.id },
-        );
     }
 
     fn announce_timeline_phases_between(&mut self, previous_ms: u64, current_ms: u64) {
-        let phases = self
+        let mut phases = self
             .timeline_phases
             .iter()
             .filter(|phase| previous_ms < phase.start_ms && phase.start_ms <= current_ms)
             .cloned()
             .collect::<Vec<_>>();
+        phases.sort_by_key(|phase| (phase.start_ms, phase.id));
         for phase in phases {
             self.timeline_last_announced_phase_id = Some(phase.id);
-            self.push_timeline_guide_cue(
-                phase.start_ms,
-                phase.label,
-                TimelineGuideCueKind::Phase { phase_id: phase.id },
-            );
         }
     }
 
@@ -35947,7 +37934,9 @@ impl EngineRuntime {
                 format!("Timeline {timeline_id:?} was not found in the authored bank")
             })?;
         let (timeline, runtime_events) = self.prepare_timeline_bank_entry(timeline)?;
-        self.install_timeline_bank_entry(timeline, runtime_events, true, 0);
+        self.preflight_timeline_transport_authority_invalidation()?;
+        self.invalidate_timeline_transport_authority()?;
+        self.install_timeline_bank_entry(timeline, runtime_events, true, 0)?;
         Ok(())
     }
 
@@ -36005,6 +37994,10 @@ impl EngineRuntime {
         let duration = self.timeline_duration_ms();
         let current = self.timeline_position_ms;
         let target = dj_link_authored_bar_jump_target(current, duration, self.clock.bpm, bars)?;
+        let next_audio_transport_revision = self
+            .reserve_timeline_audio_transport_revision_successors(
+                1 + u64::from(self.timeline_follow_is_abortable()),
+            )?;
         self.preflight_timeline_transport_authority_invalidation()?;
         let rollback = self.timeline_transport_rollback();
         let now = Instant::now();
@@ -36022,8 +38015,7 @@ impl EngineRuntime {
         self.announce_timeline_phase_at(target);
         self.establish_child_transports_at_position(now);
         self.apply_child_timeline_automations();
-        self.timeline_audio_transport_revision =
-            self.timeline_audio_transport_revision.wrapping_add(1);
+        self.timeline_audio_transport_revision = next_audio_transport_revision;
         if let Err(error) = self.invalidate_timeline_transport_authority() {
             self.rollback_pending_command(rollback);
             return Err(error);
@@ -36062,29 +38054,86 @@ impl EngineRuntime {
     /// Advance one monotonically increasing transport segment. Returns true
     /// when a Scene Block jump changed the destination, in which case callers
     /// must not continue an A-B wrap using the discarded linear remainder.
+    fn planned_jump_for_segment<'a>(
+        plan: &'a TimelineTickDiscontinuityPlan,
+        completed_wraps: u128,
+        previous_position: u64,
+        current_position: u64,
+        include_previous: bool,
+        include_current: bool,
+    ) -> Option<&'a TimelinePlannedJump> {
+        let jump = plan.jump.as_ref()?;
+        if plan.loop_wraps != completed_wraps
+            || jump.at_ms < previous_position
+            || jump.at_ms > current_position
+            || (jump.at_ms == previous_position && !include_previous)
+            || (jump.at_ms == current_position && !include_current)
+        {
+            return None;
+        }
+        Some(jump)
+    }
+
     fn advance_timeline_segment(
         &mut self,
         previous_position: u64,
         current_position: u64,
         include_previous: bool,
         include_current: bool,
+        planned_jump: Option<&TimelinePlannedJump>,
         now: Instant,
     ) -> bool {
-        if let Some((jump_at_ms, _source_event_index, target_event_index, target)) =
-            self.first_timeline_jump_between(previous_position, current_position, include_previous)
-        {
-            self.timeline_position_ms = jump_at_ms;
+        if let Some(planned_jump) = planned_jump {
+            let TimelinePlannedJump {
+                at_ms: jump_at_ms,
+                source_event_index,
+                target_event_index,
+                target,
+            } = planned_jump;
+            let plan_is_current =
+                self.timeline_events
+                    .get(*source_event_index)
+                    .is_some_and(|event| {
+                        timeline_event_end_ms(event) == *jump_at_ms
+                            && event.jump_to_event_id == Some(target.id)
+                    })
+                    && self
+                        .timeline_events
+                        .get(*target_event_index)
+                        .is_some_and(|event| event.id == target.id);
+            if !plan_is_current {
+                self.last_error =
+                    Some("Timeline tick jump plan changed before application".to_string());
+                return true;
+            }
+            let reserved_transport = match self.reserve_timeline_transport_authority_invalidation()
+            {
+                Ok(reserved) => reserved,
+                Err(error) => {
+                    self.last_error = Some(error);
+                    return true;
+                }
+            };
+            let next_audio_transport_revision =
+                match self.reserve_timeline_audio_transport_revision() {
+                    Ok(revision) => revision,
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return true;
+                    }
+                };
+            self.timeline_position_ms = *jump_at_ms;
             self.trigger_timeline_events_between(
                 previous_position,
-                jump_at_ms,
+                *jump_at_ms,
                 include_previous,
                 false,
                 now,
             );
-            self.announce_timeline_phases_between(previous_position, jump_at_ms);
+            self.announce_timeline_phases_between(previous_position, *jump_at_ms);
             for event_index in 0..self.timeline_events.len() {
                 let event = &self.timeline_events[event_index];
-                if event.duration_ms == 0 || timeline_event_end_ms(event) != jump_at_ms {
+                if event.duration_ms == 0 || timeline_event_end_ms(event) != *jump_at_ms {
                     continue;
                 }
                 let event_id = event.id;
@@ -36115,11 +38164,14 @@ impl EngineRuntime {
                         .is_none_or(|activation| activation.event_id != event_id)
                 });
             }
+            self.commit_reserved_timeline_transport_authority(reserved_transport);
+            self.timeline_audio_transport_revision = next_audio_transport_revision;
+            self.timeline_guide_cues.clear();
             self.timeline_position_ms = target.time_ms;
             self.reconcile_timeline_effect_activations_at_position(target.time_ms, now);
             if !target.layer_muted_effective {
-                self.activate_child_transport(target_event_index, 0);
-                self.request_timeline_event_at_index(target_event_index, now);
+                self.activate_child_transport(*target_event_index, 0);
+                self.request_timeline_event_at_index(*target_event_index, now);
             }
             self.timeline_evaluated_boundary_position_ms = Some(target.time_ms);
             self.timeline_jump_landed_event_id = Some(target.id);
@@ -36159,10 +38211,35 @@ impl EngineRuntime {
         // child, playhead, event, or loop mutation so a second wrap cannot
         // panic or leave a partial tick after the first consumes the final
         // successor.
-        let loop_wraps = self.timeline_loop_wraps_for_next_tick();
-        if let Err(error) = self.preflight_timeline_transport_authority_invalidations(loop_wraps) {
+        let discontinuity_plan = self.timeline_tick_discontinuity_plan();
+        let loop_wraps = discontinuity_plan.loop_wraps;
+        let internal_jump = discontinuity_plan.jump.is_some();
+        let transport_invalidations = loop_wraps.saturating_add(u128::from(internal_jump));
+        if let Err(error) =
+            self.preflight_timeline_transport_authority_invalidations(transport_invalidations)
+        {
             self.last_error = Some(error);
             return;
+        }
+        let audio_successors = loop_wraps
+            .checked_add(u128::from(internal_jump))
+            .and_then(|count| {
+                count.checked_add(u128::from(
+                    loop_wraps > 0 && self.timeline_follow_is_abortable(),
+                ))
+            })
+            .and_then(|count| u64::try_from(count).ok());
+        let Some(audio_successors) = audio_successors else {
+            self.last_error = Some("Timeline audio transport revision is exhausted".to_string());
+            return;
+        };
+        if audio_successors > 0 {
+            if let Err(error) =
+                self.reserve_timeline_audio_transport_revision_successors(audio_successors)
+            {
+                self.last_error = Some(error);
+                return;
+            }
         }
         self.advance_direct_child_count_in(now);
         if !self.timeline_playing || self.timeline_external_sync_source.is_some() {
@@ -36221,6 +38298,7 @@ impl EngineRuntime {
         let mut remaining_ms = delta_ms;
         let mut segment_start = previous_position;
         let mut segment_include_start = include_previous;
+        let mut completed_wraps = 0_u128;
         let mut jumped = false;
         let loop_bounds = match self.timeline_loop_runtime.status {
             TimelineLoopRuntimeStatus::Disabled => None,
@@ -36233,11 +38311,20 @@ impl EngineRuntime {
         while remaining_ms > 0 && segment_start < duration {
             let Some((a_ms, b_ms)) = loop_bounds else {
                 let end = segment_start.saturating_add(remaining_ms).min(duration);
+                let planned_jump = Self::planned_jump_for_segment(
+                    &discontinuity_plan,
+                    completed_wraps,
+                    segment_start,
+                    end,
+                    segment_include_start,
+                    true,
+                );
                 jumped = self.advance_timeline_segment(
                     segment_start,
                     end,
                     segment_include_start,
                     true,
+                    planned_jump,
                     now,
                 );
                 break;
@@ -36247,11 +38334,20 @@ impl EngineRuntime {
                 let distance_to_a = a_ms - segment_start;
                 let consumed = remaining_ms.min(distance_to_a);
                 let end = segment_start + consumed;
+                let planned_jump = Self::planned_jump_for_segment(
+                    &discontinuity_plan,
+                    completed_wraps,
+                    segment_start,
+                    end,
+                    segment_include_start,
+                    true,
+                );
                 jumped = self.advance_timeline_segment(
                     segment_start,
                     end,
                     segment_include_start,
                     true,
+                    planned_jump,
                     now,
                 );
                 if jumped || consumed == remaining_ms {
@@ -36267,11 +38363,20 @@ impl EngineRuntime {
             if segment_start >= b_ms {
                 self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Armed;
                 let end = segment_start.saturating_add(remaining_ms).min(duration);
+                let planned_jump = Self::planned_jump_for_segment(
+                    &discontinuity_plan,
+                    completed_wraps,
+                    segment_start,
+                    end,
+                    segment_include_start,
+                    true,
+                );
                 jumped = self.advance_timeline_segment(
                     segment_start,
                     end,
                     segment_include_start,
                     true,
+                    planned_jump,
                     now,
                 );
                 break;
@@ -36281,21 +38386,39 @@ impl EngineRuntime {
             let distance_to_b = b_ms - segment_start;
             if remaining_ms < distance_to_b {
                 let end = segment_start + remaining_ms;
+                let planned_jump = Self::planned_jump_for_segment(
+                    &discontinuity_plan,
+                    completed_wraps,
+                    segment_start,
+                    end,
+                    segment_include_start,
+                    true,
+                );
                 jumped = self.advance_timeline_segment(
                     segment_start,
                     end,
                     segment_include_start,
                     true,
+                    planned_jump,
                     now,
                 );
                 break;
             }
 
+            let planned_jump = Self::planned_jump_for_segment(
+                &discontinuity_plan,
+                completed_wraps,
+                segment_start,
+                b_ms,
+                segment_include_start,
+                false,
+            );
             jumped = self.advance_timeline_segment(
                 segment_start,
                 b_ms,
                 segment_include_start,
                 false,
+                planned_jump,
                 now,
             );
             if jumped {
@@ -36306,6 +38429,16 @@ impl EngineRuntime {
             // every planned wrap. Keep the mutation first at the individual
             // boundary too: an unforeseen future caller cannot move a loop
             // back to `a_ms` and only then discover terminal exhaustion.
+            let revision_successors = 1 + u64::from(self.timeline_follow_is_abortable());
+            let next_audio_transport_revision = match self
+                .reserve_timeline_audio_transport_revision_successors(revision_successors)
+            {
+                Ok(revision) => revision,
+                Err(error) => {
+                    self.last_error = Some(error);
+                    return;
+                }
+            };
             if let Err(error) = self.invalidate_timeline_transport_authority() {
                 self.last_error = Some(error);
                 return;
@@ -36314,8 +38447,8 @@ impl EngineRuntime {
                 self.abort_timeline_follow(protocol::TimelineFollowAbortReason::LoopWrap, now);
             }
             self.timeline_position_ms = a_ms;
-            self.timeline_audio_transport_revision =
-                self.timeline_audio_transport_revision.wrapping_add(1);
+            self.timeline_audio_transport_revision = next_audio_transport_revision;
+            self.timeline_guide_cues.clear();
             self.reconcile_timeline_effect_activations_at_position(a_ms, now);
             self.deactivate_all_child_transports();
             self.establish_child_transports_at_position(now);
@@ -36323,11 +38456,7 @@ impl EngineRuntime {
                 self.timeline_loop_runtime.wrap_count.saturating_add(1);
             self.timeline_loop_runtime.generation =
                 next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
-            self.push_timeline_guide_cue(
-                a_ms,
-                "Looping".to_string(),
-                TimelineGuideCueKind::Looping,
-            );
+            completed_wraps = completed_wraps.saturating_add(1);
             self.timeline_last_announced_phase_id = None;
             self.announce_timeline_phase_at(a_ms);
             segment_start = a_ms;
@@ -36338,11 +38467,20 @@ impl EngineRuntime {
         }
 
         if delta_ms == 0 {
+            let planned_jump = Self::planned_jump_for_segment(
+                &discontinuity_plan,
+                completed_wraps,
+                previous_position,
+                previous_position,
+                include_previous,
+                true,
+            );
             self.advance_timeline_segment(
                 previous_position,
                 previous_position,
                 include_previous,
                 true,
+                planned_jump,
                 now,
             );
         }
@@ -36556,6 +38694,7 @@ impl EngineRuntime {
         previous_position: u64,
         current_position: u64,
         include_previous: bool,
+        include_current: bool,
     ) -> Option<(u64, usize, usize, RuntimeTimelineEvent)> {
         let (end_ms, _, _, source_event_index, target_id) = self
             .timeline_events
@@ -36570,6 +38709,7 @@ impl EngineRuntime {
                 if end_ms > current_position
                     || end_ms < previous_position
                     || (end_ms == previous_position && !include_previous)
+                    || (end_ms == current_position && !include_current)
                 {
                     return None;
                 }
@@ -36859,6 +38999,303 @@ impl EngineRuntime {
         self.last_error = None;
     }
 
+    fn apply_midi_clock_pulse_at(&mut self, now: Instant) {
+        // Probe the pulse on a clone first. MIDI Clock is 24 PPQN and its PLL
+        // estimate normally changes by a tiny amount on every pulse; do not
+        // invalidate a 600 ms future batch unless the candidate actually
+        // displaces an onset by more than one canonical output frame.
+        let mut candidate = self.clock.clone();
+        let previous_bpm = candidate.bpm;
+        candidate.midi_clock_pulse(now);
+        let rotation = if candidate.bpm != previous_bpm && self.timeline_click_scheduler.armed {
+            (|| {
+                let Some(selection) = self.timeline_click_source_selection()? else {
+                    return Ok(false);
+                };
+                let candidate_authority = TimelineTempoMeterAuthority::new(
+                    f64::from(clamp_bpm(candidate.bpm)),
+                    selection.authority.points().to_vec(),
+                )?;
+                selection.authority.differs_audibly_within_lookahead(
+                    &candidate_authority,
+                    selection.position_ms,
+                    self.timeline_click_scheduler.sample_rate,
+                    self.timeline_click_scheduler.lookahead_frames,
+                )
+            })()
+        } else {
+            Ok(false)
+        };
+        let rotation = match rotation {
+            Ok(rotation) => rotation,
+            Err(error) => {
+                self.last_error = Some(error);
+                return;
+            }
+        };
+        if rotation {
+            if let Err(error) = self
+                .timeline_click_scheduler
+                .preflight_schedule_generation_rotation()
+            {
+                self.last_error = Some(error);
+                return;
+            }
+            self.clock = candidate;
+            if let Err(error) = self.timeline_click_scheduler.rotate_schedule_generation() {
+                self.last_error = Some(error);
+            }
+        } else {
+            self.clock = candidate;
+        }
+    }
+
+    fn timeline_click_authority(&self) -> Result<TimelineTempoMeterAuthority, String> {
+        validate_timeline_tempo_meter_map(
+            self.timeline_tempo_meter_map_version,
+            &self.timeline_tempo_meter_map,
+        )?;
+        TimelineTempoMeterAuthority::new(
+            f64::from(clamp_bpm(self.clock.bpm)),
+            self.timeline_tempo_meter_map.clone(),
+        )
+    }
+
+    fn timeline_count_in_duration_for_map(
+        &self,
+        points: &[TimelineTempoMeterPoint],
+        version: u8,
+        position_units: u64,
+        requested_beats: u8,
+    ) -> Result<(u8, Duration), String> {
+        validate_timeline_tempo_meter_map(version, points)?;
+        let authority = TimelineTempoMeterAuthority::new(
+            f64::from(clamp_bpm(self.clock.bpm)),
+            points.to_vec(),
+        )?;
+        let quarter = position_units as f64 / f64::from(TIMELINE_CLICK_QUARTER_UNITS as u32);
+        let (numerator, denominator) = authority.meter_at_quarter_beat(quarter)?;
+        let beats = if points.is_empty() {
+            requested_beats
+        } else {
+            numerator
+        };
+        if beats == 0 {
+            return Ok((0, Duration::ZERO));
+        }
+        let quarter_beats = if points.is_empty() {
+            f64::from(beats)
+        } else {
+            f64::from(numerator) * 4.0 / f64::from(denominator)
+        };
+        let bpm = authority.bpm_at_quarter_beat(quarter)?;
+        let seconds = quarter_beats * 60.0 / bpm;
+        if !seconds.is_finite() || seconds < 0.0 {
+            return Err("Timeline count-in duration is invalid".to_string());
+        }
+        Ok((beats, Duration::from_secs_f64(seconds)))
+    }
+
+    fn timeline_position_quarter_units(
+        &self,
+        authority: &TimelineTempoMeterAuthority,
+    ) -> Result<u64, String> {
+        self.timeline_position_quarter_units_at_ms(authority, self.timeline_position_ms)
+    }
+
+    fn timeline_position_quarter_units_at_ms(
+        &self,
+        authority: &TimelineTempoMeterAuthority,
+        position_ms: u64,
+    ) -> Result<u64, String> {
+        let seconds = position_ms as f64 / 1_000.0;
+        let quarter = authority.quarter_beat_at_seconds(seconds)?;
+        let units = quarter * f64::from(TIMELINE_CLICK_QUARTER_UNITS as u32);
+        if !units.is_finite() || units < 0.0 || units >= u64::MAX as f64 {
+            return Err("Timeline click musical position overflowed".to_string());
+        }
+        // The scheduler's lower bound is the first not-yet-elapsed musical
+        // unit.  Rounding down would reintroduce a denominator click that
+        // already passed when the 25 ms projection poll lands mid-beat.
+        Ok(units.ceil() as u64)
+    }
+
+    fn timeline_click_source_selection(
+        &self,
+    ) -> Result<Option<TimelineClickSourceSelection>, String> {
+        // A Follow transition keeps the outgoing/root musical map authoritative
+        // for the full crossfade and settlement.  The incoming child is a
+        // render/audio projection only until the target Timeline is committed;
+        // selecting it here would jump the click phase before settlement.
+        if self.timeline_follow_transition.is_some() && self.timeline_metronome_enabled {
+            let authority = self.timeline_click_authority()?;
+            return Ok(Some(TimelineClickSourceSelection {
+                source: TimelineScheduleSource::Root,
+                authority,
+                position_ms: self.timeline_position_ms,
+                count_in_start_units: None,
+            }));
+        }
+
+        if self.timeline_playing && self.timeline_metronome_enabled {
+            let authority = self.timeline_click_authority()?;
+            let count_in_start_units = self
+                .timeline_count_in_until
+                .is_some()
+                .then(|| self.timeline_position_quarter_units(&authority))
+                .transpose()?;
+            return Ok(Some(TimelineClickSourceSelection {
+                source: TimelineScheduleSource::Root,
+                authority,
+                position_ms: self.timeline_position_ms,
+                count_in_start_units,
+            }));
+        }
+
+        if let Some(count_in) = self.direct_child_count_in {
+            if let Some(transport) = self
+                .direct_child_transports
+                .iter()
+                .find(|transport| transport.direct_parent_cue_id == Some(count_in.cue_id))
+                .filter(|transport| transport.metronome_enabled)
+            {
+                validate_timeline_tempo_meter_map(
+                    transport.tempo_meter_map_version,
+                    &transport.tempo_meter_map,
+                )?;
+                let authority = TimelineTempoMeterAuthority::new(
+                    f64::from(clamp_bpm(self.clock.bpm)),
+                    transport.tempo_meter_map.clone(),
+                )?;
+                return Ok(Some(TimelineClickSourceSelection {
+                    source: TimelineScheduleSource::DirectChild {
+                        cue_id: count_in.cue_id,
+                        generation: count_in.generation,
+                    },
+                    authority,
+                    position_ms: 0,
+                    count_in_start_units: Some(0),
+                }));
+            }
+        }
+
+        if let Some(transport) = self.direct_child_transports.iter().find(|transport| {
+            transport.active && !transport.direct_paused && transport.metronome_enabled
+        }) {
+            validate_timeline_tempo_meter_map(
+                transport.tempo_meter_map_version,
+                &transport.tempo_meter_map,
+            )?;
+            let authority = TimelineTempoMeterAuthority::new(
+                f64::from(clamp_bpm(self.clock.bpm)),
+                transport.tempo_meter_map.clone(),
+            )?;
+            return Ok(Some(TimelineClickSourceSelection {
+                source: TimelineScheduleSource::DirectChild {
+                    cue_id: transport
+                        .direct_parent_cue_id
+                        .unwrap_or(transport.owner_cue_id),
+                    generation: transport.direct_generation,
+                },
+                authority,
+                position_ms: transport.position_ms,
+                count_in_start_units: None,
+            }));
+        }
+        Ok(None)
+    }
+
+    fn advance_timeline_click_scheduler(&mut self) {
+        let result = (|| {
+            let Some(mut selection) = self.timeline_click_source_selection()? else {
+                self.timeline_click_scheduler.disarm();
+                return Ok::<(), String>(());
+            };
+            if self.timeline_click_scheduler.identity().source != selection.source {
+                self.timeline_click_scheduler
+                    .rotate_source(selection.source)?;
+            }
+            let authority_changed = self
+                .timeline_click_scheduler
+                .authority
+                .as_ref()
+                .is_some_and(|authority| authority != &selection.authority);
+            if authority_changed {
+                let current = self
+                    .timeline_click_scheduler
+                    .authority
+                    .as_ref()
+                    .expect("authority_changed requires an installed authority");
+                if current.differs_audibly_within_lookahead(
+                    &selection.authority,
+                    selection.position_ms,
+                    self.timeline_click_scheduler.sample_rate,
+                    self.timeline_click_scheduler.lookahead_frames,
+                )? {
+                    self.timeline_click_scheduler.rotate_schedule_generation()?;
+                } else {
+                    // Retain the already queued authority until cumulative PLL
+                    // drift crosses the one-frame contract. Mixing events
+                    // calculated from two near-equal maps in one generation
+                    // would defeat the de-duplication fence.
+                    selection.authority = current.clone();
+                }
+            }
+            self.timeline_click_scheduler
+                .configure_authority(selection.authority.clone())?;
+            if let Some(start_units) = selection.count_in_start_units {
+                if !self.timeline_click_scheduler.count_in_active {
+                    self.timeline_click_scheduler.rearm_count_in(start_units)?;
+                }
+                return Ok::<(), String>(());
+            }
+            if self.timeline_click_scheduler.count_in_active {
+                self.timeline_click_scheduler.end_count_in()?;
+            }
+            let current_units = self.timeline_position_quarter_units_at_ms(
+                &selection.authority,
+                selection.position_ms,
+            )?;
+            let current_frame = selection.authority.sample_frame_at_quarter_beat(
+                current_units as f64 / f64::from(TIMELINE_CLICK_QUARTER_UNITS as u32),
+                self.timeline_click_scheduler.sample_rate,
+            )?;
+            let lookahead_frame = current_frame
+                .checked_add(self.timeline_click_scheduler.lookahead_frames)
+                .ok_or_else(|| "Timeline click lookahead frame overflowed".to_string())?;
+            let end_quarter = selection.authority.quarter_beat_at_sample_frame(
+                lookahead_frame,
+                self.timeline_click_scheduler.sample_rate,
+            )?;
+            let end_units_float =
+                (end_quarter * f64::from(TIMELINE_CLICK_QUARTER_UNITS as u32)).ceil();
+            if !end_units_float.is_finite()
+                || end_units_float < 0.0
+                || end_units_float >= u64::MAX as f64
+            {
+                return Err("Timeline click lookahead musical range overflowed".to_string());
+            }
+            let end_units = end_units_float as u64;
+            if !self.timeline_click_scheduler.armed {
+                self.timeline_click_scheduler.rearm(
+                    selection.authority,
+                    current_units,
+                    end_units.max(current_units.saturating_add(1)),
+                )?;
+            } else {
+                self.timeline_click_scheduler.poll(
+                    current_units,
+                    end_units.max(current_units.saturating_add(1)),
+                )?;
+            }
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            self.timeline_click_scheduler.overflow = Some(error.clone());
+            self.last_error = Some(error);
+        }
+    }
+
     fn active_child_timeline_transport_summaries(
         &self,
     ) -> Vec<ChildTimelineTransportRuntimeSummary> {
@@ -36996,6 +39433,8 @@ impl EngineRuntime {
             audio_muted: self.timeline_audio_muted,
             metronome_enabled: self.timeline_metronome_enabled,
             count_in_beats: self.timeline_count_in_beats,
+            tempo_meter_map: self.timeline_tempo_meter_map.clone(),
+            tempo_meter_map_version: self.timeline_tempo_meter_map_version,
             count_in_remaining_ms: self
                 .timeline_count_in_until
                 .map(|until| until.saturating_duration_since(self.last_tick).as_millis() as u64)
@@ -37007,6 +39446,17 @@ impl EngineRuntime {
             loop_runtime: self.timeline_loop_runtime.clone(),
             follow_runtime: self.timeline_follow_runtime.clone(),
             guide_cues: self.timeline_guide_cues.clone(),
+            click_events: self
+                .timeline_click_scheduler
+                .queued_events()
+                .iter()
+                .copied()
+                .collect(),
+            click_schedule_generation: self.timeline_click_scheduler.identity().schedule_generation,
+            click_queue_overflow: self
+                .timeline_click_scheduler
+                .overflow()
+                .map(ToOwned::to_owned),
             playing: self.timeline_playing,
             position_ms: self.timeline_position_ms,
             duration_ms: self.timeline_duration_ms(),
@@ -37025,6 +39475,9 @@ impl EngineRuntime {
         timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
         timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
         timeline.guide_cues.clear();
+        timeline.click_events.clear();
+        timeline.click_schedule_generation = 0;
+        timeline.click_queue_overflow = None;
         if self.timeline_audio_clips_derived {
             timeline.audio_clips.clear();
         }
@@ -40172,6 +42625,9 @@ impl EngineRuntime {
         snapshot.timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
         snapshot.timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
         snapshot.timeline.guide_cues.clear();
+        snapshot.timeline.click_events.clear();
+        snapshot.timeline.click_schedule_generation = 0;
+        snapshot.timeline.click_queue_overflow = None;
         if self.timeline_audio_clips_derived {
             snapshot.timeline.audio_clips.clear();
         }
@@ -40200,6 +42656,9 @@ impl EngineRuntime {
         active_bank_timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
         active_bank_timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
         active_bank_timeline.guide_cues.clear();
+        active_bank_timeline.click_events.clear();
+        active_bank_timeline.click_schedule_generation = 0;
+        active_bank_timeline.click_queue_overflow = None;
         if let Some(active) = snapshot
             .timeline_bank
             .iter_mut()
@@ -42725,6 +45184,35 @@ fn normalize_and_validate_timeline_audio_clips(
             .min(clip.duration_ms.saturating_sub(clip.fade_in_ms));
     }
     clips.sort_by_key(|clip| (clip.start_ms, clip.layer_id, clip.id));
+    Ok(())
+}
+
+fn validate_project_child_tempo_meter_maps(cues: &[CueSummary]) -> Result<(), String> {
+    let mut visited = HashSet::new();
+    for cue in cues {
+        validate_project_child_tempo_meter_map_for_cue(cues, cue, &mut visited)?;
+    }
+    Ok(())
+}
+
+fn validate_project_child_tempo_meter_map_for_cue(
+    cues: &[CueSummary],
+    cue: &CueSummary,
+    visited: &mut HashSet<CueId>,
+) -> Result<(), String> {
+    if !visited.insert(cue.id) {
+        return Ok(());
+    }
+    let Some(child) = cue.child_timeline.as_ref() else {
+        return Ok(());
+    };
+    validate_child_timeline_tempo_meter_map(child)
+        .map_err(|error| format!("Cue {} child timeline tempo/meter map: {error}", cue.id))?;
+    for event in &child.events {
+        if let Some(referenced) = cues.iter().find(|candidate| candidate.id == event.cue_id) {
+            validate_project_child_tempo_meter_map_for_cue(cues, referenced, visited)?;
+        }
+    }
     Ok(())
 }
 
@@ -53202,10 +55690,6 @@ fn timeline_follow_lighting_value(
     (f32::from(outgoing) + (f32::from(incoming) - f32::from(outgoing)) * progress)
         .round()
         .clamp(0.0, 255.0) as u8
-}
-
-fn timeline_count_in_duration(bpm: f32, beats: u8) -> Duration {
-    Duration::from_secs_f64(f64::from(beats) * 60.0 / f64::from(clamp_bpm(bpm)))
 }
 
 fn sanitize_loaded_video_layers(layers: &[VideoLayerSummary]) -> Vec<RuntimeVideoLayer> {
@@ -100595,11 +103079,12 @@ mod tests {
             runtime.timeline_loop_runtime.status,
             TimelineLoopRuntimeStatus::Armed
         ));
-        assert_eq!(runtime.timeline_guide_cues[0].label, "Intro");
-        assert_eq!(
-            runtime.timeline_guide_cues[0].generation,
-            runtime.timeline_audio_transport_revision
-        );
+        let intro = runtime
+            .timeline_guide_cues
+            .iter()
+            .find(|cue| cue.label == "Intro")
+            .expect("Intro guide reservation");
+        assert_eq!(intro.generation, runtime.timeline_audio_transport_revision);
 
         runtime.advance_timeline(started + Duration::from_millis(60));
         assert_eq!(runtime.timeline_position_ms, 120);
@@ -100618,7 +103103,8 @@ mod tests {
                 .iter()
                 .filter(|cue| matches!(cue.cue, TimelineGuideCueKind::Looping))
                 .count(),
-            1
+            0,
+            "the already-admitted Looping cue is not re-emitted at the wrap"
         );
         assert_eq!(
             runtime
@@ -100626,7 +103112,8 @@ mod tests {
                 .iter()
                 .map(|cue| cue.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Intro", "Verse", "Looping", "Intro"]
+            Vec::<&str>::new(),
+            "loop wrap cancels old Guide and never catches up an already-started Phase"
         );
 
         runtime.apply_command(EngineCommand::ScaleTimelineLoop(TimelineLoopScale::Half));
@@ -100775,6 +103262,7 @@ mod tests {
             destination_bpm: Some(128.0),
             preroll_ms: 100,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let mut second = TimelineSnapshot {
@@ -100809,6 +103297,13 @@ mod tests {
             cue: TimelineGuideCueKind::Phase {
                 phase_id: TimelinePhaseId(103),
             },
+            asset: TimelineGuideAssetKey::Verse,
+            playback_rate_milli: 1_000,
+            sample_frame: 0,
+            epoch: 1,
+            transport_generation: 1,
+            schedule_generation: 1,
+            source: TimelineScheduleSource::Root,
         });
         let persisted = runtime.build_persistence_snapshot();
         assert_eq!(persisted.timeline.id, TimelineId(102));
@@ -101309,6 +103804,137 @@ mod tests {
     }
 
     #[test]
+    fn timeline_follow_terminal_audio_revision_boundary_is_atomic_and_nonwrapping() {
+        let now = Instant::now();
+        for (fault_policy, result, start_revision) in [
+            (
+                protocol::TimelineFollowFaultPolicy::Hold,
+                TimelineFollowSettlementAckResult::Applied,
+                u64::MAX - 1,
+            ),
+            (
+                protocol::TimelineFollowFaultPolicy::Cut,
+                TimelineFollowSettlementAckResult::Fault {
+                    fault: "cut fault".to_string(),
+                },
+                u64::MAX - 1,
+            ),
+            (
+                protocol::TimelineFollowFaultPolicy::Hold,
+                TimelineFollowSettlementAckResult::Fault {
+                    fault: "hold fault".to_string(),
+                },
+                u64::MAX,
+            ),
+        ] {
+            let mut runtime = timeline_follow_settling_runtime(fault_policy, now);
+            runtime.timeline_audio_transport_revision = start_revision;
+            let acknowledgement = TimelineFollowSettlementAck {
+                epoch: runtime.output_ownership_gate.status().epoch,
+                generation: runtime.timeline_follow_runtime.generation,
+                domain: TimelineFollowSettlementDomain::Audio,
+                consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                result,
+            };
+            let before_runtime = runtime.timeline_follow_runtime.clone();
+            let before_bank = runtime.timeline_bank.clone();
+            let before_transition = runtime
+                .timeline_follow_transition
+                .as_ref()
+                .map(|transition| {
+                    (
+                        transition.generation,
+                        transition.source_timeline_id,
+                        transition.target_timeline_id,
+                        transition.accepted_settlement_acknowledgements.clone(),
+                    )
+                });
+            let before_guide = runtime.timeline_guide_cues.clone();
+            let error = runtime
+                .acknowledge_timeline_follow_settlement(acknowledgement, now)
+                .unwrap_err();
+            assert!(error.contains("audio transport revision is exhausted"));
+            assert_eq!(runtime.timeline_audio_transport_revision, start_revision);
+            assert_eq!(runtime.timeline_follow_runtime, before_runtime);
+            assert_eq!(runtime.timeline_bank, before_bank);
+            assert_eq!(
+                runtime
+                    .timeline_follow_transition
+                    .as_ref()
+                    .map(|transition| {
+                        (
+                            transition.generation,
+                            transition.source_timeline_id,
+                            transition.target_timeline_id,
+                            transition.accepted_settlement_acknowledgements.clone(),
+                        )
+                    }),
+                before_transition
+            );
+            assert_eq!(runtime.timeline_guide_cues, before_guide);
+            assert!(runtime
+                .timeline_follow_terminal_settlement_receipt
+                .is_none());
+        }
+
+        for (fault_policy, result) in [
+            (
+                protocol::TimelineFollowFaultPolicy::Hold,
+                TimelineFollowSettlementAckResult::Applied,
+            ),
+            (
+                protocol::TimelineFollowFaultPolicy::Cut,
+                TimelineFollowSettlementAckResult::Fault {
+                    fault: "cut at exact boundary".to_string(),
+                },
+            ),
+        ] {
+            let mut runtime = timeline_follow_settling_runtime(fault_policy, now);
+            runtime.timeline_audio_transport_revision = u64::MAX - 2;
+            let acknowledgement = TimelineFollowSettlementAck {
+                epoch: runtime.output_ownership_gate.status().epoch,
+                generation: runtime.timeline_follow_runtime.generation,
+                domain: TimelineFollowSettlementDomain::Audio,
+                consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                result,
+            };
+            runtime
+                .acknowledge_timeline_follow_settlement(acknowledgement, now)
+                .unwrap();
+            assert_eq!(runtime.timeline_audio_transport_revision, u64::MAX);
+            assert_eq!(runtime.timeline_id, TimelineId(8_102));
+            assert!(runtime.timeline_follow_transition.is_none());
+        }
+
+        let mut abort =
+            timeline_follow_settling_runtime(protocol::TimelineFollowFaultPolicy::Hold, now);
+        abort.timeline_audio_transport_revision = u64::MAX;
+        let before_transition = abort.timeline_follow_transition.as_ref().map(|transition| {
+            (
+                transition.generation,
+                transition.source_timeline_id,
+                transition.target_timeline_id,
+                transition.accepted_settlement_acknowledgements.clone(),
+            )
+        });
+        let before_runtime = abort.timeline_follow_runtime.clone();
+        assert!(!abort.abort_timeline_follow(protocol::TimelineFollowAbortReason::ManualSeek, now,));
+        assert_eq!(abort.timeline_audio_transport_revision, u64::MAX);
+        assert_eq!(
+            abort.timeline_follow_transition.as_ref().map(|transition| {
+                (
+                    transition.generation,
+                    transition.source_timeline_id,
+                    transition.target_timeline_id,
+                    transition.accepted_settlement_acknowledgements.clone(),
+                )
+            }),
+            before_transition
+        );
+        assert_eq!(abort.timeline_follow_runtime, before_runtime);
+    }
+
+    #[test]
     fn timeline_follow_terminal_ack_commits_once_then_replays_terminal_receipt() {
         let now = Instant::now();
 
@@ -101666,6 +104292,7 @@ mod tests {
             destination_bpm: Some(120.0),
             preroll_ms: 100,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: protocol::TimelineFollowFaultPolicy::Fault,
         });
         let incoming = TimelineSnapshot {
@@ -101730,17 +104357,24 @@ mod tests {
         runtime.last_tick = admitted_at + Duration::from_millis(50);
         assert!((runtime.clock.bpm - 110.0).abs() < 0.01);
         assert_eq!(runtime.timeline_follow_runtime.progress_millis, 500);
-        assert!(runtime
-            .timeline_guide_cues
-            .iter()
-            .any(|cue| matches!(cue.cue, TimelineGuideCueKind::Trans)));
+        assert!(
+            runtime
+                .timeline_guide_cues
+                .iter()
+                .all(|cue| !matches!(cue.cue, TimelineGuideCueKind::Trans)),
+            "a transition shorter than its captured cadence has no Trans target"
+        );
         let video = runtime.video_snapshot();
-        assert_eq!(video.layers.len(), 2);
-        let outgoing_layer = video.layers.iter().find(|layer| layer.id == 10).unwrap();
+        assert_eq!(video.layers.len(), 3);
+        let outgoing_layer = video
+            .layers
+            .iter()
+            .find(|layer| layer.id != 10 && layer.media_asset_id == Some(201))
+            .unwrap();
         let incoming_layer = video
             .layers
             .iter()
-            .find(|layer| layer.id == u64::MAX - 10)
+            .find(|layer| layer.media_asset_id == Some(202))
             .unwrap();
         assert!((outgoing_layer.state.opacity - 0.5).abs() < 0.01);
         assert!((incoming_layer.state.opacity - 0.5).abs() < 0.01);
@@ -101776,7 +104410,17 @@ mod tests {
         assert!(runtime.timeline_follow_transport.is_none());
         assert!(runtime.timeline_follow_transition.is_none());
         assert!((runtime.clock.bpm - 120.0).abs() < 0.01);
-        assert_eq!(runtime.timeline_guide_cues.last().unwrap().label, "Verse");
+        assert_eq!(
+            runtime
+                .timeline_guide_cues
+                .iter()
+                .filter(|cue| matches!(cue.cue, TimelineGuideCueKind::Complete))
+                .count(),
+            1
+        );
+        assert!(!runtime.timeline_guide_cues.iter().any(|cue| {
+            matches!(cue.cue, TimelineGuideCueKind::Phase { .. }) && cue.at_ms == 100
+        }));
     }
 
     fn timeline_follow_ltl5_runtime(
@@ -101801,6 +104445,7 @@ mod tests {
             destination_bpm: Some(120.0),
             preroll_ms: 100,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy,
         });
         let mut target = TimelineSnapshot {
@@ -101842,6 +104487,7 @@ mod tests {
             destination_bpm: Some(120.0),
             preroll_ms: 100,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy,
         });
         runtime
@@ -102451,6 +105097,7 @@ mod tests {
             destination_bpm: None,
             preroll_ms: 0,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = TimelineSnapshot {
@@ -103283,9 +105930,13 @@ mod tests {
         runtime.timeline_guide_enabled = false;
         runtime.advance_timeline_follow(now + Duration::from_millis(50));
         assert!((runtime.clock.bpm - 110.0).abs() < 0.01);
-        assert!(runtime.timeline_guide_cues.iter().any(|cue| {
-            matches!(cue.cue, TimelineGuideCueKind::Trans) && cue.generation == guide_generation
-        }));
+        assert!(
+            runtime.timeline_guide_cues.iter().all(|cue| {
+                !matches!(cue.cue, TimelineGuideCueKind::Trans)
+                    || cue.generation != guide_generation
+            }),
+            "Follow admission must not fabricate an immediate/backdated Trans cue"
+        );
         let transition = runtime.timeline_follow_transition.as_ref().unwrap();
         assert_eq!(
             transition.fault_policy,
@@ -103438,6 +106089,7 @@ mod tests {
             destination_bpm: None,
             preroll_ms: 0,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let mut target = TimelineSnapshot {
@@ -104002,6 +106654,7 @@ mod tests {
             destination_bpm: None,
             preroll_ms: 0,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = TimelineSnapshot {
@@ -104209,6 +106862,7 @@ mod tests {
             destination_bpm: None,
             preroll_ms: 1_000,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         snapshot.timeline.follow_runtime = TimelineFollowRuntimeSummary {
@@ -107760,6 +110414,342 @@ mod tests {
     }
 
     #[test]
+    fn backward_scene_block_jump_rotates_all_audio_schedule_fences_and_rearms_target_future() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(&mut runtime, 1, Vec::new());
+        create_effect_only_cue(&mut runtime, 2, Vec::new());
+        let target = test_scene_block(20, 2, 100, 100, 1, 1.0);
+        let mut source = test_scene_block(10, 1, 500, 100, 1, 1.0);
+        source.jump_to_event_id = Some(20);
+        runtime.timeline_events = vec![target, source];
+        runtime.sort_timeline_events();
+        runtime.timeline_phases = vec![TimelinePhaseSummary {
+            id: TimelinePhaseId(71),
+            label: "Life Verse".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 1_000,
+            end_ms: 2_000,
+        }];
+        runtime.clock.bpm = 120.0;
+        runtime.timeline_playing = true;
+        runtime.timeline_metronome_enabled = true;
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_position_ms = 550;
+        runtime.advance_timeline_click_scheduler();
+        let old_identity = runtime.timeline_click_scheduler.identity();
+        let old_revision = runtime.timeline_audio_transport_revision;
+        runtime.timeline_guide_cues.push(TimelineGuideCueSummary {
+            generation: old_revision,
+            sequence: 9,
+            at_ms: 900,
+            label: "old".to_string(),
+            cue: TimelineGuideCueKind::Looping,
+            asset: TimelineGuideAssetKey::Looping,
+            playback_rate_milli: 1_000,
+            sample_frame: 43_200,
+            epoch: old_identity.epoch,
+            transport_generation: old_identity.transport_generation,
+            schedule_generation: old_identity.schedule_generation,
+            source: old_identity.source,
+        });
+
+        runtime.last_tick_interval = Duration::from_millis(100);
+        runtime.advance_timeline(Instant::now());
+        assert_eq!(runtime.timeline_position_ms, 100);
+        assert_eq!(runtime.timeline_jump_landed_event_id, Some(20));
+        assert_eq!(runtime.timeline_audio_transport_revision, old_revision + 1);
+        assert!(runtime.timeline_guide_cues.is_empty());
+        assert_ne!(runtime.timeline_click_scheduler.identity(), old_identity);
+
+        runtime.advance_timeline_click_scheduler();
+        runtime.advance_timeline_guide_lookahead();
+        assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+        assert!(runtime
+            .timeline_click_scheduler
+            .queued_events()
+            .iter()
+            .all(|event| event.sample_frame >= 4_800));
+        let target_guide = runtime
+            .timeline_guide_cues
+            .iter()
+            .find(|cue| matches!(cue.cue, TimelineGuideCueKind::Phase { phase_id } if phase_id == TimelinePhaseId(71)))
+            .expect("target future Guide rearmed");
+        assert_eq!(target_guide.sample_frame, 24_000);
+        assert_eq!(target_guide.generation, old_revision + 1);
+        assert_ne!(
+            target_guide.schedule_generation,
+            old_identity.schedule_generation
+        );
+    }
+
+    #[test]
+    fn backward_scene_block_jump_revision_exhaustion_rejects_before_tick_side_effects() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(&mut runtime, 1, Vec::new());
+        create_effect_only_cue(&mut runtime, 2, Vec::new());
+        let target = test_scene_block(20, 2, 100, 100, 1, 1.0);
+        let mut source = test_scene_block(10, 1, 500, 100, 1, 1.0);
+        source.jump_to_event_id = Some(20);
+        runtime.timeline_events = vec![target, source];
+        runtime.sort_timeline_events();
+        runtime.clock.bpm = 120.0;
+        runtime.timeline_playing = true;
+        runtime.timeline_metronome_enabled = true;
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_position_ms = 550;
+        runtime.timeline_playhead_boundary_armed = true;
+        runtime.timeline_evaluated_boundary_position_ms = Some(550);
+        runtime.last_tick_interval = Duration::from_millis(100);
+        runtime.advance_timeline_click_scheduler();
+        let identity = runtime.timeline_click_scheduler.identity();
+        runtime.timeline_guide_cues.push(TimelineGuideCueSummary {
+            generation: u64::MAX,
+            sequence: 5,
+            at_ms: 900,
+            label: "old".to_string(),
+            cue: TimelineGuideCueKind::Looping,
+            asset: TimelineGuideAssetKey::Looping,
+            playback_rate_milli: 1_000,
+            sample_frame: 43_200,
+            epoch: identity.epoch,
+            transport_generation: identity.transport_generation,
+            schedule_generation: identity.schedule_generation,
+            source: identity.source,
+        });
+        runtime.timeline_audio_transport_revision = u64::MAX;
+        let before = (
+            runtime.timeline_position_ms,
+            runtime.timeline_playhead_boundary_armed,
+            runtime.timeline_evaluated_boundary_position_ms,
+            runtime.timeline_jump_landed_event_id,
+            runtime.timeline_audio_transport_revision,
+            runtime.timeline_click_scheduler.identity(),
+            runtime.timeline_click_scheduler.queued_events().clone(),
+            runtime.timeline_guide_cues.clone(),
+            runtime.pending_cues.len(),
+            runtime.timeline_follow_runtime.clone(),
+        );
+
+        runtime.advance_timeline(Instant::now());
+
+        assert_eq!(
+            (
+                runtime.timeline_position_ms,
+                runtime.timeline_playhead_boundary_armed,
+                runtime.timeline_evaluated_boundary_position_ms,
+                runtime.timeline_jump_landed_event_id,
+                runtime.timeline_audio_transport_revision,
+                runtime.timeline_click_scheduler.identity(),
+                runtime.timeline_click_scheduler.queued_events().clone(),
+                runtime.timeline_guide_cues.clone(),
+                runtime.pending_cues.len(),
+                runtime.timeline_follow_runtime.clone(),
+            ),
+            before
+        );
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("Timeline audio transport revision is exhausted")
+        );
+    }
+
+    #[test]
+    fn loop_a_boundary_scene_jump_is_preflighted_with_the_post_wrap_segment() {
+        fn runtime_at_loop_boundary(revision: u64) -> EngineRuntime {
+            let mut runtime = runtime_with_lfo_effects(&[]);
+            create_effect_only_cue(&mut runtime, 1, Vec::new());
+            create_effect_only_cue(&mut runtime, 2, Vec::new());
+            let target = test_scene_block(20, 2, 100, 10, 1, 1.0);
+            let mut source = test_scene_block(10, 1, 100, 100, 1, 1.0);
+            source.jump_to_event_id = Some(20);
+            let duration_anchor = test_scene_block(30, 2, 1_000, 10, 1, 1.0);
+            runtime.timeline_events = vec![target, source, duration_anchor];
+            runtime.sort_timeline_events();
+            runtime.clock.bpm = 120.0;
+            runtime.timeline_playing = true;
+            runtime.timeline_position_ms = 750;
+            runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+                generation: 2,
+                status: TimelineLoopRuntimeStatus::Looping,
+                a_ms: Some(200),
+                b_ms: Some(800),
+                musical_length_millibeats: None,
+                wrap_count: 0,
+            };
+            runtime.last_tick_interval = Duration::from_millis(100);
+            runtime.timeline_audio_transport_revision = revision;
+            runtime.advance_timeline_click_scheduler();
+            runtime
+        }
+
+        let mut exhausted = runtime_at_loop_boundary(u64::MAX - 1);
+        let before = (
+            exhausted.timeline_position_ms,
+            exhausted.timeline_playhead_boundary_armed,
+            exhausted.timeline_evaluated_boundary_position_ms,
+            exhausted.timeline_jump_landed_event_id,
+            exhausted.timeline_audio_transport_revision,
+            exhausted.timeline_loop_runtime.clone(),
+            exhausted.timeline_click_scheduler.identity(),
+            exhausted.timeline_click_scheduler.queued_events().clone(),
+            exhausted.timeline_guide_cues.clone(),
+            exhausted.pending_cues.len(),
+            exhausted.timeline_follow_runtime.clone(),
+        );
+        exhausted.advance_timeline(Instant::now());
+        assert_eq!(
+            (
+                exhausted.timeline_position_ms,
+                exhausted.timeline_playhead_boundary_armed,
+                exhausted.timeline_evaluated_boundary_position_ms,
+                exhausted.timeline_jump_landed_event_id,
+                exhausted.timeline_audio_transport_revision,
+                exhausted.timeline_loop_runtime.clone(),
+                exhausted.timeline_click_scheduler.identity(),
+                exhausted.timeline_click_scheduler.queued_events().clone(),
+                exhausted.timeline_guide_cues.clone(),
+                exhausted.pending_cues.len(),
+                exhausted.timeline_follow_runtime.clone(),
+            ),
+            before
+        );
+        assert_eq!(
+            exhausted.last_error.as_deref(),
+            Some("Timeline audio transport revision is exhausted")
+        );
+
+        let mut succeeds = runtime_at_loop_boundary(u64::MAX - 2);
+        succeeds.advance_timeline(Instant::now());
+        assert_eq!(succeeds.timeline_position_ms, 100);
+        assert_eq!(succeeds.timeline_jump_landed_event_id, Some(20));
+        assert_eq!(succeeds.timeline_audio_transport_revision, u64::MAX);
+        assert_eq!(succeeds.timeline_loop_runtime.wrap_count, 1);
+        assert!(succeeds.last_error.is_none(), "{:?}", succeeds.last_error);
+    }
+
+    #[test]
+    fn loop_b_boundary_and_pre_b_jump_consume_the_exact_discontinuity_plan() {
+        fn runtime_for_boundary(
+            jump_end_ms: u64,
+            position_ms: u64,
+            delta_ms: u64,
+            revision: u64,
+        ) -> EngineRuntime {
+            let mut runtime = runtime_with_lfo_effects(&[]);
+            create_effect_only_cue(&mut runtime, 1, Vec::new());
+            create_effect_only_cue(&mut runtime, 2, Vec::new());
+            let target = test_scene_block(20, 2, 100, 10, 1, 1.0);
+            let mut source = test_scene_block(
+                10,
+                1,
+                jump_end_ms.saturating_sub(100),
+                100.min(jump_end_ms),
+                1,
+                1.0,
+            );
+            source.duration_ms = jump_end_ms.saturating_sub(source.time_ms);
+            source.jump_to_event_id = Some(20);
+            let duration_anchor = test_scene_block(30, 2, 1_000, 10, 1, 1.0);
+            runtime.timeline_events = vec![target, source, duration_anchor];
+            runtime.sort_timeline_events();
+            runtime.clock.bpm = 120.0;
+            runtime.timeline_playing = true;
+            runtime.timeline_position_ms = position_ms;
+            runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+                generation: 2,
+                status: TimelineLoopRuntimeStatus::Looping,
+                a_ms: Some(200),
+                b_ms: Some(800),
+                musical_length_millibeats: None,
+                wrap_count: 0,
+            };
+            runtime.last_tick_interval = Duration::from_millis(delta_ms);
+            runtime.timeline_audio_transport_revision = revision;
+            runtime.advance_timeline_click_scheduler();
+            runtime
+        }
+
+        // B is excluded by the pre-wrap segment, so exactly one wrap is
+        // required and the Scene jump at B remains armed for a later segment.
+        let mut at_b = runtime_for_boundary(800, 750, 50, u64::MAX - 1);
+        at_b.advance_timeline(Instant::now());
+        assert_eq!(at_b.timeline_position_ms, 200);
+        assert_eq!(at_b.timeline_loop_runtime.wrap_count, 1);
+        assert_eq!(at_b.timeline_jump_landed_event_id, None);
+        assert_eq!(at_b.timeline_audio_transport_revision, u64::MAX);
+        assert!(at_b.last_error.is_none(), "{:?}", at_b.last_error);
+
+        // Entering the loop from before A uses the same exclusive B boundary.
+        let mut before_a = runtime_for_boundary(800, 100, 700, u64::MAX - 1);
+        before_a.advance_timeline(Instant::now());
+        assert_eq!(before_a.timeline_position_ms, 200);
+        assert_eq!(before_a.timeline_loop_runtime.wrap_count, 1);
+        assert_eq!(before_a.timeline_jump_landed_event_id, None);
+        assert_eq!(before_a.timeline_audio_transport_revision, u64::MAX);
+        assert!(before_a.last_error.is_none(), "{:?}", before_a.last_error);
+
+        let mut exhausted_at_b = runtime_for_boundary(800, 750, 50, u64::MAX);
+        let exhausted_before = (
+            exhausted_at_b.timeline_position_ms,
+            exhausted_at_b.timeline_audio_transport_revision,
+            exhausted_at_b.timeline_loop_runtime.clone(),
+            exhausted_at_b.timeline_jump_landed_event_id,
+            exhausted_at_b.timeline_click_scheduler.identity(),
+            exhausted_at_b
+                .timeline_click_scheduler
+                .queued_events()
+                .clone(),
+            exhausted_at_b.timeline_guide_cues.clone(),
+            exhausted_at_b.pending_cues.len(),
+        );
+        exhausted_at_b.advance_timeline(Instant::now());
+        assert_eq!(
+            (
+                exhausted_at_b.timeline_position_ms,
+                exhausted_at_b.timeline_audio_transport_revision,
+                exhausted_at_b.timeline_loop_runtime.clone(),
+                exhausted_at_b.timeline_jump_landed_event_id,
+                exhausted_at_b.timeline_click_scheduler.identity(),
+                exhausted_at_b
+                    .timeline_click_scheduler
+                    .queued_events()
+                    .clone(),
+                exhausted_at_b.timeline_guide_cues.clone(),
+                exhausted_at_b.pending_cues.len(),
+            ),
+            exhausted_before
+        );
+
+        // A jump before B terminates the tick before a wrap, so MAX-1 is
+        // sufficient for exactly the jump successor and must not overreserve.
+        let mut before_b = runtime_for_boundary(775, 750, 50, u64::MAX - 1);
+        before_b.advance_timeline(Instant::now());
+        assert_eq!(before_b.timeline_position_ms, 100);
+        assert_eq!(before_b.timeline_loop_runtime.wrap_count, 0);
+        assert_eq!(before_b.timeline_jump_landed_event_id, Some(20));
+        assert_eq!(before_b.timeline_audio_transport_revision, u64::MAX);
+        assert!(before_b.last_error.is_none(), "{:?}", before_b.last_error);
+
+        let mut exhausted_before_b = runtime_for_boundary(775, 750, 50, u64::MAX);
+        let exhausted_jump_before = (
+            exhausted_before_b.timeline_position_ms,
+            exhausted_before_b.timeline_audio_transport_revision,
+            exhausted_before_b.timeline_loop_runtime.clone(),
+            exhausted_before_b.timeline_jump_landed_event_id,
+        );
+        exhausted_before_b.advance_timeline(Instant::now());
+        assert_eq!(
+            (
+                exhausted_before_b.timeline_position_ms,
+                exhausted_before_b.timeline_audio_transport_revision,
+                exhausted_before_b.timeline_loop_runtime.clone(),
+                exhausted_before_b.timeline_jump_landed_event_id,
+            ),
+            exhausted_jump_before
+        );
+    }
+
+    #[test]
     fn activation_scoped_seek_and_backward_sync_cancel_timeline_instances() {
         let mut runtime = runtime_with_lfo_effects(&[]);
         create_effect_only_cue(
@@ -109541,7 +112531,7 @@ mod tests {
         runtime.recompute_timeline_event_layers().unwrap();
 
         let (jump_at_ms, _, _, target) = runtime
-            .first_timeline_jump_between(0, 100, true)
+            .first_timeline_jump_between(0, 100, true, true)
             .expect("simultaneous jump sources should select one target");
 
         assert_eq!(jump_at_ms, 100);
@@ -112966,5 +115956,1352 @@ mod tests {
         assert_eq!(video_runtime.layer_id, 91);
         assert_eq!(video_runtime.timeline_layer_id, Some(31));
         assert_eq!(timeline_video_automation_summary(&video_runtime), video);
+    }
+
+    fn click_point(
+        position_sixteenth_steps: u64,
+        bpm: f64,
+        numerator: u8,
+        denominator: u8,
+        interpolation: TimelineTempoInterpolation,
+    ) -> TimelineTempoMeterPoint {
+        TimelineTempoMeterPoint {
+            position_sixteenth_steps,
+            bpm,
+            numerator,
+            denominator,
+            interpolation,
+            ..TimelineTempoMeterPoint::default()
+        }
+    }
+
+    fn timeline_tempo_ramp_anchor(
+        position_sixteenth_steps: u64,
+        bpm: f64,
+        measure_number: u64,
+        interpolation: TimelineTempoInterpolation,
+    ) -> TimelineTempoMeterPoint {
+        TimelineTempoMeterPoint {
+            position_sixteenth_steps,
+            bpm,
+            numerator: 4,
+            denominator: 4,
+            interpolation,
+            measure_number: Some(measure_number),
+        }
+    }
+
+    #[test]
+    fn timeline_click_authority_handles_variable_meter_and_madow_count() {
+        let identity = TimelineClickScheduleIdentity {
+            epoch: 2,
+            transport_generation: 3,
+            schedule_generation: 4,
+            source: TimelineScheduleSource::Root,
+        };
+        let authority = TimelineTempoMeterAuthority::new(
+            194.0,
+            vec![click_point(
+                0,
+                194.0,
+                4,
+                4,
+                TimelineTempoInterpolation::Step,
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            authority
+                .enumerate_clicks(0, 64, 48_000, identity)
+                .unwrap()
+                .len(),
+            4
+        );
+
+        let seventh = TimelineTempoMeterAuthority::new(
+            194.0,
+            vec![click_point(
+                0,
+                194.0,
+                7,
+                8,
+                TimelineTempoInterpolation::Step,
+            )],
+        )
+        .unwrap();
+        let seventh_events = seventh.enumerate_clicks(0, 56, 48_000, identity).unwrap();
+        assert_eq!(seventh_events.len(), 7);
+        assert_eq!(
+            seventh_events.iter().filter(|event| event.downbeat).count(),
+            1
+        );
+
+        let three = TimelineTempoMeterAuthority::new(
+            194.0,
+            vec![click_point(
+                0,
+                194.0,
+                3,
+                8,
+                TimelineTempoInterpolation::Step,
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            three
+                .enumerate_clicks(0, 24, 48_000, identity)
+                .unwrap()
+                .len(),
+            3
+        );
+
+        let mut madow_start = click_point(0, 194.0, 4, 4, TimelineTempoInterpolation::Step);
+        madow_start.measure_number = Some(113);
+        let madow = TimelineTempoMeterAuthority::new(
+            194.0,
+            vec![
+                madow_start,
+                click_point(64, 194.0, 5, 4, TimelineTempoInterpolation::Step),
+                click_point(124, 194.0, 6, 4, TimelineTempoInterpolation::Step),
+                click_point(148, 194.0, 5, 4, TimelineTempoInterpolation::Step),
+                click_point(208, 194.0, 6, 4, TimelineTempoInterpolation::Step),
+                click_point(232, 194.0, 4, 4, TimelineTempoInterpolation::Step),
+            ],
+        )
+        .unwrap();
+        let madow_events = madow
+            .enumerate_clicks(0, 74 * 16, 48_000, identity)
+            .unwrap();
+        assert_eq!(madow_events.len(), 74);
+        assert_eq!(
+            madow_events.iter().filter(|event| event.downbeat).count(),
+            16
+        );
+        let downbeat_measures = madow_events
+            .iter()
+            .filter(|event| event.downbeat)
+            .map(|event| event.measure)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            downbeat_measures,
+            vec![113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128]
+        );
+        assert_eq!(
+            madow_events.last().map(|event| event.sample_frame),
+            Some(madow.sample_frame_at_quarter_beat(73.0, 48_000).unwrap(),)
+        );
+        let expected_downbeat_frames = [
+            0, 59_381, 118_763, 178_144, 237_526, 311_753, 385_979, 460_206, 549_278, 623_505,
+            697_732, 771_959, 861_031, 920_412, 979_794, 1_039_175,
+        ];
+        let actual_downbeat_frames = madow_events
+            .iter()
+            .filter(|event| event.downbeat)
+            .map(|event| event.sample_frame)
+            .collect::<Vec<_>>();
+        assert_eq!(actual_downbeat_frames, expected_downbeat_frames);
+    }
+
+    #[test]
+    fn timeline_click_independent_fixture_handles_exact_seven_to_three_eighth_boundary() {
+        let authority = TimelineTempoMeterAuthority::new(
+            120.0,
+            vec![
+                click_point(0, 120.0, 7, 8, TimelineTempoInterpolation::Step),
+                click_point(14, 120.0, 3, 8, TimelineTempoInterpolation::Step),
+            ],
+        )
+        .unwrap();
+        let identity = TimelineClickScheduleIdentity {
+            epoch: 11,
+            transport_generation: 12,
+            schedule_generation: 13,
+            source: TimelineScheduleSource::Root,
+        };
+        let events = authority.enumerate_clicks(0, 80, 48_000, identity).unwrap();
+        assert_eq!(events.len(), 10);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.sample_frame)
+                .collect::<Vec<_>>(),
+            vec![0, 12_000, 24_000, 36_000, 48_000, 60_000, 72_000, 84_000, 96_000, 108_000]
+        );
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.numerator)
+                .collect::<Vec<_>>(),
+            vec![7, 7, 7, 7, 7, 7, 7, 3, 3, 3]
+        );
+        assert_eq!(events.iter().filter(|event| event.downbeat).count(), 2);
+        assert!(events[7].downbeat);
+        assert_eq!(events[7].sample_frame, 84_000);
+    }
+
+    #[test]
+    fn timeline_click_meter_boundaries_keep_exact_measure_and_count_in_shape() {
+        let identity = TimelineClickScheduleIdentity {
+            epoch: 4,
+            transport_generation: 5,
+            schedule_generation: 6,
+            source: TimelineScheduleSource::Root,
+        };
+        let authority = TimelineTempoMeterAuthority::new(
+            120.0,
+            vec![
+                TimelineTempoMeterPoint {
+                    position_sixteenth_steps: 0,
+                    bpm: 120.0,
+                    numerator: 4,
+                    denominator: 4,
+                    measure_number: Some(100),
+                    ..TimelineTempoMeterPoint::default()
+                },
+                click_point(32, 120.0, 7, 8, TimelineTempoInterpolation::Step),
+            ],
+        )
+        .unwrap();
+        let events = authority
+            .enumerate_clicks(0, 11 * 16 + 8, 48_000, identity)
+            .unwrap();
+        assert_eq!(events.iter().filter(|event| event.downbeat).count(), 3);
+        assert_eq!(events[0].measure, 100);
+        assert_eq!(events[4].measure, 101);
+        assert_eq!(events[8].measure, 102);
+        assert_eq!(events[8].numerator, 7);
+        assert_eq!(events[8].denominator, 8);
+        assert_eq!(events[14].beat, 7);
+
+        let five = TimelineTempoMeterAuthority::new(
+            120.0,
+            vec![click_point(
+                0,
+                120.0,
+                5,
+                4,
+                TimelineTempoInterpolation::Step,
+            )],
+        )
+        .unwrap();
+        let five_count_in = five.count_in_clicks(0, 48_000, identity).unwrap();
+        assert_eq!(five_count_in.len(), 5);
+        assert!(five_count_in[0].downbeat);
+        assert_eq!(five_count_in.last().unwrap().beat, 5);
+
+        let seven_count_in = authority.count_in_clicks(128, 48_000, identity).unwrap();
+        assert_eq!(seven_count_in.len(), 7);
+        assert!(seven_count_in[0].downbeat);
+        assert_eq!(seven_count_in[0].measure, 102);
+        assert_eq!(seven_count_in.last().unwrap().beat, 7);
+    }
+
+    #[test]
+    fn timeline_click_linear_slew_is_phase_continuous_and_monotonic() {
+        let identity = TimelineClickScheduleIdentity {
+            epoch: 1,
+            transport_generation: 1,
+            schedule_generation: 1,
+            source: TimelineScheduleSource::Root,
+        };
+        let authority = TimelineTempoMeterAuthority::new(
+            170.0,
+            vec![
+                click_point(0, 170.0, 4, 4, TimelineTempoInterpolation::Linear),
+                click_point(128, 194.0, 4, 4, TimelineTempoInterpolation::Step),
+            ],
+        )
+        .unwrap();
+        let expected_seconds = 80.0 * (194.0f64 / 170.0).ln();
+        assert!(
+            (authority.seconds_at_quarter_beat(32.0).unwrap() - expected_seconds).abs() < 1e-12
+        );
+        let events = authority
+            .enumerate_clicks(0, 32 * 16, 48_000, identity)
+            .unwrap();
+        assert_eq!(events.len(), 32);
+        assert!(events
+            .windows(2)
+            .all(|pair| pair[0].sample_frame < pair[1].sample_frame));
+        for event in events {
+            let quarter = (event.measure.saturating_sub(1) * 4
+                + u64::from(event.beat.saturating_sub(1))) as f64;
+            let analytic = authority.sample_frame_at_quarter_beat(quarter, 48_000);
+            let analytic = analytic.unwrap();
+            assert!(event.sample_frame.abs_diff(analytic) <= 1);
+        }
+    }
+
+    #[test]
+    fn timeline_click_independent_fixture_matches_linear_170_to_194_frames() {
+        let authority = TimelineTempoMeterAuthority::new(
+            170.0,
+            vec![
+                click_point(0, 170.0, 4, 4, TimelineTempoInterpolation::Linear),
+                click_point(128, 194.0, 4, 4, TimelineTempoInterpolation::Step),
+            ],
+        )
+        .unwrap();
+        let identity = TimelineClickScheduleIdentity {
+            epoch: 21,
+            transport_generation: 22,
+            schedule_generation: 23,
+            source: TimelineScheduleSource::Root,
+        };
+        let events = authority
+            .enumerate_clicks(0, 32 * 16, 48_000, identity)
+            .unwrap();
+        let expected = [
+            0, 16_904, 33_734, 50_490, 67_174, 83_785, 100_325, 116_794, 133_193, 149_521, 165_781,
+            181_972, 198_095, 214_151, 230_140, 246_063, 261_920, 277_711, 293_438, 309_101,
+            324_700, 340_236, 355_710, 371_121, 386_471, 401_760, 416_988, 432_156, 447_264,
+            462_313, 477_303, 492_235,
+        ];
+        assert_eq!(events.len(), expected.len());
+        for (event, expected_frame) in events.iter().zip(expected) {
+            assert!(event.sample_frame.abs_diff(expected_frame) <= 1);
+        }
+        assert!(events
+            .windows(2)
+            .all(|pair| pair[0].sample_frame < pair[1].sample_frame));
+    }
+
+    #[test]
+    fn timeline_click_scheduler_deduplicates_overlap_and_fences_generation() {
+        let authority = TimelineTempoMeterAuthority::new(
+            120.0,
+            vec![click_point(
+                0,
+                120.0,
+                4,
+                4,
+                TimelineTempoInterpolation::Step,
+            )],
+        )
+        .unwrap();
+        let mut scheduler = TimelineClickScheduler::new();
+        scheduler.configure_authority(authority.clone()).unwrap();
+        assert_eq!(scheduler.rearm(authority.clone(), 0, 16).unwrap(), 1);
+        let continuous_identity = scheduler.identity();
+        assert_eq!(scheduler.poll(0, 80).unwrap(), 4);
+        assert_eq!(scheduler.identity(), continuous_identity);
+        let current = scheduler.identity();
+        let events = scheduler.take_current_events(current);
+        assert_eq!(events.len(), 5);
+        assert!(events
+            .windows(2)
+            .all(|pair| pair[0].sample_frame < pair[1].sample_frame));
+        let old = scheduler.identity();
+        scheduler.invalidate(2, 1).unwrap();
+        assert!(scheduler.queued_events().is_empty());
+        assert!(scheduler.take_current_events(old).is_empty());
+        assert_eq!(
+            scheduler.identity().schedule_generation,
+            old.schedule_generation + 1
+        );
+        scheduler.configure_authority(authority.clone()).unwrap();
+        scheduler.rearm(authority, 0, 16).unwrap();
+        let root_identity = scheduler.identity();
+        scheduler
+            .rotate_source(TimelineScheduleSource::DirectChild {
+                cue_id: 7,
+                generation: 9,
+            })
+            .unwrap();
+        assert!(scheduler.queued_events().is_empty());
+        assert_eq!(scheduler.take_current_events(root_identity), Vec::new());
+        assert_eq!(
+            scheduler.identity().schedule_generation,
+            root_identity.schedule_generation + 1
+        );
+    }
+
+    #[test]
+    fn timeline_click_scheduler_overflow_is_visible_without_partial_queue_or_identity_mutation() {
+        let authority = TimelineTempoMeterAuthority::new(
+            120.0,
+            vec![click_point(
+                0,
+                120.0,
+                4,
+                4,
+                TimelineTempoInterpolation::Step,
+            )],
+        )
+        .unwrap();
+        let mut scheduler = TimelineClickScheduler::new();
+        scheduler.configure_authority(authority.clone()).unwrap();
+        assert_eq!(scheduler.rearm(authority, 0, 16).unwrap(), 1);
+        let queued_before = scheduler.queued_events().clone();
+        let identity_before = scheduler.identity();
+        assert!(scheduler
+            .rearm(
+                scheduler.authority.clone().unwrap(),
+                0,
+                (TIMELINE_CLICK_BATCH_CAPACITY as u64 + 1) * TIMELINE_CLICK_QUARTER_UNITS,
+            )
+            .is_err());
+        assert_eq!(scheduler.identity(), identity_before);
+        assert_eq!(&*scheduler.queued_events(), &queued_before);
+        assert!(scheduler.overflow().is_some());
+        assert!(scheduler.take_current_events(identity_before).is_empty());
+        assert_eq!(&*scheduler.queued_events(), &queued_before);
+
+        scheduler.identity.schedule_generation = u64::MAX;
+        let max_identity = scheduler.identity();
+        assert!(scheduler.invalidate(9, 9).is_err());
+        assert_eq!(scheduler.identity(), max_identity);
+        assert_eq!(&*scheduler.queued_events(), &queued_before);
+    }
+
+    #[test]
+    fn timeline_click_scheduler_production_direct_child_count_in_has_source_and_domain_fence() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 0, 1_000)]);
+        runtime.direct_child_transports[0].metronome_enabled = true;
+        runtime.direct_child_transports[0].count_in_beats = 5;
+        runtime.direct_child_transports[0].tempo_meter_map = vec![TimelineTempoMeterPoint {
+            numerator: 5,
+            denominator: 4,
+            ..TimelineTempoMeterPoint::default()
+        }];
+        runtime.apply_command(EngineCommand::SetDirectChildTimelinePlaying {
+            cue_id: 1,
+            playing: true,
+        });
+        let count_in = runtime.direct_child_count_in.expect("direct count-in");
+        runtime.advance_timeline_click_scheduler();
+        let count_in_identity = runtime.timeline_click_scheduler.identity();
+        let count_in_events = runtime
+            .timeline_click_scheduler
+            .queued_events()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(count_in_events.len(), 5);
+        assert!(count_in_events.iter().all(|event| event.count_in));
+        assert!(count_in_events.iter().all(|event| event.source
+            == TimelineScheduleSource::DirectChild {
+                cue_id: 1,
+                generation: count_in.generation,
+            }));
+        assert_eq!(count_in_events[0].sample_frame, 0);
+
+        runtime.advance_direct_child_count_in(count_in.until);
+        runtime.advance_pending_cue(count_in.until);
+        runtime.advance_timeline_click_scheduler();
+        let main_identity = runtime.timeline_click_scheduler.identity();
+        assert!(main_identity.schedule_generation > count_in_identity.schedule_generation);
+        assert_eq!(main_identity.source, count_in_identity.source);
+        let main_events = runtime
+            .timeline_click_scheduler
+            .queued_events()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(main_events.iter().all(|event| !event.count_in));
+        assert!(main_events.iter().all(|event| matches!(
+            event.source,
+            TimelineScheduleSource::DirectChild { cue_id: 1, .. }
+        )));
+    }
+
+    #[test]
+    fn timeline_click_midi_pll_jitter_keeps_generation_until_one_frame_is_exceeded() {
+        let current = TimelineTempoMeterAuthority::new(120.0, Vec::new()).unwrap();
+        let micro = TimelineTempoMeterAuthority::new(120.001, Vec::new()).unwrap();
+        let shift = TimelineTempoMeterAuthority::new(121.0, Vec::new()).unwrap();
+        assert!(!current
+            .differs_audibly_within_lookahead(
+                &micro,
+                0,
+                TIMELINE_CLICK_SAMPLE_RATE,
+                u64::from(TIMELINE_CLICK_SAMPLE_RATE) * TIMELINE_CLICK_LOOKAHEAD_MS / 1_000,
+            )
+            .unwrap());
+        assert!(current
+            .differs_audibly_within_lookahead(
+                &shift,
+                0,
+                TIMELINE_CLICK_SAMPLE_RATE,
+                u64::from(TIMELINE_CLICK_SAMPLE_RATE) * TIMELINE_CLICK_LOOKAHEAD_MS / 1_000,
+            )
+            .unwrap());
+
+        let mut scheduler = TimelineClickScheduler::new();
+        scheduler.configure_authority(current.clone()).unwrap();
+        scheduler.rearm(current.clone(), 0, 64).unwrap();
+        let generation = scheduler.identity().schedule_generation;
+        let retained = scheduler.authority.clone().unwrap();
+        assert!(!retained
+            .differs_audibly_within_lookahead(
+                &micro,
+                0,
+                scheduler.sample_rate,
+                scheduler.lookahead_frames,
+            )
+            .unwrap());
+        assert_eq!(scheduler.identity().schedule_generation, generation);
+        scheduler.rotate_schedule_generation().unwrap();
+        assert_eq!(scheduler.identity().schedule_generation, generation + 1);
+
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_playing = true;
+        runtime.timeline_metronome_enabled = true;
+        let base = Instant::now();
+        let pulse = Duration::from_nanos(20_833_333);
+        for index in 0..8u32 {
+            runtime.clock.midi_clock_pulse(base + pulse * index);
+        }
+        runtime.advance_timeline_click_scheduler();
+        let stable_generation = runtime
+            .timeline_click_scheduler
+            .identity()
+            .schedule_generation;
+        runtime.apply_midi_clock_pulse_at(base + pulse * 8 + Duration::from_nanos(1));
+        assert_eq!(
+            runtime
+                .timeline_click_scheduler
+                .identity()
+                .schedule_generation,
+            stable_generation,
+            "sub-frame PLL jitter must not rotate the production schedule"
+        );
+        runtime.apply_midi_clock_pulse_at(base + pulse * 9 - Duration::from_millis(1));
+        assert!(
+            runtime
+                .timeline_click_scheduler
+                .identity()
+                .schedule_generation
+                > stable_generation,
+            "a real tempo displacement must rotate the production schedule"
+        );
+    }
+
+    #[test]
+    fn timeline_metronome_toggle_is_atomic_at_schedule_generation_exhaustion() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime
+            .timeline_click_scheduler
+            .identity
+            .schedule_generation = u64::MAX;
+        let before = runtime.timeline_snapshot();
+        runtime.apply_command(EngineCommand::SetTimelineMetronome {
+            enabled: true,
+            count_in_beats: 4,
+        });
+        assert!(!runtime.timeline_metronome_enabled);
+        assert_eq!(runtime.timeline_count_in_beats, before.count_in_beats);
+        assert_eq!(
+            runtime
+                .timeline_click_scheduler
+                .identity()
+                .schedule_generation,
+            u64::MAX
+        );
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("Timeline click schedule generation is exhausted")
+        );
+    }
+
+    #[test]
+    fn timeline_audio_transport_revision_exhaustion_rejects_seek_without_state_or_queue_delta() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_position_ms = 100;
+        runtime.timeline_audio_transport_revision = u64::MAX;
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_guide_cues.push(TimelineGuideCueSummary {
+            generation: u64::MAX,
+            sequence: 7,
+            at_ms: 500,
+            label: "Verse".to_string(),
+            cue: TimelineGuideCueKind::Looping,
+            asset: TimelineGuideAssetKey::Looping,
+            playback_rate_milli: 1_000,
+            sample_frame: 24_000,
+            epoch: 3,
+            transport_generation: 4,
+            schedule_generation: 5,
+            source: TimelineScheduleSource::Root,
+        });
+        let before_queue = runtime.timeline_guide_cues.clone();
+        let before_authority = (
+            runtime.timeline_transport_epoch,
+            runtime.timeline_transport_generation,
+        );
+        runtime.apply_command(EngineCommand::SeekTimeline(900));
+        assert_eq!(runtime.timeline_position_ms, 100);
+        assert_eq!(runtime.timeline_audio_transport_revision, u64::MAX);
+        assert_eq!(runtime.timeline_guide_cues, before_queue);
+        assert_eq!(
+            (
+                runtime.timeline_transport_epoch,
+                runtime.timeline_transport_generation,
+            ),
+            before_authority
+        );
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("Timeline audio transport revision is exhausted")
+        );
+    }
+
+    #[test]
+    fn timeline_timecode_discontinuity_threshold_is_exact_and_source_scoped() {
+        let run = |delta: i64, next_source: ClockSource| {
+            let mut runtime = runtime_with_lfo_effects(&[]);
+            runtime.timeline_audio = Some(AudioAnalysisSummary {
+                path: "C:/media/mtc.wav".to_string(),
+                sample_rate: 48_000,
+                channels: 2,
+                duration_ms: 10_000,
+                estimated_bpm: None,
+                waveform: Vec::new(),
+                spectrum: Vec::new(),
+                beats: Vec::new(),
+            });
+            runtime.timeline_position_ms = 1_000;
+            runtime.timeline_external_sync_source = Some(ClockSource::MidiTimecode);
+            let before = (
+                runtime.timeline_transport_epoch,
+                runtime.timeline_transport_generation,
+            );
+            let target = if delta.is_negative() {
+                1_000 - delta.unsigned_abs()
+            } else {
+                1_000 + delta as u64
+            };
+            runtime.apply_command(EngineCommand::SyncTimelineTimecode {
+                position_ms: target,
+                source: next_source,
+            });
+            (
+                before,
+                (
+                    runtime.timeline_transport_epoch,
+                    runtime.timeline_transport_generation,
+                ),
+            )
+        };
+        let (before, after) = run(249, ClockSource::MidiTimecode);
+        assert_eq!(after, before);
+        let (before, after) = run(250, ClockSource::MidiTimecode);
+        assert_eq!(after, before);
+        let (before, after) = run(251, ClockSource::MidiTimecode);
+        assert_ne!(after, before);
+        let (before, after) = run(-1, ClockSource::MidiTimecode);
+        assert_ne!(after, before);
+        let (before, after) = run(1, ClockSource::Ltc);
+        assert_ne!(after, before);
+    }
+
+    #[test]
+    fn timeline_follow_click_keeps_source_map_until_target_install() {
+        let now = Instant::now();
+        let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        runtime.clock.bpm = 170.0;
+        runtime.timeline_follow.as_mut().unwrap().destination_bpm = Some(194.0);
+        runtime.timeline_metronome_enabled = true;
+        runtime.timeline_tempo_meter_map = vec![
+            click_point(0, 170.0, 4, 4, TimelineTempoInterpolation::Linear),
+            click_point(128, 194.0, 4, 4, TimelineTempoInterpolation::Step),
+        ];
+        runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        runtime.advance_timeline_follow(now + Duration::from_millis(50));
+        let selection = runtime
+            .timeline_click_source_selection()
+            .unwrap()
+            .expect("source click authority during Follow");
+        assert_eq!(selection.source, TimelineScheduleSource::Root);
+        assert_eq!(
+            selection.authority.points(),
+            runtime.timeline_tempo_meter_map
+        );
+        assert!((runtime.clock.bpm - 182.0).abs() < 0.01);
+        runtime.advance_timeline_click_scheduler();
+        assert_eq!(
+            runtime.timeline_click_scheduler.identity().source,
+            TimelineScheduleSource::Root
+        );
+
+        let mut installed =
+            timeline_follow_settling_runtime(protocol::TimelineFollowFaultPolicy::Hold, now);
+        let target_map = vec![click_point(
+            0,
+            194.0,
+            7,
+            8,
+            TimelineTempoInterpolation::Step,
+        )];
+        {
+            let transition = installed.timeline_follow_transition.as_mut().unwrap();
+            transition.target.metronome_enabled = true;
+            transition.target.tempo_meter_map = target_map.clone();
+            transition.target.tempo_meter_map_version = protocol::TIMELINE_TEMPO_METER_MAP_VERSION;
+        }
+        installed.complete_timeline_follow_settlement(now).unwrap();
+        let target = installed
+            .timeline_click_source_selection()
+            .unwrap()
+            .expect("installed target click authority");
+        assert_eq!(installed.timeline_id, TimelineId(8_102));
+        assert_eq!(target.source, TimelineScheduleSource::Root);
+        assert_eq!(target.authority.points(), target_map);
+    }
+
+    #[test]
+    fn timeline_guide_lookahead_is_sorted_one_beat_early_and_click_queue_independent() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_audio = Some(AudioAnalysisSummary {
+            path: "C:/media/guide.wav".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            duration_ms: 2_000,
+            estimated_bpm: None,
+            waveform: Vec::new(),
+            spectrum: Vec::new(),
+            beats: Vec::new(),
+        });
+        runtime.clock.bpm = 120.0;
+        runtime.timeline_playing = true;
+        runtime.timeline_metronome_enabled = true;
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_phases = vec![
+            TimelinePhaseSummary {
+                id: TimelinePhaseId(2),
+                label: "Chorus".to_string(),
+                role: protocol::TimelinePhaseRole::Chorus,
+                start_ms: 1_000,
+                end_ms: 2_000,
+            },
+            TimelinePhaseSummary {
+                id: TimelinePhaseId(1),
+                label: "Verse".to_string(),
+                role: protocol::TimelinePhaseRole::Verse,
+                start_ms: 500,
+                end_ms: 1_000,
+            },
+        ];
+        runtime.advance_timeline_click_scheduler();
+        let click_identity = runtime.timeline_click_scheduler.identity();
+        let click_queue = runtime.timeline_click_scheduler.queued_events().clone();
+        runtime.advance_timeline_guide_lookahead();
+        assert_eq!(runtime.timeline_guide_cues.len(), 2);
+        assert_eq!(
+            runtime
+                .timeline_guide_cues
+                .iter()
+                .map(|cue| cue.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Verse", "Chorus"]
+        );
+        assert_eq!(runtime.timeline_guide_cues[0].sample_frame, 0);
+        assert_eq!(runtime.timeline_guide_cues[1].sample_frame, 24_000);
+        assert_eq!(runtime.timeline_guide_cues[0].playback_rate_milli, 920);
+        assert_eq!(runtime.timeline_click_scheduler.identity(), click_identity);
+        assert_eq!(
+            runtime.timeline_click_scheduler.queued_events(),
+            &click_queue
+        );
+        runtime.announce_timeline_phases_between(0, 1_000);
+        assert_eq!(
+            runtime.timeline_guide_cues.len(),
+            2,
+            "boundary poll deduplicates lookahead"
+        );
+    }
+
+    #[test]
+    fn timeline_play_publication_admits_frame_zero_guide_before_first_tick() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_audio = Some(AudioAnalysisSummary {
+            path: "C:/media/guide-play-edge.wav".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            duration_ms: 2_000,
+            estimated_bpm: None,
+            waveform: Vec::new(),
+            spectrum: Vec::new(),
+            beats: Vec::new(),
+        });
+        runtime.clock.bpm = 120.0;
+        runtime.timeline_playing = false;
+        runtime.timeline_metronome_enabled = true;
+        runtime.timeline_count_in_beats = 0;
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_phases = vec![TimelinePhaseSummary {
+            id: TimelinePhaseId(31),
+            label: "Verse".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 500,
+            end_ms: 2_000,
+        }];
+
+        runtime.apply_command(EngineCommand::SetTimelinePlaying(true));
+
+        assert!(runtime.timeline_playing);
+        assert_eq!(runtime.timeline_guide_cues.len(), 1);
+        let cue = &runtime.timeline_guide_cues[0];
+        assert_eq!(cue.sample_frame, 0);
+        assert_eq!(cue.source, TimelineScheduleSource::Root);
+        assert_eq!(
+            (cue.epoch, cue.transport_generation, cue.schedule_generation),
+            {
+                let identity = runtime.timeline_click_scheduler.identity();
+                (
+                    identity.epoch,
+                    identity.transport_generation,
+                    identity.schedule_generation,
+                )
+            }
+        );
+    }
+
+    #[test]
+    fn timeline_guide_predicts_looping_and_follow_trans_but_never_backdates() {
+        let now = Instant::now();
+        let mut looping = runtime_with_lfo_effects(&[]);
+        looping.clock = BpmClock::new(120.0, now);
+        looping.timeline_playing = true;
+        looping.timeline_metronome_enabled = true;
+        looping.timeline_guide_enabled = true;
+        looping.timeline_position_ms = 0;
+        looping.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            status: TimelineLoopRuntimeStatus::Armed,
+            a_ms: Some(0),
+            b_ms: Some(1_000),
+            musical_length_millibeats: None,
+            generation: 1,
+            wrap_count: 0,
+        };
+        looping.advance_timeline_click_scheduler();
+        looping.advance_timeline_guide_lookahead_at(now);
+        let loop_cues = looping
+            .timeline_guide_cues
+            .iter()
+            .filter(|cue| matches!(cue.cue, TimelineGuideCueKind::Looping))
+            .collect::<Vec<_>>();
+        assert_eq!(loop_cues.len(), 1);
+        assert_eq!(loop_cues[0].at_ms, 1_000);
+        assert_eq!(loop_cues[0].sample_frame, 24_000);
+        looping.advance_timeline_guide_lookahead_at(now);
+        assert_eq!(
+            looping
+                .timeline_guide_cues
+                .iter()
+                .filter(|cue| matches!(cue.cue, TimelineGuideCueKind::Looping))
+                .count(),
+            1,
+            "one iteration publishes one Looping reservation"
+        );
+
+        let mut missed = runtime_with_lfo_effects(&[]);
+        missed.clock = BpmClock::new(120.0, now);
+        missed.timeline_playing = true;
+        missed.timeline_metronome_enabled = true;
+        missed.timeline_guide_enabled = true;
+        missed.timeline_position_ms = 600;
+        missed.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            status: TimelineLoopRuntimeStatus::Looping,
+            a_ms: Some(0),
+            b_ms: Some(1_000),
+            musical_length_millibeats: None,
+            generation: 1,
+            wrap_count: 0,
+        };
+        missed.advance_timeline_click_scheduler();
+        missed.advance_timeline_guide_lookahead_at(now + Duration::from_millis(600));
+        assert!(
+            missed.timeline_guide_cues.is_empty(),
+            "a late first loop is not backdated"
+        );
+
+        let mut trans = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        trans.clock = BpmClock::new(300.0, now);
+        trans.timeline_position_ms = 0;
+        trans.timeline_tempo_meter_map.clear();
+        trans.timeline_metronome_enabled = true;
+        trans.timeline_guide_enabled = true;
+        trans
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::PrerollBeforeNaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        {
+            let active = trans.timeline_follow_transition.as_mut().unwrap();
+            active.duration = Duration::from_secs(2);
+            active.source_bpm = 300.0;
+            active.target_bpm = 300.0;
+            active.trans_cadence_bars = 2;
+            active.last_trans_beat_ordinal = None;
+        }
+        trans.advance_timeline_click_scheduler();
+        trans.timeline_position_ms = 800;
+        trans.advance_timeline_guide_lookahead_at(now + Duration::from_millis(800));
+        let trans_cues = trans
+            .timeline_guide_cues
+            .iter()
+            .filter(|cue| matches!(cue.cue, TimelineGuideCueKind::Trans))
+            .collect::<Vec<_>>();
+        assert_eq!(trans_cues.len(), 1);
+        assert_eq!(trans_cues[0].at_ms, 1_600);
+        assert_eq!(trans_cues[0].sample_frame, 67_200);
+        assert_eq!(
+            trans
+                .timeline_follow_transition
+                .as_ref()
+                .unwrap()
+                .last_trans_beat_ordinal,
+            Some(8)
+        );
+        trans.advance_timeline_guide_lookahead_at(now + Duration::from_millis(800));
+        assert_eq!(
+            trans
+                .timeline_guide_cues
+                .iter()
+                .filter(|cue| matches!(cue.cue, TimelineGuideCueKind::Trans))
+                .count(),
+            1,
+            "the same Follow cadence target is reserved once"
+        );
+
+        let mut pinned = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        pinned.clock = BpmClock::new(170.0, now);
+        pinned.timeline_position_ms = 0;
+        pinned.timeline_metronome_enabled = true;
+        pinned.timeline_guide_enabled = true;
+        pinned.timeline_tempo_meter_map = vec![
+            timeline_tempo_ramp_anchor(0, 170.0, 148, TimelineTempoInterpolation::Linear),
+            timeline_tempo_ramp_anchor(144, 194.0, 157, TimelineTempoInterpolation::Step),
+        ];
+        pinned
+            .timeline_follow
+            .as_mut()
+            .unwrap()
+            .trans_target_measures = vec![149, 151, 153, 155];
+        pinned
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::PrerollBeforeNaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        pinned.timeline_follow_transition.as_mut().unwrap().duration = Duration::from_secs(12);
+        pinned.advance_timeline_click_scheduler();
+        let authority = pinned.timeline_click_authority().unwrap();
+        let mut pinned_trans_at_ms = Vec::new();
+        for (measure, sixteenth_steps) in [(149, 16_u64), (151, 48), (153, 80), (155, 112)] {
+            let target_frame = authority
+                .sample_frame_at_quarter_beat(sixteenth_steps as f64 / 4.0, 48_000)
+                .unwrap();
+            let onset = authority
+                .guide_onset_before_frame(
+                    target_frame,
+                    48_000,
+                    pinned.timeline_click_scheduler.identity(),
+                )
+                .unwrap()
+                .unwrap();
+            let onset_ms = onset * 1_000 / 48_000;
+            pinned.timeline_position_ms = onset_ms.saturating_sub(100);
+            pinned.advance_timeline_guide_lookahead_at(
+                now + Duration::from_millis(pinned.timeline_position_ms),
+            );
+            pinned_trans_at_ms.push(
+                pinned
+                    .timeline_guide_cues
+                    .iter()
+                    .rev()
+                    .find(|cue| matches!(cue.cue, TimelineGuideCueKind::Trans))
+                    .unwrap()
+                    .at_ms,
+            );
+            assert_eq!(
+                pinned
+                    .timeline_follow_transition
+                    .as_ref()
+                    .unwrap()
+                    .last_trans_beat_ordinal,
+                Some(measure),
+                "semantic Trans measure {measure} must be reserved exactly"
+            );
+        }
+        assert_eq!(
+            pinned_trans_at_ms,
+            [16_u64, 48, 80, 112]
+                .into_iter()
+                .map(|steps| {
+                    authority
+                        .sample_frame_at_quarter_beat(steps as f64 / 4.0, 48_000)
+                        .unwrap()
+                        * 1_000
+                        / 48_000
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn timeline_guide_timecode_tracking_retains_queue_but_locate_cancels_without_catchup() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_audio = Some(AudioAnalysisSummary {
+            path: "C:/media/guide-mtc.wav".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            duration_ms: 5_000,
+            estimated_bpm: None,
+            waveform: Vec::new(),
+            spectrum: Vec::new(),
+            beats: Vec::new(),
+        });
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_external_sync_source = Some(ClockSource::MidiTimecode);
+        runtime.timeline_phases = vec![TimelinePhaseSummary {
+            id: TimelinePhaseId(9),
+            label: "Interlude".to_string(),
+            role: protocol::TimelinePhaseRole::Interlude,
+            start_ms: 500,
+            end_ms: 2_000,
+        }];
+        runtime.advance_timeline_guide_lookahead();
+        assert_eq!(runtime.timeline_guide_cues.len(), 1);
+        runtime.apply_command(EngineCommand::SyncTimelineTimecode {
+            position_ms: 200,
+            source: ClockSource::MidiTimecode,
+        });
+        assert_eq!(runtime.timeline_guide_cues.len(), 1);
+        runtime.apply_command(EngineCommand::SyncTimelineTimecode {
+            position_ms: 451,
+            source: ClockSource::MidiTimecode,
+        });
+        assert!(runtime.timeline_guide_cues.is_empty());
+        runtime.advance_timeline_guide_lookahead();
+        assert!(
+            runtime.timeline_guide_cues.is_empty(),
+            "past cue is not caught up"
+        );
+        runtime.apply_command(EngineCommand::SyncTimelineTimecode {
+            position_ms: 1_000,
+            source: ClockSource::Ltc,
+        });
+        runtime.announce_timeline_phase_at(1_000);
+        runtime.advance_timeline_guide_lookahead();
+        assert!(
+            runtime.timeline_guide_cues.is_empty(),
+            "a source-change locate inside an active phase must not catch up its old Guide cue"
+        );
+    }
+
+    #[test]
+    fn timeline_guide_frame_zero_intro_uses_semantic_role_not_display_label() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_playing = true;
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_phases = vec![TimelinePhaseSummary {
+            id: TimelinePhaseId(44),
+            label: "Life opening".to_string(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 1_000,
+        }];
+        runtime.advance_timeline_guide_lookahead();
+        assert_eq!(runtime.timeline_guide_cues.len(), 1);
+        assert_eq!(
+            runtime.timeline_guide_cues[0].asset,
+            TimelineGuideAssetKey::Intro
+        );
+        assert_eq!(runtime.timeline_guide_cues[0].sample_frame, 0);
+    }
+
+    #[test]
+    fn timeline_guide_long_show_retires_past_history_without_sequence_reuse_or_capacity_fault() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.clock.bpm = 120.0;
+        runtime.timeline_playing = true;
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_phases = (0..70_u64)
+            .map(|index| TimelinePhaseSummary {
+                id: TimelinePhaseId(index + 1),
+                label: format!("Verse {}", index + 1),
+                role: protocol::TimelinePhaseRole::Verse,
+                start_ms: (index + 1) * 1_000,
+                end_ms: (index + 2) * 1_000,
+            })
+            .collect();
+
+        for index in 0..70_u64 {
+            runtime.timeline_position_ms = (index + 1) * 1_000 - 600;
+            runtime.advance_timeline_guide_lookahead();
+            let cue = runtime
+                .timeline_guide_cues
+                .iter()
+                .find(|cue| {
+                    matches!(
+                        cue.cue,
+                        TimelineGuideCueKind::Phase { phase_id }
+                            if phase_id == TimelinePhaseId(index + 1)
+                    )
+                })
+                .expect("next future phase must remain published");
+            assert_eq!(cue.sequence, index + 1);
+            assert!(runtime.timeline_guide_cues.len() <= 3);
+        }
+        assert!(!runtime
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("queue capacity")));
+        assert_eq!(runtime.timeline_guide_cues.last().unwrap().sequence, 70);
+    }
+
+    #[test]
+    fn timeline_guide_exact_trans_resolution_fault_is_visible_without_generic_or_partial_publish() {
+        let now = Instant::now();
+        let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        runtime.timeline_playing = true;
+        runtime.timeline_metronome_enabled = true;
+        runtime.timeline_guide_enabled = true;
+        runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::PrerollBeforeNaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        runtime
+            .timeline_follow_transition
+            .as_mut()
+            .unwrap()
+            .trans_target_measures = vec![149, 151];
+        runtime.timeline_tempo_meter_map.clear();
+        runtime.advance_timeline_click_scheduler();
+        runtime.advance_timeline_guide_lookahead_at(now);
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("no authored anchor")));
+        assert!(!runtime
+            .timeline_guide_cues
+            .iter()
+            .any(|cue| matches!(cue.cue, TimelineGuideCueKind::Trans)));
+        assert_eq!(
+            runtime
+                .timeline_follow_transition
+                .as_ref()
+                .unwrap()
+                .last_trans_beat_ordinal,
+            None,
+            "an exact-map fault must not fall back to generic cadence or partially advance"
+        );
+    }
+
+    #[test]
+    fn timeline_guide_sequence_exhaustion_is_fail_closed() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_guide_cues.push(TimelineGuideCueSummary {
+            generation: 1,
+            sequence: u64::MAX,
+            at_ms: 0,
+            label: "Intro".to_string(),
+            cue: TimelineGuideCueKind::Phase {
+                phase_id: TimelinePhaseId(1),
+            },
+            asset: TimelineGuideAssetKey::Intro,
+            playback_rate_milli: 1_000,
+            sample_frame: 0,
+            epoch: 1,
+            transport_generation: 1,
+            schedule_generation: 1,
+            source: TimelineScheduleSource::Root,
+        });
+        let before = runtime.timeline_guide_cues.clone();
+        runtime.push_timeline_guide_cue(0, "Intro".to_string(), TimelineGuideCueKind::Looping);
+        assert_eq!(runtime.timeline_guide_cues, before);
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("Timeline Guide sequence is exhausted")
+        );
+    }
+
+    #[test]
+    fn timeline_guide_asset_contract_is_exhaustive_and_legacy_interlude_is_exact() {
+        assert_eq!(timeline_guide_playback_rate_milli(120.0).unwrap(), 920);
+        assert_eq!(timeline_guide_playback_rate_milli(170.0).unwrap(), 1_000);
+        assert_eq!(timeline_guide_playback_rate_milli(194.0).unwrap(), 1_040);
+        assert_eq!(timeline_guide_playback_rate_milli(218.0).unwrap(), 1_080);
+        assert!(timeline_guide_playback_rate_milli(f64::NAN).is_err());
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let phase_contract = [
+            (
+                protocol::TimelinePhaseRole::Intro,
+                TimelineGuideAssetKey::Intro,
+                "Intro",
+            ),
+            (
+                protocol::TimelinePhaseRole::Verse,
+                TimelineGuideAssetKey::Verse,
+                "Verse",
+            ),
+            (
+                protocol::TimelinePhaseRole::PreChorus,
+                TimelineGuideAssetKey::PreChorus,
+                "Pre Chorus",
+            ),
+            (
+                protocol::TimelinePhaseRole::Chorus,
+                TimelineGuideAssetKey::Chorus,
+                "Chorus",
+            ),
+            (
+                protocol::TimelinePhaseRole::Interlude,
+                TimelineGuideAssetKey::Interlude,
+                "Interlude",
+            ),
+            (
+                protocol::TimelinePhaseRole::Bridge,
+                TimelineGuideAssetKey::Bridge,
+                "Bridge",
+            ),
+            (
+                protocol::TimelinePhaseRole::Breakdown,
+                TimelineGuideAssetKey::Breakdown,
+                "Breakdown",
+            ),
+            (
+                protocol::TimelinePhaseRole::Outro,
+                TimelineGuideAssetKey::Outro,
+                "Outro",
+            ),
+        ];
+        runtime.timeline_phases = phase_contract
+            .iter()
+            .enumerate()
+            .map(|(index, (role, _, label))| TimelinePhaseSummary {
+                id: TimelinePhaseId(index as u64 + 1),
+                label: (*label).to_string(),
+                role: role.clone(),
+                start_ms: index as u64 * 1_000,
+                end_ms: index as u64 * 1_000 + 1_000,
+            })
+            .collect();
+        for (index, (_, expected, _)) in phase_contract.iter().enumerate() {
+            assert_eq!(
+                runtime
+                    .timeline_guide_asset(&TimelineGuideCueKind::Phase {
+                        phase_id: TimelinePhaseId(index as u64 + 1),
+                    })
+                    .unwrap(),
+                *expected
+            );
+        }
+        runtime.timeline_phases.push(TimelinePhaseSummary {
+            id: TimelinePhaseId(99),
+            label: "Interlude".to_string(),
+            role: protocol::TimelinePhaseRole::Custom,
+            start_ms: 9_000,
+            end_ms: 10_000,
+        });
+        assert_eq!(
+            runtime
+                .timeline_guide_asset(&TimelineGuideCueKind::Phase {
+                    phase_id: TimelinePhaseId(99),
+                })
+                .unwrap(),
+            TimelineGuideAssetKey::Interlude
+        );
+        assert_eq!(
+            [
+                TimelineGuideAssetKey::Intro,
+                TimelineGuideAssetKey::Verse,
+                TimelineGuideAssetKey::PreChorus,
+                TimelineGuideAssetKey::Chorus,
+                TimelineGuideAssetKey::Interlude,
+                TimelineGuideAssetKey::Bridge,
+                TimelineGuideAssetKey::Breakdown,
+                TimelineGuideAssetKey::Outro,
+                TimelineGuideAssetKey::Looping,
+                TimelineGuideAssetKey::Break,
+                TimelineGuideAssetKey::Trans,
+                TimelineGuideAssetKey::Complete,
+            ]
+            .len(),
+            12
+        );
+        assert_eq!(
+            runtime.timeline_guide_asset(&TimelineGuideCueKind::Looping),
+            Ok(TimelineGuideAssetKey::Looping)
+        );
+        assert_eq!(
+            runtime.timeline_guide_asset(&TimelineGuideCueKind::Break),
+            Ok(TimelineGuideAssetKey::Break)
+        );
+        assert_eq!(
+            runtime.timeline_guide_asset(&TimelineGuideCueKind::Trans),
+            Ok(TimelineGuideAssetKey::Trans)
+        );
+        assert_eq!(
+            runtime.timeline_guide_asset(&TimelineGuideCueKind::Complete),
+            Ok(TimelineGuideAssetKey::Complete)
+        );
+    }
+
+    #[test]
+    fn timeline_guide_complete_is_success_only_and_stale_abort_fault_publish_zero() {
+        let now = Instant::now();
+        let has_complete = |runtime: &EngineRuntime| {
+            runtime
+                .timeline_guide_cues
+                .iter()
+                .any(|cue| matches!(cue.cue, TimelineGuideCueKind::Complete))
+        };
+
+        let mut aborted = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        aborted
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        aborted.abort_timeline_follow(protocol::TimelineFollowAbortReason::ManualSeek, now);
+        assert!(!has_complete(&aborted));
+
+        let mut faulted = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        faulted
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        faulted
+            .timeline_follow_transition
+            .as_mut()
+            .unwrap()
+            .target
+            .label
+            .clear();
+        faulted.advance_timeline_follow(now + Duration::from_millis(100));
+        assert!(!has_complete(&faulted));
+
+        let mut stale =
+            timeline_follow_settling_runtime(protocol::TimelineFollowFaultPolicy::Hold, now);
+        let stale_generation = stale.timeline_follow_runtime.generation + 1;
+        assert!(stale
+            .acknowledge_timeline_follow_settlement(
+                TimelineFollowSettlementAck {
+                    epoch: stale.output_ownership_gate.status().epoch,
+                    generation: stale_generation,
+                    domain: TimelineFollowSettlementDomain::Audio,
+                    consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                    result: TimelineFollowSettlementAckResult::Applied,
+                },
+                now,
+            )
+            .is_err());
+        assert!(!has_complete(&stale));
     }
 }

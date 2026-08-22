@@ -2630,6 +2630,7 @@ export type TimelinePhaseRole =
   | "verse"
   | "pre_chorus"
   | "chorus"
+  | "interlude"
   | "bridge"
   | "breakdown"
   | "outro"
@@ -3002,7 +3003,26 @@ export type TimelineGuideCueKind =
   | { kind: "phase"; phase_id: number }
   | { kind: "looping" }
   | { kind: "break" }
-  | { kind: "trans" };
+  | { kind: "trans" }
+  | { kind: "complete" };
+
+export type TimelineGuideAssetKey =
+  | "intro"
+  | "verse"
+  | "pre_chorus"
+  | "chorus"
+  | "interlude"
+  | "bridge"
+  | "breakdown"
+  | "outro"
+  | "looping"
+  | "break"
+  | "trans"
+  | "complete";
+
+export type TimelineScheduleSource =
+  | { kind: "root" }
+  | { kind: "direct_child"; cue_id: number; generation: number };
 
 export interface TimelineGuideCueSummary {
   generation: number;
@@ -3010,19 +3030,70 @@ export interface TimelineGuideCueSummary {
   at_ms: number;
   label: string;
   cue: TimelineGuideCueKind;
+  asset: TimelineGuideAssetKey;
+  playback_rate_milli: number;
+  sample_frame: number;
+  epoch: number;
+  transport_generation: number;
+  schedule_generation: number;
+  source: TimelineScheduleSource;
 }
 
-/** Machine/session-local Guide monitor bus; never project-authored. */
-export interface TimelineGuideAudioStatus {
-  enabled: boolean;
-  gain: number;
-  requestedDeviceName?: string | null;
-  resolvedDeviceName?: string | null;
-  activeGeneration?: number | null;
-  lastSequence: number;
-  lastSpokenLabel?: string | null;
-  spokenCount: number;
-  lastError?: string | null;
+/** Machine-local Cue Audio delivery settings. Project Click and Guide remain separate enables. */
+export interface MachineTimelineCueAudioSettingsV1 {
+  version: number;
+  route: "follow_program" | "explicit_device";
+  device_name: string | null;
+  topology_fingerprint: string | null;
+  click_gain: number;
+  guide_gain: number;
+}
+
+export type TimelineCueAudioLifecycle =
+  | "loading_settings"
+  | "disabled_by_project"
+  | "waiting_for_program_output"
+  | "applying"
+  | "running"
+  | "missing_device"
+  | "ambiguous_device"
+  | "topology_changed"
+  | "stalled"
+  | "fault";
+
+/** Exact-name output candidates; duplicate names are summarized by occurrences and are not selectable. */
+export interface TimelineCueAudioEndpointSummary {
+  name: string;
+  occurrences: number;
+  selectable: boolean;
+}
+
+/** Backend-authoritative machine Cue Audio status. Do not derive applied state on the frontend. */
+export interface TimelineCueAudioStatus {
+  runtimeIncarnation: number;
+  statusRevision: number;
+  desiredSettings: MachineTimelineCueAudioSettingsV1;
+  appliedSettings: MachineTimelineCueAudioSettingsV1 | null;
+  settingsRevision: number;
+  lifecycle: TimelineCueAudioLifecycle;
+  requestedDeviceName: string | null;
+  resolvedDeviceName: string | null;
+  requestedTopologyFingerprint: string | null;
+  observedTopologyFingerprint: string | null;
+  topologyGeneration: number;
+  endpoints: TimelineCueAudioEndpointSummary[];
+  outputClockEpoch: number;
+  scheduleGeneration: number;
+  sourceFence: number;
+  nextOutputFrame: number;
+  callbackLive: boolean;
+  faultCode: string;
+  faultCount: number;
+  faultSequence: number;
+  lastError: string | null;
+  rotationCount: number;
+  stallCount: number;
+  configCount: number;
 }
 
 export interface TimelineAdvancedAuthoringSummary {

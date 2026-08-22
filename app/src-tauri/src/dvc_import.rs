@@ -8046,6 +8046,8 @@ fn parse_super_scenes(
             tempo_driven,
             metronome_enabled: false,
             count_in_beats: 4,
+            tempo_meter_map: Vec::new(),
+            tempo_meter_map_version: 1,
             duration_ms,
         });
         cues[owner_index]

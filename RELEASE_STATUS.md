@@ -1,12 +1,46 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-08-19
-Branch: `codex/syndocal-v1.0`  
+Updated: 2026-08-22
+Branch: `codex/syndocal-v1.2` (current development branch)
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
-> Current continuation note: the active `1.2.0-alpha.3` train is not represented by the old v1.0 completion statement alone. Use the [current completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md), [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md), [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) as the current authorities. Do not mark AI3 complete, advance to AI4, or close the current Windows product release until their unchecked gates are closed.
+> Current continuation note: the active `1.2.0-alpha.4` train is not represented by the old v1.0 completion statement alone. Use the [current completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md), [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md), [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) as the current authorities. Do not mark AI3 complete, advance to AI4, or close the current Windows product release until their unchecked gates are closed.
+
+## 2026-08-22 alpha.4 development checkpoint
+
+`1.2.0-alpha.4` is the current distributed-development metadata ordinal. It
+does not claim a release candidate. The sample-frame Timeline scheduler is
+independently frozen at protocol hash
+`48FF684AFD66680DC97F1AB5447F5FAFF920E63A5609D9ABF1FC6F6CF502BD1B` and Engine
+hash `0031D9EC1AB5004779A9C28A2665DF2BC14D6122B1FAE32B40DFCB15D5735F66`.
+The final plan/apply scheduler review is P0/P1/P2 zero. The native cue-audio
+integration is independently green at main hash
+`E69A8989E7AE0D030C7AB3FE0AA31B2D36075CB22FADA0382EDDFE99D5214750`, core hash
+`D6C1A18FD09E98AB7CA849EE439AFEF93C67C700E42466CB5B4C6854F90C1927`, and DVC
+hash `B81913413A4796A37B4F6FE5A146CB75114AB20F0BE1A74B700A4A3C226F3546`.
+The old 25 ms detached-Sink route is removed; Click and Guide share one output
+sample clock, machine-local routing is persisted, and stale identity or output
+topology fails closed.
+
+The pinned authored material is 33 Guide events, natural BPM-linked playback
+rate (`170 BPM = 1000 milli`, `194 BPM = 1040 milli` under the bounded formula),
+and `Trans` at 149/151/153/155 every two measures. `Complete` is the only Guide
+cue at the settlement collision; the destination Intro is suppressed. Cue Audio
+passed 41/41, DVC import 105/105, protocol 143/143, frontend build, 411 invokes,
+3541/3541 localization, Cue runtime/browser, and the four-viewport Timeline
+browser matrix. Windows default/release warning ratchets report zero first-party
+warnings. After the exact-checkout process count was verified as zero,
+`pnpm --dir app tauri build --no-bundle` passed in 2m37s. The resulting
+56,342,016-byte executable reports ProductVersion/FileVersion `1.2.0-alpha.4`
+and SHA-256
+`AB98EA14F8439E23CC2E3BD80A4041C2B9CC82244A68B6938A3E9B2515A87297`.
+Exactly one responsive exact-path `Syndocal` window was launched and maximized;
+Edit > Timeline rendered Click, Guide, Follow waiting, shared lane structure,
+and the source shelf without a runtime fault. The empty project was not changed,
+so audible playback, editor + LED panel + projector operation, fixture/serial-DMX,
+MTC/DJ Link, and audio-hardware acceptance remain open.
 
 ## 結論
 

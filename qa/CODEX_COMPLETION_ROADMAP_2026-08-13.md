@@ -4,7 +4,7 @@
 > requirement and final-gate authority, but its frozen checkpoint, 75.5% planning
 > roll-up, and Media A1 resume instructions are historical. Use
 > `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for the current dependency order,
-> `1.2.0-alpha.3` version train, warning ratchet, AI3 resume point, and checkpoint
+> `1.2.0-alpha.4` version train, warning ratchet, AI3 resume point, and checkpoint
 > workflow. Do not compare old and current percentages without identical denominators.
 
 > **OutputControl supersession (2026-08-21):** physical six-digit/Raw Input/Enter
@@ -1474,11 +1474,13 @@ returns the fresh logical selection, and is exactly recoverable without a second
   Scene state.
 - Click BPM slews monotonically from outgoing to incoming BPM across the exact transition duration. Beat
   phase remains continuous; it does not reset at admission or completion.
-- When Guide is enabled, `Trans` is spoken on a configurable musical cadence during the transition,
-  defaulting to every four bars. After and only after successful Follow settlement, the fixed one-word
-  cue `Complete` is spoken exactly once, followed by at most one destination Phase announcement. Abort,
-  fault, stale generation, or failed settlement must never speak `Complete`. `Trans` and `Complete` cues
-  use the same monitor-only guide bus and generation cancellation rules as Phase/Loop cues.
+- When Guide is enabled, `Trans` is spoken on a configurable musical cadence during the transition.
+  For the pinned two-song show chart, it is exactly every two measures at targets 149, 151, 153,
+  and 155. After and only after successful Follow settlement, the fixed one-word cue `Complete` is
+  spoken exactly once. At the same settlement boundary, any destination Phase/Intro cue is suppressed;
+  `Complete` is the only Guide cue there, preventing a collision. Abort, fault, stale generation, or
+  failed settlement must never speak `Complete`. `Trans` and `Complete` cues use the same monitor-only
+  guide bus and generation cancellation rules as Phase/Loop cues.
 - Missing media, unavailable audio device, late decoder, clock discontinuity, or next-Timeline validation
   failure follows an explicit Hold/Cut/Fault policy selected before publication. It must never leave both
   Timelines emitting indefinitely or advance history twice.
@@ -2145,3 +2147,40 @@ retained editor + LED panel + projector layout. No six-digit, Raw Input, Enter, 
 - Product progress is 14/79 (17.7%). E2 authority-bundle/generation consistency
   is next. E3 restart durability, E4 Save/Save As, and all later roadmap items
   remain open; this is not a whole-product or cross-platform completion claim.
+
+## 31. 2026-08-22 alpha.4 cue-audio integration checkpoint
+
+The next distributed development artifact is `1.2.0-alpha.4`. This is a
+product-version-only advance; it is not a beta/RC/release claim and does not
+alter project, command, API, ABI, or asset schema versions. The checkpoint is on
+`codex/syndocal-v1.2`; its pre-commit parent is
+`9b0bd7e1755571037c9ff552e880467f6ee47f8d`.
+
+The independently frozen scheduler evidence is protocol
+`48FF684AFD66680DC97F1AB5447F5FAFF920E63A5609D9ABF1FC6F6CF502BD1B` and Engine
+`0031D9EC1AB5004779A9C28A2665DF2BC14D6122B1FAE32B40DFCB15D5735F66`.
+The final plan/apply scheduler review reported P0/P1/P2 zero. The final
+independently accepted native integration hashes are main
+`E69A8989E7AE0D030C7AB3FE0AA31B2D36075CB22FADA0382EDDFE99D5214750`, cue core
+`D6C1A18FD09E98AB7CA849EE439AFEF93C67C700E42466CB5B4C6854F90C1927`, and DVC
+`B81913413A4796A37B4F6FE5A146CB75114AB20F0BE1A74B700A4A3C226F3546`; its
+review reported P0/P1/P2 zero.
+
+The two-song authored material remains exact: 33 Guide events, natural
+`playback_rate_milli = clamp(round((1 + (BPM - 170) / 600) * 1000), 920, 1080)`
+(170 BPM = 1000; 194 BPM = 1040), `Trans` at measures 149/151/153/155 every
+two measures, and `Complete` as the sole Guide cue at the settlement boundary
+with the destination Intro suppressed. These values are backed by the
+pre-render manifest. Runtime integration and focused native UI smoke are now
+accepted; audible playback and physical display/hardware acceptance remain open.
+
+Automated gates passed: Cue Audio 41/41, DVC import 105/105, protocol 143/143,
+frontend TypeScript/build, 411 invokes, 3541/3541 localization, Cue Audio
+runtime/browser, the four-viewport Timeline matrix, and Windows default/release
+warning ratchets with zero first-party warnings. The final no-bundle build
+produced a 56,342,016-byte `1.2.0-alpha.4` executable with SHA-256
+`AB98EA14F8439E23CC2E3BD80A4041C2B9CC82244A68B6938A3E9B2515A87297`.
+Exactly one responsive window was maximized; Edit > Timeline rendered Click,
+Guide, Follow waiting, lanes, and the source shelf without a fault. This is a
+native UI smoke, not audible playback or physical editor + LED + projector,
+fixture/DMX, MTC/DJ Link, audio-device, soak, beta, RC, or whole-product proof.

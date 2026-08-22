@@ -114,22 +114,28 @@ const dragTimelineItemToLane = async (client, selector, targetLayerId, isolate =
     const item = document.querySelector(${JSON.stringify(selector)});
     const target = document.querySelector('[data-timeline-layer-gutter][data-timeline-layer-id="${targetLayerId}"]');
     if (!(item instanceof Element) || !(target instanceof Element)) return null;
+    item.scrollIntoView({ block: 'center', inline: 'nearest' });
     const sourceLayerId = item.getAttribute('data-timeline-layer-id');
     const sourceLane = document.querySelector('[data-timeline-layer-gutter][data-timeline-layer-id="' + sourceLayerId + '"]');
     if (!(sourceLane instanceof Element)) return null;
     const hitSurface = item.querySelector('.timelineVideoClipBody, .timelineAudioClipBody, .timelineSceneBlockBody, :scope > rect') ?? item;
     const itemRect = hitSurface.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
     const safeInset = hitSurface.matches('.timelineSceneBlockBody') ? 24 : 8;
+    const moveBandY = itemRect.top + Math.min(4, Math.max(1, itemRect.height / 4));
+    const centerY = itemRect.top + itemRect.height / 2;
     const sourceYs = item.matches('.timelineAutomationRange')
       ? [itemRect.top + itemRect.height / 2]
-      : [itemRect.top + Math.min(4, Math.max(1, itemRect.height / 4))];
+      // Scene blocks reserve the lower band for selection. Clips may use their
+      // interior body, but blocks must start in their upper move band.
+      : item.matches('.timelineMarker.sceneBlock') ? [moveBandY, centerY] : [centerY, moveBandY];
     const excluded = '.timelineAutomationHandle, .timelineAutomationKeyframeGroup, .timelineSceneBlockResizeHandle, .timelineSceneBlockFadeHandle, .timelineVideoClipResizeHandle, .timelineVideoClipFadeHandle, .timelineAudioClipResizeHandle, .timelineAudioClipFadeHandle';
+    // Prefer the interior body before edge-adjacent points: a compact clip can
+    // turn the legacy 8px candidate into a resize handle rather than a lane move.
     const sourceXs = [
-      itemRect.left + Math.min(safeInset, Math.max(1, itemRect.width / 2)),
-      itemRect.left + itemRect.width * 0.25,
       itemRect.left + itemRect.width * 0.5,
+      itemRect.left + itemRect.width * 0.25,
       itemRect.left + itemRect.width * 0.75,
+      itemRect.left + Math.min(safeInset, Math.max(1, itemRect.width / 2)),
     ];
     const preferredSourcePoints = sourceYs.flatMap((candidateY) => sourceXs.map((candidateX) => ({ x: candidateX, y: candidateY })));
     const automationSourcePoints = [];
@@ -147,17 +153,43 @@ const dragTimelineItemToLane = async (client, selector, targetLayerId, isolate =
     const resolvedSource = sourcePoint ?? { x: itemRect.left + itemRect.width / 2, y: itemRect.top + itemRect.height / 2 };
     return {
       source: resolvedSource,
-      target: { x: Math.min(window.innerWidth - 8, resolvedSource.x + 12), y: targetRect.top + targetRect.height / 2 },
       sourceSize: [itemRect.width, itemRect.height],
-      targetSize: [targetRect.width, targetRect.height],
     };
   })()`);
-  assert.ok(points && points.sourceSize[0] > 0 && points.sourceSize[1] > 0 && points.targetSize[0] > 0 && points.targetSize[1] > 0, `visible lane drag geometry for ${selector}`);
+  assert.ok(points && points.sourceSize[0] > 0 && points.sourceSize[1] > 0, `visible lane drag source geometry for ${selector}`);
   const modifiers = isolate ? 1 : 0;
   await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...points.source, modifiers });
   await client.send("Input.dispatchMouseEvent", { type: "mousePressed", ...points.source, modifiers, button: "left", buttons: 1, clickCount: 1 });
-  await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...points.target, modifiers, button: "left", buttons: 1 });
-  await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...points.target, modifiers, button: "left", buttons: 0, clickCount: 1 });
+  // The compact fixture cannot co-display distant source and destination
+  // lanes. Scroll the same timeline container while pointer capture is live,
+  // then remeasure the destination lane's actual SVG hit surface before drop.
+  const target = await evaluate(client, `(() => {
+    const target = document.querySelector('.timelineLayerRowBackground[data-timeline-layer-id="${targetLayerId}"]');
+    if (!(target instanceof Element)) return null;
+    target.scrollIntoView({ block: 'center', inline: 'nearest' });
+    const rect = target.getBoundingClientRect();
+    const candidateXs = [
+      Math.max(rect.left + 8, Math.min(rect.right - 8, ${JSON.stringify(points.source.x)} + 24)),
+      rect.left + rect.width * 0.75,
+      rect.left + rect.width * 0.5,
+      rect.left + rect.width * 0.25,
+    ];
+    const point = candidateXs.map((x) => ({ x, y: rect.top + rect.height / 2 })).find((candidate) =>
+      document.elementFromPoint(candidate.x, candidate.y)
+        ?.closest('[data-timeline-layer-id]')?.getAttribute('data-timeline-layer-id') === ${JSON.stringify(String(targetLayerId))},
+    );
+    if (!point) return null;
+    return {
+      point,
+      size: [rect.width, rect.height],
+      layerAtPoint: document.elementFromPoint(point.x, point.y)
+        ?.closest('[data-timeline-layer-id]')?.getAttribute('data-timeline-layer-id') ?? null,
+    };
+  })()`);
+  assert.ok(target && target.size[0] > 0 && target.size[1] > 0, `visible lane drag target geometry for ${selector}`);
+  assert.equal(target.layerAtPoint, String(targetLayerId), `pointer target resolves lane ${targetLayerId} for ${selector}`);
+  await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...target.point, modifiers, button: "left", buttons: 1 });
+  await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...target.point, modifiers, button: "left", buttons: 0, clickCount: 1 });
   await sleep(100);
 };
 const timelineLaneItemKey = (item) => `${item.kind}:${item.event_id ?? item.clip_id ?? item.automation_id}`;
@@ -183,7 +215,10 @@ const mountedTimelineItemTimes = (client, item) => {
 };
 const assertLaneTimeShiftMounted = async (client, callIndex, call, label) => {
   assert.equal(Number.isInteger(call.delta_ms), true, `${label} carries an integer delta`);
-  assert.equal(Math.sign(call.delta_ms), 1, `${label} carries the positive signed pointer delta`);
+  // The destination gutter may be left of the clip on compact layouts. Keep
+  // asserting a genuine signed pointer-time change instead of assuming its
+  // direction from the old canvas-only drop coordinate.
+  assert.notEqual(call.delta_ms, 0, `${label} carries a nonzero signed pointer delta`);
   const applied = await evaluate(client, `structuredClone(window.__syndocalTimelineLaneMoveFixtureApplied[${callIndex}])`);
   const keys = call.items.map(timelineLaneItemKey);
   for (const key of keys) {
@@ -251,9 +286,10 @@ const measure = (client) => evaluate(client, `(() => {
       return bounds.width > 0 && bounds.height > 0 && (bounds.width < 43.5 || bounds.height < 43.5);
     }).length,
     phaseEditorOpen: Boolean(document.querySelector('.timelinePerformanceEditor .timelinePhaseEditor[open]')),
-    guideAudioOpen: Boolean(document.querySelector('.timelinePerformanceEditor .timelineGuideAudioEditor[open]')),
-    guideAudioControls: document.querySelectorAll('.timelineGuideAudioEditorBody input, .timelineGuideAudioEditorBody select').length,
-    guideAudioState: document.querySelector('.timelineGuideAudioEditor > summary output')?.textContent?.trim() ?? '',
+    cueAudioOpen: Boolean(document.querySelector('.timelinePerformanceEditor .timelineCueAudioEditor[open]')),
+    cueAudioControls: document.querySelectorAll('.timelineCueAudioEditorBody input, .timelineCueAudioEditorBody select, .timelineCueAudioEditorBody button').length,
+    cueAudioState: document.querySelector('.timelineCueAudioEditor > summary output')?.textContent?.trim() ?? '',
+    cueAudioCheckboxes: document.querySelectorAll('.timelineCueAudioEditorBody input[type="checkbox"]').length,
     phaseLabels: phases.map((phase) => phase.textContent?.trim() ?? ''),
     guidePressed: document.querySelector('.timelineOperatorBar [data-timeline-guide]')?.getAttribute('aria-pressed') ?? '',
     loopPressed: document.querySelector('.timelineOperatorBar [data-timeline-loop-toggle]')?.getAttribute('aria-pressed') ?? '',
@@ -324,17 +360,17 @@ try {
     await client.send("Page.navigate", { url: baseUrl });
     await waitFor(() => evaluate(client, "document.querySelector('.app') && document.readyState === 'complete'"), "app mount");
     assert.equal(await click(client, '[data-workspace-option="control"]'), true);
-    assert.equal(await click(client, '[data-workspace-pane="lower-right"] [data-lighting-context-tab="timeline"]'), true);
+    assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="live"]'), true);
     assert.equal(await waitFor(() => click(client, '[data-timeline-desk-surface="show"]'), "Timeline Show tab"), true);
     await waitFor(() => evaluate(client, "document.querySelectorAll('.timelineVideoClip').length === 1 && document.querySelectorAll('.timelineAudioClip').length === 2"), "authored Timeline media clips");
     assert.equal(await click(client, '.timelineToolsDisclosure > summary'), true);
     await waitFor(() => evaluate(client, "document.querySelector('.timelineToolsDisclosure[open] .timelinePerformanceEditor')?.getBoundingClientRect().height > 0"), "Timeline performance disclosure");
     assert.equal(await click(client, '.timelinePerformanceEditor [data-timeline-bank] > summary'), true);
-    assert.equal(await click(client, '.timelinePerformanceEditor .timelineGuideAudioEditor > summary'), true);
+    assert.equal(await click(client, '.timelinePerformanceEditor .timelineCueAudioEditor > summary'), true);
     assert.equal(await click(client, '.timelinePerformanceEditor .timelinePhaseEditor > summary'), true);
     await sleep(100);
     const targetProof = [];
-    for (const selector of ['.timelinePerformanceEditor [data-timeline-bank]', '.timelinePerformanceEditor .timelineGuideAudioEditor', '.timelinePerformanceEditor .timelinePhaseEditor', '.timelineOperatorBar > .timelineLoopControls']) {
+    for (const selector of ['.timelinePerformanceEditor [data-timeline-bank]', '.timelinePerformanceEditor .timelineCueAudioEditor', '.timelinePerformanceEditor .timelinePhaseEditor', '.timelineOperatorBar > .timelineLoopControls']) {
       targetProof.push(await evaluate(client, `(() => {
         const scope = document.querySelector(${JSON.stringify(selector)});
         if (!(scope instanceof HTMLElement)) return null;
@@ -440,7 +476,7 @@ try {
       "Timeline Follow abort retains focus after its bounded runtime-only result",
     );
     assert.equal(state.phaseEditorOpen, true);
-    assert.deepEqual([state.guideAudioOpen, state.guideAudioControls, state.guideAudioState], [true, 3, 'Ready']);
+    assert.deepEqual([state.cueAudioOpen, state.cueAudioControls, state.cueAudioState, state.cueAudioCheckboxes], [true, 4, 'Loading settings', 0]);
     assert.deepEqual(state.phaseLabels, ["Intro", "Verse", "Chorus"]);
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
     assert.deepEqual([state.videoClips, state.audioClips], [1, 3], "isolated Split mounts one fresh Audio right-side block");
@@ -693,6 +729,36 @@ try {
         };
         window.__syndocalTimelineLaneMoveItemKey = key;
       })()`);
+      const laneDragGeometry = await evaluate(client, `(() => {
+        const performanceDetails = [...document.querySelectorAll('.timelinePerformanceEditor details')];
+        for (const detail of performanceDetails) {
+          if (detail instanceof HTMLDetailsElement && detail.open) {
+            detail.querySelector(':scope > summary')?.click();
+          }
+        }
+        const toolsDisclosure = document.querySelector('.timelineToolsDisclosure');
+        if (toolsDisclosure instanceof HTMLDetailsElement && toolsDisclosure.open) {
+          toolsDisclosure.querySelector(':scope > summary')?.click();
+        }
+        const source = document.querySelector('[data-timeline-video-clip-id="800"]');
+        const target = document.querySelector('[data-timeline-layer-gutter][data-timeline-layer-id="15"]');
+        if (!(source instanceof Element) || !(target instanceof Element)) return null;
+        source.scrollIntoView({ block: 'center', inline: 'nearest' });
+        target.scrollIntoView({ block: 'center', inline: 'nearest' });
+        const sourceRect = source.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        return {
+          detailsClosed: performanceDetails.every((detail) => !(detail instanceof HTMLDetailsElement) || !detail.open)
+            && (!(toolsDisclosure instanceof HTMLDetailsElement) || !toolsDisclosure.open),
+          source: [sourceRect.width, sourceRect.height],
+          target: [targetRect.width, targetRect.height],
+        };
+      })()`);
+      assert.deepEqual(
+        [laneDragGeometry?.detailsClosed, laneDragGeometry?.source[0] > 0, laneDragGeometry?.source[1] > 0, laneDragGeometry?.target[0] > 0, laneDragGeometry?.target[1] > 0],
+        [true, true, true, true, true],
+        "1280 linked lane drag closes performance disclosures and remeasures visible source and target geometry",
+      );
       await dragTimelineItemToLane(client, '[data-timeline-video-clip-id="800"]', 15);
       await waitFor(() => evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls?.length === 1"), "Video linked lane move");
       const firstLaneCall = await evaluate(client, "structuredClone(window.__syndocalTimelineLaneMoveFixtureCalls[0])");
@@ -883,7 +949,7 @@ try {
       await sleep(50);
       assert.equal(await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"), beforeContextMove + 1, "boundary keyboard move invokes no authoritative command");
     }
-    assert.equal(targetProof.every((proof) => proof?.rect[0] > 0 && proof?.rect[1] > 0 && proof.count > 0 && proof.short === 0), true, `Timeline bank, Guide audio, Phase, and loop controls preserve 44px targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(targetProof)}`);
+    assert.equal(targetProof.every((proof) => proof?.rect[0] > 0 && proof?.rect[1] > 0 && proof.count > 0 && proof.short === 0), true, `Timeline bank, Cue Audio, Phase, and loop controls preserve 44px targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(targetProof)}`);
     assert.equal(state.shortTargets, 0, `Visible Timeline performance controls preserve 44px targets at ${viewport.width}x${viewport.height}`);
     assert.equal(state.fixedOuter, true, `Timeline disclosures keep app/document outer scroll fixed at ${viewport.width}x${viewport.height}`);
     console.log(`${viewport.width}x${viewport.height}: phases=${state.phaseLabels.join('/')} bank=${state.bankItems} media=${state.videoClips}+${state.audioClips} selected=${state.selectedVideo}+${state.selectedAudio}`);

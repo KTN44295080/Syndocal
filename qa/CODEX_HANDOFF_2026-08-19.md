@@ -6,7 +6,7 @@
 - Pushed checkpoint HEAD: `4b3781d7e998d70f56d738c64af0fdf473421c51`
   (`feat: expand two-song guide cues`), with the complete five-commit checkpoint
   range `486d420..4b3781d` published to `origin/codex/syndocal-v1.2`.
-- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.3`.
+- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.4`.
 - **2026-08-22 Windows-only scope:** current completion targets this operator's
   Windows PC. macOS/Linux control/native/warning rows and the six distribution,
   legal, signing, SBOM, clean-machine, updater, and publication rows are deferred
@@ -17,7 +17,7 @@
   same registered Tauri/control-plane production paths from backend drivers.
   Do not repeat Computer Use for every fix. Run one maximized release-executable
   UI/hardware acceptance after the integrated bundle is otherwise green.
-- **2026-08-22 `1.2.0-alpha.3` checkpoint:** Commit A `486d420` records the
+- **Historical 2026-08-22 `1.2.0-alpha.3` checkpoint:** Commit A `486d420` records the
   integrated Windows show-core work and synchronized product metadata; Commit B
   `4120539` contains only the reviewed frontend build-marker rebaseline. The
   explicit `486d420...4120539` output-marker audit passed. Release metadata and
@@ -44,14 +44,16 @@
   acceptance. The normal warning gate from the reviewed `4120539` baseline to
   `4b3781d` passed with total/first-party/third-party counts `0/0/0`, and the
   checkpoint push completed successfully.
-- **2026-08-22 Timeline click gap:** the present Rodio click is a 25 ms polling,
+- **Historical 2026-08-22 alpha.3 Timeline click gap (superseded by the alpha.4
+  scheduler checkpoint below):** the then-current Rodio click was a 25 ms polling,
   fixed-4/4 sine-tone implementation. It is not accepted for the show-core. The
   next independent tranche after the real MediaAsset path must add an authored
   numerator/denominator meter map, sample-frame scheduling and generation-fenced
   cancellation, the reference 1320/920 Hz square-wave envelope and click bus,
   and exact `惑う星` 113-128 / 194 BPM / 74-click proof. MTC, loop, seek, BPM,
   replacement and DJ transport discontinuities must not emit stale clicks.
-- **2026-08-22 Timeline Guide scope/gap:** the engine/native path already emits and
+- **Historical 2026-08-22 alpha.3 Timeline Guide scope/gap (superseded by the
+  alpha.4 cue-audio checkpoint below):** the engine/native path then emitted and
   generation-fences Phase/`Looping`/`Break`/`Trans` cues and plays the fixed
   embedded English WAV vocabulary through its own device/gain bus. It is not the
   final timing/routing path: playback is appended after the 25 ms media-audio
@@ -65,7 +67,8 @@
   tempo/meter authority, retain a separate bus, persist machine-local routing
   safely, and prove stale-generation/device/custom-label failures through the
   production command path before completion.
-- **2026-08-22 Guide completion cue:** the selected Follow-end phrase is the
+- **Historical 2026-08-22 Guide completion cue (superseded by the alpha.4 cue-audio
+  checkpoint below):** the selected Follow-end phrase was the
   single word `Complete`, generated with the same `Microsoft Zira Desktop`, Rate
   2, Volume 100 voice as the existing fixed pack. It must play exactly once only
   after successful Follow settlement, before a due destination Phase cue; abort,
@@ -1340,3 +1343,44 @@ with zero first-party warnings, fmt, and diff-check. Stable hashes are engine
 `C9FB7C0AA033A7CC4C03C4A3928B86CF83B390247154861A256D9467FB106EEC`
 and main
 `D85641CF45731C9F2C5C773A1F4AA0A6619632EA75F3753D4B354D4BE963904C`.
+
+## 2026-08-22 alpha.4 cue-audio integration handoff
+
+- Branch/HEAD before the alpha.4 checkpoint commit: `codex/syndocal-v1.2` /
+  `9b0bd7e1755571037c9ff552e880467f6ee47f8d`. The integrated implementation and
+  independent reviews are complete and ready for one checkpoint commit/push.
+- Product metadata has advanced consistently to `1.2.0-alpha.4` across the
+  workspace manifest, first-party Cargo.lock entries, frontend/Tauri manifests,
+  release checker, artifact names, README, completion flow, roadmap, and release
+  status. No project/command/API/ABI/asset schema version was changed.
+- Independently frozen scheduler hashes are protocol
+  `48FF684AFD66680DC97F1AB5447F5FAFF920E63A5609D9ABF1FC6F6CF502BD1B` and Engine
+  `0031D9EC1AB5004779A9C28A2665DF2BC14D6122B1FAE32B40DFCB15D5735F66`.
+  Engine validation was 805/805 with zero failures, two ignored tests, one
+  known filtered case, and zero first-party warnings.
+- Final independently green native integration hashes are main
+  `E69A8989E7AE0D030C7AB3FE0AA31B2D36075CB22FADA0382EDDFE99D5214750`, cue core
+  `D6C1A18FD09E98AB7CA849EE439AFEF93C67C700E42466CB5B4C6854F90C1927`, and DVC
+  `B81913413A4796A37B4F6FE5A146CB75114AB20F0BE1A74B700A4A3C226F3546`.
+  Independent review reported P0/P1/P2 zero; the old polling/Sink production
+  route is absent and exact clock/topology/settings/lifecycle fences are live.
+- The authored two-song material remains 33 Guide events, natural
+  `playback_rate_milli = clamp(round((1 + (BPM - 170) / 600) * 1000), 920, 1080)`
+  (170 BPM = 1000; 194 BPM = 1040), `Trans` at 149/151/153/155 every two
+  measures, and Complete-only settlement collision with destination Intro
+  suppression.
+- Final automated evidence is green: Cue Audio 41/41, DVC import 105/105,
+  protocol 143/143, frontend TypeScript/build, 411 invokes, 3541/3541
+  localization, Cue runtime/browser, the four-viewport Timeline Performance
+  matrix, and Windows default/release warning ratchets at zero first-party
+  warnings. The one control-plane inventory correction passed its exact test.
+- Immediately before the final build the exact-checkout process count was zero.
+  `pnpm --dir app tauri build --no-bundle` passed in 2m37s and produced a
+  56,342,016-byte `1.2.0-alpha.4` executable with SHA-256
+  `AB98EA14F8439E23CC2E3BD80A4041C2B9CC82244A68B6938A3E9B2515A87297`.
+  One responsive exact-path window was launched and maximized. Edit > Timeline
+  displayed Click, Guide, Follow waiting, shared lanes, and the source shelf
+  without a runtime fault. No project or output setting was mutated.
+- Remaining external acceptance is audible playback plus the editor + LED panel
+  + projector operation, fixture/serial-DMX, MTC/DJ Link, audio device, and soak/
+  recovery rows. Do not infer those from the native UI smoke.

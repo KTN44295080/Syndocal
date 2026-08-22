@@ -220,6 +220,11 @@ import { verifiedFixtureProfileRequest, type FixtureProfileHealthSummary } from 
 import { bundledLibraryProfileRequest } from "./bundledLibrary";
 import { confirmCueRemoval, confirmDestructiveAction } from "./destructiveActions";
 import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSync";
+import {
+  createTimelineCueAudioSettingsQueue,
+  createTimelineCueAudioStatusRequestGate,
+  type TimelineCueAudioStatusFence,
+} from "./timelineCueAudioStatusSync";
 import type {
   ApplicationUpdateCheck,
   ApplicationUpdateConfiguration,
@@ -362,7 +367,8 @@ import type {
   TimelineFollowRuntimeReport,
   TimelineFollowRuntimeSummary,
   TimelineFollowSummary,
-  TimelineGuideAudioStatus,
+  MachineTimelineCueAudioSettingsV1,
+  TimelineCueAudioStatus,
   TimelineGroupAutomationAddResult,
   TimelineItemLaneMovePlan,
   TimelineItemLanePlacement,
@@ -2673,18 +2679,50 @@ export default function App() {
   const mediaAssetThumbnailSignatures = new Map<number, string>();
   const authorizeVideoThumbnailAccess = () => setVideoThumbnailAccessAuthorized(true);
   let spokenTimelineGuideKey = "";
-  const [timelineGuideAudioStatus, setTimelineGuideAudioStatus] = createSignal<TimelineGuideAudioStatus>({
-    enabled: true,
-    gain: 0.8,
+  const emptyTimelineCueAudioStatus = (): TimelineCueAudioStatus => ({
+    runtimeIncarnation: 0,
+    statusRevision: 0,
+    desiredSettings: {
+      version: 1,
+      route: "follow_program",
+      device_name: null,
+      topology_fingerprint: null,
+      click_gain: 1,
+      guide_gain: 0.85,
+    },
+    appliedSettings: null,
+    settingsRevision: 0,
+    lifecycle: "loading_settings",
     requestedDeviceName: null,
     resolvedDeviceName: null,
-    activeGeneration: null,
-    lastSequence: 0,
-    lastSpokenLabel: null,
-    spokenCount: 0,
+    requestedTopologyFingerprint: null,
+    observedTopologyFingerprint: null,
+    topologyGeneration: 0,
+    endpoints: [],
+    outputClockEpoch: 0,
+    scheduleGeneration: 0,
+    sourceFence: 0,
+    nextOutputFrame: 0,
+    callbackLive: false,
+    faultCode: "None",
+    faultCount: 0,
+    faultSequence: 0,
     lastError: null,
+    rotationCount: 0,
+    stallCount: 0,
+    configCount: 0,
   });
-  const [timelineGuideAudioDevices, setTimelineGuideAudioDevices] = createSignal<string[]>([]);
+  const timelineCueAudioStatusFence = (status: TimelineCueAudioStatus): TimelineCueAudioStatusFence => ({
+    runtimeIncarnation: status.runtimeIncarnation,
+    statusRevision: status.statusRevision,
+  });
+  const [timelineCueAudioStatus, setTimelineCueAudioStatus] = createSignal<TimelineCueAudioStatus>(
+    emptyTimelineCueAudioStatus(),
+  );
+  const [timelineCueAudioMutationBusy, setTimelineCueAudioMutationBusy] = createSignal(false);
+  const [timelineCueAudioLocalError, setTimelineCueAudioLocalError] = createSignal<string | null>(null);
+  const timelineCueAudioStatusRequests = createTimelineCueAudioStatusRequestGate();
+  let timelineCueAudioSettingsQueue: ReturnType<typeof createTimelineCueAudioSettingsQueue<MachineTimelineCueAudioSettingsV1, TimelineCueAudioStatus>> | null = null;
   // This signal is populated exclusively by the E/R/H-authoritative runtime
   // read below. Keep it separate from TimelineSnapshot.follow: the latter is
   // authored configuration, while this is live transport truth.
@@ -14048,30 +14086,51 @@ export default function App() {
       setMessage(`Timeline Guide update failed: ${String(error)}`);
     }
   };
-  const configureTimelineGuideAudio = async (enabled: boolean, gain: number, deviceName: string | null) => {
+  const applyTimelineCueAudioStatus = (status: TimelineCueAudioStatus, requestEpoch: number) => {
+    if (
+      !timelineCueAudioStatusRequests.acceptsRequest(requestEpoch)
+      || !timelineCueAudioStatusRequests.commitStatus(timelineCueAudioStatusFence(status))
+    ) return false;
+    setTimelineCueAudioStatus(status);
+    setTimelineCueAudioLocalError(null);
+    return true;
+  };
+  const refreshTimelineCueAudioStatus = async (announce = false, refreshOutputs = false) => {
+    if (!isTauriRuntime()) return null;
+    const requestEpoch = timelineCueAudioStatusRequests.beginPoll();
+    if (requestEpoch === null) return null;
+    try {
+      // The list command is a manual topology probe that updates the Cue Audio
+      // runtime. Never run it from the status timer.
+      if (refreshOutputs) await invoke<string[]>("list_audio_output_devices");
+      const status = await invoke<TimelineCueAudioStatus>("get_timeline_cue_audio_status");
+      return applyTimelineCueAudioStatus(status, requestEpoch) ? status : null;
+    } catch (error) {
+      if (announce && timelineCueAudioStatusRequests.acceptsRequest(requestEpoch)) {
+        setTimelineCueAudioLocalError(String(error));
+      }
+      return null;
+    } finally {
+      timelineCueAudioStatusRequests.endPoll();
+    }
+  };
+  const configureTimelineCueAudio = (settings: MachineTimelineCueAudioSettingsV1) => {
     if (!isTauriRuntime()) {
-      setTimelineGuideAudioStatus((current) => ({
-        enabled,
-        gain: Math.max(0, Math.min(2, gain)),
-        requestedDeviceName: deviceName,
-        resolvedDeviceName: deviceName,
-        activeGeneration: current?.activeGeneration ?? null,
-        lastSequence: current?.lastSequence ?? 0,
-        lastSpokenLabel: current?.lastSpokenLabel ?? null,
-        spokenCount: current?.spokenCount ?? 0,
-        lastError: null,
-      }));
+      setTimelineCueAudioLocalError(tauriBackendUnavailableMessage);
       return;
     }
-    try {
-      setTimelineGuideAudioStatus(await invoke<TimelineGuideAudioStatus>("set_timeline_guide_audio_config", {
-        enabled,
-        gain,
-        deviceName,
-      }));
-    } catch (error) {
-      setMessage(`Timeline Guide audio update failed: ${String(error)}`);
+    if (!timelineCueAudioSettingsQueue) {
+      timelineCueAudioSettingsQueue = createTimelineCueAudioSettingsQueue({
+        gate: timelineCueAudioStatusRequests,
+        send: (next) => invoke<TimelineCueAudioStatus>("set_machine_timeline_cue_audio_settings", { settings: next }),
+        fenceOf: timelineCueAudioStatusFence,
+        onStatus: (status) => setTimelineCueAudioStatus(status),
+        onError: (error) => setTimelineCueAudioLocalError(String(error)),
+        onBusy: setTimelineCueAudioMutationBusy,
+      });
     }
+    setTimelineCueAudioLocalError(null);
+    timelineCueAudioSettingsQueue.submit(settings);
   };
   const setTimelinePhases = async (phases: TimelinePhaseSummary[]) => {
     try {
@@ -14180,7 +14239,7 @@ export default function App() {
   createEffect(() => {
     const cues = activeTimeline().guide_cues ?? [];
     const cue = cues.at(-1);
-    // Native playback is owned by the backend's dedicated Guide monitor bus.
+    // Native playback is owned by the backend's dedicated Cue Audio delivery path.
     // Keep Web Speech only for browser fixtures/non-Tauri previews so the
     // desktop application never announces the same cue twice.
     if (isTauriRuntime()) return;
@@ -14199,18 +14258,8 @@ export default function App() {
     if (!visible || !isTauriRuntime()) return;
     let disposed = false;
     const refresh = async () => {
-      try {
-        const [status, devices] = await Promise.all([
-          invoke<TimelineGuideAudioStatus>("get_timeline_guide_audio_status"),
-          invoke<string[]>("list_audio_output_devices"),
-        ]);
-        if (!disposed) {
-          setTimelineGuideAudioStatus(status);
-          setTimelineGuideAudioDevices(devices);
-        }
-      } catch (error) {
-        if (!disposed) setMessage(`Timeline Guide audio status failed: ${String(error)}`);
-      }
+      if (disposed) return;
+      await refreshTimelineCueAudioStatus(true);
     };
     void refresh();
     const timer = window.setInterval(refresh, 1_000);
@@ -22651,8 +22700,9 @@ export default function App() {
           countInRemainingMs={activeTimeline().count_in_remaining_ms ?? 0}
           phases={activeTimeline().phases ?? []}
           guideEnabled={activeTimeline().guide_enabled ?? false}
-          guideAudioStatus={timelineGuideAudioStatus()}
-          guideAudioDevices={timelineGuideAudioDevices()}
+          cueAudioStatus={timelineCueAudioStatus()}
+          cueAudioMutationBusy={timelineCueAudioMutationBusy()}
+          cueAudioLocalError={timelineCueAudioLocalError()}
           loopRegion={activeTimeline().loop_region ?? null}
           loopRuntime={activeTimeline().loop_runtime ?? { generation: 0, status: "disabled", wrap_count: 0 }}
           timelines={timelineBank()}
@@ -22679,7 +22729,8 @@ export default function App() {
           onPlay={playTimeline}
           onSetMetronome={setTimelineMetronome}
           onSetGuideEnabled={setTimelineGuideEnabled}
-          onConfigureGuideAudio={configureTimelineGuideAudio}
+          onConfigureCueAudio={configureTimelineCueAudio}
+          onRefreshCueAudio={async () => { await refreshTimelineCueAudioStatus(true, true); }}
           onSetPhases={setTimelinePhases}
           onSetLoopRegion={setTimelineLoopRegion}
           onSetLoopEnabled={setTimelineLoopEnabled}

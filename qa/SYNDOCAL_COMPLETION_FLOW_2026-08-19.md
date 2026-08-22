@@ -140,17 +140,19 @@ does not truncate an already valid utterance.
 
 Successful Follow settlement emits the fixed one-word guide `Complete` exactly
 once. It is not emitted at admission, visual transition end, abort, Hold/Fault,
-failed quorum, or stale-generation cleanup. If a destination Phase cue is also
-due, `Complete` precedes that Phase announcement on the same Guide bus.
+failed quorum, or stale-generation cleanup. At a settlement boundary where a
+destination Phase would otherwise be due, `Complete` is the only Guide cue;
+the destination Phase/Intro is suppressed so the two words cannot collide.
 
 Guide enable remains project-authored. Physical device selection and monitor gain
 are machine-local settings, must survive an application restart, and must stay
 locked with a visible fault when the explicitly selected device is absent. The
 Guide bus remains separate from Program audio and the Click bus. Playback captures
-the Timeline BPM at each cue boundary and applies only a small pitch-preserving
-rate adjustment to the fixed voice: 120 BPM is 1.00x and the effective rate is
-bounded to 0.92x-1.08x. A later BPM or sync correction cannot retime a word that
-is already in progress. Deterministic backend proof must cover every built-in
+the Timeline BPM at each cue boundary and applies the natural rate adjustment
+`playback_rate_milli = clamp(round((1 + (BPM - 170) / 600) * 1000), 920, 1080)`
+to the fixed voice: 170 BPM is 1000 and 194 BPM is 1040. This is intentionally
+not pitch-preserving; a later BPM or sync correction cannot retime a word that is
+already in progress. Deterministic backend proof must cover every built-in
 English asset, unsupported/corrupt custom
 labels, exact ordering when multiple boundaries are crossed,
 stale-generation cancellation, missing-device fail-closed behavior, and parity
@@ -328,7 +330,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active development train advances from the long-lived `1.1.0` metadata to
-`1.2.0-alpha.3`. The branch name may remain historical; artifact metadata and tags
+`1.2.0-alpha.4`. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from the branch name.
 
 The synchronized product-version surfaces are:
@@ -1094,3 +1096,37 @@ visible interaction, so no repeated Computer Use mutation sequence was run.
 The authoritative checklist is now 14/79 (17.7%). This is an E1-only acceptance,
 not whole-product or cross-platform completion. Continue next with E2 authority
 bundle/generation consistency; E3 durability and E4 Save/Save As remain open.
+
+## 24. 2026-08-22 alpha.4 Timeline cue-audio integration checkpoint
+
+The distributed development train is now `1.2.0-alpha.4`. This ordinal advances
+the product metadata for the next intentionally distributed build; it does not
+promote the current source to beta, RC, or release and does not change any
+project, command, API, ABI, or asset schema version.
+
+The sample-frame scheduler is independently frozen and reviewed. The exact
+protocol hash is
+`48FF684AFD66680DC97F1AB5447F5FAFF920E63A5609D9ABF1FC6F6CF502BD1B`, and the
+exact Engine hash is
+`0031D9EC1AB5004779A9C28A2665DF2BC14D6122B1FAE32B40DFCB15D5735F66`.
+The full Engine gate passed 805/805 with zero failures, two ignored tests, and
+one explicitly known filtered case; focused protocol/documentation gates and
+the first-party warning gate were also zero-warning. The scheduler covers exact
+sample-frame click/Guide ordering, variable meters, MTC/DJ discontinuities,
+musical looping, and the pinned two-song `Trans` targets.
+
+The final independently accepted native integration hashes are main
+`E69A8989E7AE0D030C7AB3FE0AA31B2D36075CB22FADA0382EDDFE99D5214750`, cue core
+`D6C1A18FD09E98AB7CA849EE439AFEF93C67C700E42466CB5B4C6854F90C1927`, and DVC
+`B81913413A4796A37B4F6FE5A146CB75114AB20F0BE1A74B700A4A3C226F3546`, with
+P0/P1/P2 all zero. Backend Cue Audio 41/41, DVC import 105/105, protocol 143/143,
+frontend TypeScript/build, 411 invokes, 3541/3541 localization, focused Cue
+runtime/browser, the four-viewport Timeline browser matrix, and Windows
+default/release warning ratchets are green with zero first-party warnings.
+After an exact-path process count of zero, the no-bundle native build passed in
+2m37s and produced a 56,342,016-byte `1.2.0-alpha.4` executable with SHA-256
+`AB98EA14F8439E23CC2E3BD80A4041C2B9CC82244A68B6938A3E9B2515A87297`. Exactly one
+responsive `Syndocal` window was maximized and Edit > Timeline displayed Click,
+Guide, Follow waiting, the shared lanes, and source shelf without a fault. No
+project state was changed; audible playback, the final three-screen pass, and
+fixture/serial-DMX/audio hardware acceptance remain required.

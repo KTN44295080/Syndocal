@@ -3943,6 +3943,7 @@ pub enum TimelinePhaseRole {
     Verse,
     PreChorus,
     Chorus,
+    Interlude,
     Bridge,
     Breakdown,
     Outro,
@@ -4056,6 +4057,10 @@ pub struct TimelineFollowSummary {
     pub preroll_ms: u64,
     #[serde(default = "default_timeline_follow_trans_cadence_bars")]
     pub trans_cadence_bars: u16,
+    /// Exact show-authored Trans target measures. Empty preserves the additive
+    /// legacy behavior (derive targets from `trans_cadence_bars`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trans_target_measures: Vec<u64>,
     #[serde(default)]
     pub fault_policy: TimelineFollowFaultPolicy,
 }
@@ -4086,6 +4091,280 @@ pub struct TimelineAudioClipSummary {
     pub fade_in_ms: u64,
     #[serde(default)]
     pub fade_out_ms: u64,
+}
+
+/// The interpolation used between two authored Timeline tempo points.  The
+/// default is deliberately step/hold so a legacy or partially authored map
+/// cannot introduce an implicit tempo slew.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TimelineTempoInterpolation {
+    Step,
+    Linear,
+}
+
+impl Default for TimelineTempoInterpolation {
+    fn default() -> Self {
+        Self::Step
+    }
+}
+
+/// One exact Timeline tempo/meter change point.  The authored transport
+/// coordinate is an integer sixteenth-note grid (`1/16` note per unit), so a
+/// `7/8` measure is exactly 14 units and can be followed by a `3/8` measure
+/// without a fractional or floating-point persistence coordinate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TimelineTempoMeterPoint {
+    #[serde(default)]
+    pub position_sixteenth_steps: u64,
+    #[serde(default = "default_timeline_tempo_bpm")]
+    pub bpm: f64,
+    #[serde(
+        default = "default_timeline_meter_numerator",
+        alias = "meter_numerator"
+    )]
+    pub numerator: u8,
+    #[serde(
+        default = "default_timeline_meter_denominator",
+        alias = "meter_denominator"
+    )]
+    pub denominator: u8,
+    #[serde(default)]
+    pub interpolation: TimelineTempoInterpolation,
+    /// Optional display/diagnostic measure number.  It is not used to derive
+    /// timing, but lets imported maps preserve a source measure identity such
+    /// as the `惑う星` 113..128 range without inventing another clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measure_number: Option<u64>,
+}
+
+impl Default for TimelineTempoMeterPoint {
+    fn default() -> Self {
+        Self {
+            position_sixteenth_steps: 0,
+            bpm: default_timeline_tempo_bpm(),
+            numerator: default_timeline_meter_numerator(),
+            denominator: default_timeline_meter_denominator(),
+            interpolation: TimelineTempoInterpolation::default(),
+            measure_number: None,
+        }
+    }
+}
+
+pub type TimelineTempoPoint = TimelineTempoMeterPoint;
+pub type TimelineMeterPoint = TimelineTempoMeterPoint;
+
+pub const TIMELINE_TEMPO_METER_MAP_VERSION: u8 = 1;
+pub const TIMELINE_TEMPO_METER_MAX_POINTS: usize = 4096;
+pub const TIMELINE_TEMPO_METER_MAX_SIXTEENTH_STEPS: u64 = u64::MAX / 4;
+pub const TIMELINE_TEMPO_METER_MAX_MEASURE: u64 = u64::MAX / 16;
+pub const TIMELINE_TEMPO_MIN_BPM: f64 = 20.0;
+pub const TIMELINE_TEMPO_MAX_BPM: f64 = 300.0;
+
+const fn default_timeline_tempo_meter_map_version() -> u8 {
+    TIMELINE_TEMPO_METER_MAP_VERSION
+}
+
+fn is_default_timeline_tempo_meter_map_version(version: &u8) -> bool {
+    *version == TIMELINE_TEMPO_METER_MAP_VERSION
+}
+
+const fn default_timeline_tempo_bpm() -> f64 {
+    120.0
+}
+
+const fn default_timeline_meter_numerator() -> u8 {
+    4
+}
+
+const fn default_timeline_meter_denominator() -> u8 {
+    4
+}
+
+/// Validate a Timeline tempo/meter map without consulting runtime state.  An
+/// empty map is valid and means "use the current engine BPM and 4/4".
+pub fn validate_timeline_tempo_meter_map(
+    version: u8,
+    points: &[TimelineTempoMeterPoint],
+) -> Result<(), String> {
+    if version > TIMELINE_TEMPO_METER_MAP_VERSION {
+        return Err(format!(
+            "Timeline tempo/meter map version {version} is newer than supported version {TIMELINE_TEMPO_METER_MAP_VERSION}"
+        ));
+    }
+    if version == 0 && !points.is_empty() {
+        return Err("Timeline tempo/meter map version 0 cannot carry authored points".to_string());
+    }
+    if points.len() > TIMELINE_TEMPO_METER_MAX_POINTS {
+        return Err(format!(
+            "Timeline tempo/meter map contains {} points; the limit is {TIMELINE_TEMPO_METER_MAX_POINTS}",
+            points.len()
+        ));
+    }
+    let mut previous_position = None;
+    let mut previous_measure_number = None;
+    let mut current_measure_number = 1_u64;
+    let mut last_measure_boundary = 0_u64;
+    let mut current_numerator = 4_u8;
+    let mut current_denominator = 4_u8;
+    for (index, point) in points.iter().enumerate() {
+        if point.position_sixteenth_steps > TIMELINE_TEMPO_METER_MAX_SIXTEENTH_STEPS {
+            return Err(format!(
+                "Timeline tempo/meter point {index} exceeds the checked sixteenth-step range"
+            ));
+        }
+        if let Some(previous) = previous_position {
+            if point.position_sixteenth_steps == previous {
+                return Err(format!(
+                    "Timeline tempo/meter map contains duplicate point position {}",
+                    point.position_sixteenth_steps
+                ));
+            }
+            if point.position_sixteenth_steps < previous {
+                return Err("Timeline tempo/meter points must be sorted by position".to_string());
+            }
+        }
+        previous_position = Some(point.position_sixteenth_steps);
+        if !point.bpm.is_finite()
+            || !(TIMELINE_TEMPO_MIN_BPM..=TIMELINE_TEMPO_MAX_BPM).contains(&point.bpm)
+        {
+            return Err(format!(
+                "Timeline tempo/meter point {index} BPM must be finite and within {TIMELINE_TEMPO_MIN_BPM}..={TIMELINE_TEMPO_MAX_BPM}"
+            ));
+        }
+        if !(1..=16).contains(&point.numerator) {
+            return Err(format!(
+                "Timeline tempo/meter point {index} numerator must be within 1..=16"
+            ));
+        }
+        if !matches!(point.denominator, 1 | 2 | 4 | 8 | 16) {
+            return Err(format!(
+                "Timeline tempo/meter point {index} denominator must be a supported power of two"
+            ));
+        }
+        if point
+            .measure_number
+            .is_some_and(|measure| measure == 0 || measure > TIMELINE_TEMPO_METER_MAX_MEASURE)
+        {
+            return Err(format!(
+                "Timeline tempo/meter point {index} measure number is outside the checked range"
+            ));
+        }
+        let measure_steps = u64::from(current_numerator)
+            .checked_mul(16)
+            .and_then(|value| value.checked_div(u64::from(current_denominator)))
+            .ok_or_else(|| format!("Timeline tempo/meter point {index} measure span overflowed"))?;
+        let delta = point
+            .position_sixteenth_steps
+            .checked_sub(last_measure_boundary)
+            .ok_or_else(|| {
+                format!("Timeline tempo/meter point {index} precedes its measure boundary")
+            })?;
+        let at_measure_boundary = delta % measure_steps == 0;
+        let meter_changes =
+            (point.numerator, point.denominator) != (current_numerator, current_denominator);
+        if (meter_changes || point.measure_number.is_some()) && !at_measure_boundary {
+            return Err(format!(
+                "Timeline tempo/meter point {index} changes meter/measure number away from an exact measure boundary"
+            ));
+        }
+        if at_measure_boundary {
+            let elapsed_measures = delta / measure_steps;
+            let expected_measure = current_measure_number
+                .checked_add(elapsed_measures)
+                .ok_or_else(|| {
+                    format!("Timeline tempo/meter point {index} measure number overflowed")
+                })?;
+            if let Some(measure) = point.measure_number {
+                if let Some(previous_measure) = previous_measure_number {
+                    if measure <= previous_measure {
+                        return Err(format!(
+                            "Timeline tempo/meter measure numbers must increase strictly at point {index}"
+                        ));
+                    }
+                }
+                if index > 0 && measure != expected_measure {
+                    return Err(format!(
+                        "Timeline tempo/meter point {index} measure number {measure} does not match expected boundary {expected_measure}"
+                    ));
+                }
+                current_measure_number = measure;
+                previous_measure_number = Some(measure);
+            } else {
+                current_measure_number = expected_measure;
+            }
+            last_measure_boundary = point.position_sixteenth_steps;
+        } else if point.measure_number.is_some() {
+            return Err(format!(
+                "Timeline tempo/meter point {index} has an ambiguous measure number"
+            ));
+        }
+        if meter_changes {
+            current_numerator = point.numerator;
+            current_denominator = point.denominator;
+            last_measure_boundary = point.position_sixteenth_steps;
+        }
+        if matches!(point.interpolation, TimelineTempoInterpolation::Linear)
+            && points.get(index + 1).is_none()
+        {
+            return Err(
+                "The final Timeline tempo/meter point cannot request a linear slew without an end point"
+                    .to_string(),
+            );
+        }
+        // The checked cadence multiplication is part of validation rather
+        // than a later scheduler assertion, so a malformed map cannot mutate
+        // an already-running project before failing.
+        u64::from(point.numerator)
+            .checked_mul(16 / u64::from(point.denominator))
+            .ok_or_else(|| format!("Timeline tempo/meter point {index} cadence overflowed"))?;
+    }
+    Ok(())
+}
+
+/// Validate only the authored tempo/meter authority carried by a child
+/// Timeline.  Child event/cue graph validation remains engine-owned because it
+/// needs the project Cue catalog; keeping this function pure lets project-load
+/// preflight reject a malformed map before any runtime child transport exists.
+pub fn validate_child_timeline_tempo_meter_map(child: &ChildTimelineSummary) -> Result<(), String> {
+    validate_timeline_tempo_meter_map(child.tempo_meter_map_version, &child.tempo_meter_map)
+}
+
+/// Source identity for the engine-owned metronome/Guide output clock.  A
+/// source transition is an ABA fence even when the visible sample frame is
+/// unchanged, so a queued Root click can never be reused for a Direct child.
+/// A Follow keeps the source Root authority through settlement and installs
+/// its destination as a checked new Root generation only after success.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TimelineScheduleSource {
+    #[default]
+    Root,
+    DirectChild {
+        cue_id: CueId,
+        generation: u64,
+    },
+}
+
+/// Runtime-only click metadata published with a Timeline audio projection.
+/// The native bus can schedule the event without re-deriving musical timing;
+/// all identity fields are an ABA fence for queued output frames.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineClickEventSummary {
+    pub sample_frame: u64,
+    pub measure: u64,
+    pub beat: u16,
+    pub numerator: u8,
+    pub denominator: u8,
+    pub downbeat: bool,
+    pub frequency_hz: u16,
+    pub duration_frames: u32,
+    pub epoch: u64,
+    pub transport_generation: u64,
+    pub schedule_generation: u64,
+    #[serde(default)]
+    pub source: TimelineScheduleSource,
+    #[serde(default)]
+    pub count_in: bool,
 }
 
 impl Default for TimelineAudioClipSummary {
@@ -4335,10 +4614,36 @@ pub struct TimelineLoopRuntimeSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TimelineGuideCueKind {
-    Phase { phase_id: TimelinePhaseId },
+    Phase {
+        phase_id: TimelinePhaseId,
+    },
     Looping,
     Break,
     Trans,
+    /// Emitted exactly once when an admitted Follow reaches successful
+    /// terminal settlement.  Visual end, stale, abort and fault paths never
+    /// use this cue.
+    Complete,
+}
+
+/// Exhaustive offline Guide voice catalog. Keeping this semantic key in the
+/// runtime DTO prevents native playback from guessing an asset from localized
+/// or user-authored labels.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineGuideAssetKey {
+    Intro,
+    Verse,
+    PreChorus,
+    Chorus,
+    Interlude,
+    Bridge,
+    Breakdown,
+    Outro,
+    Looping,
+    Break,
+    Trans,
+    Complete,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4348,6 +4653,27 @@ pub struct TimelineGuideCueSummary {
     pub at_ms: u64,
     pub label: String,
     pub cue: TimelineGuideCueKind,
+    pub asset: TimelineGuideAssetKey,
+    /// Boundary-captured natural playback rate. Native playback intentionally
+    /// changes pitch with speed; an already-started word is never retimed.
+    #[serde(default = "default_timeline_guide_playback_rate_milli")]
+    pub playback_rate_milli: u16,
+    /// Exact native-bus coordinate derived from the current tempo/meter
+    /// authority. `at_ms` remains diagnostic/UI history only.
+    #[serde(default)]
+    pub sample_frame: u64,
+    #[serde(default)]
+    pub epoch: u64,
+    #[serde(default)]
+    pub transport_generation: u64,
+    #[serde(default)]
+    pub schedule_generation: u64,
+    #[serde(default)]
+    pub source: TimelineScheduleSource,
+}
+
+const fn default_timeline_guide_playback_rate_milli() -> u16 {
+    1_000
 }
 
 /// One authoritative authored image for the advanced Timeline surfaces. The
@@ -4892,6 +5218,16 @@ pub struct TimelineSnapshot {
     pub metronome_enabled: bool,
     #[serde(default = "default_timeline_count_in_beats")]
     pub count_in_beats: u8,
+    /// Authored tempo/meter authority shared by arranger, snap, count-in,
+    /// metronome, MTC conversion, and the runtime click scheduler.  Empty is
+    /// the additive legacy representation (current clock BPM, 4/4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tempo_meter_map: Vec<TimelineTempoMeterPoint>,
+    #[serde(
+        default = "default_timeline_tempo_meter_map_version",
+        skip_serializing_if = "is_default_timeline_tempo_meter_map_version"
+    )]
+    pub tempo_meter_map_version: u8,
     #[serde(default, skip_serializing)]
     pub count_in_remaining_ms: u64,
     #[serde(default, skip_serializing)]
@@ -4919,6 +5255,14 @@ pub struct TimelineSnapshot {
     pub follow_runtime: TimelineFollowRuntimeSummary,
     #[serde(default, skip_serializing)]
     pub guide_cues: Vec<TimelineGuideCueSummary>,
+    /// Runtime-only bounded click lookahead.  Authored project JSON cannot
+    /// inject queued native frames or their transport identity.
+    #[serde(default, skip)]
+    pub click_events: Vec<TimelineClickEventSummary>,
+    #[serde(default, skip)]
+    pub click_schedule_generation: u64,
+    #[serde(default, skip)]
+    pub click_queue_overflow: Option<String>,
     pub playing: bool,
     pub position_ms: u64,
     pub duration_ms: u64,
@@ -4945,6 +5289,8 @@ impl Default for TimelineSnapshot {
             audio_muted: false,
             metronome_enabled: false,
             count_in_beats: default_timeline_count_in_beats(),
+            tempo_meter_map: Vec::new(),
+            tempo_meter_map_version: default_timeline_tempo_meter_map_version(),
             count_in_remaining_ms: 0,
             audio_transport_revision: 0,
             transport_epoch: 0,
@@ -4953,6 +5299,9 @@ impl Default for TimelineSnapshot {
             loop_runtime: TimelineLoopRuntimeSummary::default(),
             follow_runtime: TimelineFollowRuntimeSummary::default(),
             guide_cues: Vec::new(),
+            click_events: Vec::new(),
+            click_schedule_generation: 0,
+            click_queue_overflow: None,
             playing: false,
             position_ms: 0,
             duration_ms: 0,
@@ -4980,6 +5329,7 @@ pub const TIMELINE_FOLLOW_MAX_DURATION_BEAT_MILLIUNITS: u64 = 200_000;
 pub const TIMELINE_FOLLOW_MAX_DURATION_BAR_MILLIUNITS: u64 = 50_000;
 pub const TIMELINE_FOLLOW_MAX_PREROLL_MS: u64 = TIMELINE_FOLLOW_MAX_RESOLVED_DURATION_MS;
 pub const TIMELINE_FOLLOW_MAX_TRANS_CADENCE_BARS: u16 = 256;
+pub const TIMELINE_FOLLOW_MAX_TRANS_TARGETS: usize = 64;
 
 /// Validate the authored Timeline additions without observing machine-local
 /// media availability. Media identity is checked only against the project
@@ -4994,6 +5344,7 @@ pub fn validate_timeline_authoring(
     if timeline.label.trim().is_empty() {
         return Err("Timeline label must not be empty".to_string());
     }
+    validate_timeline_tempo_meter_map(timeline.tempo_meter_map_version, &timeline.tempo_meter_map)?;
     let layer_by_id = timeline
         .layers
         .iter()
@@ -5260,6 +5611,47 @@ pub fn validate_timeline_authoring(
                 "Timeline Follow has invalid timing, preroll, BPM, or Guide cadence".to_string(),
             );
         }
+        if follow.trans_target_measures.len() > TIMELINE_FOLLOW_MAX_TRANS_TARGETS
+            || follow
+                .trans_target_measures
+                .iter()
+                .any(|measure| *measure == 0 || *measure > TIMELINE_TEMPO_METER_MAX_MEASURE)
+            || follow
+                .trans_target_measures
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(
+                "Timeline Follow Trans target measures must be bounded, non-zero, sorted, and unique"
+                    .to_string(),
+            );
+        }
+        if !follow.trans_target_measures.is_empty() {
+            let authored_range = timeline
+                .tempo_meter_map
+                .iter()
+                .filter_map(|point| point.measure_number)
+                .fold(None, |range, measure| match range {
+                    None => Some((measure, measure)),
+                    Some((minimum, maximum)) => Some((minimum.min(measure), maximum.max(measure))),
+                });
+            let Some((minimum, maximum)) = authored_range else {
+                return Err(
+                    "Timeline Follow exact Trans targets require authored measure anchors"
+                        .to_string(),
+                );
+            };
+            if follow
+                .trans_target_measures
+                .iter()
+                .any(|measure| *measure < minimum || *measure > maximum)
+            {
+                return Err(
+                    "Timeline Follow exact Trans target is outside the authored measure range"
+                        .to_string(),
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -5289,6 +5681,9 @@ pub fn normalize_timeline_bank(snapshot: &mut EngineSnapshot) {
         timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
         timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
         timeline.guide_cues.clear();
+        timeline.click_events.clear();
+        timeline.click_schedule_generation = 0;
+        timeline.click_queue_overflow = None;
     }
 }
 
@@ -5441,6 +5836,15 @@ pub struct ChildTimelineSummary {
     pub metronome_enabled: bool,
     #[serde(default = "default_timeline_count_in_beats")]
     pub count_in_beats: u8,
+    /// Authored tempo/meter authority for child metronome and count-in.  An
+    /// empty legacy map resolves to the owning runtime BPM and 4/4.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tempo_meter_map: Vec<TimelineTempoMeterPoint>,
+    #[serde(
+        default = "default_timeline_tempo_meter_map_version",
+        skip_serializing_if = "is_default_timeline_tempo_meter_map_version"
+    )]
+    pub tempo_meter_map_version: u8,
     #[serde(default)]
     pub duration_ms: u64,
 }
@@ -5457,6 +5861,8 @@ impl Default for ChildTimelineSummary {
             tempo_driven: false,
             metronome_enabled: false,
             count_in_beats: default_timeline_count_in_beats(),
+            tempo_meter_map: Vec::new(),
+            tempo_meter_map_version: default_timeline_tempo_meter_map_version(),
             duration_ms: 0,
         }
     }
@@ -8651,8 +9057,11 @@ fn default_cue_lists() -> Vec<CueListSummary> {
 mod tests {
     use super::{
         canonical_video_output_mapping_field, set_video_output_mapping_field_value,
-        video_output_mapping_field_value, AudioSpectrumBand, AudioSpectrumSource, CueListSummary,
-        NodeGraphAudioNode, PlaybackExecutorSummary, VideoOutputMapping, DEFAULT_CUE_LIST_ID,
+        validate_timeline_tempo_meter_map, video_output_mapping_field_value, AudioSpectrumBand,
+        AudioSpectrumSource, ChildTimelineSummary, CueListSummary, NodeGraphAudioNode,
+        PlaybackExecutorSummary, TimelineSnapshot, TimelineTempoInterpolation,
+        TimelineTempoMeterPoint, VideoOutputMapping, DEFAULT_CUE_LIST_ID,
+        TIMELINE_TEMPO_METER_MAP_VERSION,
     };
 
     #[test]
@@ -9173,6 +9582,7 @@ mod tests {
                 destination_bpm: Some(128.0),
                 preroll_ms: 500,
                 trans_cadence_bars: 4,
+                trans_target_measures: Vec::new(),
                 fault_policy: super::TimelineFollowFaultPolicy::Hold,
             }),
             guide_enabled: true,
@@ -9216,6 +9626,13 @@ mod tests {
                 at_ms: 750,
                 label: "Looping".to_string(),
                 cue: super::TimelineGuideCueKind::Looping,
+                asset: super::TimelineGuideAssetKey::Looping,
+                playback_rate_milli: 1_000,
+                sample_frame: 36_000,
+                epoch: 1,
+                transport_generation: 1,
+                schedule_generation: 1,
+                source: super::TimelineScheduleSource::Root,
             });
 
         super::normalize_timeline_bank(&mut snapshot);
@@ -9242,6 +9659,7 @@ mod tests {
             destination_bpm: Some(128.0),
             preroll_ms: 0,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: super::TimelineFollowFaultPolicy::Hold,
         });
         super::validate_timeline_bank(&snapshot, &[]).unwrap();
@@ -9886,6 +10304,7 @@ mod tests {
             destination_bpm: None,
             preroll_ms: 0,
             trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
             fault_policy: super::TimelineFollowFaultPolicy::Hold,
         });
         assert!(super::validate_timeline_bank(&snapshot, &[])
@@ -9917,6 +10336,7 @@ mod tests {
             destination_bpm: Some(20.0),
             preroll_ms: super::TIMELINE_FOLLOW_MAX_PREROLL_MS,
             trans_cadence_bars: super::TIMELINE_FOLLOW_MAX_TRANS_CADENCE_BARS,
+            trans_target_measures: Vec::new(),
             fault_policy: super::TimelineFollowFaultPolicy::Cut,
         });
         super::validate_timeline_authoring(&timeline, &[]).unwrap();
@@ -9965,6 +10385,72 @@ mod tests {
             );
             assert!(serde_json::from_value::<super::TimelineFollowSummary>(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn timeline_follow_exact_trans_targets_require_sorted_in_range_measure_anchors() {
+        let mut timeline = super::TimelineSnapshot::default();
+        timeline.id = super::TimelineId(101);
+        timeline.label = "Exact Trans targets".to_string();
+        timeline.tempo_meter_map = vec![
+            super::TimelineTempoMeterPoint {
+                position_sixteenth_steps: 0,
+                measure_number: Some(148),
+                bpm: 170.0,
+                interpolation: super::TimelineTempoInterpolation::Linear,
+                ..super::TimelineTempoMeterPoint::default()
+            },
+            super::TimelineTempoMeterPoint {
+                position_sixteenth_steps: 144,
+                measure_number: Some(157),
+                bpm: 194.0,
+                ..super::TimelineTempoMeterPoint::default()
+            },
+        ];
+        timeline.follow = Some(super::TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: super::TimelineId(102),
+            duration: super::VideoClipTakeDuration {
+                unit: super::VideoClipTakeDurationUnit::Beats,
+                value_milliunits: 4_000,
+            },
+            curve: super::VideoLayerTransitionCurve::EaseInOut,
+            video_kind: super::VideoClipTakeKind::Crossfade,
+            lighting_policy: super::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: Some(194.0),
+            preroll_ms: 0,
+            trans_cadence_bars: 4,
+            trans_target_measures: vec![149, 151, 153, 155],
+            fault_policy: super::TimelineFollowFaultPolicy::Hold,
+        });
+        super::validate_timeline_authoring(&timeline, &[]).unwrap();
+
+        for (targets, expected) in [
+            (vec![149, 149], "sorted"),
+            (vec![151, 149], "sorted"),
+            (vec![147], "outside"),
+            (vec![158], "outside"),
+            (vec![0], "non-zero"),
+        ] {
+            timeline.follow.as_mut().unwrap().trans_target_measures = targets;
+            assert!(super::validate_timeline_authoring(&timeline, &[])
+                .unwrap_err()
+                .contains(expected));
+        }
+
+        timeline.follow.as_mut().unwrap().trans_target_measures = vec![149];
+        timeline.tempo_meter_map.clear();
+        assert!(super::validate_timeline_authoring(&timeline, &[])
+            .unwrap_err()
+            .contains("measure anchors"));
+
+        timeline
+            .follow
+            .as_mut()
+            .unwrap()
+            .trans_target_measures
+            .clear();
+        super::validate_timeline_authoring(&timeline, &[]).unwrap();
     }
 
     #[test]
@@ -13808,5 +14294,143 @@ mod tests {
         }
         .canonical_key()
         .is_err());
+    }
+
+    #[test]
+    fn timeline_tempo_meter_legacy_defaults_and_strict_validation() {
+        let legacy: TimelineSnapshot = serde_json::from_str(
+            r#"{"id":1,"label":"Legacy","events":[],"automations":[],"video_automations":[],"playing":false,"position_ms":0,"duration_ms":0}"#,
+        )
+        .unwrap();
+        assert!(legacy.tempo_meter_map.is_empty());
+        assert_eq!(
+            legacy.tempo_meter_map_version,
+            TIMELINE_TEMPO_METER_MAP_VERSION
+        );
+        assert_eq!(ChildTimelineSummary::default().tempo_meter_map_version, 1);
+        let legacy_json = serde_json::to_value(&legacy).unwrap();
+        assert!(legacy_json.get("tempo_meter_map").is_none());
+        assert!(legacy_json.get("tempo_meter_map_version").is_none());
+        let legacy_child_json = serde_json::to_value(ChildTimelineSummary::default()).unwrap();
+        assert!(legacy_child_json.get("tempo_meter_map").is_none());
+        assert!(legacy_child_json.get("tempo_meter_map_version").is_none());
+        assert_eq!(
+            serde_json::to_string(&super::TimelinePhaseRole::Interlude).unwrap(),
+            "\"interlude\""
+        );
+        let legacy_guide: super::TimelineGuideCueSummary =
+            serde_json::from_value(serde_json::json!({
+            "generation": 1,
+            "sequence": 1,
+            "at_ms": 0,
+            "label": "Intro",
+            "cue": { "kind": "phase", "phase_id": 1 },
+            "asset": "intro",
+            "sample_frame": 0,
+            "epoch": 1,
+            "transport_generation": 1,
+            "schedule_generation": 1,
+            "source": { "kind": "root" }
+            }))
+            .unwrap();
+        assert_eq!(legacy_guide.playback_rate_milli, 1_000);
+
+        let valid = vec![TimelineTempoMeterPoint {
+            position_sixteenth_steps: 0,
+            bpm: 194.0,
+            numerator: 7,
+            denominator: 8,
+            interpolation: TimelineTempoInterpolation::Step,
+            ..TimelineTempoMeterPoint::default()
+        }];
+        validate_timeline_tempo_meter_map(1, &valid).unwrap();
+        for (label, points) in [
+            ("duplicate", vec![valid[0].clone(), valid[0].clone()]),
+            (
+                "unsorted",
+                vec![
+                    TimelineTempoMeterPoint {
+                        position_sixteenth_steps: 8,
+                        ..valid[0].clone()
+                    },
+                    valid[0].clone(),
+                ],
+            ),
+            (
+                "non-finite",
+                vec![TimelineTempoMeterPoint {
+                    bpm: f64::NAN,
+                    ..valid[0].clone()
+                }],
+            ),
+            (
+                "overflow",
+                vec![TimelineTempoMeterPoint {
+                    position_sixteenth_steps: u64::MAX,
+                    ..valid[0].clone()
+                }],
+            ),
+            (
+                "measure-overflow",
+                vec![TimelineTempoMeterPoint {
+                    measure_number: Some(u64::MAX),
+                    ..valid[0].clone()
+                }],
+            ),
+        ] {
+            assert!(
+                validate_timeline_tempo_meter_map(1, &points).is_err(),
+                "{label} map must reject"
+            );
+        }
+        assert!(validate_timeline_tempo_meter_map(2, &valid).is_err());
+        assert!(validate_timeline_tempo_meter_map(0, &valid).is_err());
+
+        let exact_meter_switch = vec![
+            TimelineTempoMeterPoint {
+                position_sixteenth_steps: 0,
+                numerator: 7,
+                denominator: 8,
+                ..TimelineTempoMeterPoint::default()
+            },
+            TimelineTempoMeterPoint {
+                position_sixteenth_steps: 14,
+                numerator: 3,
+                denominator: 8,
+                ..TimelineTempoMeterPoint::default()
+            },
+        ];
+        validate_timeline_tempo_meter_map(1, &exact_meter_switch).unwrap();
+        let mid_measure_meter_switch = vec![
+            TimelineTempoMeterPoint::default(),
+            TimelineTempoMeterPoint {
+                position_sixteenth_steps: 8,
+                numerator: 7,
+                denominator: 8,
+                ..TimelineTempoMeterPoint::default()
+            },
+        ];
+        assert!(validate_timeline_tempo_meter_map(1, &mid_measure_meter_switch).is_err());
+        let reverse_measure_numbers = vec![
+            TimelineTempoMeterPoint {
+                measure_number: Some(10),
+                ..TimelineTempoMeterPoint::default()
+            },
+            TimelineTempoMeterPoint {
+                position_sixteenth_steps: 16,
+                measure_number: Some(9),
+                ..TimelineTempoMeterPoint::default()
+            },
+        ];
+        assert!(validate_timeline_tempo_meter_map(1, &reverse_measure_numbers).is_err());
+        let tempo_only_mid_measure = vec![
+            TimelineTempoMeterPoint::default(),
+            TimelineTempoMeterPoint {
+                position_sixteenth_steps: 2,
+                bpm: 130.0,
+                ..TimelineTempoMeterPoint::default()
+            },
+        ];
+        validate_timeline_tempo_meter_map(1, &tempo_only_mid_measure).unwrap();
     }
 }
