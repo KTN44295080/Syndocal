@@ -10,6 +10,8 @@ export const OUTPUT_OWNERSHIP_ARM_OPERATION_ID = "syndocal.output.ownership.arm.
 export const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID = "syndocal.output.blackout.release.v2";
 export const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID = "syndocal.output.standby.takeover.v2";
 export const OUTPUT_DISPLAY_ADD_OPERATION_ID = "syndocal.output.display.add.v2";
+export const OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID =
+  "syndocal.output.display.window.set_open.v2";
 export const OUTPUT_ENABLE_OPERATION_ID = "syndocal.output.enable.v2";
 export const OUTPUT_LEASE_ACQUIRE_OPERATION_ID = "syndocal.output.lease.acquire.v2";
 export const OUTPUT_LEASE_RENEW_OPERATION_ID = "syndocal.output.lease.renew.v2";
@@ -90,6 +92,14 @@ export type OutputDisplayAction = {
   lease: OutputLeaseAuthority;
 };
 
+/** The sole routine mutation for the native live Display window. */
+export type OutputDisplayWindowAction = {
+  kind: "set_display_window_open";
+  output_id: number;
+  open: boolean;
+  lease: OutputLeaseAuthority;
+};
+
 export type OutputEnableAction = { kind: "enable_output" };
 
 export type OutputControlAction =
@@ -103,7 +113,8 @@ export type OutputControlAction =
       standby_generation: number;
       lease: OutputLeaseAuthority;
     }
-  | OutputDisplayAction;
+  | OutputDisplayAction
+  | OutputDisplayWindowAction;
 
 export type OutputLeaseLifecycleAction =
   | { kind: "acquire_lease"; role: OutputControlTargetRole }
@@ -157,6 +168,166 @@ export interface OutputControlReceipt {
   lease_result: OutputControlLeaseResult;
 }
 
+export const VIDEO_OUTPUT_WINDOW_STATE_EVENT = "syndocal://video-output-window-state";
+export const VIDEO_OUTPUT_WINDOW_STATE_EVENT_SCHEMA = 1 as const;
+
+/** Normalized shape of the backend's typed live-window event. */
+export interface VideoOutputWindowStateEvent {
+  schema: typeof VIDEO_OUTPUT_WINDOW_STATE_EVENT_SCHEMA;
+  output_id: number;
+  mode: "live";
+  window_incarnation: number;
+  actual_open: boolean;
+  retirement_outcome: string | null;
+  retirement_reason: string | null;
+}
+
+export interface VideoOutputWindowPhysicalState extends VideoOutputWindowStateEvent {
+  observed_from: "event" | "query";
+}
+
+export interface VideoOutputWindowStateApplyResult {
+  state: Readonly<Record<string, VideoOutputWindowPhysicalState>>;
+  accepted: boolean;
+  event: VideoOutputWindowStateEvent | null;
+  reason: "applied" | "stale" | "malformed";
+}
+
+const videoWindowEventKeys = new Set([
+  "schema", "schema_version", "schemaVersion", "output_id", "outputId", "mode",
+  "window_incarnation", "live_window_incarnation", "windowIncarnation", "liveWindowIncarnation",
+  "actual_open", "actualOpen", "retirement_outcome", "retirementOutcome",
+  "retirement_reason", "retirementReason", "reason",
+]);
+
+const readEventAlias = (
+  value: Record<string, unknown>,
+  aliases: readonly string[],
+): unknown => {
+  const present = aliases.filter((key) => Object.prototype.hasOwnProperty.call(value, key));
+  return present.length === 1 ? value[present[0]] : undefined;
+};
+
+const validWindowEventText = (value: unknown): value is string | null =>
+  value === null || typeof value === "string" && value.length <= 1024;
+
+/** Strictly validate and normalize either coordinated output-id spelling. */
+export const parseVideoOutputWindowStateEvent = (
+  value: unknown,
+): VideoOutputWindowStateEvent | null => {
+  if (!isObject(value)) return null;
+  const keys = Object.keys(value);
+  if (keys.some((key) => !videoWindowEventKeys.has(key))) return null;
+  const schema = readEventAlias(value, ["schema", "schema_version", "schemaVersion"]);
+  const outputId = readEventAlias(value, ["output_id", "outputId"]);
+  const incarnation = readEventAlias(value, [
+    "window_incarnation", "live_window_incarnation", "windowIncarnation", "liveWindowIncarnation",
+  ]);
+  const actualOpen = readEventAlias(value, ["actual_open", "actualOpen"]);
+  const retirementOutcome = readEventAlias(value, ["retirement_outcome", "retirementOutcome"]);
+  const retirementReason = readEventAlias(value, ["retirement_reason", "retirementReason", "reason"]);
+  if (schema !== VIDEO_OUTPUT_WINDOW_STATE_EVENT_SCHEMA
+    || !isPositiveSafeInteger(outputId)
+    || value.mode !== "live"
+    || !isPositiveSafeInteger(incarnation)
+    || typeof actualOpen !== "boolean"
+    || !validWindowEventText(retirementOutcome)
+    || !validWindowEventText(retirementReason)) return null;
+  return {
+    schema: VIDEO_OUTPUT_WINDOW_STATE_EVENT_SCHEMA,
+    output_id: outputId,
+    mode: "live",
+    window_incarnation: incarnation,
+    actual_open: actualOpen,
+    retirement_outcome: (retirementOutcome ?? null) as string | null,
+    retirement_reason: (retirementReason ?? null) as string | null,
+  };
+};
+
+/**
+ * Apply only a matching-or-newer positive incarnation. This is deliberately a
+ * pure reducer so event A arriving after newer event B cannot regress UI truth.
+ */
+export const applyVideoOutputWindowStateEvent = (
+  previous: Readonly<Record<string, VideoOutputWindowPhysicalState>>,
+  value: unknown,
+): VideoOutputWindowStateApplyResult => {
+  const event = parseVideoOutputWindowStateEvent(value);
+  if (!event) return { state: previous, accepted: false, event: null, reason: "malformed" };
+  const current = previous[String(event.output_id)];
+  if (current && current.window_incarnation > event.window_incarnation) {
+    return { state: previous, accepted: false, event, reason: "stale" };
+  }
+  return {
+    state: {
+      ...previous,
+      [event.output_id]: { ...event, observed_from: "event" },
+    },
+    accepted: true,
+    event,
+    reason: "applied",
+  };
+};
+
+export interface VideoOutputWindowStatusTruth {
+  output_id: number;
+  live_open: boolean;
+  live_window_incarnation?: number | null;
+}
+
+/**
+ * Resolve the normal Open/Close control from backend query truth. Incarnation
+ * zero is the explicit process-start state for a configured Display that has
+ * never created a native window; it is closed, not unknown. Positive event
+ * truth always wins over a query captured before that event.
+ */
+export const resolveVideoOutputWindowActualOpen = (
+  physical: VideoOutputWindowPhysicalState | undefined,
+  status: VideoOutputWindowStatusTruth | null,
+): boolean | null => {
+  if (physical) return physical.actual_open;
+  if (!status || typeof status.live_open !== "boolean") return null;
+  const incarnation = status.live_window_incarnation;
+  if (typeof incarnation !== "number" || !Number.isSafeInteger(incarnation) || incarnation < 0) return null;
+  return status.live_open;
+};
+
+/** Apply a positive-incarnation reconciliation query without allowing an
+ * equal-incarnation query captured earlier to overwrite a native event. */
+export const applyVideoOutputWindowStatusQuery = (
+  previous: Readonly<Record<string, VideoOutputWindowPhysicalState>>,
+  status: VideoOutputWindowStatusTruth,
+): VideoOutputWindowStateApplyResult => {
+  const incarnation = status.live_window_incarnation;
+  if (!isPositiveSafeInteger(status.output_id)
+    || typeof status.live_open !== "boolean"
+    || !isPositiveSafeInteger(incarnation)) {
+    return { state: previous, accepted: false, event: null, reason: "malformed" };
+  }
+  const current = previous[String(status.output_id)];
+  if (current && (current.window_incarnation > incarnation
+    || current.window_incarnation === incarnation && current.observed_from === "event")) {
+    return { state: previous, accepted: false, event: null, reason: "stale" };
+  }
+  const result = applyVideoOutputWindowStateEvent(previous, {
+    schema: VIDEO_OUTPUT_WINDOW_STATE_EVENT_SCHEMA,
+    output_id: status.output_id,
+    mode: "live",
+    window_incarnation: incarnation,
+    actual_open: status.live_open,
+    retirement_outcome: null,
+    retirement_reason: null,
+  });
+  if (!result.accepted || !result.event) return result;
+  return {
+    ...result,
+    state: {
+      ...result.state,
+      [status.output_id]: { ...result.state[String(status.output_id)], observed_from: "query" },
+    },
+  };
+};
+
 let nextOutputControlRequestId = 1;
 
 const allocateRequestId = (): number => {
@@ -179,6 +350,7 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
     case "release_blackout": return OUTPUT_BLACKOUT_RELEASE_OPERATION_ID;
     case "take_over_standby": return OUTPUT_STANDBY_TAKEOVER_OPERATION_ID;
     case "add_display": return OUTPUT_DISPLAY_ADD_OPERATION_ID;
+    case "set_display_window_open": return OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID;
     case "acquire_lease": return OUTPUT_LEASE_ACQUIRE_OPERATION_ID;
     case "renew_lease": return OUTPUT_LEASE_RENEW_OPERATION_ID;
     case "recover_lease": return OUTPUT_LEASE_RECOVER_OPERATION_ID;
@@ -194,6 +366,7 @@ const commandForAction = (action: OutputControlOperationAction): string => {
     case "release_blackout": return "release_blackout_output_control_v2";
     case "take_over_standby": return "take_over_output_control_v2";
     case "add_display": return "add_display_output_v2";
+    case "set_display_window_open": return "set_display_output_window_open_v2";
     case "acquire_lease": return "acquire_output_lease_v2";
     case "renew_lease": return "renew_output_lease_v2";
     case "recover_lease": return "recover_output_lease_v2";
@@ -441,6 +614,12 @@ const assertAction = (action: OutputControlOperationAction): void => {
       || typeof spec.fullscreen !== "boolean") {
       throw new Error("OutputControl display action was invalid; nothing was applied.");
     }
+  } else if (action.kind === "set_display_window_open") {
+    if (!hasExactKeys(record, ["kind", "output_id", "open", "lease"])
+      || !isPositiveSafeInteger(action.output_id)
+      || typeof action.open !== "boolean") {
+      throw new Error("OutputControl Display window action was invalid; nothing was applied.");
+    }
   } else if (!hasExactKeys(record, ["kind", "lease"])) {
     throw new Error("Output lease lifecycle action was invalid; nothing was applied.");
   }
@@ -522,6 +701,9 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
     case "add_display":
       if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
+    case "set_display_window_open":
+      if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
+      break;
     case "acquire_lease":
       if (outcome !== "acquired" || phase !== "held_active" || !sameResources(resources, resourcesForRole(action.role))) throw new Error(errorMessage);
       break;
@@ -591,7 +773,15 @@ const assertResponse = (
     || result.outcome !== "applied" && result.outcome !== "no_op") throw new Error("OutputControl receipt was invalid; physical output state is unknown.");
   const fenceBefore = assertFence(result.fence_before, "OutputControl receipt was invalid; physical output state is unknown.");
   const fenceAfter = assertFence(result.fence_after, "OutputControl receipt was invalid; physical output state is unknown.");
-  if (!fencesEqual(fenceBefore, expectedFence) || result.outcome === "no_op" && !fencesEqual(fenceBefore, fenceAfter) || result.outcome === "applied" && fencesEqual(fenceBefore, fenceAfter)) throw new Error("OutputControl receipt was inconsistent; physical output state is unknown.");
+  const fenceUnchanged = fencesEqual(fenceBefore, fenceAfter);
+  const physicalWindowAction = action.kind === "set_display_window_open";
+  if (!fencesEqual(fenceBefore, expectedFence)
+    || result.outcome === "no_op" && !fenceUnchanged
+    // Ordinary project/output-control mutations must advance their fence on
+    // Applied. The physical Display shell is deliberately outside that
+    // persisted fence, so both Applied and NoOp retain the same fence.
+    || result.outcome === "applied" && !physicalWindowAction && fenceUnchanged
+    || physicalWindowAction && !fenceUnchanged) throw new Error("OutputControl receipt was inconsistent; physical output state is unknown.");
   return {
     operation_id: operationId,
     request_id: requestId,
@@ -615,6 +805,8 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     || action.kind === "take_over_standby" && selected[0].status !== "held_active"
     || action.kind === "add_display"
       && selected[0].status !== "held_active" && selected[0].status !== "held_orphaned"
+    || action.kind === "set_display_window_open"
+      && selected[0].status !== "held_active" && selected[0].status !== "held_orphaned"
     || action.kind === "renew_lease" && selected[0].status !== "held_active"
     || action.kind === "recover_lease" && selected[0].status !== "held_orphaned") {
     throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
@@ -624,7 +816,7 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
       ? resourcesForRole(action.role)
       : ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
-  } else if (action.kind === "add_display") {
+  } else if (action.kind === "add_display" || action.kind === "set_display_window_open") {
     const expectedResources = ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   }
@@ -644,8 +836,8 @@ const executeOutputControlOperation = async (
   assertAction(action);
   const authority = assertAuthority(await invoke<unknown>("query_output_control_authority_v1"));
   if (options.skipPublicLeaseQuery) {
-    if (action.kind !== "add_display") {
-      throw new Error("Only the canonical display Add path may bypass the public lease query; nothing was applied.");
+    if (action.kind !== "add_display" && action.kind !== "set_display_window_open") {
+      throw new Error("Only canonical Display actions may bypass the public lease query; nothing was applied.");
     }
   } else {
     const leaseQuery = await queryOutputLeaseAuthority(invoke);
@@ -689,6 +881,20 @@ export async function executeDisplayAddOutputControl(
   const authority = selectExactBothLeaseForDisplayAdd(authorityQuery);
   if (authority.lease_id !== action.lease.lease_id || authority.generation !== action.lease.generation) {
     throw new Error("Display Add lease authority changed before execution; nothing was applied.");
+  }
+  return executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: true });
+}
+
+/** Execute the live Display window action through the Add-equivalent
+ * active-or-recoverable exact-Both authority lane. */
+export async function executeDisplayWindowOutputControl(
+  invoke: FrontendTauriInvoke,
+  action: OutputDisplayWindowAction,
+  authorityQuery: DisplayAddLeaseAuthorityQuery,
+): Promise<OutputControlReceipt> {
+  const authority = selectExactBothLeaseForDisplayAdd(authorityQuery);
+  if (authority.lease_id !== action.lease.lease_id || authority.generation !== action.lease.generation) {
+    throw new Error("Display window lease authority changed before execution; nothing was applied.");
   }
   return executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: true });
 }

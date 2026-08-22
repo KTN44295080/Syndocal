@@ -2272,6 +2272,8 @@ export interface VideoOutputWindowStatus {
   output_id: number;
   label: string;
   live_open: boolean;
+  /** Backend-issued positive incarnation for the current live window. */
+  live_window_incarnation?: number | null;
   test_pattern_open: boolean;
   live_window_label: string;
   test_pattern_window_label: string;

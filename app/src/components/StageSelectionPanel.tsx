@@ -1,18 +1,8 @@
 import { For, Show } from "solid-js";
-import type { VideoOutputAspectMode, VideoOutputMapping, VideoOutputSummary } from "../types";
+import type { VideoOutputSummary } from "../types";
 import type { ControlCategory, ControlMode } from "../uiModes";
 import { ProjectorMapPreview } from "./ProjectorMapEditor";
-import {
-  mappingNumber,
-  mappingReadout,
-  outputAspectRatio,
-  resetVideoOutputCornerOffsets,
-  resetVideoOutputLensKeystone,
-  resetVideoOutputStagePosition,
-  resetVideoOutputWarp,
-  videoOutputAspectModes,
-  videoOutputAspectPresets,
-} from "../videoOutputMapping";
+import { mappingReadout } from "../videoOutputMapping";
 
 type GroupBulkMode = "add" | "remove" | "set";
 
@@ -119,10 +109,6 @@ interface StageSelectionPanelProps {
   selectedVideoOutputId: () => number | null;
   setSelectedVideoOutputId: (id: number) => void;
   selectedMappingVideoOutput: () => VideoOutputSummary | null;
-  patchVideoOutputMapping: (output: VideoOutputSummary, patch: Partial<VideoOutputMapping>) => void;
-  setVideoOutputEnabled: (id: number, value: boolean) => Promise<void>;
-  setVideoOutputBlackout: (id: number, value: boolean) => Promise<void>;
-  openVideoOutputWindow: (id: number, flag: boolean) => Promise<void>;
 }
 
 export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
@@ -472,183 +458,14 @@ export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
             <div>
               <strong>{output().label}</strong>
               <span>{mappingReadout(output().mapping)}</span>
+              <small>
+                {output().enabled ? "Authored enabled" : "Authored disabled"} / {output().blackout ? "Blackout" : `${Math.round(output().opacity * 100)}%`}
+              </small>
             </div>
           </div>
-          <div class="mappingProjectorActionRow">
-            <button onClick={() => void props.setVideoOutputEnabled(output().id, !output().enabled)}>
-              {output().enabled ? "Disable" : "Enable"}
-            </button>
-            <button onClick={() => void props.setVideoOutputBlackout(output().id, !output().blackout)}>
-              {output().blackout ? "Clear BO" : "Blackout"}
-            </button>
-            <button onClick={() => void props.openVideoOutputWindow(output().id, true)}>
-              Test
-            </button>
-          </div>
-          <div class="mappingProjectorFieldGrid">
-            <label>
-              X
-              <input
-                type="number"
-                step="0.1"
-                value={mappingNumber(output().mapping, "stage_x", 0)}
-                onChange={(event) => props.patchVideoOutputMapping(output(), { stage_x: Number(event.currentTarget.value) })}
-              />
-            </label>
-            <label>
-              Z
-              <input
-                type="number"
-                step="0.1"
-                value={mappingNumber(output().mapping, "stage_z", 0)}
-                onChange={(event) => props.patchVideoOutputMapping(output(), { stage_z: Number(event.currentTarget.value) })}
-              />
-            </label>
-            <label>
-              Y
-              <input
-                type="number"
-                step="0.1"
-                value={mappingNumber(output().mapping, "stage_y", 0)}
-                onChange={(event) => props.patchVideoOutputMapping(output(), { stage_y: Number(event.currentTarget.value) })}
-              />
-            </label>
-            <label>
-              W
-              <input
-                type="number"
-                min="0.01"
-                max="8"
-                step="0.05"
-                value={mappingNumber(output().mapping, "scale_x", 1)}
-                onChange={(event) => props.patchVideoOutputMapping(output(), { scale_x: Number(event.currentTarget.value) })}
-              />
-            </label>
-            <label>
-              H
-              <input
-                type="number"
-                min="0.01"
-                max="8"
-                step="0.05"
-                value={mappingNumber(output().mapping, "scale_y", 1)}
-                onChange={(event) => props.patchVideoOutputMapping(output(), { scale_y: Number(event.currentTarget.value) })}
-              />
-            </label>
-            <label>
-              Rot
-              <input
-                type="number"
-                min="-180"
-                max="180"
-                step="1"
-                value={mappingNumber(output().mapping, "rotation_deg", 0)}
-                onChange={(event) => props.patchVideoOutputMapping(output(), { rotation_deg: Number(event.currentTarget.value) })}
-              />
-            </label>
-            <button onClick={() => props.patchVideoOutputMapping(output(), resetVideoOutputStagePosition(output().mapping))}>
-              Reset Stage
-            </button>
-          </div>
-          <div class="mappingProjectorWarpGrid">
-            <label>
-              Mode
-              <select
-                value={output().mapping.aspect_mode}
-                onInput={(event) =>
-                  props.patchVideoOutputMapping(output(), {
-                    aspect_mode: event.currentTarget.value as VideoOutputAspectMode,
-                  })
-                }
-              >
-                <For each={videoOutputAspectModes}>{(mode) => <option value={mode}>{mode}</option>}</For>
-              </select>
-            </label>
-            <label>
-              Ratio
-              <input
-                type="number"
-                min="0.1"
-                max="10"
-                step="0.01"
-                value={mappingNumber(output().mapping, "aspect_ratio", 1)}
-                onChange={(event) => props.patchVideoOutputMapping(output(), { aspect_ratio: Number(event.currentTarget.value) })}
-              />
-            </label>
-            <label>
-              Lens
-              <input
-                type="number"
-                min="-1"
-                max="1"
-                step="0.01"
-                value={mappingNumber(output().mapping, "lens_distortion", 0)}
-                onChange={(event) => props.patchVideoOutputMapping(output(), { lens_distortion: Number(event.currentTarget.value) })}
-              />
-            </label>
-            <label>
-              Key H
-              <input
-                type="number"
-                min="-1"
-                max="1"
-                step="0.01"
-                value={mappingNumber(output().mapping, "keystone_x", 0)}
-                onChange={(event) => props.patchVideoOutputMapping(output(), { keystone_x: Number(event.currentTarget.value) })}
-              />
-            </label>
-            <label>
-              Key V
-              <input
-                type="number"
-                min="-1"
-                max="1"
-                step="0.01"
-                value={mappingNumber(output().mapping, "keystone_y", 0)}
-                onChange={(event) => props.patchVideoOutputMapping(output(), { keystone_y: Number(event.currentTarget.value) })}
-              />
-            </label>
-            <label>
-              Preset
-              <select
-                value=""
-                onInput={(event) => {
-                  const preset = videoOutputAspectPresets.find((candidate) => candidate.label === event.currentTarget.value);
-                  if (preset) {
-                    props.patchVideoOutputMapping(output(), {
-                      aspect_ratio: preset.ratio,
-                      aspect_mode: "Fit",
-                    });
-                  }
-                  event.currentTarget.value = "";
-                }}
-              >
-                <option value="">Select</option>
-                <For each={videoOutputAspectPresets}>
-                  {(preset) => <option data-no-localize value={preset.label}>{preset.label}</option>}
-                </For>
-              </select>
-            </label>
-            <button
-              onClick={() =>
-                props.patchVideoOutputMapping(output(), {
-                  aspect_ratio: outputAspectRatio(output().width, output().height),
-                  aspect_mode: "Fit",
-                })
-              }
-            >
-              Output Ratio
-            </button>
-            <button onClick={() => props.patchVideoOutputMapping(output(), resetVideoOutputWarp(output().mapping))}>
-              Clear Warp
-            </button>
-            <button onClick={() => props.patchVideoOutputMapping(output(), resetVideoOutputLensKeystone(output().mapping))}>
-              Clear Lens/Key
-            </button>
-            <button onClick={() => props.patchVideoOutputMapping(output(), resetVideoOutputCornerOffsets(output().mapping))}>
-              Reset Corners
-            </button>
-          </div>
+          <p class="inlineUnavailable" role="status">
+            Projection mapping/configuration mutation is unavailable until a canonical path exists. This view is read-only.
+          </p>
         </div>
       )}
     </Show>

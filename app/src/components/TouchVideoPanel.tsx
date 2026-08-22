@@ -13,11 +13,7 @@ interface TouchVideoPanelProps {
   onAddCuePoint: (layerId: number) => void | Promise<void>;
   onJumpCuePoint: (layerId: number, cuePointIndex: number) => void | Promise<void>;
   onSelectOutput: (outputId: number) => void;
-  onSetOutputEnabled: (outputId: number, enabled: boolean) => void | Promise<void>;
-  onSetOutputBlackout: (outputId: number, blackout: boolean) => void | Promise<void>;
-  onSetOutputOpacity: (outputId: number, opacity: number) => void | Promise<void>;
-  onFadeOutputOpacity: (outputId: number, opacity: number) => void | Promise<void>;
-  onOpenOutputWindow: (outputId: number, testPattern?: boolean) => void | Promise<void>;
+  windowStateForOutput?: (outputId: number) => { stateLabel: string; detail: string };
   clipSlotBank: ComponentProps<typeof VideoClipSlotBankPanel>;
   clipSlotTake: { enabled: boolean; label: string; onTake: () => void | Promise<void> };
   transitionBuses: ComponentProps<typeof VideoTransitionBusPanel>;
@@ -42,7 +38,7 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
       </div>
       <VideoClipSlotBankPanel {...props.clipSlotBank} />
       <VideoTransitionBusPanel {...props.transitionBuses} compact />
-      <Show when={props.outputs.length > 0}>
+      <Show when={props.outputs.length > 0} fallback={<p class="empty">No configured video outputs. Add a Display output in Setup.</p>}>
         <div class="touchVideoOutputGrid">
           <For each={props.outputs}>
             {(output) => {
@@ -77,65 +73,16 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
                       <small>{output.blackout ? "Blackout" : `${Math.round(output.opacity * 100)}%`}</small>
                     </div>
                   </div>
-                  <label class="touchSlider">
-                    Output
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      value={output.opacity}
-                      onInput={(event) => {
-                        selectOutput();
-                        void props.onSetOutputOpacity(output.id, Number(event.currentTarget.value));
-                      }}
-                    />
-                    <strong>{Math.round(output.opacity * 100)}%</strong>
-                  </label>
-                  <div class="touchTransportRow compact">
-                    <button
-                      class={output.enabled ? "primary" : ""}
-                      onClick={() => {
-                        selectOutput();
-                        void props.onSetOutputEnabled(output.id, !output.enabled);
-                      }}
-                    >
-                      {output.enabled ? "On" : "Off"}
-                    </button>
-                    <button
-                      class={output.blackout ? "primary" : ""}
-                      onClick={() => {
-                        selectOutput();
-                        void props.onSetOutputBlackout(output.id, !output.blackout);
-                      }}
-                    >
-                      {output.blackout ? "Clear" : "BO"}
-                    </button>
-                    <button
-                      onClick={() => {
-                        selectOutput();
-                        void props.onFadeOutputOpacity(output.id, 0);
-                      }}
-                    >
-                      Out
-                    </button>
-                    <button
-                      onClick={() => {
-                        selectOutput();
-                        void props.onFadeOutputOpacity(output.id, 1);
-                      }}
-                    >
-                      In
-                    </button>
-                    <Show when={output.kind === "Display"}>
-                      <button
-                        onClick={() => {
-                          selectOutput();
-                          void props.onOpenOutputWindow(output.id, true);
-                        }}
-                      >
-                        Pattern
-                      </button>
+                  <div class="touchVideoOutputReadOnly" role="status">
+                    <span>Authored {output.enabled ? "enabled" : "disabled"}</span>
+                    <span>{output.blackout ? "Blackout" : `${Math.round(output.opacity * 100)}% opacity`}</span>
+                    <Show when={props.windowStateForOutput?.(output.id)}>
+                      {(windowState) => (
+                        <span>
+                          Physical window: {windowState().stateLabel}
+                          <Show when={windowState().detail}><small>{windowState().detail}</small></Show>
+                        </span>
+                      )}
                     </Show>
                   </div>
                 </div>

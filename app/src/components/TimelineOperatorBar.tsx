@@ -50,6 +50,7 @@ interface TimelineOperatorBarProps {
   armedCueId: number | null;
   armedCueLabel: string | null;
   deskSurface: TimelineDeskSurface;
+  showDeskSurfaceTabs?: boolean;
   onExitChildTimeline: () => void;
   onSeek: (timeMs: number) => void | Promise<void>;
   onPause: () => void | Promise<void>;
@@ -211,6 +212,7 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
               {formatOperatorTime(props.positionMs)} / {formatOperatorTime(props.durationMs)}
             </output>
           </div>
+          <Show when={props.showDeskSurfaceTabs !== false}>
           <nav class="timelineDeskTabs timelineDeskTabs-disclosure" aria-label="Timeline desk surface">
             <button
               type="button"
@@ -246,6 +248,7 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
               <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▦</span>
             </button>
           </nav>
+          </Show>
           <nav class="timelineViewportToolbar" aria-label="Timeline visible range controls">
             <button type="button" title="Pan Prev" aria-label="Pan Prev" data-timeline-tool="pan-prev" onClick={() => props.onPanOverview(-1)} disabled={props.visibleWindow.start_ms <= 0}>
               <span class="timelineToolIcon" aria-hidden="true" data-no-localize>←</span>

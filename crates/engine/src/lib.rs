@@ -1499,6 +1499,24 @@ pub struct TimelineTransportAuthority {
     pub generation: u64,
 }
 
+/// Runtime-only ABA fence for the complete Timeline audio source projection.
+/// This is intentionally separate from transport authority: authored lane
+/// audibility and source identity can change while the playhead is stationary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimelineAudioProjectionAuthority {
+    pub epoch: u64,
+    pub generation: u64,
+}
+
+impl Default for TimelineAudioProjectionAuthority {
+    fn default() -> Self {
+        Self {
+            epoch: 1,
+            generation: 1,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TimelineTransportPublicationCompletion {
     ack: mpsc::SyncSender<Result<(), String>>,
@@ -2391,6 +2409,14 @@ define_engine_command! {
         captured_at: Instant,
     },
     SetTimelinePlaying(bool),
+    /// Machine-local, runtime-only availability reported by the Media Asset
+    /// verifier.  It is deliberately separate from authored catalog data so
+    /// render ticks never perform synchronous filesystem I/O.
+    SetMediaAssetAvailability {
+        asset_id: MediaAssetId,
+        available: bool,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     /// Runtime-only activation of an already-authored Timeline bank entry.
     /// This never selects or mutates the authored project/history image.
     StartTimeline {
@@ -2916,6 +2942,7 @@ impl EngineCommand {
                 | EngineCommand::ClearLiveAudioInputPublished { .. }
                 | EngineCommand::ReportLiveAudioOnset { .. }
                 | EngineCommand::SetTimelinePlaying(_)
+                | EngineCommand::SetMediaAssetAvailability { .. }
                 | EngineCommand::SetTimelinePlayingPublished { .. }
                 | EngineCommand::DjLinkStartTimeline { .. }
                 | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
@@ -3080,10 +3107,22 @@ pub struct EngineHandle {
     wake: Arc<EngineWake>,
     shared_telemetry: Arc<EngineSharedTelemetry>,
     snapshot: Arc<RwLock<EngineSnapshot>>,
+    /// Machine-local media verification verdicts. This stays outside the
+    /// authored snapshot so a save/reload cannot persist a host-specific
+    /// filesystem observation.
+    media_asset_availability: Arc<RwLock<HashMap<MediaAssetId, bool>>>,
     /// Runtime-only unweighted source/target inputs for the Follow presenter.
     /// Keeping this beside (rather than inside) `EngineSnapshot` prevents an
     /// authored project save from ever observing a dual transport.
     timeline_follow_video_render_snapshot: Arc<RwLock<Option<TimelineFollowVideoRenderSnapshot>>>,
+    /// Published while the EngineSnapshot write guard is held, so readers
+    /// observe one source projection and one matching ABA fence.
+    timeline_audio_projection_authority: Arc<RwLock<TimelineAudioProjectionAuthority>>,
+    /// Monotonic runtime publication token. Unlike the semantic projection
+    /// authority this advances for transport-only snapshots (play/pause/seek
+    /// and active-window changes), closing the final same-authority install
+    /// race in the native audio worker.
+    timeline_audio_publication_generation: Arc<AtomicU64>,
     output_ownership_gate: OutputOwnershipGate,
     /// Serializes public ID allocation with candidate snapshot reservation.
     /// Reservation is a monotonic commit at command enqueue time, so a
@@ -3167,6 +3206,8 @@ pub struct TimelineAudioRuntimeSnapshot {
     pub position_ms: u64,
     pub muted: bool,
     pub transport_revision: u64,
+    pub source_projection_authority: TimelineAudioProjectionAuthority,
+    pub publication_generation: u64,
     pub bpm: f32,
     pub metronome_enabled: bool,
     pub count_in_beats: u8,
@@ -3187,13 +3228,34 @@ pub enum TimelineMetronomeTransport {
 
 #[derive(Debug, Clone)]
 pub struct ChildTimelineAudioRuntimeClip {
-    pub parent_event_id: TimelineEventId,
-    pub parent_iteration: u64,
-    pub direct_parent_cue_id: Option<CueId>,
-    pub direct_generation: u64,
+    pub root: ChildTimelineAudioRuntimeRoot,
     pub path: Arc<[ChildTimelineTransportPathSegment]>,
     pub position_ms: u64,
     pub clip: TimelineAudioClipSummary,
+}
+
+/// Runtime-only sink identity for a Child Timeline Audio projection. Follow
+/// owns an explicit source/target identity instead of borrowing a sentinel
+/// Cue ID from the Direct domain, so retries and later generations cannot
+/// alias an unrelated activation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ChildTimelineAudioRuntimeRoot {
+    Timeline {
+        parent_event_id: TimelineEventId,
+        parent_iteration: u64,
+    },
+    Direct {
+        parent_cue_id: CueId,
+        generation: u64,
+    },
+    Follow {
+        source_timeline_id: TimelineId,
+        target_timeline_id: TimelineId,
+        generation: u64,
+        /// Distinguishes the target Timeline's root lane from a root child
+        /// path whose clip ID and empty path may otherwise be identical.
+        target_root: bool,
+    },
 }
 
 struct QueuedEngineCommand {
@@ -3454,7 +3516,11 @@ impl EngineHandle {
             .checked_add(1)
             .expect("the default Timeline ID must leave allocator capacity");
         let snapshot = Arc::new(RwLock::new(initial_snapshot));
+        let media_asset_availability = Arc::new(RwLock::new(HashMap::new()));
         let timeline_follow_video_render_snapshot = Arc::new(RwLock::new(None));
+        let timeline_audio_projection_authority =
+            Arc::new(RwLock::new(TimelineAudioProjectionAuthority::default()));
+        let timeline_audio_publication_generation = Arc::new(AtomicU64::new(1));
         let next_fixture_id = Arc::new(AtomicU64::new(1));
         let next_effect_id = Arc::new(AtomicU64::new(1));
         let next_cue_id = Arc::new(AtomicU64::new(1));
@@ -3491,8 +3557,13 @@ impl EngineHandle {
         let runtime_shared_telemetry = Arc::clone(&shared_telemetry);
         let runtime_output_ownership_gate = output_ownership_gate.clone();
         let runtime_snapshot = Arc::clone(&snapshot);
+        let runtime_media_asset_availability = Arc::clone(&media_asset_availability);
         let runtime_timeline_follow_video_render_snapshot =
             Arc::clone(&timeline_follow_video_render_snapshot);
+        let runtime_timeline_audio_projection_authority =
+            Arc::clone(&timeline_audio_projection_authority);
+        let runtime_timeline_audio_publication_generation =
+            Arc::clone(&timeline_audio_publication_generation);
         let runtime_lifetime = Arc::downgrade(&lifetime);
         #[cfg(test)]
         let runtime_test_fail_next_pending_publication =
@@ -3508,6 +3579,9 @@ impl EngineHandle {
                     output,
                     runtime_shared_telemetry,
                     runtime_output_ownership_gate,
+                    runtime_media_asset_availability,
+                    runtime_timeline_audio_projection_authority,
+                    runtime_timeline_audio_publication_generation,
                     #[cfg(test)]
                     runtime_test_fail_next_pending_publication,
                     #[cfg(test)]
@@ -3533,7 +3607,10 @@ impl EngineHandle {
             wake,
             shared_telemetry,
             snapshot,
+            media_asset_availability,
             timeline_follow_video_render_snapshot,
+            timeline_audio_projection_authority,
+            timeline_audio_publication_generation,
             output_ownership_gate,
             allocator_gate,
             next_fixture_id,
@@ -5392,6 +5469,28 @@ impl EngineHandle {
         acknowledged
     }
 
+    /// Publish the latest machine-local Media Asset availability without
+    /// touching authored project/history state.  The acknowledgement is
+    /// emitted only after the shared runtime snapshot has accepted the new
+    /// availability map, so the next Timeline render cannot race the verifier
+    /// result.
+    pub fn set_media_asset_availability(
+        &self,
+        asset_id: MediaAssetId,
+        available: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetMediaAssetAvailability {
+            asset_id,
+            available,
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Media Asset availability acknowledgement failed: {error}"))?
+    }
+
     /// The exact engine-owned fence used by the local runtime control plane.
     /// It is non-persistent and becomes visible atomically with the snapshot.
     pub fn timeline_transport_generation(&self) -> u64 {
@@ -6038,7 +6137,15 @@ impl EngineHandle {
     pub fn snapshot(&self) -> EngineSnapshot {
         self.snapshot
             .read()
-            .map(|snapshot| snapshot.clone())
+            .map(|snapshot| {
+                let mut public = snapshot.clone();
+                // The shared runtime publication carries an exact authored
+                // video image for backend consumers that must distinguish
+                // renderer-only Timeline projections from authored layers.
+                // Keep the established public/UI snapshot shape unchanged.
+                public.authored_video = None;
+                public
+            })
             .unwrap_or_default()
     }
 
@@ -6291,9 +6398,48 @@ impl EngineHandle {
     }
 
     pub fn video_audio_runtime_snapshot(&self) -> VideoAudioRuntimeSnapshot {
+        let media_asset_availability = self.media_asset_availability.read().ok();
         self.snapshot
             .read()
             .map(|snapshot| {
+                let source_projection_authority = *self
+                    .timeline_audio_projection_authority
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let publication_generation = self
+                    .timeline_audio_publication_generation
+                    .load(Ordering::Acquire);
+                // Do not infer provenance from numeric IDs or from the
+                // optional authored payload.  The published runtime image
+                // carries the exact projection IDs beside clip-slot truth,
+                // and `EngineHandle::snapshot()` may intentionally omit
+                // `authored_video` for public/UI compatibility.
+                let timeline_video_projection_layer_ids = snapshot
+                    .video_clip_runtime
+                    .timeline_video_projection_layer_ids
+                    .iter()
+                    .copied()
+                    .collect::<HashSet<_>>();
+                let audio_clip_asset_is_available = |clip: &TimelineAudioClipSummary| {
+                    let Some(asset_id) = clip.media_asset_id else {
+                        // Legacy clips carry their own path and have no catalog
+                        // authority to invalidate here.
+                        return true;
+                    };
+                    snapshot
+                        .video
+                        .media_assets
+                        .iter()
+                        .find(|asset| asset.id == asset_id)
+                        .is_some_and(|asset| {
+                            timeline_media_asset_source_is_uri(asset)
+                                || media_asset_availability
+                                    .as_ref()
+                                    .and_then(|availability| availability.get(&asset.id))
+                                    .copied()
+                                    .unwrap_or(false)
+                        })
+                };
                 let resolve_audio_clip = |mut clip: TimelineAudioClipSummary| {
                     if clip.path.trim().is_empty() {
                         clip.path = clip
@@ -6332,10 +6478,19 @@ impl EngineHandle {
                         .unwrap_or(VideoLayerTransitionCurve::Linear),
                     f32::from(snapshot.timeline.follow_runtime.progress_millis) / 1000.0,
                 );
+                let source_muted = snapshot.timeline.audio_muted;
                 let mut root_clips = snapshot
                     .timeline
                     .audio_clips
                     .iter()
+                    .filter(|_| !follow_transitioning || !source_muted)
+                    .filter(|clip| {
+                        timeline_audio_layer_is_effectively_audible(
+                            &snapshot.timeline.layers,
+                            clip.layer_id,
+                        )
+                    })
+                    .filter(|clip| audio_clip_asset_is_available(clip))
                     .cloned()
                     .map(&resolve_audio_clip)
                     .collect::<Vec<_>>();
@@ -6346,6 +6501,7 @@ impl EngineHandle {
                 }
                 let mut child_clips = child_timeline_audio_runtime_clips(&snapshot)
                     .into_iter()
+                    .filter(|child| audio_clip_asset_is_available(&child.clip))
                     .map(|mut child| {
                         child.clip = resolve_audio_clip(child.clip);
                         child
@@ -6365,9 +6521,33 @@ impl EngineHandle {
                         })
                     {
                         follow_target_muted = target.audio_muted;
+                        child_clips.retain_mut(|child| match &child.root {
+                            ChildTimelineAudioRuntimeRoot::Follow { .. } => {
+                                if follow_target_muted {
+                                    false
+                                } else {
+                                    child.clip.gain *= follow_progress;
+                                    true
+                                }
+                            }
+                            _ => {
+                                if source_muted {
+                                    false
+                                } else {
+                                    child.clip.gain *= 1.0 - follow_progress;
+                                    true
+                                }
+                            }
+                        });
                         let position_ms = snapshot.timeline.follow_runtime.elapsed_ms;
                         child_clips.extend(target.audio_clips.iter().filter_map(|clip| {
                             (clip.duration_ms > 0
+                                && !target.audio_muted
+                                && timeline_audio_layer_is_effectively_audible(
+                                    &target.layers,
+                                    clip.layer_id,
+                                )
+                                && audio_clip_asset_is_available(clip)
                                 && position_ms >= clip.start_ms
                                 && position_ms
                                     < clip.start_ms.saturating_add(clip.duration_ms))
@@ -6375,13 +6555,12 @@ impl EngineHandle {
                                 let mut clip = resolve_audio_clip(clip.clone());
                                 clip.gain *= follow_progress;
                                 ChildTimelineAudioRuntimeClip {
-                                    parent_event_id: 0,
-                                    parent_iteration: 0,
-                                    direct_parent_cue_id: Some(u64::MAX),
-                                    direct_generation: snapshot
-                                        .timeline
-                                        .follow_runtime
-                                        .generation,
+                                    root: ChildTimelineAudioRuntimeRoot::Follow {
+                                        source_timeline_id: snapshot.timeline.id,
+                                        target_timeline_id: target.id,
+                                        generation: snapshot.timeline.follow_runtime.generation,
+                                        target_root: true,
+                                    },
                                     path: Arc::from(Vec::<
                                         ChildTimelineTransportPathSegment,
                                     >::new()),
@@ -6390,6 +6569,15 @@ impl EngineHandle {
                                 }
                             })
                         }));
+                    } else {
+                        child_clips.retain_mut(|child| {
+                            if source_muted {
+                                false
+                            } else {
+                                child.clip.gain *= 1.0 - follow_progress;
+                                true
+                            }
+                        });
                     }
                 }
                 let transport_revision = if follow_transitioning {
@@ -6425,7 +6613,19 @@ impl EngineHandle {
                         (false, 0, 0, None)
                     };
                 VideoAudioRuntimeSnapshot {
-                    layers: snapshot.video.layers.clone(),
+                    // Timeline MediaAsset AV groups own their audio through
+                    // `timeline_audio.clips`.  Do not also open the same
+                    // file through the legacy per-VJ-layer monitor path for
+                    // a renderer-only Timeline projection.
+                    layers: snapshot
+                        .video
+                        .layers
+                        .iter()
+                        .filter(|layer| {
+                            !timeline_video_projection_layer_ids.contains(&layer.id)
+                        })
+                        .cloned()
+                        .collect(),
                     clip_slots: snapshot.video_clip_runtime.clone(),
                     auto_vj_status: snapshot.video.auto_vj.status.clone(),
                     timeline_audio: TimelineAudioRuntimeSnapshot {
@@ -6442,11 +6642,13 @@ impl EngineHandle {
                                 .unwrap_or(0)
                         },
                         muted: if follow_transitioning {
-                            snapshot.timeline.audio_muted && follow_target_muted
+                            source_muted && follow_target_muted
                         } else {
                             snapshot.timeline.audio_muted
                         },
                         transport_revision,
+                        source_projection_authority,
+                        publication_generation,
                         bpm: snapshot.clock.bpm,
                         metronome_enabled,
                         count_in_beats,
@@ -6458,6 +6660,38 @@ impl EngineHandle {
                 }
             })
             .unwrap_or_default()
+    }
+
+    /// Hold the same publication barrier used by the engine worker while a
+    /// native audio consumer performs its final, non-blocking sink install.
+    /// The callback must not do file/device/decode work and must not re-enter
+    /// an EngineHandle snapshot method. A pending project/lane publication is
+    /// therefore either wholly before this fence or wholly after it; it can
+    /// never rotate the source authority between validation and `Sink::play`.
+    pub fn with_timeline_audio_projection_fence<R>(
+        &self,
+        expected: TimelineAudioProjectionAuthority,
+        expected_publication_generation: u64,
+        apply: impl FnOnce() -> R,
+    ) -> Result<R, String> {
+        let _publication = self
+            .snapshot
+            .read()
+            .map_err(|_| "Engine snapshot lock was poisoned".to_string())?;
+        let current = *self
+            .timeline_audio_projection_authority
+            .read()
+            .map_err(|_| "Timeline audio projection authority lock was poisoned".to_string())?;
+        if current != expected {
+            return Err("Timeline audio source projection changed before sink install".to_string());
+        }
+        let current_publication_generation = self
+            .timeline_audio_publication_generation
+            .load(Ordering::Acquire);
+        if current_publication_generation != expected_publication_generation {
+            return Err("Timeline audio transport changed before sink install".to_string());
+        }
+        Ok(apply())
     }
 
     /// Collect every allocator candidate carried by a command before either
@@ -7028,7 +7262,8 @@ impl EngineHandle {
             | EngineCommand::SetVideoOutputMappingField { .. }
             | EngineCommand::SaveVideoOutputMappingPreset { .. }
             | EngineCommand::ApplyVideoOutputMappingPreset { .. }
-            | EngineCommand::RemoveVideoOutputMappingPreset { .. } => {}
+            | EngineCommand::RemoveVideoOutputMappingPreset { .. }
+            | EngineCommand::SetMediaAssetAvailability { .. } => {}
             #[cfg(test)]
             EngineCommand::InspectMediaAssetRollbackTestState { .. } => {}
         }
@@ -8014,6 +8249,96 @@ struct RuntimeAudioReactiveNode {
     last_updated_at: Option<Instant>,
     hold_until: Option<Instant>,
     hold_value: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TimelineAudioChildProjectionSignature {
+    cue_id: CueId,
+    legacy_audio: Option<(String, u64)>,
+    clips: Vec<TimelineAudioClipSummary>,
+    lanes: Vec<(u32, bool, bool)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TimelineAudioBankProjectionSignature {
+    timeline_id: TimelineId,
+    audio_muted: bool,
+    clips: Vec<TimelineAudioClipSummary>,
+    lanes: Vec<(u32, bool, bool)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TimelineAudioProjectionSignature {
+    timeline_id: TimelineId,
+    audio_muted: bool,
+    audio_offset_ms: i64,
+    clips: Vec<TimelineAudioClipSummary>,
+    lanes: Vec<(u32, bool, bool)>,
+    children: Vec<TimelineAudioChildProjectionSignature>,
+    timeline_bank: Vec<TimelineAudioBankProjectionSignature>,
+    active_children: Vec<(
+        CueId,
+        ChildTimelineTransportRootSummary,
+        Vec<ChildTimelineTransportPathSegment>,
+    )>,
+    follow: (
+        protocol::TimelineFollowRuntimeStatus,
+        Option<TimelineId>,
+        u64,
+    ),
+    media_sources: Vec<(MediaAssetId, Option<String>, bool)>,
+}
+
+/// Runtime-only fence input for a native audio sink commit.  Deliberately
+/// excludes continuously advancing playhead positions: ordinary 44 Hz ticks
+/// inside the same active clips must not starve a decoder prepared outside the
+/// playback mutex.  Discontinuities are covered by the transport authority and
+/// audio revision, while clip-boundary changes are represented by the exact
+/// active sink membership below.
+#[derive(Debug, Clone, PartialEq)]
+struct TimelineAudioCommitSignature {
+    projection: TimelineAudioProjectionSignature,
+    playing: bool,
+    transport_epoch: u64,
+    transport_generation: u64,
+    transport_revision: u64,
+    active_root_clip_ids: Vec<TimelineAudioClipId>,
+    active_child_clips: Vec<(
+        ChildTimelineAudioRuntimeRoot,
+        Vec<ChildTimelineTransportPathSegment>,
+        TimelineAudioClipId,
+    )>,
+}
+
+impl Default for TimelineAudioCommitSignature {
+    fn default() -> Self {
+        Self {
+            projection: TimelineAudioProjectionSignature::default(),
+            playing: false,
+            transport_epoch: 1,
+            transport_generation: 1,
+            transport_revision: 0,
+            active_root_clip_ids: Vec::new(),
+            active_child_clips: Vec::new(),
+        }
+    }
+}
+
+impl Default for TimelineAudioProjectionSignature {
+    fn default() -> Self {
+        Self {
+            timeline_id: TimelineId(1),
+            audio_muted: false,
+            audio_offset_ms: 0,
+            clips: Vec::new(),
+            lanes: Vec::new(),
+            children: Vec::new(),
+            timeline_bank: Vec::new(),
+            active_children: Vec::new(),
+            follow: (protocol::TimelineFollowRuntimeStatus::Idle, None, 0),
+            media_sources: Vec::new(),
+        }
+    }
 }
 
 impl RuntimeAudioReactiveNode {
@@ -14038,6 +14363,62 @@ struct RuntimeVideoLayer {
     runtime_transport_dirty: bool,
 }
 
+/// A Timeline Video clip is authored against a `TimelineLayerSummary` lane,
+/// not against the separately allocated authored `VideoLayerId` domain.  The
+/// renderer still consumes `VideoLayerSummary`, so the active clip is
+/// projected into this runtime-only shape at snapshot time.  It is never
+/// inserted into `EngineRuntime::video_layers`, never allocated, and never
+/// persisted.
+#[derive(Clone)]
+struct RuntimeTimelineVideoProjection {
+    timeline_layer_id: u32,
+    layer_order: u32,
+    clip_id: TimelineVideoClipId,
+    layer: VideoLayerSummary,
+}
+
+/// High IDs are reserved for renderer-only Timeline projections.  Authored
+/// VideoLayer IDs use an independent allocator, so keeping this namespace
+/// separate makes a projection collision impossible for normal projects.
+/// The builder still checks the authored set and moves within the reserved
+/// range if a hand-authored file already occupies the deterministic slot; a
+/// pathological collision run fails closed after a bounded probe.
+const TIMELINE_VIDEO_RUNTIME_LAYER_NAMESPACE: u64 = 0x8000_0000_0000_0000;
+const TIMELINE_VIDEO_RUNTIME_LAYER_MASK: u64 = 0x3fff_ffff_ffff_ffff;
+const TIMELINE_VIDEO_RUNTIME_LAYER_PROBE_LIMIT: u64 = 4_096;
+
+fn timeline_video_runtime_projection_id(
+    clip_id: TimelineVideoClipId,
+    used_ids: &mut HashSet<VideoLayerId>,
+) -> Option<VideoLayerId> {
+    let mut offset = clip_id.0 & TIMELINE_VIDEO_RUNTIME_LAYER_MASK;
+    if offset == 0 {
+        offset = 1;
+    }
+    for _ in 0..TIMELINE_VIDEO_RUNTIME_LAYER_PROBE_LIMIT {
+        let candidate = TIMELINE_VIDEO_RUNTIME_LAYER_NAMESPACE | offset;
+        if used_ids.insert(candidate) {
+            return Some(candidate);
+        }
+        offset = if offset == TIMELINE_VIDEO_RUNTIME_LAYER_MASK {
+            1
+        } else {
+            offset + 1
+        };
+    }
+    None
+}
+
+fn timeline_media_asset_source_is_uri(asset: &MediaAssetSummary) -> bool {
+    let Some(path) = asset.source.path.as_deref().map(str::trim) else {
+        return false;
+    };
+    if path.is_empty() {
+        return false;
+    }
+    path.contains("://")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeClipDirection {
     Forward,
@@ -14700,6 +15081,12 @@ struct EngineRuntime {
     timeline_metronome_enabled: bool,
     timeline_count_in_beats: u8,
     timeline_audio_transport_revision: u64,
+    timeline_audio_projection_authority: TimelineAudioProjectionAuthority,
+    timeline_audio_projection_signature: TimelineAudioProjectionSignature,
+    timeline_audio_publication_generation: u64,
+    timeline_audio_commit_signature: TimelineAudioCommitSignature,
+    published_timeline_audio_projection_authority: Arc<RwLock<TimelineAudioProjectionAuthority>>,
+    published_timeline_audio_publication_generation: Arc<AtomicU64>,
     live_audio_spectrum: Option<AudioSpectrumPoint>,
     live_audio_features: Option<LiveAudioReactiveFeatures>,
     live_audio_onset_latched: bool,
@@ -14728,6 +15115,9 @@ struct EngineRuntime {
     #[cfg(test)]
     timeline_reconform_count: u64,
     media_assets: Vec<MediaAssetSummary>,
+    /// Last machine-local availability verdict per catalog asset.  This map
+    /// is runtime-only and is intentionally absent from persistence snapshots.
+    media_asset_availability: Arc<RwLock<HashMap<MediaAssetId, bool>>>,
     /// C1 canonical authored effect tables.  `RuntimeVideoLayer::isf_effect`
     /// remains only the renderer compatibility projection of its Layer chain.
     video_effect_chains: Vec<VideoEffectChainSummary>,
@@ -14958,6 +15348,9 @@ impl EngineRuntime {
             output,
             shared_telemetry,
             OutputOwnershipGate::for_role(MachineOutputRole::Both),
+            Arc::new(RwLock::new(HashMap::new())),
+            Arc::new(RwLock::new(TimelineAudioProjectionAuthority::default())),
+            Arc::new(AtomicU64::new(1)),
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
         )
@@ -14967,6 +15360,11 @@ impl EngineRuntime {
         output: DmxOutputConfig,
         shared_telemetry: Arc<EngineSharedTelemetry>,
         output_ownership_gate: OutputOwnershipGate,
+        media_asset_availability: Arc<RwLock<HashMap<MediaAssetId, bool>>>,
+        published_timeline_audio_projection_authority: Arc<
+            RwLock<TimelineAudioProjectionAuthority>,
+        >,
+        published_timeline_audio_publication_generation: Arc<AtomicU64>,
         #[cfg(test)] test_fail_next_pending_publication: Arc<AtomicBool>,
         #[cfg(test)] test_media_asset_publication_failed_after_b: Arc<AtomicBool>,
     ) -> Self {
@@ -15045,6 +15443,12 @@ impl EngineRuntime {
             timeline_metronome_enabled: false,
             timeline_count_in_beats: 4,
             timeline_audio_transport_revision: 0,
+            timeline_audio_projection_authority: TimelineAudioProjectionAuthority::default(),
+            timeline_audio_projection_signature: TimelineAudioProjectionSignature::default(),
+            timeline_audio_publication_generation: 1,
+            timeline_audio_commit_signature: TimelineAudioCommitSignature::default(),
+            published_timeline_audio_projection_authority,
+            published_timeline_audio_publication_generation,
             live_audio_spectrum: None,
             live_audio_features: None,
             live_audio_onset_latched: false,
@@ -15070,6 +15474,7 @@ impl EngineRuntime {
             #[cfg(test)]
             timeline_reconform_count: 0,
             media_assets: Vec::new(),
+            media_asset_availability,
             video_effect_chains: Vec::new(),
             video_effect_presets: Vec::new(),
             video_layer_groups: Vec::new(),
@@ -15753,6 +16158,12 @@ impl EngineRuntime {
         // validated this image, so catalog entries (including legal orphans)
         // are retained verbatim through authored/rendered/persistence paths.
         self.media_assets = snapshot.video.media_assets.clone();
+        // Filesystem availability is machine-local and never survives a
+        // project replacement. URI-backed in-process sources remain valid by
+        // source kind; local files must be re-inspected before projection.
+        if let Ok(mut availability) = self.media_asset_availability.write() {
+            availability.clear();
+        }
         self.video_effect_chains = snapshot.video.effect_chains.clone();
         self.video_effect_presets = snapshot.video.effect_presets.clone();
         self.video_layer_groups = snapshot.video.layer_groups.clone();
@@ -21191,6 +21602,27 @@ impl EngineRuntime {
                 // playing state or releases an external clock owner.
                 self.last_error = self.apply_timeline_playing_command(playing, false).err();
             }
+            EngineCommand::SetMediaAssetAvailability {
+                asset_id,
+                available,
+                ack,
+            } => {
+                if let Ok(mut availability) = self.media_asset_availability.write() {
+                    if available {
+                        availability.insert(asset_id, true);
+                    } else {
+                        availability.remove(&asset_id);
+                    }
+                }
+                self.last_error = None;
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result: Ok(()),
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error:
+                        "Media Asset availability could not publish its runtime verdict",
+                });
+            }
             EngineCommand::StartTimeline { timeline_id } => {
                 self.last_error = self.start_timeline_runtime(timeline_id).err();
             }
@@ -22835,8 +23267,34 @@ impl EngineRuntime {
             || force_publication_failure_from_handle;
         #[cfg(not(test))]
         let force_publication_failure = false;
+        let (mut prepared_audio_projection, audio_projection_error) =
+            if requires_publication && !force_publication_failure {
+                match self.prepare_timeline_audio_projection_publication() {
+                    Ok(prepared) => (prepared, None),
+                    Err(error) => (None, Some(error)),
+                }
+            } else {
+                (None, None)
+            };
+        let (mut prepared_audio_commit, audio_commit_error) =
+            if requires_publication && !force_publication_failure {
+                match self.prepare_timeline_audio_commit_publication() {
+                    Ok(prepared) => (prepared, None),
+                    Err(error) => (None, Some(error)),
+                }
+            } else {
+                (None, None)
+            };
+        if let Some(error) = audio_projection_error
+            .as_ref()
+            .or(audio_commit_error.as_ref())
+        {
+            self.last_error = Some(error.clone());
+        }
+        let audio_projection_ready =
+            audio_projection_error.is_none() && audio_commit_error.is_none();
         let published = if requires_publication {
-            if force_publication_failure {
+            if force_publication_failure || !audio_projection_ready {
                 false
             } else {
                 if waits_for_definitive_publication {
@@ -22849,6 +23307,10 @@ impl EngineRuntime {
                         .write()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *guard = self.build_snapshot(queue_depth);
+                    self.commit_timeline_audio_commit_publication(prepared_audio_commit.take());
+                    self.commit_timeline_audio_projection_publication(
+                        prepared_audio_projection.take(),
+                    );
                     true
                 } else {
                     let deadline = Instant::now() + Duration::from_millis(5);
@@ -22856,6 +23318,12 @@ impl EngineRuntime {
                         match snapshot.try_write() {
                             Ok(mut guard) => {
                                 *guard = self.build_snapshot(queue_depth);
+                                self.commit_timeline_audio_commit_publication(
+                                    prepared_audio_commit.take(),
+                                );
+                                self.commit_timeline_audio_projection_publication(
+                                    prepared_audio_projection.take(),
+                                );
                                 break true;
                             }
                             Err(std::sync::TryLockError::WouldBlock)
@@ -24740,7 +25208,23 @@ impl EngineRuntime {
         self.acknowledge_timeline_follow_lighting_settlement(now);
         self.refresh_timeline_follow_video_render_snapshot();
 
+        let prepared_audio_projection = self.prepare_timeline_audio_projection_publication();
+        let prepared_audio_commit = self.prepare_timeline_audio_commit_publication();
         if let Ok(mut guard) = snapshot.write() {
+            let prepared_audio_projection = match prepared_audio_projection {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.last_error = Some(error);
+                    return;
+                }
+            };
+            let prepared_audio_commit = match prepared_audio_commit {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.last_error = Some(error);
+                    return;
+                }
+            };
             // Touch layout is authored state, not 44 Hz render state. Reuse the already-published
             // allocation on ordinary ticks; only project loads copy a newly-authored surface once.
             let touch_surface = if self.touch_surface_dirty {
@@ -24750,6 +25234,8 @@ impl EngineRuntime {
                 std::mem::take(&mut guard.touch_surface)
             };
             *guard = self.build_snapshot_with_touch_surface(queue_depth, touch_surface);
+            self.commit_timeline_audio_commit_publication(prepared_audio_commit);
+            self.commit_timeline_audio_projection_publication(prepared_audio_projection);
         }
     }
 
@@ -29761,6 +30247,9 @@ impl EngineRuntime {
     ) -> Result<(), String> {
         let current_timeline = self.timeline_snapshot();
         let mut timeline = current_timeline.clone();
+        if let Some(layers) = &candidate.layers {
+            timeline.layers = layers.clone();
+        }
         timeline.video_clips = candidate.video_clips.clone();
         timeline.audio_clips = candidate.audio_clips.clone();
         timeline.phases = candidate.phases.clone();
@@ -29926,6 +30415,9 @@ impl EngineRuntime {
         };
         self.timeline_video_clips = candidate.video_clips;
         self.timeline_audio_clips = candidate.audio_clips;
+        if let Some(layers) = candidate.layers {
+            self.timeline_layers = layers;
+        }
         self.timeline_audio_clips_derived = false;
         self.timeline_phases = candidate.phases;
         self.timeline_item_groups = candidate.item_groups;
@@ -33636,6 +34128,370 @@ impl EngineRuntime {
             )
     }
 
+    fn timeline_audio_projection_signature(&self) -> TimelineAudioProjectionSignature {
+        let audio_lanes = |layers: &[TimelineLayerSummary]| {
+            let mut lanes = layers
+                .iter()
+                .filter(|layer| matches!(layer.kind, TimelineLayerKind::Audio))
+                .map(|layer| (layer.id, layer.muted, layer.solo))
+                .collect::<Vec<_>>();
+            lanes.sort_by_key(|lane| lane.0);
+            lanes
+        };
+        let sorted_clips = |clips: &[TimelineAudioClipSummary]| {
+            let mut clips = clips.to_vec();
+            clips.sort_by_key(|clip| clip.id);
+            clips
+        };
+        let mut children = self
+            .cues
+            .iter()
+            .filter_map(|cue| {
+                cue.child_timeline
+                    .as_ref()
+                    .map(|child| TimelineAudioChildProjectionSignature {
+                        cue_id: cue.id,
+                        legacy_audio: child
+                            .audio
+                            .as_ref()
+                            .map(|audio| (audio.path.clone(), audio.duration_ms)),
+                        clips: sorted_clips(&child.audio_clips),
+                        lanes: audio_lanes(&child.layers),
+                    })
+            })
+            .collect::<Vec<_>>();
+        children.sort_by_key(|child| child.cue_id);
+        let mut timeline_bank = self
+            .timeline_bank
+            .iter()
+            .map(|timeline| TimelineAudioBankProjectionSignature {
+                timeline_id: timeline.id,
+                audio_muted: timeline.audio_muted,
+                clips: sorted_clips(&timeline.audio_clips),
+                lanes: audio_lanes(&timeline.layers),
+            })
+            .collect::<Vec<_>>();
+        timeline_bank.sort_by_key(|timeline| timeline.timeline_id);
+        let active_children = self
+            .active_child_timeline_transport_summaries()
+            .into_iter()
+            .map(|transport| (transport.owner_cue_id, transport.root, transport.path))
+            .collect::<Vec<_>>();
+        let mut referenced_assets = self
+            .timeline_audio_clips
+            .iter()
+            .chain(
+                self.timeline_bank
+                    .iter()
+                    .flat_map(|timeline| timeline.audio_clips.iter()),
+            )
+            .chain(self.cues.iter().flat_map(|cue| {
+                cue.child_timeline
+                    .iter()
+                    .flat_map(|child| child.audio_clips.iter())
+            }))
+            .filter_map(|clip| clip.media_asset_id)
+            .collect::<Vec<_>>();
+        referenced_assets.sort_unstable();
+        referenced_assets.dedup();
+        let availability = self.media_asset_availability.read().ok();
+        let media_sources = referenced_assets
+            .into_iter()
+            .map(|asset_id| {
+                let path = self
+                    .media_assets
+                    .iter()
+                    .find(|asset| asset.id == asset_id)
+                    .and_then(|asset| asset.source.path.clone());
+                let available = self
+                    .media_assets
+                    .iter()
+                    .find(|asset| asset.id == asset_id)
+                    .is_some_and(|asset| {
+                        timeline_media_asset_source_is_uri(asset)
+                            || availability
+                                .as_ref()
+                                .and_then(|availability| availability.get(&asset_id))
+                                .copied()
+                                .unwrap_or(false)
+                    });
+                (asset_id, path, available)
+            })
+            .collect();
+
+        TimelineAudioProjectionSignature {
+            timeline_id: self.timeline_id,
+            audio_muted: self.timeline_audio_muted,
+            audio_offset_ms: self.timeline_audio_offset_ms,
+            clips: sorted_clips(&self.timeline_audio_clips),
+            lanes: audio_lanes(&self.timeline_layers),
+            children,
+            timeline_bank,
+            active_children,
+            follow: (
+                self.timeline_follow_runtime.status,
+                self.timeline_follow_runtime.target_timeline_id,
+                self.timeline_follow_runtime.generation,
+            ),
+            media_sources,
+        }
+    }
+
+    fn timeline_audio_commit_signature(&self) -> TimelineAudioCommitSignature {
+        let projection = self.timeline_audio_projection_signature();
+        let availability = self.media_asset_availability.read().ok();
+        let clip_is_available = |clip: &TimelineAudioClipSummary| {
+            let Some(asset_id) = clip.media_asset_id else {
+                return true;
+            };
+            self.media_assets
+                .iter()
+                .find(|asset| asset.id == asset_id)
+                .is_some_and(|asset| {
+                    timeline_media_asset_source_is_uri(asset)
+                        || availability
+                            .as_ref()
+                            .and_then(|availability| availability.get(&asset_id))
+                            .copied()
+                            .unwrap_or(false)
+                })
+        };
+        let follow_transitioning = matches!(
+            self.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Transitioning
+                | protocol::TimelineFollowRuntimeStatus::Settling
+        );
+        let source_audible = !follow_transitioning || !self.timeline_audio_muted;
+        let mut active_root_clip_ids = self
+            .timeline_audio_clips
+            .iter()
+            .filter(|clip| {
+                source_audible
+                    && clip.duration_ms > 0
+                    && timeline_audio_layer_is_effectively_audible(
+                        &self.timeline_layers,
+                        clip.layer_id,
+                    )
+                    && clip_is_available(clip)
+                    && self.timeline_position_ms >= clip.start_ms
+                    && self.timeline_position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+            })
+            .map(|clip| clip.id)
+            .collect::<Vec<_>>();
+        active_root_clip_ids.sort_unstable();
+
+        let mut active_child_clips = Vec::new();
+        for transport in self.active_child_timeline_transport_summaries() {
+            let Some(child) = self
+                .cues
+                .iter()
+                .find(|cue| cue.id == transport.owner_cue_id)
+                .and_then(|cue| cue.child_timeline.as_ref())
+            else {
+                continue;
+            };
+            let root = match transport.root {
+                ChildTimelineTransportRootSummary::Timeline {
+                    parent_event_id,
+                    parent_iteration,
+                } => ChildTimelineAudioRuntimeRoot::Timeline {
+                    parent_event_id,
+                    parent_iteration,
+                },
+                ChildTimelineTransportRootSummary::Direct {
+                    parent_cue_id,
+                    generation,
+                } => ChildTimelineAudioRuntimeRoot::Direct {
+                    parent_cue_id,
+                    generation,
+                },
+                ChildTimelineTransportRootSummary::Follow {
+                    source_timeline_id,
+                    generation,
+                } => {
+                    let Some(target_timeline_id) = self.timeline_follow_runtime.target_timeline_id
+                    else {
+                        continue;
+                    };
+                    ChildTimelineAudioRuntimeRoot::Follow {
+                        source_timeline_id,
+                        target_timeline_id,
+                        generation,
+                        target_root: false,
+                    }
+                }
+            };
+            let mut clips = Vec::new();
+            append_child_timeline_audio_runtime_clips(
+                &mut clips,
+                child,
+                transport.position_ms,
+                root,
+                Arc::from(transport.path),
+            );
+            active_child_clips.extend(
+                clips
+                    .into_iter()
+                    .filter(|child| clip_is_available(&child.clip))
+                    .map(|child| (child.root, child.path.to_vec(), child.clip.id)),
+            );
+        }
+        if follow_transitioning {
+            if let Some(target) =
+                self.timeline_follow_runtime
+                    .target_timeline_id
+                    .and_then(|target_id| {
+                        self.timeline_bank
+                            .iter()
+                            .find(|timeline| timeline.id == target_id)
+                    })
+            {
+                if !target.audio_muted {
+                    let position_ms = self.timeline_follow_runtime.elapsed_ms;
+                    active_child_clips.extend(target.audio_clips.iter().filter_map(|clip| {
+                        (clip.duration_ms > 0
+                            && timeline_audio_layer_is_effectively_audible(
+                                &target.layers,
+                                clip.layer_id,
+                            )
+                            && clip_is_available(clip)
+                            && position_ms >= clip.start_ms
+                            && position_ms < clip.start_ms.saturating_add(clip.duration_ms))
+                        .then(|| {
+                            (
+                                ChildTimelineAudioRuntimeRoot::Follow {
+                                    source_timeline_id: self.timeline_id,
+                                    target_timeline_id: target.id,
+                                    generation: self.timeline_follow_runtime.generation,
+                                    target_root: true,
+                                },
+                                Vec::new(),
+                                clip.id,
+                            )
+                        })
+                    }));
+                }
+            }
+        }
+        let child_key = |child: &(
+            ChildTimelineAudioRuntimeRoot,
+            Vec<ChildTimelineTransportPathSegment>,
+            TimelineAudioClipId,
+        )| {
+            let mut key = match child.0 {
+                ChildTimelineAudioRuntimeRoot::Timeline {
+                    parent_event_id,
+                    parent_iteration,
+                } => vec![0, parent_event_id, parent_iteration, 0, 0],
+                ChildTimelineAudioRuntimeRoot::Direct {
+                    parent_cue_id,
+                    generation,
+                } => vec![1, parent_cue_id, generation, 0, 0],
+                ChildTimelineAudioRuntimeRoot::Follow {
+                    source_timeline_id,
+                    target_timeline_id,
+                    generation,
+                    target_root,
+                } => vec![
+                    2,
+                    source_timeline_id.0,
+                    target_timeline_id.0,
+                    generation,
+                    u64::from(target_root),
+                ],
+            };
+            key.push(child.1.len() as u64);
+            for segment in &child.1 {
+                key.push(segment.event_id);
+                key.push(segment.iteration);
+            }
+            key.push(child.2);
+            key
+        };
+        active_child_clips.sort_by_key(child_key);
+
+        TimelineAudioCommitSignature {
+            projection,
+            playing: self.timeline_playing,
+            transport_epoch: self.timeline_transport_epoch,
+            transport_generation: self.timeline_transport_generation,
+            transport_revision: self.timeline_audio_transport_revision,
+            active_root_clip_ids,
+            active_child_clips,
+        }
+    }
+
+    fn prepare_timeline_audio_commit_publication(
+        &self,
+    ) -> Result<Option<(u64, TimelineAudioCommitSignature)>, String> {
+        let signature = self.timeline_audio_commit_signature();
+        if signature == self.timeline_audio_commit_signature {
+            return Ok(None);
+        }
+        let generation = self
+            .timeline_audio_publication_generation
+            .checked_add(1)
+            .ok_or_else(|| "Timeline audio commit generation is exhausted".to_string())?;
+        Ok(Some((generation, signature)))
+    }
+
+    fn commit_timeline_audio_commit_publication(
+        &mut self,
+        prepared: Option<(u64, TimelineAudioCommitSignature)>,
+    ) {
+        if let Some((generation, signature)) = prepared {
+            self.timeline_audio_publication_generation = generation;
+            self.timeline_audio_commit_signature = signature;
+        }
+        self.published_timeline_audio_publication_generation.store(
+            self.timeline_audio_publication_generation,
+            Ordering::Release,
+        );
+    }
+
+    fn prepare_timeline_audio_projection_publication(
+        &self,
+    ) -> Result<
+        Option<(
+            TimelineAudioProjectionAuthority,
+            TimelineAudioProjectionSignature,
+        )>,
+        String,
+    > {
+        let signature = self.timeline_audio_projection_signature();
+        if signature == self.timeline_audio_projection_signature {
+            return Ok(None);
+        }
+        let (epoch, generation) =
+            protocol::control_plane_command::next_timeline_transport_authority(
+                self.timeline_audio_projection_authority.epoch,
+                self.timeline_audio_projection_authority.generation,
+            )
+            .ok_or_else(|| "Timeline audio source projection authority is exhausted".to_string())?;
+        Ok(Some((
+            TimelineAudioProjectionAuthority { epoch, generation },
+            signature,
+        )))
+    }
+
+    fn commit_timeline_audio_projection_publication(
+        &mut self,
+        prepared: Option<(
+            TimelineAudioProjectionAuthority,
+            TimelineAudioProjectionSignature,
+        )>,
+    ) {
+        if let Some((authority, signature)) = prepared {
+            self.timeline_audio_projection_authority = authority;
+            self.timeline_audio_projection_signature = signature;
+        }
+        *self
+            .published_timeline_audio_projection_authority
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            self.timeline_audio_projection_authority;
+    }
+
     /// Advance the single non-persistent fence used by the canonical local
     /// Timeline transport lane.  Do not derive this from playhead time: a
     /// value can repeat after a seek, a loop wrap, or a project replacement.
@@ -33967,14 +34823,30 @@ impl EngineRuntime {
         let source_audio_projected =
             !self.timeline_audio_clips.is_empty() || self.timeline_audio.is_some();
         let target_audio_projected = !target.audio_clips.is_empty() || target.audio.is_some();
-        let audio_consumers = (source_audio_projected || target_audio_projected)
-            .then_some(TimelineFollowSettlementConsumerSummary {
-                consumer_id: TimelineFollowSettlementConsumerId::Audio,
-                state: TimelineFollowSettlementState::Pending,
-                fault: None,
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
+        // Root clips are not the whole production projection.  An active
+        // Scene Block (including the incoming Follow root and any nested
+        // descendant) owns an independent sink key.  The native worker emits
+        // one Audio ACK only after it has synchronized every projected key,
+        // so admitting that consumer whenever any active child contributes is
+        // sufficient and avoids allowing a child-only Follow to install the
+        // target before its audio sink has applied.
+        let child_audio_projected = self
+            .child_transports
+            .iter()
+            .chain(&self.direct_child_transports)
+            .chain(&self.nested_child_transports)
+            .chain(self.timeline_follow_transport.iter())
+            .any(|transport| self.runtime_child_transport_projects_audio(transport))
+            || self.timeline_snapshot_child_contains_audio(target);
+        let audio_consumers =
+            (source_audio_projected || target_audio_projected || child_audio_projected)
+                .then_some(TimelineFollowSettlementConsumerSummary {
+                    consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                    state: TimelineFollowSettlementState::Pending,
+                    fault: None,
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
         let video_consumers = self
             .video_outputs
             .iter()
@@ -34014,6 +34886,57 @@ impl EngineRuntime {
             },
         )
         .collect()
+    }
+
+    fn runtime_child_transport_projects_audio(&self, transport: &RuntimeChildTransport) -> bool {
+        if !transport.active {
+            return false;
+        }
+        let Some(child) = self
+            .cues
+            .iter()
+            .find(|cue| cue.id == transport.owner_cue_id)
+            .and_then(|cue| cue.child_timeline.as_ref())
+        else {
+            return false;
+        };
+        self.child_timeline_contains_audio(child, 0)
+    }
+
+    fn timeline_snapshot_child_contains_audio(&self, timeline: &TimelineSnapshot) -> bool {
+        timeline.events.iter().any(|event| {
+            event.duration_ms > 0
+                && self
+                    .cues
+                    .iter()
+                    .find(|cue| cue.id == event.cue_id)
+                    .and_then(|cue| cue.child_timeline.as_ref())
+                    .is_some_and(|child| self.child_timeline_contains_audio(child, 0))
+        })
+    }
+
+    fn child_timeline_contains_audio(&self, child: &ChildTimelineSummary, depth: usize) -> bool {
+        if depth > self.cues.len() {
+            return false;
+        }
+        // Settlement applicability is deliberately conservative, matching
+        // root Timeline semantics above. A muted/unavailable/later-starting
+        // child may still have a sink from the outgoing projection which the
+        // worker must retire before Follow can install its target.
+        if child.audio.is_some() || !child.audio_clips.is_empty() {
+            return true;
+        }
+        child.events.iter().any(|event| {
+            event.duration_ms > 0
+                && self
+                    .cues
+                    .iter()
+                    .find(|cue| cue.id == event.cue_id)
+                    .and_then(|cue| cue.child_timeline.as_ref())
+                    .is_some_and(|nested| {
+                        self.child_timeline_contains_audio(nested, depth.saturating_add(1))
+                    })
+        })
     }
 
     fn timeline_follow_enabled_dmx_routes(&self) -> Vec<RuntimeTimelineFollowLightingRoute> {
@@ -35772,6 +36695,15 @@ impl EngineRuntime {
         }
 
         for (layer_id, clip) in desired {
+            // Modern Timeline clips are rendered by the ephemeral projection
+            // above.  Only the legacy representation (no matching explicit
+            // Video Timeline lane) is allowed to take over an authored VJ
+            // layer with the same numeric value.
+            if self.timeline_layers.iter().any(|layer| {
+                layer.id == clip.layer_id && matches!(layer.kind, TimelineLayerKind::Video)
+            }) {
+                continue;
+            }
             let Some(asset) = self
                 .media_assets
                 .iter()
@@ -36110,6 +37042,195 @@ impl EngineRuntime {
         bank
     }
 
+    /// Resolve active Timeline Video clips into renderer layers without
+    /// conflating the Timeline-lane allocator with the authored VJ-layer
+    /// allocator.  The returned projection is deliberately rebuilt from the
+    /// authoritative clip/catalog snapshot on every published frame: when a
+    /// clip ends, the playhead seeks, a loop changes, or the active Timeline
+    /// changes, the projection simply disappears without a retire mutation.
+    fn timeline_video_projection_layers(
+        &self,
+        clips: &[TimelineVideoClipSummary],
+        timeline_layers: &[TimelineLayerSummary],
+        position_ms: u64,
+        playing: bool,
+    ) -> Vec<RuntimeTimelineVideoProjection> {
+        let mut used_ids = self
+            .video_layers
+            .iter()
+            .map(|layer| layer.id)
+            .collect::<HashSet<_>>();
+        self.timeline_video_projection_layers_with_used_ids(
+            clips,
+            timeline_layers,
+            position_ms,
+            playing,
+            &mut used_ids,
+        )
+    }
+
+    fn timeline_video_projection_layers_with_used_ids(
+        &self,
+        clips: &[TimelineVideoClipSummary],
+        timeline_layers: &[TimelineLayerSummary],
+        position_ms: u64,
+        playing: bool,
+        used_ids: &mut HashSet<VideoLayerId>,
+    ) -> Vec<RuntimeTimelineVideoProjection> {
+        let media_asset_availability = self.media_asset_availability.read().ok();
+        let video_lanes = timeline_layers
+            .iter()
+            .filter(|layer| matches!(layer.kind, TimelineLayerKind::Video))
+            .map(|layer| (layer.id, layer))
+            .collect::<BTreeMap<_, _>>();
+        if video_lanes.is_empty() {
+            // Empty `timeline_layers` is the legacy representation.  In that
+            // form the old layer takeover path remains authoritative below.
+            return Vec::new();
+        }
+
+        let has_video_solo = video_lanes.values().any(|layer| layer.solo);
+        let mut desired = BTreeMap::<u32, (TimelineVideoClipSummary, &TimelineLayerSummary)>::new();
+        for clip in clips.iter().filter(|clip| {
+            clip.start_ms <= position_ms
+                && position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+        }) {
+            let Some(layer) = video_lanes.get(&clip.layer_id).copied() else {
+                // A malformed/legacy clip is not allowed to become a VJ
+                // layer by numeric coincidence.  Authoring validation owns
+                // the durable error; runtime rendering fails closed here.
+                continue;
+            };
+            if layer.muted || (has_video_solo && !layer.solo) {
+                continue;
+            }
+            match desired.get(&clip.layer_id) {
+                Some((current, _))
+                    if (current.start_ms, current.id.0) >= (clip.start_ms, clip.id.0) => {}
+                _ => {
+                    desired.insert(clip.layer_id, (clip.clone(), layer));
+                }
+            }
+        }
+
+        let mut projections = desired
+            .into_iter()
+            .filter_map(|(timeline_layer_id, (clip, timeline_layer))| {
+                let asset = self
+                    .media_assets
+                    .iter()
+                    .find(|asset| asset.id == clip.media_asset_id)?;
+                // Availability is established by the media-asset authority
+                // before authoring.  A catalog row without a local path is
+                // nevertheless never handed to the renderer or audio worker.
+                if !timeline_media_asset_source_is_uri(asset)
+                    && !media_asset_availability
+                        .as_ref()
+                        .and_then(|availability| availability.get(&asset.id))
+                        .copied()
+                        .unwrap_or(false)
+                {
+                    return None;
+                }
+                let id = timeline_video_runtime_projection_id(clip.id, used_ids)?;
+                let position_ms = clip
+                    .offset_ms
+                    .saturating_add(position_ms.saturating_sub(clip.start_ms));
+                let label = if timeline_layer.label.trim().is_empty() {
+                    asset.label.clone()
+                } else {
+                    format!("{} · {}", timeline_layer.label.trim(), asset.label)
+                };
+                Some(RuntimeTimelineVideoProjection {
+                    timeline_layer_id,
+                    layer_order: timeline_layer.order,
+                    clip_id: clip.id,
+                    layer: VideoLayerSummary {
+                        id,
+                        label,
+                        source: asset.source.clone(),
+                        media_asset_id: Some(asset.id),
+                        blend_mode: VideoBlendMode::Normal,
+                        state: VideoLayerState {
+                            playing,
+                            position_ms,
+                            ..VideoLayerState::default()
+                        },
+                        isf_effect: None,
+                        clip_slots: Vec::new(),
+                        default_clip_slot_id: None,
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        projections.sort_by_key(|projection| {
+            (
+                projection.layer_order,
+                projection.timeline_layer_id,
+                projection.clip_id,
+            )
+        });
+        projections
+    }
+
+    fn apply_timeline_video_projection_automations(
+        &self,
+        projections: &mut [RuntimeTimelineVideoProjection],
+        position_ms: u64,
+    ) {
+        for automation in self
+            .timeline_video_automations
+            .iter()
+            .filter(|automation| automation.enabled && automation.timeline_layer_id.is_some())
+        {
+            let Some(value) =
+                evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
+            else {
+                continue;
+            };
+            let Some(timeline_layer_id) = automation.timeline_layer_id else {
+                continue;
+            };
+            for projection in projections
+                .iter_mut()
+                .filter(|projection| projection.timeline_layer_id == timeline_layer_id)
+            {
+                apply_video_param(&mut projection.layer.state, &automation.param, value);
+                projection.layer.state =
+                    video::sanitize_layer_state(projection.layer.state.clone());
+            }
+        }
+    }
+
+    fn apply_timeline_video_projection_automations_from_summaries(
+        &self,
+        projections: &mut [RuntimeTimelineVideoProjection],
+        automations: &[TimelineVideoAutomationSummary],
+        position_ms: u64,
+    ) {
+        for automation in automations
+            .iter()
+            .filter(|automation| automation.enabled && automation.timeline_layer_id.is_some())
+        {
+            let Some(value) =
+                evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
+            else {
+                continue;
+            };
+            let Some(timeline_layer_id) = automation.timeline_layer_id else {
+                continue;
+            };
+            for projection in projections
+                .iter_mut()
+                .filter(|projection| projection.timeline_layer_id == timeline_layer_id)
+            {
+                apply_video_param(&mut projection.layer.state, &automation.param, value);
+                projection.layer.state =
+                    video::sanitize_layer_state(projection.layer.state.clone());
+            }
+        }
+    }
+
     /// Authored/runtime video projection without the legacy Follow weighting
     /// shim. New Follow presenters consume this for both inputs; the legacy
     /// `video_snapshot` below deliberately keeps its synthetic incoming IDs
@@ -36121,11 +37242,26 @@ impl EngineRuntime {
             .iter()
             .map(|output| output.summary.clone())
             .collect::<Vec<_>>();
-        let layers = self
+        let mut layers = self
             .video_layers
             .iter()
             .map(|layer| self.video_layer_summary_with_effects(layer, now))
             .collect::<Vec<_>>();
+        let mut timeline_projections = self.timeline_video_projection_layers(
+            &self.timeline_video_clips,
+            &self.timeline_layers,
+            self.timeline_position_ms,
+            self.timeline_playing,
+        );
+        self.apply_timeline_video_projection_automations(
+            &mut timeline_projections,
+            self.timeline_position_ms,
+        );
+        layers.extend(
+            timeline_projections
+                .into_iter()
+                .map(|projection| projection.layer),
+        );
         let main_layer_ids = layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
         let mut compositions = vec![CompositionSummary {
             id: 1,
@@ -36177,45 +37313,84 @@ impl EngineRuntime {
                     .min(u64::MAX as u128) as u64
             })
             .min(transition.target.duration_ms);
-        let mut desired = BTreeMap::<VideoLayerId, TimelineVideoClipSummary>::new();
-        for clip in transition.target.video_clips.iter().filter(|clip| {
-            clip.start_ms <= position_ms
-                && position_ms < clip.start_ms.saturating_add(clip.duration_ms)
-        }) {
-            let layer_id = VideoLayerId::from(clip.layer_id);
-            match desired.get(&layer_id) {
-                Some(current) if (current.start_ms, current.id.0) >= (clip.start_ms, clip.id.0) => {
-                }
-                _ => {
-                    desired.insert(layer_id, clip.clone());
+        let target_has_explicit_video_lanes = transition
+            .target
+            .layers
+            .iter()
+            .any(|layer| matches!(layer.kind, TimelineLayerKind::Video));
+        if target_has_explicit_video_lanes {
+            // A target Timeline lane is not an authored VJ layer.  Build the
+            // same renderer-only projection used by the active Timeline and
+            // keep its ID disjoint from the outgoing snapshot.  The target's
+            // lane automations are evaluated against the captured Follow
+            // snapshot, so later authoring edits cannot retarget this run.
+            let mut used_ids = snapshot.layers.iter().map(|layer| layer.id).collect();
+            let mut projections = self.timeline_video_projection_layers_with_used_ids(
+                &transition.target.video_clips,
+                &transition.target.layers,
+                position_ms,
+                true,
+                &mut used_ids,
+            );
+            self.apply_timeline_video_projection_automations_from_summaries(
+                &mut projections,
+                &transition.target.video_automations,
+                position_ms,
+            );
+            snapshot
+                .layers
+                .extend(projections.into_iter().map(|projection| projection.layer));
+            if let Some(main) = snapshot
+                .compositions
+                .iter_mut()
+                .find(|composition| composition.id == 1)
+            {
+                main.layer_ids = snapshot.layers.iter().map(|layer| layer.id).collect();
+            }
+        } else {
+            // Legacy Timeline data had no explicit lane summaries and used
+            // the numeric lane value as an authored VJ-layer ID.  Keep that
+            // compatibility path only for this representation.
+            let mut desired = BTreeMap::<VideoLayerId, TimelineVideoClipSummary>::new();
+            for clip in transition.target.video_clips.iter().filter(|clip| {
+                clip.start_ms <= position_ms
+                    && position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+            }) {
+                let layer_id = VideoLayerId::from(clip.layer_id);
+                match desired.get(&layer_id) {
+                    Some(current)
+                        if (current.start_ms, current.id.0) >= (clip.start_ms, clip.id.0) => {}
+                    _ => {
+                        desired.insert(layer_id, clip.clone());
+                    }
                 }
             }
-        }
-        for (layer_id, clip) in desired {
-            let Some(layer) = snapshot
-                .layers
-                .iter_mut()
-                .find(|layer| layer.id == layer_id)
-            else {
-                continue;
-            };
-            let Some(asset) = snapshot
-                .media_assets
-                .iter()
-                .find(|asset| asset.id == clip.media_asset_id)
-            else {
-                continue;
-            };
-            layer.source = asset.source.clone();
-            layer.media_asset_id = Some(asset.id);
-            layer.state.position_ms = clip
-                .offset_ms
-                .saturating_add(position_ms.saturating_sub(clip.start_ms));
-            layer.state.playing = true;
-            // The renderer, not this projection, owns all Follow weighting.
-            // In particular, do not create legacy u64::MAX synthetic IDs.
-            layer.clip_slots.clear();
-            layer.default_clip_slot_id = None;
+            for (layer_id, clip) in desired {
+                let Some(layer) = snapshot
+                    .layers
+                    .iter_mut()
+                    .find(|layer| layer.id == layer_id)
+                else {
+                    continue;
+                };
+                let Some(asset) = snapshot
+                    .media_assets
+                    .iter()
+                    .find(|asset| asset.id == clip.media_asset_id)
+                else {
+                    continue;
+                };
+                layer.source = asset.source.clone();
+                layer.media_asset_id = Some(asset.id);
+                layer.state.position_ms = clip
+                    .offset_ms
+                    .saturating_add(position_ms.saturating_sub(clip.start_ms));
+                layer.state.playing = true;
+                // The renderer, not this projection, owns all Follow weighting.
+                // In particular, do not create legacy u64::MAX synthetic IDs.
+                layer.clip_slots.clear();
+                layer.default_clip_slot_id = None;
+            }
         }
         self.apply_follow_video_automation_subtree_to_snapshot(
             &mut snapshot,
@@ -36294,6 +37469,25 @@ impl EngineRuntime {
             .iter()
             .map(|layer| self.video_layer_summary_with_effects(layer, now))
             .collect::<Vec<_>>();
+        let mut timeline_projections = self.timeline_video_projection_layers(
+            &self.timeline_video_clips,
+            &self.timeline_layers,
+            self.timeline_position_ms,
+            self.timeline_playing,
+        );
+        self.apply_timeline_video_projection_automations(
+            &mut timeline_projections,
+            self.timeline_position_ms,
+        );
+        let root_timeline_projection_ids = timeline_projections
+            .iter()
+            .map(|projection| projection.layer.id)
+            .collect::<HashSet<_>>();
+        layers.extend(
+            timeline_projections
+                .into_iter()
+                .map(|projection| projection.layer),
+        );
         if let Some(transition) = &self.timeline_follow_transition {
             let duration_ms = transition.duration.as_millis().max(1) as u64;
             let elapsed_ms = now
@@ -36302,53 +37496,87 @@ impl EngineRuntime {
                 .min(u128::from(u64::MAX)) as u64;
             let raw = elapsed_ms.min(duration_ms) as f32 / duration_ms as f32;
             let incoming_weight = video_transition_curve_progress(transition.curve, raw);
+            let outgoing_projection_ids = layers
+                .iter()
+                .filter(|layer| root_timeline_projection_ids.contains(&layer.id))
+                .map(|layer| layer.id)
+                .collect::<HashSet<_>>();
             for layer in &mut layers {
-                if transition.affected_video_layer_ids.contains(&layer.id) {
+                if transition.affected_video_layer_ids.contains(&layer.id)
+                    || outgoing_projection_ids.contains(&layer.id)
+                {
                     layer.state.opacity *= 1.0 - incoming_weight;
                 }
             }
-            let mut desired = BTreeMap::<VideoLayerId, TimelineVideoClipSummary>::new();
-            for clip in transition.target.video_clips.iter().filter(|clip| {
-                clip.start_ms <= elapsed_ms
-                    && elapsed_ms < clip.start_ms.saturating_add(clip.duration_ms)
-            }) {
-                let layer_id = VideoLayerId::from(clip.layer_id);
-                match desired.get(&layer_id) {
-                    Some(current)
-                        if (current.start_ms, current.id.0) >= (clip.start_ms, clip.id.0) => {}
-                    _ => {
-                        desired.insert(layer_id, clip.clone());
+            let target_has_explicit_video_lanes = transition
+                .target
+                .layers
+                .iter()
+                .any(|layer| matches!(layer.kind, TimelineLayerKind::Video));
+            if target_has_explicit_video_lanes {
+                let mut used_ids = layers.iter().map(|layer| layer.id).collect();
+                let mut projections = self.timeline_video_projection_layers_with_used_ids(
+                    &transition.target.video_clips,
+                    &transition.target.layers,
+                    elapsed_ms,
+                    true,
+                    &mut used_ids,
+                );
+                self.apply_timeline_video_projection_automations_from_summaries(
+                    &mut projections,
+                    &transition.target.video_automations,
+                    elapsed_ms,
+                );
+                layers.extend(projections.into_iter().map(|mut projection| {
+                    projection.layer.state.opacity *= incoming_weight;
+                    projection.layer
+                }));
+            } else {
+                // Legacy Timeline data had no explicit lane summaries and
+                // used the numeric lane value as an authored VJ-layer ID.
+                let mut desired = BTreeMap::<VideoLayerId, TimelineVideoClipSummary>::new();
+                for clip in transition.target.video_clips.iter().filter(|clip| {
+                    clip.start_ms <= elapsed_ms
+                        && elapsed_ms < clip.start_ms.saturating_add(clip.duration_ms)
+                }) {
+                    let layer_id = VideoLayerId::from(clip.layer_id);
+                    match desired.get(&layer_id) {
+                        Some(current)
+                            if (current.start_ms, current.id.0) >= (clip.start_ms, clip.id.0) => {}
+                        _ => {
+                            desired.insert(layer_id, clip.clone());
+                        }
                     }
                 }
-            }
-            for (layer_id, clip) in desired {
-                let Some(mut incoming) = self
-                    .video_layers
-                    .iter()
-                    .find(|layer| layer.id == layer_id)
-                    .map(|layer| self.video_layer_summary_with_effects(layer, now))
-                else {
-                    continue;
-                };
-                let Some(asset) = self
-                    .media_assets
-                    .iter()
-                    .find(|asset| asset.id == clip.media_asset_id)
-                else {
-                    continue;
-                };
-                incoming.id = u64::MAX.saturating_sub(layer_id);
-                incoming.label = format!("{} · incoming", incoming.label);
-                incoming.source = asset.source.clone();
-                incoming.media_asset_id = Some(asset.id);
-                incoming.state.position_ms = clip
-                    .offset_ms
-                    .saturating_add(elapsed_ms.saturating_sub(clip.start_ms));
-                incoming.state.playing = true;
-                incoming.state.opacity *= incoming_weight;
-                incoming.clip_slots.clear();
-                incoming.default_clip_slot_id = None;
-                layers.push(incoming);
+                for (layer_id, clip) in desired {
+                    let Some(mut incoming) = self
+                        .video_layers
+                        .iter()
+                        .find(|layer| layer.id == layer_id)
+                        .map(|layer| self.video_layer_summary_with_effects(layer, now))
+                    else {
+                        continue;
+                    };
+                    let Some(asset) = self
+                        .media_assets
+                        .iter()
+                        .find(|asset| asset.id == clip.media_asset_id)
+                    else {
+                        continue;
+                    };
+                    incoming.id = u64::MAX.saturating_sub(layer_id);
+                    incoming.label = format!("{} · incoming", incoming.label);
+                    incoming.source = asset.source.clone();
+                    incoming.media_asset_id = Some(asset.id);
+                    incoming.state.position_ms = clip
+                        .offset_ms
+                        .saturating_add(elapsed_ms.saturating_sub(clip.start_ms));
+                    incoming.state.playing = true;
+                    incoming.state.opacity *= incoming_weight;
+                    incoming.clip_slots.clear();
+                    incoming.default_clip_slot_id = None;
+                    layers.push(incoming);
+                }
             }
         }
         let main_layer_ids = layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
@@ -36384,6 +37612,16 @@ impl EngineRuntime {
     }
 
     fn video_clip_runtime_snapshot(&self) -> VideoClipRuntimeSnapshot {
+        let timeline_video_projection_layer_ids = self
+            .timeline_video_projection_layers(
+                &self.timeline_video_clips,
+                &self.timeline_layers,
+                self.timeline_position_ms,
+                self.timeline_playing,
+            )
+            .into_iter()
+            .map(|projection| projection.layer.id)
+            .collect();
         let runtime = VideoClipRuntimeSnapshot {
             layers: self
                 .video_layers
@@ -36453,6 +37691,7 @@ impl EngineRuntime {
                             .is_some_and(|slot| slot.loop_mode == VideoClipLoopMode::PingPong),
                 })
                 .collect(),
+            timeline_video_projection_layer_ids,
         };
         let authored = VideoSnapshot {
             layers: self
@@ -38688,6 +39927,30 @@ impl EngineRuntime {
         touch_surface: TouchSurfaceSummary,
     ) -> EngineSnapshot {
         let enabled_effect_count = self.enabled_effect_count();
+        let rendered_video = self.video_snapshot();
+        let authored_video = Some(self.authored_video_snapshot_from_rendered(&rendered_video));
+        let mut video_clip_runtime = self.video_clip_runtime_snapshot();
+        // `video_snapshot()` may also contain incoming Follow projections in
+        // addition to the root Timeline lanes.  Derive provenance from the
+        // exact authored image for this same publication, so every renderer-
+        // only layer (including Follow targets) is excluded by the audio
+        // monitor without a numeric-ID convention.
+        let authored_layer_ids = authored_video
+            .as_ref()
+            .map(|video| {
+                video
+                    .layers
+                    .iter()
+                    .map(|layer| layer.id)
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        video_clip_runtime.timeline_video_projection_layer_ids = rendered_video
+            .layers
+            .iter()
+            .filter(|layer| !authored_layer_ids.contains(&layer.id))
+            .map(|layer| layer.id)
+            .collect();
         let fixtures = self
             .fixtures
             .iter()
@@ -38781,9 +40044,9 @@ impl EngineRuntime {
             programmer: self.programmer_snapshot(),
             timeline: self.timeline_snapshot(),
             timeline_bank: self.timeline_bank_snapshot(),
-            video: self.video_snapshot(),
-            authored_video: None,
-            video_clip_runtime: self.video_clip_runtime_snapshot(),
+            video: rendered_video,
+            authored_video,
+            video_clip_runtime,
             video_transition_runtime: self.video_layer_transition_runtime_snapshot(),
             effects: self.effects.iter().map(effect_summary).collect(),
             node_graphs: self
@@ -41705,28 +42968,42 @@ fn child_timeline_audio_runtime_clips(
         let Some(child) = cue.child_timeline.as_ref() else {
             continue;
         };
-        let (parent_event_id, parent_iteration, direct_parent_cue_id, direct_generation) =
-            match transport.root {
-                ChildTimelineTransportRootSummary::Timeline {
-                    parent_event_id,
-                    parent_iteration,
-                } => (parent_event_id, parent_iteration, None, 0),
-                ChildTimelineTransportRootSummary::Direct {
-                    parent_cue_id,
+        let root = match transport.root {
+            ChildTimelineTransportRootSummary::Timeline {
+                parent_event_id,
+                parent_iteration,
+            } => ChildTimelineAudioRuntimeRoot::Timeline {
+                parent_event_id,
+                parent_iteration,
+            },
+            ChildTimelineTransportRootSummary::Direct {
+                parent_cue_id,
+                generation,
+            } => ChildTimelineAudioRuntimeRoot::Direct {
+                parent_cue_id,
+                generation,
+            },
+            ChildTimelineTransportRootSummary::Follow {
+                source_timeline_id,
+                generation,
+            } => {
+                let Some(target_timeline_id) = snapshot.timeline.follow_runtime.target_timeline_id
+                else {
+                    continue;
+                };
+                ChildTimelineAudioRuntimeRoot::Follow {
+                    source_timeline_id,
+                    target_timeline_id,
                     generation,
-                } => (0, 0, Some(parent_cue_id), generation),
-                ChildTimelineTransportRootSummary::Follow { generation, .. } => {
-                    (0, 0, None, generation)
+                    target_root: false,
                 }
-            };
+            }
+        };
         append_child_timeline_audio_runtime_clips(
             &mut active,
             child,
             transport.position_ms,
-            parent_event_id,
-            parent_iteration,
-            direct_parent_cue_id,
-            direct_generation,
+            root,
             Arc::from(transport.path.clone()),
         );
     }
@@ -41737,10 +43014,7 @@ fn append_child_timeline_audio_runtime_clips(
     active: &mut Vec<ChildTimelineAudioRuntimeClip>,
     child: &ChildTimelineSummary,
     child_position_ms: u64,
-    parent_event_id: TimelineEventId,
-    parent_iteration: u64,
-    direct_parent_cue_id: Option<CueId>,
-    direct_generation: u64,
+    root: ChildTimelineAudioRuntimeRoot,
     path: Arc<[ChildTimelineTransportPathSegment]>,
 ) {
     if child.audio_clips.is_empty() {
@@ -41749,10 +43023,16 @@ fn append_child_timeline_audio_runtime_clips(
                 .layers
                 .iter()
                 .filter(|layer| matches!(layer.kind, TimelineLayerKind::Audio))
-                .min_by_key(|layer| (layer.order, layer.id))
+                .min_by_key(|layer| layer.id)
                 .map(|layer| layer.id)
-                .unwrap_or(0);
-            if timeline_audio_clip_layer_is_muted(child, layer_id) {
+                .unwrap_or(LEGACY_AUDIO_TIMELINE_LAYER_ID);
+            let has_authored_audio_lane = child
+                .layers
+                .iter()
+                .any(|layer| matches!(layer.kind, TimelineLayerKind::Audio));
+            if has_authored_audio_lane
+                && !timeline_audio_layer_is_effectively_audible(&child.layers, layer_id)
+            {
                 return;
             }
             let clip = legacy_timeline_audio_clip(audio, layer_id, 0);
@@ -41760,10 +43040,7 @@ fn append_child_timeline_audio_runtime_clips(
                 && child_position_ms < clip.start_ms.saturating_add(clip.duration_ms)
             {
                 active.push(ChildTimelineAudioRuntimeClip {
-                    parent_event_id,
-                    parent_iteration,
-                    direct_parent_cue_id,
-                    direct_generation,
+                    root: root.clone(),
                     path: Arc::clone(&path),
                     position_ms: child_position_ms,
                     clip,
@@ -41773,17 +43050,14 @@ fn append_child_timeline_audio_runtime_clips(
         return;
     }
     for clip in &child.audio_clips {
-        if timeline_audio_clip_layer_is_muted(child, clip.layer_id) {
+        if !timeline_audio_layer_is_effectively_audible(&child.layers, clip.layer_id) {
             continue;
         }
         if child_position_ms >= clip.start_ms
             && child_position_ms < clip.start_ms.saturating_add(clip.duration_ms)
         {
             active.push(ChildTimelineAudioRuntimeClip {
-                parent_event_id,
-                parent_iteration,
-                direct_parent_cue_id,
-                direct_generation,
+                root: root.clone(),
                 path: Arc::clone(&path),
                 position_ms: child_position_ms,
                 clip: clip.clone(),
@@ -41792,13 +43066,17 @@ fn append_child_timeline_audio_runtime_clips(
     }
 }
 
-fn timeline_audio_clip_layer_is_muted(child: &ChildTimelineSummary, layer_id: u32) -> bool {
-    let any_solo = child.layers.iter().any(|layer| layer.solo);
-    child
-        .layers
+fn timeline_audio_layer_is_effectively_audible(
+    layers: &[TimelineLayerSummary],
+    layer_id: u32,
+) -> bool {
+    let any_audio_solo = layers
+        .iter()
+        .any(|layer| matches!(layer.kind, TimelineLayerKind::Audio) && layer.solo);
+    layers
         .iter()
         .find(|layer| layer.id == layer_id && matches!(layer.kind, TimelineLayerKind::Audio))
-        .is_none_or(|layer| layer.muted || (any_solo && !layer.solo))
+        .is_some_and(|layer| !layer.muted && (!any_audio_solo || layer.solo))
 }
 
 fn timeline_block_iteration_range(
@@ -60340,7 +61618,12 @@ mod tests {
             wake,
             shared_telemetry,
             snapshot,
+            media_asset_availability: Arc::new(RwLock::new(HashMap::new())),
             timeline_follow_video_render_snapshot: Arc::new(RwLock::new(None)),
+            timeline_audio_projection_authority: Arc::new(RwLock::new(
+                TimelineAudioProjectionAuthority::default(),
+            )),
+            timeline_audio_publication_generation: Arc::new(AtomicU64::new(1)),
             output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
             allocator_gate: Arc::new(Mutex::new(())),
             next_fixture_id: Arc::new(AtomicU64::new(1)),
@@ -69942,7 +71225,12 @@ mod tests {
             wake,
             shared_telemetry: Arc::clone(&shared_telemetry),
             snapshot: Arc::new(RwLock::new(EngineSnapshot::default())),
+            media_asset_availability: Arc::new(RwLock::new(HashMap::new())),
             timeline_follow_video_render_snapshot: Arc::new(RwLock::new(None)),
+            timeline_audio_projection_authority: Arc::new(RwLock::new(
+                TimelineAudioProjectionAuthority::default(),
+            )),
+            timeline_audio_publication_generation: Arc::new(AtomicU64::new(1)),
             output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
             allocator_gate: Arc::new(Mutex::new(())),
             next_fixture_id: Arc::new(AtomicU64::new(1)),
@@ -100853,6 +102141,7 @@ mod tests {
         let published = RwLock::new(runtime.build_snapshot(0));
         let authored = runtime.authored_timeline_snapshot();
         let candidate = TimelineAdvancedAuthoringSummary {
+            layers: None,
             snap_request: None,
             video_clips: authored.video_clips,
             audio_clips: authored.audio_clips,
@@ -101411,6 +102700,103 @@ mod tests {
                 .unwrap();
             assert_eq!(runtime.timeline_id, TimelineId(8_102));
             assert!(runtime.timeline_follow_transition.is_none());
+        }
+    }
+
+    #[test]
+    fn timeline_follow_ltl5_child_only_audio_waits_for_terminal_worker_ack() {
+        for (nested, clip_start_ms, lane_muted) in [
+            (false, 0, false),
+            (true, 0, false),
+            (false, 500, false),
+            (false, 0, true),
+        ] {
+            let now = Instant::now();
+            let mut runtime =
+                timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+            let mut audio_layer = default_timeline_audio_layer(2);
+            audio_layer.muted = lane_muted;
+            let child_clip = TimelineAudioClipSummary {
+                id: if nested { 80_321 } else { 80_320 },
+                layer_id: 2,
+                media_asset_id: None,
+                path: "child-only-follow.wav".to_string(),
+                start_ms: clip_start_ms,
+                offset_ms: 0,
+                duration_ms: 1_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            };
+            let leaf_cue = if nested { 80_323 } else { 80_322 };
+            create_effect_only_cue(&mut runtime, leaf_cue, Vec::new());
+            runtime
+                .set_cue_child_timeline_state(
+                    leaf_cue,
+                    Some(ChildTimelineSummary {
+                        layers: vec![audio_layer.clone()],
+                        audio_clips: vec![child_clip],
+                        duration_ms: 1_000,
+                        ..ChildTimelineSummary::default()
+                    }),
+                )
+                .unwrap();
+            let target_cue = if nested {
+                let outer_cue = 80_324;
+                create_effect_only_cue(&mut runtime, outer_cue, Vec::new());
+                runtime
+                    .set_cue_child_timeline_state(
+                        outer_cue,
+                        Some(ChildTimelineSummary {
+                            events: vec![direct_child_static_event(80_325, leaf_cue, 0, 1_000)],
+                            duration_ms: 1_000,
+                            ..ChildTimelineSummary::default()
+                        }),
+                    )
+                    .unwrap();
+                outer_cue
+            } else {
+                leaf_cue
+            };
+            let mut bank = runtime.timeline_bank.clone();
+            bank[1].events = vec![direct_child_static_event(80_326, target_cue, 0, 1_000)];
+            runtime
+                .apply_timeline_bank_state(bank, TimelineId(8_101), false)
+                .unwrap();
+            runtime
+                .begin_timeline_follow(
+                    protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                    now,
+                )
+                .unwrap();
+            runtime.advance_child_transports(now + Duration::from_millis(50));
+            runtime.advance_timeline_follow(now + Duration::from_millis(100));
+
+            let audio_domain = runtime
+                .timeline_follow_runtime
+                .settlement
+                .as_ref()
+                .expect("child-only Follow must enter settlement")
+                .domains
+                .iter()
+                .find(|domain| domain.domain == TimelineFollowSettlementDomain::Audio)
+                .unwrap();
+            assert_eq!(audio_domain.state, TimelineFollowSettlementState::Pending);
+            assert_eq!(runtime.timeline_id, TimelineId(8_101));
+            let generation = runtime.timeline_follow_runtime.generation;
+            runtime
+                .acknowledge_timeline_follow_settlement(
+                    TimelineFollowSettlementAck {
+                        epoch: runtime.output_ownership_gate.status().epoch,
+                        generation,
+                        domain: TimelineFollowSettlementDomain::Audio,
+                        consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                        result: TimelineFollowSettlementAckResult::Applied,
+                    },
+                    now + Duration::from_millis(101),
+                )
+                .unwrap();
+            assert_eq!(runtime.timeline_id, TimelineId(8_102));
         }
     }
 
@@ -101979,6 +103365,7 @@ mod tests {
         let mut authored = advanced.authored_timeline_snapshot();
         authored.follow.as_mut().unwrap().preroll_ms = 0;
         let candidate = TimelineAdvancedAuthoringSummary {
+            layers: None,
             snap_request: None,
             video_clips: authored.video_clips,
             audio_clips: authored.audio_clips,
@@ -102104,6 +103491,7 @@ mod tests {
         let published = RwLock::new(runtime.build_snapshot(0));
         let authored = runtime.authored_timeline_snapshot();
         let candidate = TimelineAdvancedAuthoringSummary {
+            layers: None,
             snap_request: None,
             video_clips: authored.video_clips,
             audio_clips: authored.audio_clips,
@@ -102412,6 +103800,7 @@ mod tests {
         let published = RwLock::new(runtime.build_snapshot(0));
         let authored = runtime.authored_timeline_snapshot();
         let candidate = TimelineAdvancedAuthoringSummary {
+            layers: None,
             snap_request: None,
             video_clips: authored.video_clips,
             audio_clips: authored.audio_clips,
@@ -102777,16 +104166,34 @@ mod tests {
             path: "incoming.wav".to_string(),
             ..outgoing_clip.clone()
         };
+        let incoming_suppressed = TimelineAudioClipSummary {
+            id: 603,
+            layer_id: 12,
+            path: "incoming-suppressed.wav".to_string(),
+            ..outgoing_clip.clone()
+        };
         let mut target = TimelineSnapshot {
             id: TimelineId(702),
             label: "Verse".to_string(),
-            audio_clips: vec![incoming_clip],
+            layers: vec![
+                timeline_test_layer(11, 0, false, false, true, TimelineLayerKind::Audio),
+                timeline_test_layer(12, 1, false, false, false, TimelineLayerKind::Audio),
+            ],
+            audio_clips: vec![incoming_clip, incoming_suppressed],
             duration_ms: 2_000,
             ..TimelineSnapshot::default()
         };
         target.playing = false;
         let mut snapshot = EngineSnapshot::default();
         snapshot.timeline.id = TimelineId(701);
+        snapshot.timeline.layers = vec![timeline_test_layer(
+            11,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
         snapshot.timeline.audio_clips = vec![outgoing_clip];
         snapshot.timeline.playing = true;
         snapshot.timeline.follow = Some(TimelineFollowSummary {
@@ -102826,10 +104233,250 @@ mod tests {
         let incoming = audio
             .child_clips
             .iter()
-            .find(|child| child.direct_parent_cue_id == Some(u64::MAX))
+            .find(|child| {
+                matches!(
+                    child.root,
+                    ChildTimelineAudioRuntimeRoot::Follow {
+                        source_timeline_id: TimelineId(701),
+                        target_timeline_id: TimelineId(702),
+                        generation: 9,
+                        target_root: true,
+                    }
+                )
+            })
             .expect("the Follow target must be present on the incoming audio lane");
+        assert_eq!(audio.child_clips.len(), 1);
+        assert_eq!(incoming.clip.id, 602);
         assert!((incoming.clip.gain - 0.25).abs() < 0.001);
         assert_eq!(incoming.position_ms, 500);
+
+        {
+            let mut published = engine.snapshot.write().unwrap();
+            published.timeline.audio_muted = true;
+            published.timeline_bank[1].audio_muted = false;
+        }
+        let source_only_muted = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert!(source_only_muted.clips.is_empty());
+        assert_eq!(source_only_muted.child_clips.len(), 1);
+        assert!(!source_only_muted.muted);
+
+        {
+            let mut published = engine.snapshot.write().unwrap();
+            published.timeline.audio_muted = false;
+            published.timeline_bank[1].audio_muted = true;
+        }
+        let target_only_muted = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(target_only_muted.clips.len(), 1);
+        assert!(target_only_muted.child_clips.is_empty());
+        assert!(!target_only_muted.muted);
+
+        {
+            let mut published = engine.snapshot.write().unwrap();
+            published.timeline.audio_muted = true;
+            published.timeline_bank[1].audio_muted = true;
+        }
+        let both_muted = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert!(both_muted.clips.is_empty());
+        assert!(both_muted.child_clips.is_empty());
+        assert!(both_muted.muted);
+    }
+
+    #[test]
+    fn timeline_audio_root_lanes_apply_audio_only_mute_solo_without_runtime_state_delta() {
+        let shared_asset_id = 700;
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.timeline.layers = vec![
+            timeline_test_layer(21, 0, false, false, false, TimelineLayerKind::Audio),
+            timeline_test_layer(22, 1, false, false, false, TimelineLayerKind::Audio),
+            // A solo in another media domain must not suppress Audio lanes.
+            timeline_test_layer(23, 2, false, false, true, TimelineLayerKind::Video),
+        ];
+        snapshot.timeline.audio_clips = vec![
+            TimelineAudioClipSummary {
+                id: 701,
+                layer_id: 21,
+                media_asset_id: Some(shared_asset_id),
+                path: String::new(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            },
+            TimelineAudioClipSummary {
+                id: 702,
+                layer_id: 22,
+                media_asset_id: Some(shared_asset_id),
+                path: String::new(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            },
+        ];
+        snapshot.timeline.playing = true;
+        snapshot.timeline.position_ms = 500;
+        snapshot.video.media_assets = vec![media_asset_test_summary(
+            shared_asset_id,
+            "Shared AV",
+            VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("memory://timeline/shared-av.mp4".to_string()),
+                name: Some("shared-av.mp4".to_string()),
+                codec: None,
+                metadata: Some(VideoMediaMetadata {
+                    duration_ms: Some(2_000),
+                    width: Some(1_920),
+                    height: Some(1_080),
+                    frame_rate: Some(30.0),
+                    has_audio: true,
+                }),
+            },
+        )];
+        let published = Arc::new(RwLock::new(snapshot));
+        let engine = allocator_test_handle(Arc::clone(&published));
+        let clip_ids = || {
+            engine
+                .video_audio_runtime_snapshot()
+                .timeline_audio
+                .clips
+                .into_iter()
+                .map(|clip| clip.id)
+                .collect::<Vec<_>>()
+        };
+
+        assert!(engine.snapshot().authored_video.is_none());
+        assert_eq!(clip_ids(), vec![701, 702]);
+
+        published.write().unwrap().timeline.layers[0].muted = true;
+        assert_eq!(clip_ids(), vec![702]);
+        // Repeating the runtime projection is read-only; once a sink sees A
+        // disappear, another snapshot cannot manufacture a second retirement.
+        let muted_image = published.read().unwrap().clone();
+        assert_eq!(clip_ids(), vec![702]);
+        assert_eq!(*published.read().unwrap(), muted_image);
+
+        {
+            let mut image = published.write().unwrap();
+            image.timeline.layers[0].muted = false;
+            image.timeline.layers[1].solo = true;
+        }
+        assert_eq!(clip_ids(), vec![702]);
+
+        published.write().unwrap().timeline.layers[0].solo = true;
+        assert_eq!(clip_ids(), vec![701, 702]);
+
+        {
+            let mut image = published.write().unwrap();
+            image.timeline.layers[0].solo = false;
+            image.timeline.layers[1].solo = false;
+            image.timeline.layers[0].order = 9;
+            image.timeline.layers[1].order = 1;
+        }
+        assert_eq!(clip_ids(), vec![701, 702]);
+
+        {
+            let mut image = published.write().unwrap();
+            image.timeline.layers[0].muted = true;
+            image.timeline.layers[1].muted = true;
+        }
+        assert!(clip_ids().is_empty());
+
+        {
+            let mut image = published.write().unwrap();
+            image.timeline.layers[0].muted = false;
+            image.timeline.layers[1].muted = false;
+        }
+        assert_eq!(clip_ids(), vec![701, 702]);
+    }
+
+    #[test]
+    fn timeline_audio_projection_authority_tracks_semantics_not_reorder_and_rolls_back() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .add_timeline_layer(timeline_test_layer(
+                31,
+                0,
+                false,
+                false,
+                false,
+                TimelineLayerKind::Audio,
+            ))
+            .unwrap();
+        engine
+            .add_timeline_layer(timeline_test_layer(
+                32,
+                1,
+                false,
+                false,
+                false,
+                TimelineLayerKind::Audio,
+            ))
+            .unwrap();
+        let after_create = engine
+            .video_audio_runtime_snapshot()
+            .timeline_audio
+            .source_projection_authority;
+
+        let mut reordered_ids = engine
+            .snapshot()
+            .timeline
+            .layers
+            .into_iter()
+            .map(|layer| layer.id)
+            .collect::<Vec<_>>();
+        reordered_ids.reverse();
+        engine.reorder_timeline_layers(reordered_ids).unwrap();
+        assert_eq!(
+            engine
+                .video_audio_runtime_snapshot()
+                .timeline_audio
+                .source_projection_authority,
+            after_create,
+            "display-only lane order must not invalidate an audio sink"
+        );
+
+        let mut lane = engine
+            .snapshot()
+            .timeline
+            .layers
+            .into_iter()
+            .find(|layer| layer.id == 31)
+            .unwrap();
+        lane.muted = true;
+        engine.update_timeline_layer(lane.clone()).unwrap();
+        let muted = engine
+            .video_audio_runtime_snapshot()
+            .timeline_audio
+            .source_projection_authority;
+        assert_ne!(muted, after_create);
+
+        let persisted_b = engine.persistence_snapshot().unwrap();
+        engine.force_next_pending_publication_failure_for_tests();
+        lane.muted = false;
+        assert!(engine.update_timeline_layer(lane).is_err());
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().timeline,
+            persisted_b.timeline
+        );
+        assert_eq!(
+            engine
+                .video_audio_runtime_snapshot()
+                .timeline_audio
+                .source_projection_authority,
+            muted,
+            "failed publication must not expose or consume a projection generation"
+        );
+        assert!(serde_json::to_value(engine.persistence_snapshot().unwrap())
+            .unwrap()
+            .get("timeline_audio_projection_authority")
+            .is_none());
     }
 
     #[test]
@@ -102992,6 +104639,295 @@ mod tests {
         assert_eq!(restored.state.position_ms, 321);
         assert!(restored.state.playing);
         assert!(runtime.timeline_video_layer_restores.is_empty());
+    }
+
+    #[test]
+    fn timeline_video_media_asset_projects_without_an_authored_vj_layer() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let source = media_asset_test_source("timeline-only");
+        runtime.timeline_layers = vec![
+            timeline_test_layer(40, 3, false, false, false, TimelineLayerKind::Video),
+            timeline_test_layer(41, 4, false, false, false, TimelineLayerKind::Audio),
+        ];
+        runtime.media_assets = vec![media_asset_test_summary(
+            80,
+            "Timeline only",
+            source.clone(),
+        )];
+        runtime.timeline_video_clips = vec![TimelineVideoClipSummary {
+            id: TimelineVideoClipId(801),
+            layer_id: 40,
+            media_asset_id: 80,
+            start_ms: 100,
+            offset_ms: 250,
+            duration_ms: 1_000,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        }];
+        runtime.timeline_position_ms = 350;
+        runtime.timeline_playing = true;
+
+        assert!(runtime.video_layers.is_empty());
+        let rendered = runtime.video_snapshot();
+        let projection = rendered
+            .layers
+            .iter()
+            .find(|layer| layer.media_asset_id == Some(80))
+            .expect("the Timeline clip must render without a pre-created VJ layer");
+        assert_ne!(
+            projection.id, 40,
+            "Timeline lane IDs must not become VJ IDs"
+        );
+        assert_eq!(projection.source, source);
+        assert_eq!(projection.state.position_ms, 500);
+        assert!(projection.state.playing);
+        assert!(rendered
+            .compositions
+            .iter()
+            .find(|composition| composition.id == 1)
+            .is_some_and(|composition| composition.layer_ids.contains(&projection.id)));
+
+        let persisted = runtime.build_persistence_snapshot();
+        assert!(persisted
+            .authored_video
+            .as_ref()
+            .is_some_and(|video| video.layers.is_empty()));
+        assert_eq!(persisted.timeline.video_clips.len(), 1);
+    }
+
+    #[test]
+    fn timeline_video_media_asset_projection_keeps_lanes_independent_and_applies_lane_automation() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let source = media_asset_test_source("shared");
+        runtime.timeline_layers = vec![
+            timeline_test_layer(50, 1, false, false, false, TimelineLayerKind::Video),
+            timeline_test_layer(51, 2, false, false, false, TimelineLayerKind::Video),
+        ];
+        runtime.media_assets = vec![media_asset_test_summary(90, "Shared", source.clone())];
+        let mut collision_probe = HashSet::new();
+        let authored_high_id =
+            timeline_video_runtime_projection_id(TimelineVideoClipId(901), &mut collision_probe)
+                .expect("initial projection ID allocation");
+        let authored_high = media_asset_test_layer_with_default_slot(
+            authored_high_id,
+            90,
+            9_901,
+            "Authored high namespace",
+            source.clone(),
+        );
+        // An imported/project-authored layer is allowed to use any full u64
+        // identity. It must remain authored even when it occupies the
+        // renderer projection namespace; the projection allocator will probe
+        // to a distinct ID instead of relying on a numeric predicate.
+        runtime.video_layers = vec![runtime_video_layer_from_summary(&authored_high)];
+        runtime.timeline_video_clips = vec![
+            TimelineVideoClipSummary {
+                id: TimelineVideoClipId(901),
+                layer_id: 50,
+                media_asset_id: 90,
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            },
+            TimelineVideoClipSummary {
+                id: TimelineVideoClipId(902),
+                layer_id: 51,
+                media_asset_id: 90,
+                start_ms: 0,
+                offset_ms: 400,
+                duration_ms: 2_000,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            },
+        ];
+        runtime.timeline_video_automations = vec![RuntimeTimelineVideoAutomation {
+            id: 903,
+            // This ID is deliberately not an authored VideoLayer ID.  The
+            // lane identity is the authoritative target for this projection.
+            layer_id: 9_999,
+            timeline_layer_id: Some(50),
+            param: VideoParam::Opacity,
+            track: TimelineTrackKind::Video,
+            keyframes: vec![
+                VideoAutomationKeyframeSummary {
+                    time_ms: 0,
+                    value: 0.25,
+                    interpolation: AutomationInterpolation::Linear,
+                },
+                VideoAutomationKeyframeSummary {
+                    time_ms: 1_000,
+                    value: 0.75,
+                    interpolation: AutomationInterpolation::Linear,
+                },
+            ],
+            enabled: true,
+        }];
+        runtime.timeline_position_ms = 500;
+        runtime.timeline_playing = false;
+
+        let first = runtime.video_snapshot();
+        assert!(first
+            .layers
+            .iter()
+            .any(|layer| layer.id == authored_high_id));
+        let first_layers = first
+            .layers
+            .iter()
+            .filter(|layer| layer.media_asset_id == Some(90) && layer.id != authored_high_id)
+            .collect::<Vec<_>>();
+        assert_eq!(first_layers.len(), 2);
+        assert_ne!(first_layers[0].id, first_layers[1].id);
+        assert!(first_layers
+            .iter()
+            .all(|layer| layer.id != authored_high_id));
+        assert!(first_layers.iter().all(|layer| layer.source == source));
+        let automated = first_layers
+            .iter()
+            .find(|layer| layer.state.opacity > 0.49 && layer.state.opacity < 0.51)
+            .expect("lane automation must reach the corresponding runtime projection");
+        let automated_id = automated.id;
+
+        runtime.timeline_layers[0].label = "Renamed lane".to_string();
+        runtime.timeline_layers[0].order = 9;
+        let renamed = runtime.video_snapshot();
+        let renamed_layer = renamed
+            .layers
+            .iter()
+            .find(|layer| layer.id == automated_id)
+            .expect("lane reorder must not retire or retarget the active clip");
+        assert_eq!(renamed_layer.source, source);
+        assert_eq!(renamed_layer.media_asset_id, Some(90));
+        assert!(runtime
+            .build_persistence_snapshot()
+            .authored_video
+            .is_some_and(|video| video
+                .layers
+                .iter()
+                .any(|layer| layer.id == authored_high_id)));
+
+        // The public snapshot deliberately omits `authored_video`, so audio
+        // monitoring must rely on the exact runtime provenance set rather
+        // than treating every rendered layer as an authored monitor source.
+        let published = runtime.build_snapshot(0);
+        let projection_ids = published
+            .video_clip_runtime
+            .timeline_video_projection_layer_ids
+            .clone();
+        assert_eq!(projection_ids.len(), 2);
+        assert!(projection_ids.iter().all(|id| *id != authored_high_id));
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        *engine.snapshot.write().unwrap() = published;
+        let public = engine.snapshot();
+        assert!(public.authored_video.is_none());
+        let audio_monitor = engine.video_audio_runtime_snapshot();
+        assert!(audio_monitor
+            .layers
+            .iter()
+            .all(|layer| !projection_ids.contains(&layer.id)));
+        assert!(audio_monitor
+            .layers
+            .iter()
+            .any(|layer| layer.id == authored_high_id));
+    }
+
+    #[test]
+    fn timeline_video_media_asset_projection_fails_closed_for_missing_source_or_catalog_row() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_layers = vec![timeline_test_layer(
+            60,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Video,
+        )];
+        runtime.media_assets = vec![media_asset_test_summary(
+            100,
+            "Missing source",
+            VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: None,
+                name: Some("missing.mp4".to_string()),
+                codec: None,
+                metadata: Some(VideoMediaMetadata {
+                    duration_ms: Some(1_000),
+                    width: Some(1_920),
+                    height: Some(1_080),
+                    frame_rate: Some(30.0),
+                    has_audio: true,
+                }),
+            },
+        )];
+        runtime.timeline_video_clips = vec![TimelineVideoClipSummary {
+            id: TimelineVideoClipId(1_001),
+            layer_id: 60,
+            media_asset_id: 100,
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        }];
+        runtime.timeline_position_ms = 100;
+        assert!(runtime.video_snapshot().layers.is_empty());
+        runtime
+            .media_asset_availability
+            .write()
+            .unwrap()
+            .insert(100, true);
+        assert_eq!(
+            runtime
+                .video_snapshot()
+                .layers
+                .iter()
+                .filter(|layer| layer.media_asset_id == Some(100))
+                .count(),
+            1,
+            "a verified machine-local availability verdict admits the asset without per-frame filesystem I/O"
+        );
+        runtime
+            .media_asset_availability
+            .write()
+            .unwrap()
+            .insert(100, false);
+        assert!(runtime.video_snapshot().layers.is_empty());
+
+        runtime.media_assets = vec![media_asset_test_summary(
+            100,
+            "Stale source",
+            VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("C:\\syndocal-missing\\stale.mp4".to_string()),
+                name: Some("stale.mp4".to_string()),
+                codec: None,
+                metadata: Some(VideoMediaMetadata {
+                    duration_ms: Some(1_000),
+                    width: Some(1_920),
+                    height: Some(1_080),
+                    frame_rate: Some(30.0),
+                    has_audio: true,
+                }),
+            },
+        )];
+        assert!(runtime.video_snapshot().layers.is_empty());
+
+        runtime.media_assets.clear();
+        assert!(runtime.video_snapshot().layers.is_empty());
+    }
+
+    #[test]
+    fn timeline_video_projection_allocator_fails_closed_after_bounded_probe() {
+        let mut used_ids = (1..=TIMELINE_VIDEO_RUNTIME_LAYER_PROBE_LIMIT)
+            .map(|offset| (TIMELINE_VIDEO_RUNTIME_LAYER_NAMESPACE | offset) as VideoLayerId)
+            .collect::<HashSet<_>>();
+        assert!(
+            timeline_video_runtime_projection_id(TimelineVideoClipId(1), &mut used_ids).is_none()
+        );
     }
 
     #[test]
@@ -108106,6 +110042,108 @@ mod tests {
     }
 
     #[test]
+    fn timeline_audio_projection_authority_exhaustion_fails_before_publication() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_layers = vec![timeline_test_layer(
+            44,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
+        runtime.timeline_audio_projection_signature = runtime.timeline_audio_projection_signature();
+        let max = protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER;
+        runtime.timeline_audio_projection_authority = TimelineAudioProjectionAuthority {
+            epoch: max,
+            generation: max,
+        };
+        *runtime
+            .published_timeline_audio_projection_authority
+            .write()
+            .unwrap() = runtime.timeline_audio_projection_authority;
+        let before = runtime.build_snapshot(0);
+        let published = RwLock::new(before.clone());
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateTimelineLayer {
+            layer: timeline_test_layer(44, 0, true, false, false, TimelineLayerKind::Audio),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.build_snapshot(0), before);
+        assert_eq!(*published.read().unwrap(), before);
+        assert_eq!(
+            runtime.timeline_audio_projection_authority,
+            TimelineAudioProjectionAuthority {
+                epoch: max,
+                generation: max,
+            }
+        );
+    }
+
+    #[test]
+    fn timeline_audio_commit_generation_ignores_continuous_ticks_and_exhausts_fail_closed() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_layers = vec![timeline_test_layer(
+            44,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
+        runtime.timeline_audio_clips = vec![timeline_test_audio_clip(701, 44)];
+        runtime.timeline_position_ms = 300;
+        let initial = runtime.prepare_timeline_audio_commit_publication().unwrap();
+        assert!(initial.is_some());
+        runtime.commit_timeline_audio_commit_publication(initial);
+        let active_generation = runtime.timeline_audio_publication_generation;
+
+        runtime.timeline_position_ms = 1_000;
+        assert_eq!(
+            runtime.prepare_timeline_audio_commit_publication().unwrap(),
+            None,
+            "ordinary 44 Hz position updates inside one active clip must not starve prepare"
+        );
+        assert_eq!(
+            runtime.timeline_audio_publication_generation,
+            active_generation
+        );
+
+        runtime.timeline_position_ms = 2_250;
+        let left_clip = runtime.prepare_timeline_audio_commit_publication().unwrap();
+        assert!(
+            left_clip.is_some(),
+            "clip-boundary membership must fence commit"
+        );
+        runtime.commit_timeline_audio_commit_publication(left_clip);
+
+        runtime.timeline_audio_publication_generation = u64::MAX;
+        runtime.timeline_audio_commit_signature = runtime.timeline_audio_commit_signature();
+        runtime
+            .published_timeline_audio_publication_generation
+            .store(u64::MAX, Ordering::Release);
+        runtime.timeline_playing = true;
+        assert_eq!(
+            runtime
+                .prepare_timeline_audio_commit_publication()
+                .unwrap_err(),
+            "Timeline audio commit generation is exhausted"
+        );
+        assert_eq!(runtime.timeline_audio_publication_generation, u64::MAX);
+        assert_eq!(
+            runtime
+                .published_timeline_audio_publication_generation
+                .load(Ordering::Acquire),
+            u64::MAX,
+            "exhaustion must never wrap to an ABA-capable generation"
+        );
+    }
+
+    #[test]
     fn timeline_layer_legacy_display_is_synthetic_but_persistence_stays_authored() {
         let mut runtime = runtime_with_lfo_effects(&[]);
         create_effect_only_cue(&mut runtime, 1, Vec::new());
@@ -110157,7 +112195,13 @@ mod tests {
 
         let mapped = child_timeline_audio_runtime_clips(&snapshot);
         assert_eq!(mapped.len(), 1);
-        assert_eq!(mapped[0].parent_event_id, 100);
+        assert_eq!(
+            mapped[0].root,
+            ChildTimelineAudioRuntimeRoot::Timeline {
+                parent_event_id: 100,
+                parent_iteration: 0,
+            }
+        );
         assert_eq!(mapped[0].position_ms, 1_000);
         assert_eq!(mapped[0].clip.id, 77);
 
@@ -110181,12 +112225,101 @@ mod tests {
         snapshot.cues[0].child_timeline.as_mut().unwrap().layers[0].muted = true;
         assert!(child_timeline_audio_runtime_clips(&snapshot).is_empty());
         snapshot.cues[0].child_timeline.as_mut().unwrap().layers[0].muted = false;
+        {
+            let child = snapshot.cues[0].child_timeline.as_mut().unwrap();
+            child.layers.push(timeline_test_layer(
+                49,
+                9,
+                false,
+                false,
+                false,
+                TimelineLayerKind::Audio,
+            ));
+        }
+        let stable = child_timeline_audio_runtime_clips(&snapshot);
+        assert_eq!(stable[0].clip.layer_id, 49);
+        {
+            let layers = &mut snapshot.cues[0].child_timeline.as_mut().unwrap().layers;
+            layers[0].order = 100;
+            layers[1].order = 0;
+        }
+        assert_eq!(
+            child_timeline_audio_runtime_clips(&snapshot)[0]
+                .clip
+                .layer_id,
+            49
+        );
+        snapshot.cues[0]
+            .child_timeline
+            .as_mut()
+            .unwrap()
+            .layers
+            .clear();
+        let implicit = child_timeline_audio_runtime_clips(&snapshot);
+        assert_eq!(implicit[0].clip.layer_id, LEGACY_AUDIO_TIMELINE_LAYER_ID);
         snapshot.cues[1].child_timeline = Some(ChildTimelineSummary::default());
         assert_eq!(
             child_timeline_audio_runtime_clips(&snapshot).len(),
             1,
             "a valid nested child must not suppress its parent's audio"
         );
+    }
+
+    #[test]
+    fn child_timeline_audio_uses_audio_only_mute_solo_and_ignores_lane_reorder() {
+        let mut snapshot = super_scene_test_runtime(1.0).build_persistence_snapshot();
+        snapshot.timeline.active_child_transports = vec![ChildTimelineTransportRuntimeSummary {
+            owner_cue_id: 1,
+            root: ChildTimelineTransportRootSummary::Timeline {
+                parent_event_id: 100,
+                parent_iteration: 0,
+            },
+            path: Vec::new(),
+            position_ms: 1_000,
+        }];
+        let child = snapshot.cues[0].child_timeline.as_mut().unwrap();
+        child.layers = vec![
+            timeline_test_layer(50, 0, false, false, false, TimelineLayerKind::Audio),
+            timeline_test_layer(51, 1, false, false, false, TimelineLayerKind::Audio),
+            timeline_test_layer(52, 2, false, false, true, TimelineLayerKind::Video),
+        ];
+        let mut first = timeline_test_audio_clip(77, 50);
+        first.start_ms = 750;
+        first.duration_ms = 500;
+        let mut second = timeline_test_audio_clip(78, 51);
+        second.start_ms = 750;
+        second.duration_ms = 500;
+        child.audio_clips = vec![first, second];
+
+        let ids = |snapshot: &EngineSnapshot| {
+            child_timeline_audio_runtime_clips(snapshot)
+                .into_iter()
+                .map(|child| child.clip.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&snapshot), vec![77, 78]);
+
+        snapshot.cues[0].child_timeline.as_mut().unwrap().layers[0].muted = true;
+        assert_eq!(ids(&snapshot), vec![78]);
+
+        {
+            let layers = &mut snapshot.cues[0].child_timeline.as_mut().unwrap().layers;
+            layers[0].muted = false;
+            layers[1].solo = true;
+        }
+        assert_eq!(ids(&snapshot), vec![78]);
+
+        snapshot.cues[0].child_timeline.as_mut().unwrap().layers[0].solo = true;
+        assert_eq!(ids(&snapshot), vec![77, 78]);
+
+        {
+            let layers = &mut snapshot.cues[0].child_timeline.as_mut().unwrap().layers;
+            layers[0].solo = false;
+            layers[1].solo = false;
+            layers[0].order = 10;
+            layers[1].order = 0;
+        }
+        assert_eq!(ids(&snapshot), vec![77, 78]);
     }
 
     #[test]
@@ -110218,8 +112351,13 @@ mod tests {
 
         let mapped = child_timeline_audio_runtime_clips(&snapshot);
         assert_eq!(mapped.len(), 1);
-        assert_eq!(mapped[0].direct_parent_cue_id, Some(snapshot.cues[0].id));
-        assert_eq!(mapped[0].direct_generation, 3);
+        assert_eq!(
+            mapped[0].root,
+            ChildTimelineAudioRuntimeRoot::Direct {
+                parent_cue_id: snapshot.cues[0].id,
+                generation: 3,
+            }
+        );
         assert_eq!(mapped[0].position_ms, 1_000);
         assert_eq!(mapped[0].clip.id, 77);
 
@@ -110281,8 +112419,13 @@ mod tests {
 
         let mapped = child_timeline_audio_runtime_clips(&snapshot);
         assert_eq!(mapped.len(), 1);
-        assert_eq!(mapped[0].direct_parent_cue_id, Some(1));
-        assert_eq!(mapped[0].direct_generation, 1);
+        assert_eq!(
+            mapped[0].root,
+            ChildTimelineAudioRuntimeRoot::Direct {
+                parent_cue_id: 1,
+                generation: 1,
+            }
+        );
         assert_eq!(mapped[0].path.as_ref(), nested_transport.path.as_slice());
         assert_eq!(mapped[0].position_ms, 100);
         assert_eq!(mapped[0].clip.id, 77);

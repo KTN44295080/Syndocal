@@ -36,6 +36,9 @@ import { VideoTransitionBusPanel } from "./VideoTransitionBusPanel";
 
 interface VideoControlPanelProps {
   mixer: boolean;
+  libraryOnly?: boolean;
+  selectedMediaAssetId?: MediaAssetId | null;
+  onSelectMediaAsset?: (assetId: MediaAssetId) => void;
   layerCount: number;
   previewDiagnostics: ComponentProps<typeof VideoPreviewDiagnosticsPanel>;
   renderPlanStatus: ComponentProps<typeof VideoOutputRenderPlanStatusPanel>;
@@ -74,7 +77,6 @@ interface VideoControlPanelProps {
     backendAvailable: boolean;
     onVerify: (assetIds: MediaAssetId[]) => void | Promise<void>;
     onRelink: (assetId: MediaAssetId) => void | Promise<void>;
-    onAddToTimeline: (assetId: MediaAssetId) => void | Promise<void>;
     onPreviewStart: (assetId: MediaAssetId) => Promise<MediaAssetPreviewSessionTicket>;
     onPreviewFrame: (ticket: MediaAssetPreviewSessionTicket, positionMs: number) => Promise<string>;
     onPreviewEnd: (ticket: MediaAssetPreviewSessionTicket) => Promise<void>;
@@ -230,10 +232,17 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
   });
   onCleanup(stopMediaLibraryPreviewNow);
   return (
-    <section class={`panel videoControlPanel controlPanel ${props.mixer ? "videoControlPanelMixer" : ""}`}>
+    <section
+      id={props.libraryOnly ? "edit-domain-panel-mixer" : undefined}
+      role={props.libraryOnly ? "tabpanel" : undefined}
+      aria-labelledby={props.libraryOnly ? "edit-domain-tab-mixer" : undefined}
+      class={`panel videoControlPanel controlPanel ${props.mixer ? "videoControlPanelMixer" : ""}${props.libraryOnly ? " videoControlPanelLibrary" : ""}`}
+      data-workspace-pane={props.libraryOnly ? "upper" : undefined}
+      data-video-media-library={props.libraryOnly ? "true" : undefined}
+    >
       <div class="panelHeader">
-        <h2>Video Control</h2>
-        <span>{props.layerCount} layer(s)</span>
+        <h2>{props.libraryOnly ? "Media Library" : "Video Control"}</h2>
+        <span>{props.libraryOnly ? `${props.mediaLibrary.assets.length} asset(s)` : `${props.layerCount} layer(s)`}</span>
       </div>
       <div class="videoMixerDiagnostics">
         <VideoPreviewDiagnosticsPanel {...props.previewDiagnostics} />
@@ -301,7 +310,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             </For>
           </div>
         </Show>
-        <details class="videoMediaLibraryRail" data-media-library-rail>
+        <details class="videoMediaLibraryRail" data-media-library-rail open={props.libraryOnly}>
           <summary>
             <strong>Media Library</strong>
             <span>{props.mediaLibrary.assets.length} asset(s)</span>
@@ -343,7 +352,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                     const relinkable = () => asset.source.kind === "File" || asset.source.kind === "StillImage";
                     return (
                       <article
-                        class={`videoMediaLibraryItem availability-${availability()?.kind ?? "unknown"}`}
+                        class={`videoMediaLibraryItem availability-${availability()?.kind ?? "unknown"}${props.selectedMediaAssetId === asset.id ? " selected" : ""}`}
                         tabindex="0"
                         aria-label={`${asset.label}. ${mediaAvailabilityLabel(availability())}. ${referenceCount()} layer and Clip Slot reference(s).`}
                         aria-describedby={`media-library-source-${asset.id}`}
@@ -351,6 +360,13 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                         onMouseLeave={(event) => stopMediaLibraryPreview(asset.id, event.currentTarget)}
                         onFocusIn={() => startMediaLibraryPreview(asset, Boolean(thumbnail()))}
                         onFocusOut={(event) => stopMediaLibraryPreview(asset.id, event.currentTarget)}
+                        onClick={() => props.onSelectMediaAsset?.(asset.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            props.onSelectMediaAsset?.(asset.id);
+                          }
+                        }}
                       >
                         <div class="videoMediaLibraryThumbnail" aria-hidden="true">
                           <Show
@@ -405,13 +421,6 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                             onClick={() => void props.mediaLibrary.onRelink(asset.id)}
                           >
                             Relink…
-                          </button>
-                          <button
-                            disabled={!props.mediaLibrary.backendAvailable || !relinkable()}
-                            title="Place at the current Timeline playhead; video audio is split and linked automatically"
-                            onClick={() => void props.mediaLibrary.onAddToTimeline(asset.id)}
-                          >
-                            Add to Timeline
                           </button>
                         </div>
                       </article>

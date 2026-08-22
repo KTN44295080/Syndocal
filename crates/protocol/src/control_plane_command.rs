@@ -1650,6 +1650,11 @@ pub const OUTPUT_LEASE_RELINQUISH_OPERATION_ID: &str = "syndocal.output.lease.re
 pub const OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID: &str =
     "syndocal.output.lease.force_transfer.v2";
 pub const OUTPUT_DISPLAY_ADD_OPERATION_ID: &str = "syndocal.output.display.add.v2";
+/// The sole operator mutation for the physical live Display shell.  This is
+/// deliberately separate from AddDisplay: it never changes the persisted
+/// output graph, routing, mapping, enable state, or blackout state.
+pub const OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID: &str =
+    "syndocal.output.display.window.set_open.v2";
 /// Normal operator path: one explicit local-renderer enable request. This is
 /// deliberately distinct from the public lease lifecycle.
 pub const OUTPUT_ENABLE_OPERATION_ID: &str = "syndocal.output.enable.v2";
@@ -2301,6 +2306,11 @@ pub enum OutputControlActionV2 {
         spec: DisplayOutputSpecV2,
         lease: OutputLeaseAuthorityV1,
     },
+    SetDisplayWindowOpen {
+        output_id: u64,
+        open: bool,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2339,6 +2349,11 @@ enum OutputControlActionV2Wire {
         spec: DisplayOutputSpecV2,
         lease: OutputLeaseAuthorityV1,
     },
+    SetDisplayWindowOpen {
+        output_id: u64,
+        open: bool,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 impl OutputControlActionV2 {
@@ -2354,6 +2369,7 @@ impl OutputControlActionV2 {
             Self::RelinquishOutputLease { .. } => OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
             Self::ForceTransferLease { .. } => OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
             Self::AddDisplay { .. } => OUTPUT_DISPLAY_ADD_OPERATION_ID,
+            Self::SetDisplayWindowOpen { .. } => OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
         }
     }
 
@@ -2388,6 +2404,14 @@ impl OutputControlActionV2 {
             | Self::ForceTransferLease { lease } => lease.validate()?,
             Self::AddDisplay { spec, lease } => {
                 spec.validate()?;
+                lease.validate()?;
+            }
+            Self::SetDisplayWindowOpen {
+                output_id, lease, ..
+            } => {
+                if *output_id == 0 || *output_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+                    return Err(OutputControlValidationErrorV1::InvalidDisplayOutputSpec);
+                }
                 lease.validate()?;
             }
             Self::TakeOverStandby { .. } | Self::AcquireLease { .. } => {}
@@ -2433,6 +2457,15 @@ impl OutputControlActionV2 {
             },
             Self::AddDisplay { spec, lease } => OutputControlActionV2Wire::AddDisplay {
                 spec: spec.clone(),
+                lease: lease.clone(),
+            },
+            Self::SetDisplayWindowOpen {
+                output_id,
+                open,
+                lease,
+            } => OutputControlActionV2Wire::SetDisplayWindowOpen {
+                output_id: *output_id,
+                open: *open,
                 lease: lease.clone(),
             },
         }
@@ -2510,6 +2543,19 @@ impl OutputControlActionV2 {
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
+            Self::SetDisplayWindowOpen {
+                output_id,
+                open,
+                lease,
+            } => {
+                // 0..=9 are frozen wire discriminants.  Appending 10 keeps
+                // old golden bytes byte-for-byte stable.
+                output.push(10);
+                append_u64(output, *output_id);
+                output.push(u8::from(*open));
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
         }
         Ok(())
     }
@@ -2558,6 +2604,15 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             OutputControlActionV2Wire::AddDisplay { spec, lease } => {
                 Self::AddDisplay { spec, lease }
             }
+            OutputControlActionV2Wire::SetDisplayWindowOpen {
+                output_id,
+                open,
+                lease,
+            } => Self::SetDisplayWindowOpen {
+                output_id,
+                open,
+                lease,
+            },
         };
         value.validate().map_err(D::Error::custom)?;
         Ok(value)
@@ -2963,6 +3018,7 @@ impl OutputControlLeaseResultV2 {
             OUTPUT_LEASE_RELINQUISH_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Relinquished,
             OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Transferred,
             OUTPUT_DISPLAY_ADD_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
+            OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_ENABLE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
             _ => return Err(OutputControlValidationErrorV1::UnexpectedOperationId),
         };
@@ -2973,9 +3029,7 @@ impl OutputControlLeaseResultV2 {
             );
         let takeover_project_orphan = operation_id == OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
             && self.outcome == OutputLeaseReceiptOutcomeV2::ProjectOrphaned;
-        if (!takeover_project_orphan
-            && !enable_outcome
-            && self.outcome != expected_outcome)
+        if (!takeover_project_orphan && !enable_outcome && self.outcome != expected_outcome)
             || self.changes.len() != 1
         {
             return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
@@ -3120,6 +3174,7 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -3141,7 +3196,13 @@ impl OutputControlReceiptV2 {
             OutputControlReceiptOutcomeV2::NoOp if self.fence_before != self.fence_after => {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
-            OutputControlReceiptOutcomeV2::Applied if self.fence_before == self.fence_after => {
+            // Physical live-window mutations intentionally leave the
+            // persisted/project/output-ownership fence unchanged.  Their
+            // durable receipt/audit identity is still authoritative.
+            OutputControlReceiptOutcomeV2::Applied
+                if self.fence_before == self.fence_after
+                    && self.operation_id != OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID =>
+            {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
             _ => Ok(()),
@@ -3220,6 +3281,7 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -3986,8 +4048,7 @@ mod tests {
             .is_err());
 
         let mut forged_recovery = recovered.clone();
-        forged_recovery.changes[0].before_phase =
-            Some(OutputLeaseReceiptPhaseV2::HeldActive);
+        forged_recovery.changes[0].before_phase = Some(OutputLeaseReceiptPhaseV2::HeldActive);
         assert!(forged_recovery
             .validate_for_operation(OUTPUT_ENABLE_OPERATION_ID)
             .is_err());
@@ -4293,6 +4354,42 @@ mod tests {
             action.append_canonical_bytes(&mut shape).unwrap();
             assert_eq!(shape.first(), Some(expected));
         }
+        // The new physical-window operation is append-only: its discriminant
+        // is 10 and the frozen 0..=9 golden bytes above never move.
+        let set_window = OutputControlActionV2::SetDisplayWindowOpen {
+            output_id: 42,
+            open: true,
+            lease: lease_authority(),
+        };
+        let mut set_window_shape = Vec::new();
+        set_window
+            .append_canonical_bytes(&mut set_window_shape)
+            .unwrap();
+        assert_eq!(
+            set_window.operation_id(),
+            OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+        );
+        assert_eq!(set_window_shape.first(), Some(&10));
+        assert_eq!(set_window_shape[1..9], 42_u64.to_be_bytes());
+        assert!(
+            serde_json::from_value::<OutputControlActionV2>(serde_json::json!({
+                "kind": "set_display_window_open",
+                "output_id": 0,
+                "open": true,
+                "lease": serde_json::to_value(lease_authority()).unwrap(),
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<OutputControlActionV2>(serde_json::json!({
+                "kind": "set_display_window_open",
+                "output_id": 42,
+                "open": true,
+                "lease": serde_json::to_value(lease_authority()).unwrap(),
+                "unexpected": true,
+            }))
+            .is_err()
+        );
         let enable_json = serde_json::to_value(&enable).unwrap();
         assert_eq!(enable_json, serde_json::json!({ "kind": "enable_output" }));
         assert_eq!(

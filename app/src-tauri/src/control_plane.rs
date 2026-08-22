@@ -18,13 +18,14 @@ use protocol::control_plane_command::{
     CUE_LIST_DELETE_OPERATION_ID, CUE_LIST_REORDER_OPERATION_ID, EMPTY_CUE_CREATE_OPERATION_ID,
     OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
     OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION, OUTPUT_DISPLAY_ADD_OPERATION_ID,
-    OUTPUT_ENABLE_OPERATION_ID, OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
-    OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
-    OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
-    OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
-    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SET_EFFECT_ENABLED_OPERATION_ID,
-    TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
-    TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+    OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
+    OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
+    OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
+    OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+    OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
+    SET_EFFECT_ENABLED_OPERATION_ID, TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
+    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
+    TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
 };
 use protocol::control_plane_registry_v2::{
     AdapterPolicy, CanonicalControlPlaneRegistry, CanonicalOperationDescriptor,
@@ -535,6 +536,7 @@ enum ReviewedCanonicalOperation {
     ArmOutputOwnership,
     TakeOverStandby,
     AddDisplayOutput,
+    SetDisplayWindowOpen,
     EnableOutput,
     AcquireOutputLease,
     RenewOutputLease,
@@ -558,6 +560,7 @@ impl ReviewedCanonicalOperation {
             Self::ArmOutputOwnership => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
             Self::TakeOverStandby => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             Self::AddDisplayOutput => OUTPUT_DISPLAY_ADD_OPERATION_ID,
+            Self::SetDisplayWindowOpen => OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
             Self::EnableOutput => OUTPUT_ENABLE_OPERATION_ID,
             Self::AcquireOutputLease => OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
             Self::RenewOutputLease => OUTPUT_LEASE_RENEW_OPERATION_ID,
@@ -586,6 +589,9 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         "arm_output_control_v2" => Some(ReviewedCanonicalOperation::ArmOutputOwnership),
         "take_over_output_control_v2" => Some(ReviewedCanonicalOperation::TakeOverStandby),
         "add_display_output_v2" => Some(ReviewedCanonicalOperation::AddDisplayOutput),
+        "set_display_output_window_open_v2" => {
+            Some(ReviewedCanonicalOperation::SetDisplayWindowOpen)
+        }
         "enable_output_control_v2" => Some(ReviewedCanonicalOperation::EnableOutput),
         "acquire_output_lease_v2" => Some(ReviewedCanonicalOperation::AcquireOutputLease),
         "renew_output_lease_v2" => Some(ReviewedCanonicalOperation::RenewOutputLease),
@@ -704,6 +710,16 @@ fn canonical_descriptor_for_source(
             AdapterPolicy::LocalWindowDangerousOutputControl,
             ReceiptPolicy::ExactTerminalReceipt,
         ),
+        ReviewedCanonicalOperation::SetDisplayWindowOpen => (
+            OperationClass::Mutation,
+            vec![
+                OperationCapability::LocalWindowBound,
+                OperationCapability::OutputControl,
+            ],
+            OperationIdempotency::Mutating,
+            AdapterPolicy::LocalWindowOutputControl,
+            ReceiptPolicy::ExactTerminalReceipt,
+        ),
         ReviewedCanonicalOperation::EnableOutput
         | ReviewedCanonicalOperation::AcquireOutputLease
         | ReviewedCanonicalOperation::RenewOutputLease
@@ -731,6 +747,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
                 | ReviewedCanonicalOperation::RenewOutputLease
@@ -754,6 +771,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
                 | ReviewedCanonicalOperation::RenewOutputLease
@@ -776,6 +794,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
                 | ReviewedCanonicalOperation::RenewOutputLease
@@ -793,6 +812,7 @@ fn canonical_descriptor_for_source(
         } else if matches!(
             reviewed,
             ReviewedCanonicalOperation::EnableOutput
+                | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::AcquireOutputLease
                 | ReviewedCanonicalOperation::RenewOutputLease
                 | ReviewedCanonicalOperation::RecoverOutputLease
@@ -918,6 +938,7 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
     if matches!(
         operation_id,
         "add_display_output_v2"
+            | "set_display_output_window_open_v2"
             | "enable_output_control_v2"
             | "acquire_output_lease_v2"
             | "renew_output_lease_v2"
@@ -1097,6 +1118,7 @@ fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
                 | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                 | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
                 | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                 | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -1216,7 +1238,7 @@ mod tests {
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 469);
+        assert_eq!(names.len(), 473);
         const ENGINE_COMMAND_COUNT: usize = 261;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
@@ -1239,16 +1261,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 407;
+        const FRONTEND_INVOKE_COUNT: usize = 411;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            469 + ENGINE_COMMAND_COUNT
+            473 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1459);
+        assert_eq!(registry.operations.len(), 1467);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -1258,7 +1280,7 @@ mod tests {
         assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
-            456 + ENGINE_COMMAND_COUNT
+            460 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -1289,7 +1311,7 @@ mod tests {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
         });
-        assert_eq!(tauri_unavailable.clone().count(), 456);
+        assert_eq!(tauri_unavailable.clone().count(), 460);
         for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
@@ -1551,21 +1573,21 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 469;
+        const TAURI_COUNT: usize = 473;
         const ENGINE_COUNT: usize = 261;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 407;
+        const FRONTEND_COUNT: usize = 411;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1459);
-        assert_eq!(SOURCE_TOTAL, 1492);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1467);
+        assert_eq!(SOURCE_TOTAL, 1500);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 30);
+        assert_eq!(canonical.canonical_operations.len(), 31);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -1577,6 +1599,7 @@ mod tests {
                         | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                         | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                         | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                        | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                         | OUTPUT_ENABLE_OPERATION_ID
                         | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                         | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -1586,7 +1609,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(output_control_operations.len(), 10);
+        assert_eq!(output_control_operations.len(), 11);
         for (source_id, operation_id) in [
             (
                 "release_blackout_output_control_v2",
@@ -1599,6 +1622,10 @@ mod tests {
                 OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             ),
             ("add_display_output_v2", OUTPUT_DISPLAY_ADD_OPERATION_ID),
+            (
+                "set_display_output_window_open_v2",
+                OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+            ),
             ("acquire_output_lease_v2", OUTPUT_LEASE_ACQUIRE_OPERATION_ID),
             ("renew_output_lease_v2", OUTPUT_LEASE_RENEW_OPERATION_ID),
             ("recover_output_lease_v2", OUTPUT_LEASE_RECOVER_OPERATION_ID),
@@ -1625,6 +1652,7 @@ mod tests {
                 if matches!(
                     operation_id,
                     OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                         | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                         | OUTPUT_LEASE_RENEW_OPERATION_ID
                         | OUTPUT_LEASE_RECOVER_OPERATION_ID
@@ -1652,6 +1680,7 @@ mod tests {
                 if matches!(
                     operation_id,
                     OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                         | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                         | OUTPUT_LEASE_RENEW_OPERATION_ID
                         | OUTPUT_LEASE_RECOVER_OPERATION_ID
@@ -1860,11 +1889,11 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 30);
+        assert_eq!(direct.len(), 31);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1050);
+        assert_eq!(unclassified.len(), 1053);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -2133,6 +2162,7 @@ mod tests {
                     | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                    | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                     | OUTPUT_ENABLE_OPERATION_ID
                     | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                     | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -2271,6 +2301,7 @@ mod tests {
                     | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                    | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                     | OUTPUT_ENABLE_OPERATION_ID
                     | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                     | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -2285,6 +2316,7 @@ mod tests {
                     if matches!(
                         operation.operation_id.as_str(),
                         OUTPUT_ENABLE_OPERATION_ID
+                            | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                             | OUTPUT_LEASE_RENEW_OPERATION_ID
                             | OUTPUT_LEASE_RECOVER_OPERATION_ID
@@ -2308,6 +2340,7 @@ mod tests {
                     if matches!(
                         operation.operation_id.as_str(),
                         OUTPUT_ENABLE_OPERATION_ID
+                            | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                             | OUTPUT_LEASE_RENEW_OPERATION_ID
                             | OUTPUT_LEASE_RECOVER_OPERATION_ID
@@ -2496,11 +2529,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1459);
+        assert_eq!(legacy.operations.len(), 1467);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1459);
+        assert_eq!(operations.len(), 1467);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

@@ -39,6 +39,9 @@ type MappingPersistentWorkspaceBandProps = {
   onSelectionsDrawerOpen: (open: boolean) => void;
   onCloseHotkeyHelp: () => void;
   onOpenMapping: () => void;
+  lowerLeftContent?: JSX.Element;
+  contextContent?: JSX.Element;
+  keepChildrenMounted?: boolean;
   children?: JSX.Element;
 };
 
@@ -117,6 +120,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
           </button>
         </Show>
         <section class="mappingWorkspaceLeftPane" data-workspace-pane="lower-left" aria-label="Groups and Stage pane">
+          <Show when={props.lowerLeftContent} fallback={<>
           <section
             class={`mappingPersistentStage${props.workspace === "setup" ? " setupStageContext" : " controlStageContext"}`}
             aria-label={props.workspace === "setup" ? "Editable 2D stage map" : "2D fixture and projection surface mapping stage"}
@@ -209,6 +213,9 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
               </div>
             </details>
           </Show>
+          </>}>
+            {props.lowerLeftContent}
+          </Show>
         </section>
         <WorkspaceSplitHandle
           axis="vertical"
@@ -230,6 +237,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
             when={props.workspace === "setup"}
             fallback={
               <>
+                <Show when={props.workspace !== "control" || props.controlMode !== "live"}>
                 <header class="panelHeader controlContextHeader" data-control-context-header>
                   <h2>{props.controlHeaderTitle}</h2>
                   <div class="controlContextHeaderTools">
@@ -281,7 +289,13 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                     </div>
                   </Show>
                 </header>
-                {props.children}
+                </Show>
+                {props.contextContent ?? props.children}
+                <Show when={props.contextContent && props.keepChildrenMounted}>
+                  <div hidden data-persistent-band-background-content>
+                    {props.children}
+                  </div>
+                </Show>
               </>
             }
           >

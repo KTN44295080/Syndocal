@@ -13,6 +13,7 @@ import type {
   TimelineTrackKind,
 } from "../types";
 import type { TimelineCueDragPoint } from "../timelineCueDrag";
+import { setTimelineExternalDragPayload, timelineExternalDragPayloadForScene } from "../timelineExternalDrag";
 import { authoredCueLiveModifier } from "../cueLiveModifier";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 import { controlMappingTargetData } from "../controlMappingLearn";
@@ -944,6 +945,28 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                   TL
                                 </button>
                               </Show>
+                              <button
+                                type="button"
+                                class="sceneMatrixTimelineDragSource"
+                                draggable={true}
+                                data-timeline-external-source="scene"
+                                data-timeline-external-source-kind="Lighting"
+                                data-scene-matrix-timeline-drag-source={cue.id}
+                                aria-label="Drag scene to a Lighting Timeline lane"
+                                title="Drag this scene to a Lighting Timeline lane; click to select"
+                                onDragStart={(event) => {
+                                  const payload = timelineExternalDragPayloadForScene(cue.id);
+                                  if (payload) setTimelineExternalDragPayload(event, payload);
+                                  else event.preventDefault();
+                                }}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  props.onSelectCue(cue.id);
+                                }}
+                              >
+                                Lighting
+                              </button>
                               <button
                                 type="button"
                                 class="sceneMatrixEditStrip"

@@ -583,6 +583,19 @@ assert.match(backendSource, /QueryDisplayConfig\(/);
 assert.match(backendSource, /DISPLAYCONFIG_TARGET_DEVICE_NAME/);
 assert.match(backendSource, /Display output monitor identity is stale/);
 assert.match(backendSource, /VIDEO_DISPLAY_MONITOR_IDENTITY_DOMAIN: &str = "syndocal\.display-monitor\.v2"/);
+assert.match(backendSource, /fn native_video_output_logical_size\([\s\S]*?physical_width: u32[\s\S]*?scale_factor: f64/);
+assert.match(backendSource, /native_video_output_logical_size\(output\.width, output\.height, monitor\.scale_factor\)/);
+assert.match(backendSource, /fn activate_native_video_output_window_after_show\([\s\S]*?set_fullscreen\(true\)[\s\S]*?wait_for_native_video_output_physical_size/);
+assert.match(backendSource, /fn native_video_output_activation_geometry\([\s\S]*?PhysicalSize \{[\s\S]*?width: u32,[\s\S]*?height: u32,[\s\S]*?\}/);
+assert.match(backendSource, /fn wait_for_native_video_output_physical_size_with<[\s\S]*?did not converge/);
+assert.match(backendSource, /set_size\(tauri::PhysicalSize::new\([\s\S]*?output\.width/);
+assert.match(backendSource, /fn native_video_output_render_extent\([\s\S]*?window\.inner_size\(\)/);
+assert.doesNotMatch(backendSource, /let fixed_size = initial_size_override/);
+assert.match(backendSource, /native_video_output_window_builder_dpi_matrix_round_trips_physical_extent/);
+assert.match(backendSource, /native_video_output_nonfullscreen_activation_uses_physical_size/);
+assert.match(backendSource, /native_video_output_post_show_convergence_retries_then_accepts_physical_extent/);
+assert.match(backendSource, /native_video_output_post_show_convergence_times_out_and_fails_closed/);
+assert.match(backendSource, /native_video_output_topology_change_after_hidden_staging_is_rejected/);
 assert.match(backendSource, /native_output_qa_driver_uses_canonical_v2_add_path_for_four_sub_displays/);
 assert.doesNotMatch(
   backendSource,

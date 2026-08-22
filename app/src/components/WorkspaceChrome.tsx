@@ -174,6 +174,18 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
   let projectMenuRoot: HTMLDivElement | undefined;
   const [projectMenuOpen, setProjectMenuOpen] = createSignal(false);
   const activeSetupArea = () => setupAreaForSubTab(props.setupSubTab);
+  const focusEditDomain = (current: ControlMode, direction: -1 | 1 | "first" | "last") => {
+    const enabled = editDomainModes.filter((mode) => !(props.operatorLockMode === "Partial" && mode.id === "edit"));
+    const currentIndex = Math.max(0, enabled.findIndex((mode) => mode.id === current));
+    const target = direction === "first"
+      ? enabled[0]
+      : direction === "last"
+        ? enabled.at(-1)
+        : enabled[(currentIndex + direction + enabled.length) % enabled.length];
+    if (!target) return;
+    props.onControlMode(target.id);
+    queueMicrotask(() => document.getElementById(`edit-domain-tab-${target.id}`)?.focus());
+  };
 
   const liveLabel = () => {
     if (props.blackout && props.videoBlackout) {
@@ -720,26 +732,44 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
       <Show when={props.workspaceTab === "control"}>
         <nav
           class="controlModeTabs contextModeTabs editDomainNavigation"
+          role="tablist"
           aria-label="Edit domain"
           data-edit-domain-navigation
         >
           <For each={editDomainModes}>
             {(mode) => {
-              const active = () => mode.id === "edit"
-                ? props.controlMode === "edit" || props.controlMode === "live"
-                : props.controlMode === mode.id;
-              const shortcut = mode.id === "edit" ? "E" : "M";
+              const active = () => props.controlMode === mode.id;
+              const shortcut = mode.id === "edit" ? "E" : mode.id === "mixer" ? "M" : "L";
               return (
                 <button
                   class={active() ? "active" : ""}
                   data-control-mode-option={mode.id}
                   data-no-localize
+                  id={`edit-domain-tab-${mode.id}`}
+                  role="tab"
                   title={`${mode.label}: ${mode.description}`}
                   aria-label={mode.label}
                   aria-keyshortcuts={shortcut}
-                  aria-pressed={active()}
+                  aria-selected={active()}
+                  aria-controls={`edit-domain-panel-${mode.id}`}
+                  tabindex={active() ? 0 : -1}
                   disabled={props.operatorLockMode === "Partial" && mode.id === "edit"}
                   onClick={() => props.onControlMode(mode.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+                      event.preventDefault();
+                      focusEditDomain(mode.id, 1);
+                    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+                      event.preventDefault();
+                      focusEditDomain(mode.id, -1);
+                    } else if (event.key === "Home") {
+                      event.preventDefault();
+                      focusEditDomain(mode.id, "first");
+                    } else if (event.key === "End") {
+                      event.preventDefault();
+                      focusEditDomain(mode.id, "last");
+                    }
+                  }}
                 >
                   {mode.label}
                 </button>

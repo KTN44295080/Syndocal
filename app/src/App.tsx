@@ -3,6 +3,7 @@ import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { Portal } from "solid-js/web";
 import type { FrontendTauriInvokeCommand } from "./tauriInvokeCommands";
 import {
   AuthoredSetEffectEnabledCommandError,
@@ -89,6 +90,7 @@ import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspector
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
+import { TimelineSourceShelf } from "./components/TimelineSourceShelf";
 import { TimelineOperatorBar } from "./components/TimelineOperatorBar";
 import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
 import { EditableTouchSurface } from "./components/EditableTouchSurface";
@@ -157,6 +159,8 @@ import {
   type TimelineCueDragPoint,
   type TimelineCueDragState,
 } from "./timelineCueDrag";
+import type { TimelineExternalDragPayload } from "./timelineExternalDrag";
+import { executeTimelineExternalDrop } from "./timelineExternalDropRuntime";
 import { WorkspaceChrome } from "./components/WorkspaceChrome";
 import { TOPBAR_PULSE_STALE_MS } from "./components/TopbarPulseMeter";
 import { WorkspaceOperationsMenu } from "./components/WorkspaceOperationsMenu";
@@ -377,7 +381,6 @@ import type {
   VideoAutomationKeyframeSummary,
   VideoAudioMonitorStatus,
   VideoBlendMode,
-  VideoBitmapMaskImportResult,
   VideoDecoderDiagnostics,
   VideoClipRuntimeSnapshot,
   VideoClipSlotId,
@@ -518,11 +521,18 @@ import { createTimelineAutomationController } from "./createTimelineAutomationCo
 import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
 import {
   executeDisplayAddOutputControl,
+  executeDisplayWindowOutputControl,
   executeOutputControl,
+  applyVideoOutputWindowStatusQuery,
+  applyVideoOutputWindowStateEvent,
+  parseVideoOutputWindowStateEvent,
   queryDisplayAddLeaseAuthority,
   queryOutputLeaseAuthority,
   selectExactBothLeaseForDisplayAdd,
   selectOnlyActiveOutputLease,
+  resolveVideoOutputWindowActualOpen,
+  VIDEO_OUTPUT_WINDOW_STATE_EVENT,
+  type VideoOutputWindowPhysicalState,
 } from "./outputControlController";
 import { createTimelineFollowAbortRuntimeController } from "./timelineFollowAbortRuntimeController";
 import { createTimelineTransportRuntimeController } from "./timelineTransportRuntimeController";
@@ -578,7 +588,6 @@ import {
 } from "./sceneMatrixBankMove";
 import {
   defaultVideoOutputMapping,
-  outputAspectRatio,
 } from "./videoOutputMapping";
 import {
   canLoadWheelMedia,
@@ -731,7 +740,6 @@ import {
   invalidateProjectAuthorityIdentity,
   markProjectAuthorityPersisted,
   noteLocalProjectAuthorityEdit,
-  projectAuthorityApplicationIsCurrent,
   projectAuthorityCanApply,
   projectAuthorityCanApplyHistoryStatus,
   projectAuthorityHasDirtyMappings,
@@ -744,8 +752,6 @@ import {
   projectAuthorityReplacementContinuationIsCurrent,
   type ProjectAuthorityReplacementVerdict,
   type ProjectAuthorityDispositionState,
-  projectAuthorityPollPreservesDirtyMappings,
-  projectAuthorityPollMustHydrateMappings,
   projectRecoveryCaptureIsCurrent,
   projectRecoveryAuthoritySignature,
   projectRecoveryAcknowledgementCanClear,
@@ -757,6 +763,18 @@ import {
   rebaseDirtyProjectAuthorityMappings,
   type ProjectAuthorityToken,
 } from "./projectAuthority";
+import {
+  applyPolledProjectAuthorityBundleProduction,
+  applyProjectAuthorityBundleProduction,
+  applyProjectAuthorityReplacementProduction,
+  applyProjectAuthorityRuntimeStatusProduction,
+  beginProjectAuthorityRuntimeApplication,
+  projectAuthorityFallbackIsCurrent,
+  deliverProjectAuthorityStartupRecoveryIntentProduction,
+  type ProjectAuthorityBundleApplicationDisposition,
+  type ProjectAuthorityRuntimeEffects,
+  type ProjectAuthorityRuntimeState,
+} from "./projectAuthorityRuntime";
 import {
   controlMappingTargetsFromElement,
   dmxMappingsFromLearnedControl,
@@ -852,7 +870,6 @@ const projectMutationCommands = new Set([
   "remove_timeline_audio_clip",
   "set_timeline_audio_master",
   "set_timeline_metronome",
-  "create_custom_fixture_profile",
   "patch_fixture",
   "patch_fixtures",
   "remove_fixture",
@@ -2193,6 +2210,7 @@ export default function App() {
   const [timelineContextDrawer, setTimelineContextDrawer] = createSignal<TimelineContextDrawer>(
     initialWorkspaceLayout.timeline_context_drawer,
   );
+  const [timelineLowerContextMode, setTimelineLowerContextMode] = createSignal<"sources" | "inspector">("sources");
   const [timelineChildCueId, setTimelineChildCueId] = createSignal<number | null>(null);
   const [controlLiveView, setControlLiveView] = createSignal<"matrix" | "pads">("matrix");
   const [touchControlDomain, setTouchControlDomain] = createSignal<"lighting" | "video">("lighting");
@@ -2396,8 +2414,14 @@ export default function App() {
   let lastAppliedProjectReplacement: ProjectAuthorityToken | null = null;
   let observedProjectInputRuntimeGeneration = 0;
   let observedMappingInputRuntimeGeneration = 0;
+  // Keep the last backend-authenticated runtime image beside its two
+  // generation fences. Equal generations may still carry a changed DMX
+  // liveness bit, while a lower member of the pair is always stale.
+  let observedProjectInputRuntime: ProjectAuthorityBundle["input_runtime"] | null = null;
   let observedProjectPathGeneration = 0;
+  let observedProjectPathInitialized = false;
   let observedProjectHistoryGeneration = 0;
+  let observedProjectHistoryInitialized = false;
   let observedMappingReplacementGeneration = 0;
   let observedAuthorityDispositionGeneration = 0;
   let observedRecoveryAuthoritySerial = 0;
@@ -2406,6 +2430,48 @@ export default function App() {
   let projectDirtyUsesAuthorityBaseline = false;
   let mappingPersistPromise: Promise<ProjectControlMappingsPersistResult> | null = null;
   let mappingObservedSignature: string | null = null;
+
+  const projectAuthorityRuntimeState = (): ProjectAuthorityRuntimeState => ({
+    authority: { ...projectMappingsAuthority() },
+    authorityReady: projectMappingsAuthorityReady(),
+    sync: projectAuthoritySync,
+    lastAppliedProjectReplacement,
+    observedProjectInputRuntimeGeneration,
+    observedMappingInputRuntimeGeneration,
+    observedProjectInputRuntime,
+    observedProjectPathGeneration,
+    observedProjectPathInitialized,
+    observedProjectHistoryGeneration,
+    observedProjectHistoryInitialized,
+    observedMappingReplacementGeneration,
+    observedAuthorityDispositionGeneration,
+    observedRecoveryAuthoritySerial,
+    disposition: {
+      baseline: savedProjectAuthorityBaseline,
+      observedDispositionGeneration: observedAuthorityDispositionGeneration,
+      dispositionInitialized: authorityDispositionInitialized,
+      dirty: projectDirty(),
+    },
+    mappingSyncInFlight,
+    hasDirtyMappings: projectAuthorityHasDirtyMappings(projectAuthoritySync),
+  });
+
+  const commitProjectAuthorityRuntimeState = (state: ProjectAuthorityRuntimeState) => {
+    projectAuthoritySync = state.sync;
+    lastAppliedProjectReplacement = state.lastAppliedProjectReplacement;
+    observedProjectInputRuntimeGeneration = state.observedProjectInputRuntimeGeneration;
+    observedMappingInputRuntimeGeneration = state.observedMappingInputRuntimeGeneration;
+    observedProjectInputRuntime = state.observedProjectInputRuntime;
+    observedProjectPathGeneration = state.observedProjectPathGeneration;
+    observedProjectPathInitialized = state.observedProjectPathInitialized;
+    observedProjectHistoryGeneration = state.observedProjectHistoryGeneration;
+    observedProjectHistoryInitialized = state.observedProjectHistoryInitialized;
+    observedMappingReplacementGeneration = state.observedMappingReplacementGeneration;
+    observedAuthorityDispositionGeneration = state.observedAuthorityDispositionGeneration;
+    observedRecoveryAuthoritySerial = state.observedRecoveryAuthoritySerial;
+    savedProjectAuthorityBaseline = state.disposition.baseline;
+    authorityDispositionInitialized = state.disposition.dispositionInitialized;
+  };
   const [oscMapAddress, setOscMapAddress] = createSignal("/touchosc/fader1");
   const [oscMapAction, setOscMapAction] = createSignal<OscControlAction>("FixtureAttribute");
   const [oscMapAttribute, setOscMapAttribute] = createSignal("Dimmer");
@@ -2562,6 +2628,10 @@ export default function App() {
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
   const [videoPreviewLayerId, setVideoPreviewLayerId] = createSignal<number | null>(null);
+  const [selectedMediaLibraryAssetId, setSelectedMediaLibraryAssetId] = createSignal<MediaAssetId | null>(null);
+  const selectedMediaLibraryAsset = () =>
+    snapshot().video.media_assets.find((asset) => asset.id === selectedMediaLibraryAssetId()) ?? null;
+  const [timelineUpperHost, setTimelineUpperHost] = createSignal<HTMLDivElement>();
   // Authored bank selection is shared by Edit and Control. Runtime transport
   // is a separate signal because it must never become project snapshot state.
   const [selectedVideoClipSlotLayerId, setSelectedVideoClipSlotLayerId] = createSignal<number | null>(null);
@@ -2794,6 +2864,15 @@ export default function App() {
   const [videoPreviewDiagnostics, setVideoPreviewDiagnostics] = createSignal<VideoPreviewDiagnostics | null>(null);
   const [videoOutputRenderPlans, setVideoOutputRenderPlans] = createSignal<VideoOutputRenderPlan[] | null>(null);
   const [videoOutputWindowStatuses, setVideoOutputWindowStatuses] = createSignal<VideoOutputWindowStatus[] | null>(null);
+  // Physical native-window truth is maintained independently from authored
+  // enabled/routing fields.  It is advanced only by the typed event or the
+  // bounded backstop query, never by optimistic button state.
+  const [videoOutputPhysicalWindowStates, setVideoOutputPhysicalWindowStates] = createSignal<
+    Record<string, VideoOutputWindowPhysicalState>
+  >({});
+  const [videoOutputWindowQueryAvailable, setVideoOutputWindowQueryAvailable] = createSignal(false);
+  const [videoOutputWindowActionBusy, setVideoOutputWindowActionBusy] = createSignal<Record<string, boolean>>({});
+  const [videoOutputWindowActionErrors, setVideoOutputWindowActionErrors] = createSignal<Record<string, string>>({});
   const [videoRuntimeStatus, setVideoRuntimeStatus] = createSignal<VideoRuntimeStatus | null>(null);
   const [externalVideoIoPlans, setExternalVideoIoPlans] = createSignal<ExternalVideoIoPlans | null>(null);
   const [externalVideoTransportStatus, setExternalVideoTransportStatus] =
@@ -3758,6 +3837,20 @@ export default function App() {
         : {
             ...current.video,
             layers: [viewportFixtureData.videoLayer],
+            media_assets: timelineLayeredFixture
+              ? [{
+                  id: 900,
+                  label: "Timeline AV Source",
+                  source: {
+                    kind: "File",
+                    path: "viewport://timeline-layered/timeline-av.mp4",
+                    name: "Timeline AV Source",
+                    metadata: { duration_ms: 3_200, width: 1_920, height: 1_080, has_audio: true },
+                  },
+                  content_hash: { algorithm: "Sha256", hex: "9".repeat(64) },
+                  byte_size: 1_024_000,
+                }]
+              : current.video.media_assets,
             compositions: [viewportFixtureData.composition],
             outputs: [viewportFixtureData.videoOutput],
             mapping_presets: [{ label: "Viewport 16:9", mapping: viewportFixtureData.projectorMapping }],
@@ -4499,7 +4592,7 @@ export default function App() {
     // paired coordinator image first; only then can the exact-token history
     // guard accept its status. A delayed A result after B is rejected before
     // either mappings or history can be touched.
-    if (!applyPolledProjectAuthorityBundle(result.authority)) return false;
+    if (applyPolledProjectAuthorityBundle(result.authority) === "stale") return false;
     applyAuthoritativeProjectHistoryStatus(result.history_status);
     return true;
   };
@@ -7709,24 +7802,67 @@ export default function App() {
     videoOutputWindowStatuses()?.find((status) => status.output_id === outputId) ?? null;
   const videoOutputWindowSummary = createMemo(() => {
     const statuses = videoOutputWindowStatuses();
-    if (!statuses) {
-      return "Windows not checked";
-    }
-    const liveOpen = statuses.filter((status) => status.live_open).length;
-    const patternOpen = statuses.filter((status) => status.test_pattern_open).length;
-    return `${liveOpen} live, ${patternOpen} pattern open / ${statuses.length} display video output(s)`;
+    const physical = videoOutputPhysicalWindowStates();
+    if (!statuses && Object.keys(physical).length === 0) return "Windows not checked";
+    const liveOpen = Object.values(physical).filter((state) => state.actual_open).length;
+    const displayCount = statuses?.length ?? Object.keys(physical).length;
+    return `${liveOpen} live window(s) open / ${displayCount} display video output(s)`;
   });
   const videoOutputWindowState = (outputId: number) => {
     const status = videoOutputWindowStatusForOutput(outputId);
-    if (!status) {
+    const physical = videoOutputPhysicalWindowStates()[String(outputId)];
+    const actionError = videoOutputWindowActionErrors()[String(outputId)] ?? null;
+    const ownershipBlocked = status?.ownership_allowed === false;
+    const ownershipReason = status?.ownership_error
+      ?? (status?.ownership_reason ? String(status.ownership_reason) : null);
+    if (ownershipBlocked) {
       return {
-        stateLabel: "Window not checked",
-        stateClass: "unchecked",
-        detail: "Run Check Windows to inspect Live/Test output windows.",
+        stateLabel: "Window blocked",
+        stateClass: "blocked",
+        detail: ownershipReason ?? "Window ownership is blocked by the current output topology.",
+        actualOpen: null,
+        actionLabel: "Window unavailable",
+        actionDisabled: true,
+        error: actionError,
       };
     }
-    const openCount = Number(status.live_open) + Number(status.test_pattern_open);
-    const performance = status.performance;
+    if (!physical && !status) {
+      return {
+        stateLabel: "Window unavailable",
+        stateClass: "unchecked",
+        detail: videoOutputWindowQueryAvailable()
+          ? "The physical window state is unavailable; no change was applied."
+          : "The physical window state is unavailable; no change was applied.",
+        actualOpen: null,
+        actionLabel: "Window unavailable",
+        actionDisabled: true,
+        error: actionError,
+      };
+    }
+    const actualOpen = resolveVideoOutputWindowActualOpen(physical, status);
+    if (actualOpen === null) {
+      return {
+        stateLabel: "Window unavailable",
+        stateClass: "unchecked",
+        detail: "The physical window state is unavailable; no change was applied.",
+        actualOpen: null,
+        actionLabel: "Window unavailable",
+        actionDisabled: true,
+        error: actionError,
+      };
+    }
+    if (actionError) {
+      return {
+        stateLabel: "Window action failed",
+        stateClass: "error",
+        detail: actionError,
+        actualOpen,
+        actionLabel: actualOpen ? "Close output window" : "Open/Reopen output",
+        actionDisabled: false,
+        error: actionError,
+      };
+    }
+    const performance = status?.performance;
     const budgetDetail = performance
       ? performance.frame_budget_pass === true
         ? " / 60fps budget pass"
@@ -7751,16 +7887,13 @@ export default function App() {
         stateLabel: "Output error",
         stateClass: "error",
         detail: `${performance.last_error}${performanceDetail}`,
+        actualOpen,
+        actionLabel: actualOpen ? "Close output window" : "Open/Reopen output",
+        actionDisabled: false,
+        error: actionError,
       };
     }
-    const baseStateLabel =
-      openCount === 2
-        ? "Live + Pattern open"
-        : status.live_open
-          ? "Live window open"
-          : status.test_pattern_open
-            ? "Pattern window open"
-            : "Window closed";
+    const baseStateLabel = actualOpen ? "Window open" : "Window closed";
     const stateLabel = performance
       ? `${baseStateLabel} / ${performance.width}x${performance.height} / ${(performance.average_frame_us / 1000).toFixed(1)}ms / ${
           performance.frame_budget_pass === true
@@ -7772,10 +7905,14 @@ export default function App() {
       : baseStateLabel;
     return {
       stateLabel,
-      stateClass: openCount > 0 ? "open" : "closed",
-      detail: `Live ${status.live_open ? "open" : "closed"} / Pattern ${
-        status.test_pattern_open ? "open" : "closed"
-      }${performanceDetail}`,
+      stateClass: actualOpen ? "open" : "closed",
+      detail: `${actualOpen ? "Live window open" : "Live window closed"}${
+        physical?.retirement_reason ? ` / ${physical.retirement_reason}` : ""
+      }${ownershipReason ? ` / ${ownershipReason}` : ""}${performanceDetail}`,
+      actualOpen,
+      actionLabel: actualOpen ? "Close output window" : "Open/Reopen output",
+      actionDisabled: false,
+      error: actionError,
     };
   };
   const videoRuntimeBackendCounts = createMemo(() => {
@@ -8462,14 +8599,14 @@ export default function App() {
       ? `layoutSharedWorkspace layoutSetup setupMode-${setupSubTab()}`
       : workspaceTab() === "touch"
         ? `layoutSharedWorkspace layoutControl layoutTouch controlModeEdit editDesk-faders touchDomain${touchControlDomain() === "video" ? "Video" : "Lighting"}`
-        : `${controlMode() === "mixer" ? "" : "layoutSharedWorkspace "}layoutControl controlMode${controlMode()[0].toUpperCase()}${controlMode().slice(1)}${
+        : `layoutSharedWorkspace layoutControl controlMode${controlMode()[0].toUpperCase()}${controlMode().slice(1)}${
             controlMode() === "edit" ? ` editDesk-${editDeskSurface()}` : ""
           }`,
   );
   const sharedWorkspaceVisible = createMemo(
     () => workspaceTab() === "touch"
       || workspaceTab() === "setup"
-      || (workspaceTab() === "control" && controlMode() !== "mixer"),
+      || workspaceTab() === "control",
   );
   const liveMappingStageVisible = createMemo(
     () => (workspaceTab() === "setup" && setupSubTab() === "mapping")
@@ -9245,7 +9382,7 @@ export default function App() {
 
   const openSceneFxFromMapping = () => {
     setWorkspaceTab("control");
-    setControlMode("live");
+    selectControlMode("live");
     setTimelineDeskSurface("show");
     setTimelineContextDrawer("none");
     setSceneSettingsSurface("fx");
@@ -10881,7 +11018,6 @@ export default function App() {
       });
       if (bundle) {
         applyPolledProjectAuthorityBundle(bundle);
-        void consumePendingProjectRecoveryIntent(bundle);
       }
     } catch (error) {
       // A pending transaction intentionally rejects a partial capture. This
@@ -11353,8 +11489,13 @@ export default function App() {
 
   const createCustomProfile = async () => {
     const request = customProfileRequest();
+    const authority = captureProjectAuthorityIdentity();
     try {
-      const created = await invoke<FixtureProfileSummary>("create_custom_fixture_profile", { request });
+      const created = await invoke<FixtureProfileSummary>("preview_custom_fixture_profile", { request });
+      if (!isProjectAuthorityIdentityCurrent(authority)) {
+        setMessage("Project changed while previewing the custom fixture profile; the preview was discarded.");
+        return;
+      }
       setProfile(created);
       setGdtfPath(created.source_path);
       setSelectedMode(created.dmx_modes[0]?.name ?? "");
@@ -13828,17 +13969,77 @@ export default function App() {
     }
   };
 
-  const insertMediaAssetOnTimeline = async (mediaAssetId: MediaAssetId) => {
+  const insertMediaAssetOnTimeline = async (
+    mediaAssetId: MediaAssetId,
+    placement?: {
+      startMs?: number;
+      videoLayerId?: number | null;
+      audioLayerId?: number | null;
+    },
+  ) => {
     try {
-      const result = await commitTimelineAdvanced({
+      const request: Extract<TimelineAdvancedMutationRequest, { kind: "insert_media" }> = {
         kind: "insert_media",
         media_asset_id: mediaAssetId,
-        start_ms: snapTimeMs(activeTimeline().position_ms),
-      });
+        start_ms: snapTimeMs(placement?.startMs ?? activeTimeline().position_ms),
+      };
+      if (placement) {
+        request.video_layer_id = placement.videoLayerId ?? null;
+        request.audio_layer_id = placement.audioLayerId ?? null;
+      }
+      const result = await commitTimelineAdvanced(request);
       if (result) setMessage("Media placed on the Timeline.");
+      return Boolean(result);
     } catch (error) {
       setMessage(`Timeline media placement failed: ${String(error)}`);
+      return false;
     }
+  };
+  const placeTimelineExternalSource = async (
+    source: TimelineExternalDragPayload,
+    targetLayer: TimelineLayerSummary,
+    timeMs: number,
+  ) => {
+    await executeTimelineExternalDrop(
+      source,
+      targetLayer,
+      timelineLayers(),
+      snapshot().video.media_assets,
+      new Set(snapshot().cues.map((cue) => cue.id)),
+      timeMs,
+      {
+        reject: setMessage,
+        localize: (source) => translateUiText(source, uiLocale()),
+        placeScene: async (cueId, layerId, startMs) => {
+          const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
+          if (!cue) {
+            setMessage(translateUiText(`Scene ${cueId} is no longer available.`, uiLocale()));
+            return false;
+          }
+          const beforeEventIds = new Set(snapshot().timeline.events.map((event) => event.id));
+          await placeArmedTimelineCue(
+            cue.id,
+            startMs,
+            layerId,
+            naturalTimelineBlockDurationMs(cue.authored_beats ?? null, snapshot().clock.bpm, timelineBlockDurationMs()),
+            timelineStretchMode(),
+            timelineMagnetEnabled(),
+          );
+          return snapshot().timeline.events.some((event) =>
+            !beforeEventIds.has(event.id) &&
+            event.cue_id === cue.id &&
+            event.track === "Lighting" &&
+            event.layer_id === layerId &&
+            event.time_ms === Math.max(0, Math.round(startMs)));
+        },
+        insertMedia: async (mediaAssetId, placement) => {
+          const placed = await insertMediaAssetOnTimeline(mediaAssetId, placement);
+          if (placed && placement.linkedAudio) setMessage("Media placed as linked Video + Audio clips.");
+          return placed;
+        },
+      },
+      mediaAssetAvailabilityById(),
+    );
   };
   const setTimelineGuideEnabled = async (enabled: boolean) => {
     try {
@@ -14308,181 +14509,203 @@ export default function App() {
     application: ReturnType<typeof beginProjectAuthorityApplication>["application"],
     replacement: boolean,
     preserveDirtyMappings = false,
-  ) => {
-    // Stage/validate the entire candidate before touching any signal.  A
-    // full snapshot queue is deliberately not involved: B and C must never
-    // share one asynchronous refresh result.
-    const candidate = authorityToken(bundle);
-    if (!projectAuthorityCanApply(candidate, projectMappingsAuthority())) return false;
-    if (!projectAuthorityApplicationIsCurrent(projectAuthoritySync, application)) return false;
-
-    const preparedMappings = preserveDirtyMappings
-      ? null
-      : prepareProjectControlMappings(
-        bundle,
-        bundle.midi_mappings,
-        bundle.osc_mappings,
-        bundle.dmx_mappings,
-      );
-    if ((!preserveDirtyMappings && !preparedMappings)
-      || !projectAuthorityApplicationIsCurrent(projectAuthoritySync, application)) return false;
-    if (!preflightProjectAuthorityRecoveryDisposition(bundle)) return false;
-    const storedMode = matchingStoredOperatorLock(bundle.operator_policy);
-    const nextOperatorLockMode = storedMode ?? (replacement && bundle.operator_policy?.lock_on_load
-      ? bundle.operator_policy.lock_mode
-      : null);
-    if (replacement) invalidateProjectControlMappingsForIdentity();
-
-    // From this point no await/fallible RPC is allowed. These values came
-    // from one admission+coordinator capture and therefore become visible as
-    // one B (or C) image to the UI.
-    batch(() => {
-      if (replacement) resetMediaAssetUiForProjectReplacement();
-      if (preparedMappings) {
-        commitPreparedProjectControlMappings(preparedMappings);
-      } else {
-        // Adopt C's CAS token but retain local B arrays. The pending/in-flight
-        // B persist response was invalidated before this batch and a new B
-        // request is scheduled below against this exact C token.
-        abortMediaAssetOperationsForAuthorityChange(candidate);
-        projectTransactionAuthorityRevision = candidate.project_revision;
-        setProjectMappingsAuthority(candidate);
-        setProjectMappingsAuthorityReady(true);
-      }
-      // A recovery replacement may arrive event-only before its originating
-      // command reply has staged the browser timeline drafts. Preserve those
-      // drafts until the guarded recovery acknowledgement; all other fenced
-      // replacements intentionally clear editor state with their new image.
-      applyEngineSnapshot(
-        bundle.snapshot,
-        true,
-        replacement && bundle.authority_disposition !== "recovery_pending_ack",
-      );
-      setSnapshotRevision(null);
-      setFixtureGroupList(bundle.fixture_groups);
-      setFixtureGroupDeleteUndoAvailable(false);
-      setViewportFixtureGroupDeleteUndo(null);
-      setOperatorPolicy(bundle.operator_policy);
-      setOperatorPolicyReady(true);
-      setOperatorLockMode(nextOperatorLockMode);
-      applyAuthoritativeProjectHistoryStatus(bundle.history);
-      setCurrentProjectPath(bundle.current_project_path);
-      rememberRecentProjectPath(bundle.current_project_path);
-      setMidiConnected(bundle.input_runtime.midi_clock_active);
-      setMidiControlConnected(bundle.input_runtime.midi_control_active);
-      setMidiFeedbackConnected(bundle.input_runtime.midi_feedback_output_active);
-      setMidiFeedbackEnabled(bundle.input_runtime.midi_feedback_runtime_active);
-      setOscRunning(bundle.input_runtime.osc_active);
-      setDmxInputStatus((current) => ({
-        ...current,
-        running: bundle.input_runtime.dmx_active,
-        signal_present: bundle.input_runtime.dmx_active ? current.signal_present : false,
-        source_address: bundle.input_runtime.dmx_active ? current.source_address : null,
-      }));
-      observedProjectInputRuntimeGeneration = bundle.input_runtime.project_input_runtime_generation;
-      observedMappingInputRuntimeGeneration = bundle.input_runtime.mapping_input_runtime_generation;
-      observedProjectPathGeneration = bundle.path_generation;
-      observedProjectHistoryGeneration = bundle.history_generation;
-      observedMappingReplacementGeneration = bundle.mapping_replacement_generation;
-      observedRecoveryAuthoritySerial = bundle.recovery_authority_serial;
-      setProjectRecoveryAuthoritySerial(bundle.recovery_authority_serial);
-    });
-    if (nextOperatorLockMode) setOperatorSessionLock(nextOperatorLockMode);
-    applyProjectAuthorityDirtyState(bundle);
-    if (replacement) projectAuthoritySync = markProjectAuthorityPersisted(projectAuthoritySync);
-    void consumePendingProjectRecoveryIntent(bundle);
-    return true;
+  ): ProjectAuthorityBundleApplicationDisposition => {
+    const effects: ProjectAuthorityRuntimeEffects = {
+      preflightRecoveryDisposition: preflightProjectAuthorityRecoveryDisposition,
+      prepareBundle: (candidate) => prepareProjectControlMappings(
+        candidate,
+        candidate.midi_mappings,
+        candidate.osc_mappings,
+        candidate.dmx_mappings,
+      ),
+      invalidateMappingIdentity: invalidateProjectControlMappingsForIdentity,
+      commitBundle: (candidate, prepared, options) => {
+        const preparedMappings = prepared as ReturnType<typeof prepareProjectControlMappings>;
+        const candidateToken = authorityToken(candidate);
+        const storedMode = matchingStoredOperatorLock(candidate.operator_policy);
+        const nextOperatorLockMode = storedMode ?? (options.replacement && candidate.operator_policy?.lock_on_load
+          ? candidate.operator_policy.lock_mode
+          : null);
+        batch(() => {
+          if (options.replacement) resetMediaAssetUiForProjectReplacement();
+          if (preparedMappings) {
+            commitPreparedProjectControlMappings(preparedMappings);
+          } else {
+            // Adopt C's CAS token but retain local B arrays. The pending/in-flight
+            // B persist response was invalidated before this batch and a new B
+            // request is scheduled below against this exact C token.
+            abortMediaAssetOperationsForAuthorityChange(candidateToken);
+            projectTransactionAuthorityRevision = candidateToken.project_revision;
+            setProjectMappingsAuthority(candidateToken);
+            setProjectMappingsAuthorityReady(true);
+          }
+          // A recovery replacement may arrive event-only before its originating
+          // command reply has staged the browser timeline drafts. Preserve those
+          // drafts until the guarded recovery acknowledgement; all other fenced
+          // replacements intentionally clear editor state with their new image.
+          applyEngineSnapshot(
+            candidate.snapshot,
+            true,
+            options.replacement && candidate.authority_disposition !== "recovery_pending_ack",
+          );
+          setSnapshotRevision(null);
+          setFixtureGroupList(candidate.fixture_groups);
+          setFixtureGroupDeleteUndoAvailable(false);
+          setViewportFixtureGroupDeleteUndo(null);
+          setOperatorPolicy(candidate.operator_policy);
+          setOperatorPolicyReady(true);
+          setOperatorLockMode(nextOperatorLockMode);
+          applyAuthoritativeProjectHistoryStatus(candidate.history);
+          setCurrentProjectPath(candidate.current_project_path);
+          rememberRecentProjectPath(candidate.current_project_path);
+          if (options.applyInputRuntime) {
+            setMidiConnected(candidate.input_runtime.midi_clock_active);
+            setMidiControlConnected(candidate.input_runtime.midi_control_active);
+            setMidiFeedbackConnected(candidate.input_runtime.midi_feedback_output_active);
+            setMidiFeedbackEnabled(candidate.input_runtime.midi_feedback_runtime_active);
+            setOscRunning(candidate.input_runtime.osc_active);
+            setDmxInputStatus((current) => ({
+              ...current,
+              running: candidate.input_runtime.dmx_active,
+              signal_present: candidate.input_runtime.dmx_active ? current.signal_present : false,
+              source_address: candidate.input_runtime.dmx_active ? current.source_address : null,
+            }));
+          }
+          setProjectRecoveryAuthoritySerial(Math.max(
+            observedRecoveryAuthoritySerial,
+            candidate.recovery_authority_serial,
+          ));
+        });
+        if (nextOperatorLockMode) setOperatorSessionLock(nextOperatorLockMode);
+      },
+      commitRuntimeStatus: (candidate, plan) => {
+        batch(() => {
+          if (plan.applyPath) {
+            setCurrentProjectPath(candidate.current_project_path);
+            rememberRecentProjectPath(candidate.current_project_path);
+          }
+          if (plan.applyHistory) applyAuthoritativeProjectHistoryStatus(candidate.history);
+          if (plan.applyInput) {
+            setMidiConnected(candidate.input_runtime.midi_clock_active);
+            setMidiControlConnected(candidate.input_runtime.midi_control_active);
+            setMidiFeedbackConnected(candidate.input_runtime.midi_feedback_output_active);
+            setMidiFeedbackEnabled(candidate.input_runtime.midi_feedback_runtime_active);
+            setOscRunning(candidate.input_runtime.osc_active);
+            setDmxInputStatus((current) => ({
+              ...current,
+              running: candidate.input_runtime.dmx_active,
+              signal_present: candidate.input_runtime.dmx_active ? current.signal_present : false,
+              source_address: candidate.input_runtime.dmx_active ? current.source_address : null,
+            }));
+          }
+          setProjectRecoveryAuthoritySerial(Math.max(
+            observedRecoveryAuthoritySerial,
+            candidate.recovery_authority_serial,
+          ));
+        });
+      },
+      applyDirtyState: applyProjectAuthorityDirtyState,
+      consumeRecoveryIntent: (candidate) => { void consumePendingProjectRecoveryIntent(candidate); },
+    };
+    const result = applyProjectAuthorityBundleProduction(
+      projectAuthorityRuntimeState(),
+      bundle,
+      application,
+      replacement,
+      preserveDirtyMappings,
+      effects,
+    );
+    commitProjectAuthorityRuntimeState(result.state);
+    return result.disposition;
   };
 
   const applyProjectAuthorityRuntimeStatus = (
     bundle: ProjectAuthorityBundle,
     applyInputRuntime = true,
-  ) => {
-    // A same-token poll is intentionally status-only: it must not hydrate
-    // mapping arrays over a local dirty edit, but it still converges a dropped
-    // retirement event to the backend's durable worker truth.
-    const applyPath = bundle.path_generation >= observedProjectPathGeneration;
-    const applyHistory = bundle.history_generation >= observedProjectHistoryGeneration;
-    if (!preflightProjectAuthorityRecoveryDisposition(bundle)) return;
-    batch(() => {
-      if (applyPath) {
-        setCurrentProjectPath(bundle.current_project_path);
-        rememberRecentProjectPath(bundle.current_project_path);
-      }
-      if (applyHistory) applyAuthoritativeProjectHistoryStatus(bundle.history);
-      if (applyInputRuntime) {
-        setMidiConnected(bundle.input_runtime.midi_clock_active);
-        setMidiControlConnected(bundle.input_runtime.midi_control_active);
-        setMidiFeedbackConnected(bundle.input_runtime.midi_feedback_output_active);
-        setMidiFeedbackEnabled(bundle.input_runtime.midi_feedback_runtime_active);
-        setOscRunning(bundle.input_runtime.osc_active);
-        setDmxInputStatus((current) => ({
-          ...current,
-          running: bundle.input_runtime.dmx_active,
-          signal_present: bundle.input_runtime.dmx_active ? current.signal_present : false,
-          source_address: bundle.input_runtime.dmx_active ? current.source_address : null,
-        }));
-        observedProjectInputRuntimeGeneration = bundle.input_runtime.project_input_runtime_generation;
-        observedMappingInputRuntimeGeneration = bundle.input_runtime.mapping_input_runtime_generation;
-      }
-      if (applyPath) observedProjectPathGeneration = bundle.path_generation;
-      if (applyHistory) observedProjectHistoryGeneration = bundle.history_generation;
-      observedMappingReplacementGeneration = Math.max(
-        observedMappingReplacementGeneration,
-        bundle.mapping_replacement_generation,
-      );
-      observedRecoveryAuthoritySerial = Math.max(
-        observedRecoveryAuthoritySerial,
-        bundle.recovery_authority_serial,
-      );
-      setProjectRecoveryAuthoritySerial(observedRecoveryAuthoritySerial);
-    });
-    applyProjectAuthorityDirtyState(bundle);
-    void consumePendingProjectRecoveryIntent(bundle);
+  ): ProjectAuthorityBundleApplicationDisposition => {
+    const effects: ProjectAuthorityRuntimeEffects = {
+      preflightRecoveryDisposition: preflightProjectAuthorityRecoveryDisposition,
+      prepareBundle: () => null,
+      invalidateMappingIdentity: () => undefined,
+      commitBundle: () => undefined,
+      commitRuntimeStatus: (candidate, plan) => {
+        batch(() => {
+          if (plan.applyPath) {
+            setCurrentProjectPath(candidate.current_project_path);
+            rememberRecentProjectPath(candidate.current_project_path);
+          }
+          if (plan.applyHistory) applyAuthoritativeProjectHistoryStatus(candidate.history);
+          if (plan.applyInput) {
+            setMidiConnected(candidate.input_runtime.midi_clock_active);
+            setMidiControlConnected(candidate.input_runtime.midi_control_active);
+            setMidiFeedbackConnected(candidate.input_runtime.midi_feedback_output_active);
+            setMidiFeedbackEnabled(candidate.input_runtime.midi_feedback_runtime_active);
+            setOscRunning(candidate.input_runtime.osc_active);
+            setDmxInputStatus((current) => ({
+              ...current,
+              running: candidate.input_runtime.dmx_active,
+              signal_present: candidate.input_runtime.dmx_active ? current.signal_present : false,
+              source_address: candidate.input_runtime.dmx_active ? current.source_address : null,
+            }));
+          }
+          setProjectRecoveryAuthoritySerial(Math.max(
+            observedRecoveryAuthoritySerial,
+            candidate.recovery_authority_serial,
+          ));
+        });
+      },
+      applyDirtyState: applyProjectAuthorityDirtyState,
+      consumeRecoveryIntent: (candidate) => { void consumePendingProjectRecoveryIntent(candidate); },
+    };
+    const result = applyProjectAuthorityRuntimeStatusProduction(
+      projectAuthorityRuntimeState(),
+      bundle,
+      applyInputRuntime,
+      effects,
+    );
+    commitProjectAuthorityRuntimeState(result.state);
+    return result.disposition;
   };
 
   const applyPolledProjectAuthorityBundle = (bundle: ProjectAuthorityBundle) => {
-    const candidate = authorityToken(bundle);
-    const current = projectMappingsAuthority();
-    if (projectAuthorityTokenIsCurrent(candidate, current)) {
-      applyProjectAuthorityRuntimeStatus(bundle);
-      return true;
-    }
-    if (!projectAuthorityCanApply(candidate, current)) return false;
-    if (projectAuthorityPollMustHydrateMappings(
-      bundle.mapping_replacement_generation,
-      observedMappingReplacementGeneration,
-    )) {
-      // A fenced identity/Undo/Redo image owns its mapping arrays.  Never
-      // rebase a dirty A debounce onto B merely because the event was lost
-      // and the authority poll happened to arrive first. This durable counter
-      // remains evidence even if a later ordinary Mutation becomes the last
-      // publication before the poll runs.
-      return projectAuthorityApplicationResultIsCurrent(
-        applyAuthorityBundleAsReplacement(bundle),
-      );
-    }
-    const preserveDirtyMappings = projectAuthorityPollPreservesDirtyMappings(
-      candidate,
-      current,
-      projectAuthoritySync,
-      mappingSyncInFlight,
-      bundle.publication_kind,
-    );
-    beginProjectReadGeneration();
-    const started = beginProjectAuthorityApplication(projectAuthoritySync);
-    projectAuthoritySync = started.state;
-    if (preserveDirtyMappings) {
-      projectAuthoritySync = rebaseDirtyProjectAuthorityMappings(projectAuthoritySync, true);
-    }
-    const applied = applyProjectAuthorityBundle(
+    const result = applyPolledProjectAuthorityBundleProduction(
+      projectAuthorityRuntimeState(),
       bundle,
-      started.application,
-      false,
-      preserveDirtyMappings,
+      {
+        applyRuntimeStatus: (_, candidate) => {
+          const disposition = applyProjectAuthorityRuntimeStatus(candidate);
+          return { state: projectAuthorityRuntimeState(), disposition };
+        },
+        applyReplacement: (_, candidate) => {
+          const replacement = applyAuthorityBundleAsReplacement(candidate);
+          const disposition = !projectAuthorityApplicationResultIsCurrent(replacement)
+            ? "stale"
+            : replacement.verdict === "duplicate" ? "duplicate" : "applied";
+          return { state: projectAuthorityRuntimeState(), disposition };
+        },
+        applyOrdinaryBundle: (_, candidate, preserveDirtyMappings) => {
+          // A fenced identity/Undo/Redo image owns its mapping arrays. Never
+          // rebase a dirty A debounce onto B merely because an authority poll
+          // arrived first; ordinary C remains the only rebase case.
+          beginProjectReadGeneration();
+          const started = beginProjectAuthorityRuntimeApplication(projectAuthorityRuntimeState());
+          projectAuthoritySync = started.state.sync;
+          if (preserveDirtyMappings) {
+            projectAuthoritySync = rebaseDirtyProjectAuthorityMappings(projectAuthoritySync, true);
+          }
+          const disposition = applyProjectAuthorityBundle(
+            candidate,
+            started.application,
+            false,
+            preserveDirtyMappings,
+          );
+          if (disposition === "applied" && preserveDirtyMappings) scheduleProjectControlMappingsPersist(0);
+          return { state: projectAuthorityRuntimeState(), disposition };
+        },
+      },
     );
-    if (applied && preserveDirtyMappings) scheduleProjectControlMappingsPersist(0);
-    return applied;
+    commitProjectAuthorityRuntimeState(result.state);
+    return result.disposition;
   };
 
   const fetchProjectAuthorityBundle = async (result: ProjectLoadResult) => {
@@ -14508,37 +14731,31 @@ export default function App() {
 
   const applyAuthorityBundleAsReplacement = (bundle: ProjectAuthorityBundle): AppliedProjectAuthorityResult => {
     const candidate = authorityToken(bundle);
+    const currentState = projectAuthorityRuntimeState();
     const verdict = projectAuthorityReplacementVerdict(
       candidate,
-      projectMappingsAuthority(),
-      lastAppliedProjectReplacement,
-      projectMappingsAuthorityReady(),
+      currentState.authority,
+      currentState.lastAppliedProjectReplacement,
+      currentState.authorityReady,
     );
-    if (verdict !== "apply") {
-      return {
-        verdict,
-        token: candidate,
-        applicationGenerationAtDecision: projectAuthoritySync.applicationGeneration,
-        bundle: verdict === "duplicate" ? bundle : null,
-      };
-    }
-    beginProjectReadGeneration();
-    const started = beginProjectAuthorityApplication(projectAuthoritySync);
-    projectAuthoritySync = started.state;
-    if (!applyProjectAuthorityBundle(bundle, started.application, true)) {
-      return {
-        verdict: "stale",
-        token: candidate,
-        applicationGenerationAtDecision: projectAuthoritySync.applicationGeneration,
-        bundle: null,
-      };
-    }
-    lastAppliedProjectReplacement = candidate;
-    return {
-      verdict: "apply",
-      token: candidate,
-      applicationGenerationAtDecision: started.application.applicationGeneration,
+    if (verdict === "apply") beginProjectReadGeneration();
+    const result = applyProjectAuthorityReplacementProduction(
+      currentState,
       bundle,
+      {
+        applyBundle: (startedState, nextBundle, application) => {
+          projectAuthoritySync = startedState.sync;
+          const disposition = applyProjectAuthorityBundle(nextBundle, application, true);
+          return { state: projectAuthorityRuntimeState(), disposition };
+        },
+      },
+    );
+    commitProjectAuthorityRuntimeState(result.state);
+    return {
+      verdict: result.verdict,
+      token: result.token,
+      applicationGenerationAtDecision: result.applicationGenerationAtDecision,
+      bundle: result.bundle,
     };
   };
 
@@ -14572,7 +14789,12 @@ export default function App() {
     const bundle = await fetchProjectAuthorityBundle(result);
     // Backend may publish B then C while B waits for the compatibility fetch.
     // The application generation prevents B from applying even one field.
-    if (!projectAuthorityApplicationIsCurrent(projectAuthoritySync, started.application)) {
+    if (!projectAuthorityFallbackIsCurrent(
+      projectAuthorityRuntimeState(),
+      candidate,
+      started.application,
+      authorityToken(bundle),
+    )) {
       return {
         verdict: "stale",
         token: candidate,
@@ -14580,15 +14802,7 @@ export default function App() {
         bundle: null,
       };
     }
-    if (!projectAuthorityTokenIsCurrent(candidate, authorityToken(bundle))) {
-      return {
-        verdict: "stale",
-        token: candidate,
-        applicationGenerationAtDecision: projectAuthoritySync.applicationGeneration,
-        bundle: null,
-      };
-    }
-    if (!applyProjectAuthorityBundle(bundle, started.application, true)) {
+    if (applyProjectAuthorityBundle(bundle, started.application, true) !== "applied") {
       return {
         verdict: "stale",
         token: candidate,
@@ -14755,7 +14969,6 @@ export default function App() {
       });
       const applied = await applyLoadedProjectResult(result, checkpoint.source_path);
       if (!projectAuthorityApplicationResultIsCurrent(applied) || !applied.bundle) return;
-      await consumePendingProjectRecoveryIntent(applied.bundle);
     } catch (error) {
       // If B published before a transport/reply failure, its event or poll
       // consumes the durable intent. Otherwise restore the explicit offer so
@@ -14826,8 +15039,17 @@ export default function App() {
       if (startup !== "resume_intent") return;
       activeProjectRecoveryIntent = stored.intent;
       const applied = applyAuthorityBundleAsReplacement(bundle);
-      if (projectAuthorityApplicationResultIsCurrent(applied) && applied.bundle) {
-        await consumePendingProjectRecoveryIntent(applied.bundle);
+      // The replacement event may have hydrated this exact B before the
+      // recovery-storage handshake completed. In that one startup-only
+      // duplicate case, deliver the newly installed intent once. Ordinary
+      // duplicate event/poll paths never use this gate.
+      if (applied.verdict === "duplicate") {
+        deliverProjectAuthorityStartupRecoveryIntentProduction(
+          projectAuthorityRuntimeState(),
+          stored.intent,
+          bundle,
+          (candidate) => { void consumePendingProjectRecoveryIntent(candidate); },
+        );
       }
     } catch (error) {
       // Do not offer an unstamped v1/browser payload when the durable backend
@@ -17834,7 +18056,7 @@ export default function App() {
       return;
     }
     setWorkspaceTab("control");
-    setControlMode("live");
+    selectControlMode("live");
     setSelectedCueListId(cue.cue_list_id);
     selectSceneCue(cue.id);
     setSceneSettingsSurface("details");
@@ -17956,7 +18178,7 @@ export default function App() {
       const opened = await openOrCreateSuperScene(cueId);
       if (!opened) return;
       setWorkspaceTab("control");
-      setControlMode("live");
+      selectControlMode("live");
       setTimelineDeskSurface("show");
       setTimelineContextDrawer("none");
       return;
@@ -18231,11 +18453,11 @@ export default function App() {
       return;
     }
     if (layer.kind === "Audio") {
-      setMessage("Audio lanes accept audio files in a later tranche; Cue drops require a Lighting lane.");
+      setMessage("Audio lanes accept Audio media sources; Cue drops require a Lighting lane.");
       return;
     }
     if (layer.kind === "Video") {
-      setMessage("Video lanes accept video sources in a later tranche; Cue drops require a Lighting lane.");
+      setMessage("Video lanes accept Video media sources; Cue drops require a Lighting lane.");
       return;
     }
     const cue = snapshotCues().find((candidate) => candidate.id === drag.cue_id);
@@ -18474,11 +18696,7 @@ export default function App() {
     endMediaAssetPreview,
     refreshVideoPreviewDiagnostics,
     refreshVideoOutputRenderPlans,
-    refreshVideoOutputWindowStatuses,
     refreshSnapshotAndVideoOutputRenderPlans,
-    syncOpenVideoOutputWindows,
-    closeOpenVideoOutputWindows,
-    openAllVideoOutputWindows,
     refreshVideoRuntimeStatus,
     refreshExternalVideoIoPlans,
     syncExternalVideoTransports,
@@ -18556,6 +18774,84 @@ export default function App() {
       transition_buses: video.transition_buses ?? [],
     };
   };
+
+  let videoOutputWindowStatusPoll: Promise<boolean> | null = null;
+  let videoOutputWindowStatusPollGeneration = 0;
+  const mergeVideoOutputWindowStatusQuery = (statuses: VideoOutputWindowStatus[]) => {
+    let nextPhysical = videoOutputPhysicalWindowStates();
+    for (const status of statuses) {
+      const incarnation = status.live_window_incarnation;
+      if (typeof incarnation !== "number" || !Number.isSafeInteger(incarnation) || incarnation <= 0) continue;
+      const result = applyVideoOutputWindowStatusQuery(nextPhysical, status);
+      if (result.accepted && result.event) {
+        nextPhysical = result.state;
+      }
+    }
+    setVideoOutputPhysicalWindowStates(nextPhysical);
+  };
+  const refreshVideoOutputWindowStatuses = (silent = false): Promise<boolean> => {
+    if (videoOutputWindowStatusPoll) return videoOutputWindowStatusPoll;
+    const generation = ++videoOutputWindowStatusPollGeneration;
+    const request = (async () => {
+      try {
+        const statuses = await invoke<VideoOutputWindowStatus[]>("get_video_output_window_statuses");
+        if (generation !== videoOutputWindowStatusPollGeneration || !Array.isArray(statuses)) return false;
+        setVideoOutputWindowStatuses(statuses);
+        mergeVideoOutputWindowStatusQuery(statuses);
+        setVideoOutputWindowQueryAvailable(true);
+        if (!silent) {
+          const liveOpen = statuses.filter((status) => status.live_open).length;
+          const patternOpen = statuses.filter((status) => status.test_pattern_open).length;
+          setMessage(`Video output windows: ${liveOpen} live, ${patternOpen} pattern open.`);
+        }
+        return true;
+      } catch (error) {
+        if (generation === videoOutputWindowStatusPollGeneration) {
+          setVideoOutputWindowQueryAvailable(false);
+          setVideoOutputWindowStatuses(null);
+          if (!silent) setMessage(`Video output window state unavailable: ${String(error)}`);
+        }
+        return false;
+      }
+    })();
+    videoOutputWindowStatusPoll = request;
+    void request.finally(() => {
+      if (videoOutputWindowStatusPoll === request) videoOutputWindowStatusPoll = null;
+    });
+    return request;
+  };
+  const applyVideoOutputWindowEventToUi = (payload: unknown): boolean => {
+    const parsed = parseVideoOutputWindowStateEvent(payload);
+    if (!parsed || !snapshot().video.outputs.some((output) => output.id === parsed.output_id)) return false;
+    const result = applyVideoOutputWindowStateEvent(videoOutputPhysicalWindowStates(), parsed);
+    if (!result.accepted || !result.event) return false;
+    setVideoOutputPhysicalWindowStates(result.state);
+    setVideoOutputWindowQueryAvailable(true);
+    setVideoOutputWindowStatuses((current) => current
+      ? current.map((status) => status.output_id === parsed.output_id
+        ? {
+            ...status,
+            live_open: parsed.actual_open,
+            live_window_incarnation: parsed.window_incarnation,
+          }
+        : status)
+      : current);
+    return true;
+  };
+  let videoOutputWindowStateUnlisten: Promise<() => void> | null = null;
+  if (isTauriRuntime()) {
+    videoOutputWindowStateUnlisten = listen<unknown>(VIDEO_OUTPUT_WINDOW_STATE_EVENT, (event) => {
+      applyVideoOutputWindowEventToUi(event.payload);
+    });
+    void refreshVideoOutputWindowStatuses(true);
+    void videoOutputWindowStateUnlisten.catch((error) => {
+      setMessage(`Video output window events unavailable: ${String(error)}`);
+    });
+  }
+  onCleanup(() => {
+    videoOutputWindowStatusPollGeneration += 1;
+    void videoOutputWindowStateUnlisten?.then((unlisten) => unlisten()).catch(() => undefined);
+  });
   let vjPreviewRequestGeneration = 0;
   let vjPreviewPollInFlight: Promise<VjPreviewTransportSummary | null> | null = null;
   const isVjPreviewTransportSummary = (value: unknown): value is VjPreviewTransportSummary => {
@@ -19897,7 +20193,8 @@ export default function App() {
   });
   const videoOutputMetricsTimer = isTauriRuntime()
     ? window.setInterval(() => {
-        if (videoOutputWindowStatuses()?.some((status) => status.live_open)) {
+        if (snapshot().video.outputs.some((output) => output.kind === "Display")
+          || videoOutputWindowStatuses() !== null) {
           void refreshVideoOutputWindowStatuses(true);
         }
         if (
@@ -20031,157 +20328,46 @@ export default function App() {
   };
 
   const removeVideoOutput = async (outputId: number) => {
-    const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
-    if (output && !confirmDestructiveAction("video output", output.label)) {
-      return;
-    }
-    try {
-      await invoke("remove_video_output", { outputId });
-      setMessage(`Removed video output ${outputId}`);
-      await refreshSnapshotAndVideoOutputRenderPlans();
-    } catch (error) {
-      setMessage(String(error));
-    }
+    setMessage(`Removing video output ${outputId} is unavailable until a canonical operation exists; no state changed.`);
   };
 
   const setVideoOutputConfig = async (output: VideoOutputSummary) => {
-    const draft = videoOutputConfigDraft(output);
-    const width = Math.max(1, Math.round(Number.isFinite(draft.width) ? draft.width : output.width));
-    const height = Math.max(1, Math.round(Number.isFinite(draft.height) ? draft.height : output.height));
-    const monitorId = Math.max(0, Math.round(Number.isFinite(draft.monitor_id) ? draft.monitor_id : 0));
-    try {
-      await invoke("set_video_output_config", {
-        outputId: output.id,
-        label: draft.label,
-        kind: draft.kind,
-        width,
-        height,
-        fullscreen: draft.kind === "Display" ? draft.fullscreen : false,
-        monitorId: draft.kind === "Display" ? monitorId : null,
-        monitorIdentity: draft.kind === "Display" ? draft.monitor_identity : null,
-        endpointName: draft.kind === "Display" ? null : draft.endpoint_name,
-      });
-      setVideoOutputConfigDrafts((current) => ({
-        ...current,
-        [output.id]: {
-          ...draft,
-          width,
-          height,
-          fullscreen: draft.kind === "Display" ? draft.fullscreen : false,
-          monitor_id: draft.kind === "Display" ? monitorId : 0,
-          endpoint_name: draft.kind === "Display" ? "" : draft.endpoint_name,
-        },
-      }));
-      setMessage(`Updated video output ${output.id}`);
-      await refreshSnapshotAndVideoOutputRenderPlans();
-    } catch (error) {
-      setMessage(String(error));
-    }
+    setMessage(`Changing configuration for ${output.label} is unavailable until a canonical operation exists; no state changed.`);
   };
 
   const setVideoOutputEnabled = async (outputId: number, enabled: boolean) => {
-    try {
-      await invoke("set_video_output_enabled", { outputId, enabled });
-      await refreshSnapshotAndVideoOutputRenderPlans();
-    } catch (error) {
-      setMessage(String(error));
-    }
+    setMessage(`Changing authored enabled state for output ${outputId} is unavailable until a canonical operation exists; no state changed.`);
   };
 
   const setVideoOutputRouting = async (outputId: number, compositionId: number) => {
-    try {
-      await invoke("set_video_output_routing", { outputId, compositionId });
-      await refreshSnapshotAndVideoOutputRenderPlans();
-    } catch (error) {
-      setMessage(String(error));
-    }
+    setMessage(`Changing routing for output ${outputId} is unavailable until a canonical v2 route exists; no state changed.`);
   };
 
   const setVideoOutputOpacity = async (outputId: number, opacity: number) => {
-    try {
-      await invoke("set_video_output_opacity", { outputId, opacity });
-      await refreshSnapshotAndVideoOutputRenderPlans();
-    } catch (error) {
-      setMessage(String(error));
-    }
+    setMessage(`Changing opacity for output ${outputId} is unavailable until a canonical operation exists; no state changed.`);
   };
 
   const fadeVideoOutputOpacity = async (outputId: number, opacity: number) => {
-    try {
-      await invoke("fade_video_output_opacity", {
-        outputId,
-        opacity,
-        durationMs: Math.max(0, Math.round(videoOutputFadeMs())),
-      });
-      await refreshSnapshotAndVideoOutputRenderPlans();
-    } catch (error) {
-      setMessage(String(error));
-    }
+    setMessage(`Fading output ${outputId} is unavailable until a canonical operation exists; no state changed.`);
   };
 
   const setVideoOutputBlackout = async (outputId: number, blackout: boolean) => {
-    try {
-      if (!blackout) {
-        setMessage(
-          `Per-output blackout release for output ${outputId} is unavailable until a target-aware OutputControl action is reviewed; no state changed.`,
-        );
-        return;
-      }
-      await invoke("set_video_output_blackout", { outputId, blackout: true });
-      await refreshSnapshotAndVideoOutputRenderPlans();
-    } catch (error) {
-      setMessage(String(error));
-    }
+    setMessage(`Changing blackout for output ${outputId} is unavailable until a canonical operation exists; no state changed.`);
   };
 
   const setVideoOutputMapping = async (outputId: number, mapping: VideoOutputMapping) => {
-    try {
-      await invoke("set_video_output_mapping", { outputId, mapping });
-      await refreshSnapshot();
-      return true;
-    } catch (error) {
-      setMessage(String(error));
-      return false;
-    }
+    setMessage(`Projection mapping for output ${outputId} is unavailable until a canonical path exists; no state changed.`);
+    return false;
   };
 
   const importVideoOutputBitmapMask = async (output: VideoOutputSummary) => {
-    try {
-      const imported = await invoke<VideoBitmapMaskImportResult | null>("import_video_output_bitmap_mask");
-      if (!imported) {
-        setMessage("Luma mask import canceled.");
-        return false;
-      }
-      const words = Array.from({ length: 32 }, (_, index) => imported.luma_words[index] ?? 0);
-      const updated = await setVideoOutputMapping(output.id, {
-        ...output.mapping,
-        bitmap_mask_width: imported.width,
-        bitmap_mask_height: imported.height,
-        bitmap_mask_luma_words: words,
-      });
-      if (updated) {
-        setMessage(
-          `Imported ${imported.source_name} as an embedded ${imported.width}x${imported.height} luma mask.`,
-        );
-      }
-      return updated;
-    } catch (error) {
-      setMessage(String(error));
-      return false;
-    }
+    setMessage(`Bitmap mask import for ${output.label} is unavailable until a canonical path exists; no state changed.`);
+    return false;
   };
 
   const clearVideoOutputBitmapMask = async (output: VideoOutputSummary) => {
-    const updated = await setVideoOutputMapping(output.id, {
-      ...output.mapping,
-      bitmap_mask_width: 0,
-      bitmap_mask_height: 0,
-      bitmap_mask_luma_words: Array(32).fill(0),
-    });
-    if (updated) {
-      setMessage(`Cleared the embedded luma mask from ${output.label}.`);
-    }
-    return updated;
+    setMessage(`Bitmap mask changes for ${output.label} are unavailable until a canonical path exists; no state changed.`);
+    return false;
   };
 
   const {
@@ -20244,84 +20430,19 @@ export default function App() {
   });
 
   const fitVideoOutputToStageObject = async (output: VideoOutputSummary, object: StageObjectSummary) => {
-    const outputAspect = outputAspectRatio(output.width, output.height);
-    const objectAspect =
-      object.depth > 0.5 ? clampRange(object.width / object.depth, 0.25, 4) : outputAspect;
-    const targetAspect = Number(objectAspect.toFixed(4));
-    const targetDepth =
-      object.kind === "Screen" && object.depth <= 0.5
-        ? object.width / Math.max(0.25, targetAspect)
-        : object.depth;
-    const scaleY = clampRange(targetDepth / 4.5, 0.25, 3);
-    const scaleX = clampRange(object.width / Math.max(0.001, 4.5 * scaleY * targetAspect), 0.25, 3);
-    const updated = await setVideoOutputMapping(output.id, {
-      ...output.mapping,
-      stage_x: Number(object.x.toFixed(2)),
-      stage_z: Number(object.z.toFixed(2)),
-      rotation_deg: Number(object.rotation_deg.toFixed(1)),
-      offset_x: 0,
-      offset_y: 0,
-      scale_x: Number(scaleX.toFixed(3)),
-      scale_y: Number(scaleY.toFixed(3)),
-      aspect_ratio: targetAspect,
-      aspect_mode: "Fit",
-      lens_distortion: 0,
-      keystone_x: 0,
-      keystone_y: 0,
-      corner_top_left_x: 0,
-      corner_top_left_y: 0,
-      corner_top_right_x: 0,
-      corner_top_right_y: 0,
-      corner_bottom_right_x: 0,
-      corner_bottom_right_y: 0,
-      corner_bottom_left_x: 0,
-      corner_bottom_left_y: 0,
-    });
-    if (!updated) {
-      return;
-    }
-    setSelectedVideoOutputId(output.id);
-    setSelectedStageObjectId(object.id);
-    setMappingShowProjectors(true);
-    setMappingShowStageObjects(true);
-    setMessage(`Fit ${output.label} to ${object.label}.`);
+    setMessage(`Fitting ${output.label} to ${object.label} is unavailable until a canonical path exists; no state changed.`);
   };
 
   const saveVideoOutputMappingPreset = async (mapping: VideoOutputMapping) => {
-    try {
-      const label = await invoke<string>("save_video_output_mapping_preset", {
-        label: videoOutputMappingPresetLabel(),
-        mapping,
-      });
-      setVideoOutputMappingPresetLabel(label);
-      setSelectedVideoOutputMappingPresetLabel(label);
-      await refreshSnapshot();
-      setMessage(`Saved video output mapping preset ${label}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
+    setMessage("Saving projection mapping presets is unavailable until a canonical path exists; no state changed.");
   };
 
   const applyVideoOutputMappingPreset = async (outputId: number, label: string) => {
-    const preset = snapshot().video.mapping_presets.find((candidate) => candidate.label === label);
-    if (!preset) {
-      return;
-    }
-    await setVideoOutputMapping(outputId, preset.mapping);
-    setMessage(`Applied video output mapping preset ${preset.label}.`);
+    setMessage(`Applying projection mapping preset ${label} to output ${outputId} is unavailable until a canonical path exists; no state changed.`);
   };
 
   const removeVideoOutputMappingPreset = async (label: string) => {
-    try {
-      await invoke("remove_video_output_mapping_preset", { label });
-      if (selectedVideoOutputMappingPresetLabel() === label) {
-        setSelectedVideoOutputMappingPresetLabel("");
-      }
-      await refreshSnapshot();
-      setMessage(`Removed video output mapping preset ${label}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
+    setMessage(`Removing projection mapping preset ${label} is unavailable until a canonical path exists; no state changed.`);
   };
 
   const exportVideoOutputMappingPreset = async (mapping: VideoOutputMapping) => {
@@ -20463,35 +20584,62 @@ export default function App() {
     setWaveStageDrag(null);
   };
 
-  const openVideoOutputWindow = async (outputId: number, testPattern = false) => {
-    try {
-      await invoke("open_video_output_window", { outputId, testPattern });
-      await Promise.all([refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
-      setMessage(`Opened video output ${outputId} ${testPattern ? "test pattern" : "window"}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
+  const displayWindowActionRequests = new Map<number, Promise<boolean>>();
+  const setDisplayVideoWindowOpen = (outputId: number, open: boolean): Promise<boolean> => {
+    const pending = displayWindowActionRequests.get(outputId);
+    if (pending) return pending;
+    const request = (async () => {
+      const output = snapshot().video.outputs.find((candidate) => candidate.id === outputId);
+      if (!output || output.kind !== "Display") {
+        setMessage("Only Display outputs have a native live window.");
+        return false;
+      }
+      if (!isTauriRuntime()) {
+        setMessage(tauriBackendUnavailableMessage);
+        return false;
+      }
+      setVideoOutputWindowActionBusy((current) => ({ ...current, [outputId]: true }));
+      setVideoOutputWindowActionErrors((current) => {
+        const next = { ...current };
+        delete next[String(outputId)];
+        return next;
+      });
+      try {
+        const authorityQuery = await queryDisplayAddLeaseAuthority(invoke);
+        const lease = selectExactBothLeaseForDisplayAdd(authorityQuery);
+        await executeDisplayWindowOutputControl(
+          invoke,
+          { kind: "set_display_window_open", output_id: outputId, open, lease },
+          authorityQuery,
+        );
+        // Receipt truth is terminal, but it does not authorize optimistic UI.
+        // The typed event or this bounded single-flight query supplies the
+        // physical state shown to the operator.
+        await refreshVideoOutputWindowStatuses(true);
+        setMessage(open
+          ? "Display output window request acknowledged; physical state is updating."
+          : "Display output close request acknowledged; physical state is updating.");
+        return true;
+      } catch (error) {
+        const detail = String(error);
+        setVideoOutputWindowActionErrors((current) => ({ ...current, [String(outputId)]: detail }));
+        setMessage(detail);
+        return false;
+      } finally {
+        setVideoOutputWindowActionBusy((current) => {
+          const next = { ...current };
+          delete next[String(outputId)];
+          return next;
+        });
+      }
+    })();
+    displayWindowActionRequests.set(outputId, request);
+    void request.finally(() => {
+      if (displayWindowActionRequests.get(outputId) === request) displayWindowActionRequests.delete(outputId);
+    });
+    return request;
   };
 
-  const syncVideoOutputWindow = async (outputId: number, testPattern = false) => {
-    try {
-      await invoke("sync_video_output_window", { outputId, testPattern });
-      await Promise.all([refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
-      setMessage(`Synced video output ${outputId} ${testPattern ? "test pattern" : "window"}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const closeVideoOutputWindow = async (outputId: number, testPattern = false) => {
-    try {
-      await invoke("close_video_output_window", { outputId, testPattern });
-      await refreshVideoOutputWindowStatuses(true);
-      setMessage(`Closed video output ${outputId} ${testPattern ? "test pattern" : "window"}.`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
 
   const buildEffectVideoTargets = (includePosition: boolean, forceVideoTarget = false): VideoEffectTarget[] => {
     const videoLayerId = selectedEffectVideoLayerId();
@@ -21515,7 +21663,7 @@ export default function App() {
       const opened = await openOrCreateSuperScene(cue.id);
       if (!opened) return;
       setWorkspaceTab("control");
-      setControlMode("live");
+      selectControlMode("live");
       setTimelineDeskSurface("show");
       setTimelineContextDrawer("none");
       return;
@@ -22438,6 +22586,10 @@ export default function App() {
 
   const selectControlMode = (mode: ControlMode) => {
     if (paneWindow === "timeline" && mode !== "live") return;
+    if (operatorLockMode() === "Partial" && mode === "edit") {
+      setMessage("Lighting editing is locked for this operator.");
+      return;
+    }
     if (mode === "mixer") authorizeVideoThumbnailAccess();
     setControlMode(mode);
     if (mode === "edit") {
@@ -22448,6 +22600,9 @@ export default function App() {
       setTimelineDeskSurface("show");
       setTimelineContextDrawer((current) => current === "cue" ? "cue" : "none");
     }
+    // Domain panels unmount while switching. Return focus to the persistent tab
+    // after the new panel/Portal host has been published.
+    requestAnimationFrame(() => document.getElementById(`edit-domain-tab-${mode}`)?.focus());
   };
 
   const selectWorkspaceTab = (tab: WorkspaceTab) => {
@@ -22468,6 +22623,105 @@ export default function App() {
     setTimelineDeskSurface(surface);
     setTimelineContextDrawer("none");
   };
+
+  // Timeline owns one desk header in its upper arranger. Keeping this render path
+  // here avoids a lower-pane portal retaining stale controls across domain changes.
+  const renderTimelineDeskHeaderTools = () => (
+    <>
+      <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
+        <button type="button" class={timelineDeskSurface() === "show" ? "active" : ""} title="Show Timeline" aria-label="Show Timeline" aria-pressed={timelineDeskSurface() === "show"} data-timeline-desk-surface="show" onClick={() => selectTimelineDeskSurface("show")}>
+          <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▤</span>
+        </button>
+        <button type="button" class={timelineDeskSurface() === "automation" ? "active" : ""} title="Automation" aria-label="Automation" aria-pressed={timelineDeskSurface() === "automation"} data-timeline-desk-surface="automation" onClick={() => selectTimelineDeskSurface("automation")}>
+          <span class="timelineToolIcon" aria-hidden="true" data-no-localize>∿</span>
+        </button>
+        <button type="button" class={timelineDeskSurface() === "playback" ? "active" : ""} title="Playback" aria-label="Playback" aria-pressed={timelineDeskSurface() === "playback"} data-timeline-desk-surface="playback" onClick={() => selectTimelineDeskSurface("playback")}>
+          <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▦</span>
+        </button>
+      </nav>
+      <Show when={timelineDeskSurface() === "show"}>
+        <TimelineOperatorBar
+          childTimelineLabel={timelineChildCue()?.label ?? null}
+          positionMs={activeTimeline().position_ms}
+          durationMs={activeTimeline().duration_ms}
+          playing={activeTimeline().playing}
+          bpm={snapshot().clock.bpm}
+          metronomeEnabled={activeTimeline().metronome_enabled ?? false}
+          countInBeats={activeTimeline().count_in_beats ?? 4}
+          countInRemainingMs={activeTimeline().count_in_remaining_ms ?? 0}
+          phases={activeTimeline().phases ?? []}
+          guideEnabled={activeTimeline().guide_enabled ?? false}
+          guideAudioStatus={timelineGuideAudioStatus()}
+          guideAudioDevices={timelineGuideAudioDevices()}
+          loopRegion={activeTimeline().loop_region ?? null}
+          loopRuntime={activeTimeline().loop_runtime ?? { generation: 0, status: "disabled", wrap_count: 0 }}
+          timelines={timelineBank()}
+          activeTimelineId={activeTimeline().id ?? snapshot().timeline.id ?? 1}
+          followRuntime={displayedTimelineFollowRuntime()}
+          followAbortBusy={timelineFollowAbortBusy()}
+          followAbortFocusFence={timelineFollowAbortFocusFence}
+          visibleWindow={timelineVisibleWindow()}
+          overviewShowDurationMs={timelineOverviewShowDurationMs()}
+          overviewEditExtentMs={timelineOverviewEditExtentMs()}
+          selectedEventId={selectedTimelineSceneBlockEventId()}
+          selectedCueId={selectedTimelineCueId()}
+          selectedCueIsSuperScene={Boolean(snapshotCues().find((cue) => cue.id === selectedTimelineCueId())?.child_timeline)}
+          contextDrawer={timelineContextDrawer()}
+          stretchMode={timelineStretchMode()}
+          magnetEnabled={timelineMagnetEnabled()}
+          armedCueId={timelineArmedCueId()}
+          armedCueLabel={timelineArmedCue()?.label ?? null}
+          deskSurface={timelineDeskSurface()}
+          showDeskSurfaceTabs={false}
+          onExitChildTimeline={exitSuperScene}
+          onSeek={seekTimeline}
+          onPause={pauseTimeline}
+          onPlay={playTimeline}
+          onSetMetronome={setTimelineMetronome}
+          onSetGuideEnabled={setTimelineGuideEnabled}
+          onConfigureGuideAudio={configureTimelineGuideAudio}
+          onSetPhases={setTimelinePhases}
+          onSetLoopRegion={setTimelineLoopRegion}
+          onSetLoopEnabled={setTimelineLoopEnabled}
+          onScaleLoop={scaleTimelineLoop}
+          onCreateTimeline={createTimeline}
+          onDuplicateTimeline={duplicateTimeline}
+          onRemoveTimeline={removeTimeline}
+          onReorderTimelines={reorderTimelines}
+          onSelectTimeline={selectTimeline}
+          onSetFollow={setTimelineFollow}
+          onAbortFollow={abortTimelineFollow}
+          onPanOverview={panTimelineOverview}
+          onZoomOverview={zoomTimelineOverview}
+          onFitOverview={fitTimelineOverview}
+          onRevealSelected={() => { const eventId = selectedTimelineSceneBlockEventId(); if (eventId !== null) revealTimelineSceneBlock(eventId); }}
+          onRevealPlayhead={revealTimelinePlayhead}
+          onStretchMode={setTimelineStretchMode}
+          onMagnetEnabled={setTimelineMagnetEnabled}
+          onArmCue={toggleTimelineArmedCue}
+          onOpenOrCreateSuperScene={(cueId) => { void openOrCreateSuperScene(cueId); }}
+          onContextDrawer={setTimelineContextDrawer}
+          onDeskSurface={selectTimelineDeskSurface}
+        />
+        <details class="groupLiveMixerDisclosure">
+          <summary title="Live Mixer" aria-label="Live Mixer"><span>Live Mixer</span></summary>
+          <div class="groupLiveMixerDisclosurePanel">
+            <GroupLiveMixerStrip
+              groupId={selectedFixtureGroupFilter()}
+              fixtureCount={selectedGroupFixtures().length}
+              strobeFixtureCount={selectedGroupStrobeFixtureCount()}
+              submasterLevel={selectedGroupSubmaster()?.level ?? 1}
+              strobeHz={selectedGroupSubmaster()?.strobe_hz ?? 0}
+              soloed={selectedGroupFlagState().anySoloed}
+              onSetSubmaster={setGroupSubmaster}
+              onSetStrobe={setGroupStrobe}
+              onSetSolo={setGroupSolo}
+            />
+          </div>
+        </details>
+      </Show>
+    </>
+  );
 
   const { handleControlKeyDown } = createAppKeyboardController({
     workspaceTab,
@@ -23208,12 +23462,80 @@ export default function App() {
         data-upper-lower-ratio={sharedWorkspaceVisible() ? topSplitRatio() : undefined}
         data-lower-left-right-ratio={sharedWorkspaceVisible() ? lowerSplitRatio() : undefined}
       >
+        {/* Keep every persistent domain tab associated with a real panel while
+            inactive panels stay unmounted: these placeholders are hidden,
+            hold no application state, and disappear as their domain mounts. */}
+        <Show when={workspaceTab() === "control" && controlMode() !== "edit"}>
+          <section id="edit-domain-panel-edit" role="tabpanel" aria-labelledby="edit-domain-tab-edit" hidden />
+        </Show>
         <Show when={workspaceTab() === "control" && controlMode() !== "mixer"}>
+          <section id="edit-domain-panel-mixer" role="tabpanel" aria-labelledby="edit-domain-tab-mixer" hidden />
+        </Show>
+        <Show when={workspaceTab() === "control" && controlMode() !== "live"}>
+          <section id="edit-domain-panel-live" role="tabpanel" aria-labelledby="edit-domain-tab-live" hidden />
+        </Show>
+        <Show when={workspaceTab() === "control" && controlMode() === "edit"}>
+          <section id="edit-domain-panel-edit" role="tabpanel" aria-labelledby="edit-domain-tab-edit" class="panel editDomainUpperPanel controlPanel" data-workspace-pane="upper" aria-label="Lighting Banks and Scenes">
+            <SceneMatrixPanel
+              toolbar={liveDeskViewActions()}
+              cues={snapshot().cues}
+              cueLists={snapshot().cue_lists}
+              selectedCueListId={selectedCueList().id}
+              onSelectCueList={setSelectedCueListId}
+              onCueListLabel={setCueListLabel}
+              onCreateCueList={createCueList}
+              onRenameCueList={renameCueList}
+              onRemoveCueList={removeCueList}
+              onCreateSceneForCueList={createSceneInCueList}
+              onReorderCueLists={reorderCueLists}
+              groupColors={groupColors()}
+              onSetGroupColor={setGroupColor}
+              groupIds={sceneMatrixGroupIds()}
+              activeCueId={snapshot().active_cue_id}
+              activeGroupCueIds={snapshot().active_group_cue_ids ?? {}}
+              selectedCueId={selectedSceneCueId()}
+              activeFade={snapshot().active_fade}
+              cueLiveModifiers={snapshot().cue_live_modifiers}
+              onSetCueLiveModifier={setCueLiveModifierLive}
+              onClearCueLiveModifier={clearCueLiveModifierLive}
+              onReleaseCue={releaseCueById}
+              timelineTrack={timelineTrack()}
+              onTriggerCue={triggerCue}
+              onSelectCue={selectSceneCue}
+              onOpenSuperScene={(cueId) => void openOrCreateSuperScene(cueId)}
+              onOpenCueEditor={() => openCueEditor(true)}
+              onBeginTimelineCueDrag={beginTimelineCueDrag}
+              onMoveTimelineCueDrag={moveTimelineCueDrag}
+              onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
+            />
+          </section>
+        </Show>
+        <Show when={workspaceTab() === "control" && controlMode() === "live"}>
         <section
           class={`panel liveControlPanel controlPanel${liveStatusExpanded() ? " liveStatusExpanded" : ""}`}
+          id="edit-domain-panel-live"
+          role="tabpanel"
+          aria-labelledby="edit-domain-tab-live"
           data-workspace-pane="upper"
           data-live-status-expanded={liveStatusExpanded() ? "true" : "false"}
         >
+          <header class="panelHeader controlContextHeader timelineArrangerHeader" data-timeline-arranger-header>
+            <h2>Timeline</h2>
+            <div class="controlContextHeaderTools">
+              {renderTimelineDeskHeaderTools()}
+            </div>
+          </header>
+          <div
+            ref={(host) => {
+              setTimelineUpperHost(undefined);
+              queueMicrotask(() => {
+                if (host.isConnected) setTimelineUpperHost(host);
+              });
+            }}
+            class="timelineArrangerUpperHost controlContextPane"
+            data-timeline-arranger-upper
+            aria-label="Timeline arranger"
+          />
           <div
             id="live-status-inspector"
             class="liveStatusGrid"
@@ -23699,21 +24021,9 @@ export default function App() {
                       {output().blackout ? "Blackout" : `${Math.round(output().opacity * 100)}%`}
                     </span>
                   </div>
-                  <button
-                    class={output().blackout ? "active" : ""}
-                    onClick={() => void setVideoOutputBlackout(output().id, !output().blackout)}
-                  >
-                    BO
-                  </button>
-                  <button onClick={() => void fadeVideoOutputOpacity(output().id, 0)}>
-                    Out
-                  </button>
-                  <button onClick={() => void fadeVideoOutputOpacity(output().id, 1)}>
-                    In
-                  </button>
-                  <button onClick={() => void openVideoOutputWindow(output().id, true)}>
-                    Pattern
-                  </button>
+                  <small role="status">
+                    Physical window: {videoOutputWindowState(output().id).stateLabel}
+                  </small>
                 </div>
               )}
             </Show>
@@ -23813,11 +24123,10 @@ export default function App() {
           onAddCuePoint={addVideoCuePoint}
           onJumpCuePoint={jumpVideoCuePoint}
           onSelectOutput={setSelectedVideoOutputId}
-          onSetOutputEnabled={setVideoOutputEnabled}
-          onSetOutputBlackout={setVideoOutputBlackout}
-          onSetOutputOpacity={setVideoOutputOpacity}
-          onFadeOutputOpacity={fadeVideoOutputOpacity}
-          onOpenOutputWindow={openVideoOutputWindow}
+          windowStateForOutput={(outputId) => {
+            const state = videoOutputWindowState(outputId);
+            return { stateLabel: state.stateLabel, detail: state.detail };
+          }}
           clipSlotBank={{
             mode: "control",
             get layers() { return snapshot().video.layers; },
@@ -24117,7 +24426,6 @@ export default function App() {
           selectedMappingPresetLabel={selectedVideoOutputMappingPresetLabel()}
           selectedOutputId={selectedVideoOutputId()}
           previewOutputId={videoOutputPreviewId()}
-          previewMode={videoOutputPreviewMode()}
           previewInfo={videoOutputPreviewInfo()}
           previewUrl={videoOutputPreviewUrl()}
           liveAudioInput={{
@@ -24145,7 +24453,6 @@ export default function App() {
             onStartLiveAudioInput: startLiveAudioInput,
             onStopLiveAudioInput: stopLiveAudioInput,
           }}
-          configDraftFor={videoOutputConfigDraft}
           onCompositionLabel={setVideoCompositionLabel}
           onToggleCompositionLayer={toggleVideoCompositionLayer}
           onAddComposition={addVideoComposition}
@@ -24162,10 +24469,7 @@ export default function App() {
           onOutputEndpoint={setVideoOutputEndpoint}
           invokeCommand={invoke}
           onAddDisplayOutput={addDisplayVideoOutput}
-          onConfigDraft={updateVideoOutputConfigDraft}
-          onApplyConfig={setVideoOutputConfig}
           onSelectOutput={setSelectedVideoOutputId}
-          onSetRouting={setVideoOutputRouting}
           onMappingPresetLabel={setVideoOutputMappingPresetLabel}
           onSelectedMappingPresetLabel={setSelectedVideoOutputMappingPresetLabel}
           onSaveMappingPreset={saveVideoOutputMappingPreset}
@@ -24176,20 +24480,18 @@ export default function App() {
           onSetMapping={setVideoOutputMapping}
           onImportBitmapMask={importVideoOutputBitmapMask}
           onClearBitmapMask={clearVideoOutputBitmapMask}
-          onSetEnabled={setVideoOutputEnabled}
-          onSetBlackout={setVideoOutputBlackout}
-          onSetOpacity={setVideoOutputOpacity}
-          onFadeOpacity={fadeVideoOutputOpacity}
-          onPreview={renderDebugVideoOutputPreview}
-          onOpenWindow={openVideoOutputWindow}
-          onSyncWindow={syncVideoOutputWindow}
-          onRemoveOutput={removeVideoOutput}
+          windowStateForOutput={videoOutputWindowState}
+          windowActionBusyForOutput={(outputId) => Boolean(videoOutputWindowActionBusy()[String(outputId)])}
+          onToggleWindow={setDisplayVideoWindowOpen}
         />
         </Show>
 
         <Show when={workspaceTab() === "control" && controlMode() === "mixer"}>
         <VideoControlPanel
           mixer={controlMode() === "mixer"}
+          libraryOnly
+          selectedMediaAssetId={selectedMediaLibraryAssetId()}
+          onSelectMediaAsset={setSelectedMediaLibraryAssetId}
           layerCount={snapshot().video.layers.length}
           previewDiagnostics={{
             get layerCount() { return snapshot().video.layers.length; },
@@ -24239,24 +24541,12 @@ export default function App() {
             get outputs() { return snapshot().video.outputs; },
             get compositions() { return snapshot().video.compositions; },
             get selectedOutputId() { return selectedVideoOutputId(); },
-            get fadeMs() { return videoOutputFadeMs(); },
             get windowSummary() { return videoOutputWindowSummary(); },
             onSelectOutput: setSelectedVideoOutputId,
-            onSetFadeMs: setVideoOutputFadeMs,
-            onRefreshWindows: refreshVideoOutputWindowStatuses,
-            onOpenAllWindows: openAllVideoOutputWindows,
-            onSyncOpenWindows: syncOpenVideoOutputWindows,
-            onCloseOpenWindows: closeOpenVideoOutputWindows,
+            onRefreshWindows: () => { void refreshVideoOutputWindowStatuses(); },
             renderPlanState: videoOutputRenderPlanState,
             windowStatusForOutput: videoOutputWindowStatusForOutput,
             windowState: videoOutputWindowState,
-            onSetOutputEnabled: setVideoOutputEnabled,
-            onSetOutputBlackout: setVideoOutputBlackout,
-            onFadeOutputOpacity: fadeVideoOutputOpacity,
-            onSetOutputOpacity: setVideoOutputOpacity,
-            onOpenOutputWindow: openVideoOutputWindow,
-            onSyncOutputWindow: syncVideoOutputWindow,
-            onCloseOutputWindow: closeVideoOutputWindow,
           }}
           liveMonitors={{
             get preview() { return liveVideoMonitors.preview(); },
@@ -24400,7 +24690,6 @@ export default function App() {
             backendAvailable: isTauriRuntime(),
             onVerify: inspectMediaAssetIds,
             onRelink: relinkMediaLibraryAsset,
-            onAddToTimeline: insertMediaAssetOnTimeline,
             onPreviewStart: beginMediaAssetPreview,
             onPreviewFrame: loadMediaAssetPreviewFrame,
             onPreviewEnd: endMediaAssetPreview,
@@ -24567,72 +24856,88 @@ export default function App() {
             setWorkspaceTab("setup");
             selectSetupMode("patch");
           }}
+          lowerLeftContent={
+            paneWindow !== "stage" && workspaceTab() === "control" && controlMode() === "mixer" ? (
+              <section class="panel editVideoPreviewPane" data-edit-video-preview aria-label="Selected media thumbnail">
+                <header class="panelHeader"><h2>Thumbnail</h2><span>Selected media</span></header>
+                <Show when={selectedMediaLibraryAsset()} fallback={<div class="emptyState">Select Media Library item to view its thumbnail.</div>}>
+                  {(asset) => <div class="editVideoPreviewContent">
+                    <Show when={mediaAssetThumbnails()[asset().id]} fallback={<div class="videoMediaLibraryThumbnailPlaceholder" aria-hidden="true" />}>
+                      <img src={mediaAssetThumbnails()[asset().id]} alt="" />
+                    </Show>
+                    <strong data-no-localize>{asset().label}</strong>
+                    <span data-no-localize>{asset().source.path ?? asset().source.name ?? asset().source.kind}</span>
+                  </div>}
+                </Show>
+              </section>
+            ) : paneWindow !== "stage" && workspaceTab() === "control" && controlMode() === "live" ? (
+              <section class="panel editTimelinePreviewPane" data-edit-timeline-preview aria-label="Timeline transport preview">
+                <header class="panelHeader"><h2>Timeline Preview</h2><span data-no-localize>{timelineTrack()}</span></header>
+                <div class="editTimelinePreviewTransport">
+                  <strong>{Math.round(activeTimeline().position_ms / 1000)}s</strong>
+                  <button type="button" onClick={() => void (activeTimeline().playing ? pauseTimeline() : playTimeline())}>
+                    {activeTimeline().playing ? "Pause" : "Play"}
+                  </button>
+                  <button type="button" onClick={() => seekTimeline(0)}>Start</button>
+                </div>
+              </section>
+            ) : undefined
+          }
+          contextContent={
+            workspaceTab() === "control" && controlMode() === "mixer" ? (
+              <section class="editVideoInspectorPane" data-edit-video-inspector aria-label="Selected media properties">
+                <header class="panelHeader"><h2>Media Properties</h2></header>
+                <Show when={selectedMediaLibraryAsset()} fallback={<div class="emptyState">Select a Media Library item to inspect its properties.</div>}>
+                  {(asset) => <div class="editVideoInspectorContent">
+                    <strong data-no-localize>{asset().label}</strong>
+                    <dl>
+                      <div><dt>Source</dt><dd data-no-localize>{asset().source.kind}</dd></div>
+                      <div><dt>Availability</dt><dd data-no-localize>{mediaAssetAvailabilityById()[asset().id]?.kind ?? "Not checked"}</dd></div>
+                    </dl>
+                    <details class="editVideoAdvancedDisclosure">
+                      <summary>Advanced Video Controls</summary>
+                      <p>Layers, output routing, and physical displays are configured in Setup Video.</p>
+                    </details>
+                  </div>}
+                </Show>
+              </section>
+            ) : workspaceTab() === "control" && controlMode() === "live" ? (
+              <TimelineSourceShelf
+                cueOptions={timelineCueOptions()}
+                mediaAssets={snapshot().video.media_assets}
+                mediaAssetAvailabilityById={mediaAssetAvailabilityById()}
+                timelineLayers={timelineLayers()}
+                positionMs={activeTimeline().position_ms}
+                snapTimeMs={snapTimeMs}
+                onPlace={placeTimelineExternalSource}
+                onStatus={setMessage}
+                contextMode={timelineLowerContextMode()}
+                onContextModeChange={setTimelineLowerContextMode}
+                onOpenInspector={() => undefined}
+                inspectorContent={
+                  <section class="timelineExternalSourceShelfInspector" data-timeline-source-shelf-inspector aria-label="Timeline inspector">
+                    <h3>Inspector</h3>
+                    <Show
+                      when={selectedTimelineSceneBlockEventId() !== null}
+                      fallback={<p class="emptyState">Select a Timeline block to inspect it.</p>}
+                    >
+                      <div class="timelineLowerInspectorSelection">
+                        <strong>Selected block</strong>
+                        <span class="tabularNums" data-no-localize>#{selectedTimelineSceneBlockEventId()}</span>
+                        <button type="button" onClick={() => setTimelineContextDrawer("block")}>Open Block Properties</button>
+                      </div>
+                    </Show>
+                  </section>
+                }
+              />
+            ) : undefined
+          }
+          keepChildrenMounted={workspaceTab() === "control" && controlMode() === "live"}
           workspace={workspaceTab() === "setup" ? "setup" : workspaceTab() === "touch" ? "touch" : "control"}
           controlMode={workspaceTab() === "touch" ? "edit" : controlMode()}
           controlHeaderTitle={workspaceTab() === "touch" ? "Faders" : faderDeskTitle()}
           controlHeaderTools={
             <>
-              <Show when={workspaceTab() === "control" && (controlMode() === "edit" || controlMode() === "live")}>
-                <nav class="lightingContextTabs" aria-label="Lighting context" data-lighting-context-tabs>
-                  <button
-                    type="button"
-                    class={controlMode() === "edit" ? "active" : ""}
-                    data-lighting-context-tab="lighting"
-                    aria-keyshortcuts="E"
-                    aria-pressed={controlMode() === "edit"}
-                    onClick={() => selectControlMode("edit")}
-                  >
-                    Lighting
-                  </button>
-                  <button
-                    type="button"
-                    class={controlMode() === "live" ? "active" : ""}
-                    data-lighting-context-tab="timeline"
-                    aria-keyshortcuts="L"
-                    aria-pressed={controlMode() === "live"}
-                    onClick={() => selectControlMode("live")}
-                  >
-                    Timeline
-                  </button>
-                </nav>
-              </Show>
-              <Show when={workspaceTab() === "control" && controlMode() === "live"}>
-                <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
-                  <button
-                    type="button"
-                    class={timelineDeskSurface() === "show" ? "active" : ""}
-                    title="Show Timeline"
-                    aria-label="Show Timeline"
-                    aria-pressed={timelineDeskSurface() === "show"}
-                    data-timeline-desk-surface="show"
-                    onClick={() => selectTimelineDeskSurface("show")}
-                  >
-                    <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▤</span>
-                  </button>
-                  <button
-                    type="button"
-                    class={timelineDeskSurface() === "automation" ? "active" : ""}
-                    title="Automation"
-                    aria-label="Automation"
-                    aria-pressed={timelineDeskSurface() === "automation"}
-                    data-timeline-desk-surface="automation"
-                    onClick={() => selectTimelineDeskSurface("automation")}
-                  >
-                    <span class="timelineToolIcon" aria-hidden="true" data-no-localize>∿</span>
-                  </button>
-                  <button
-                    type="button"
-                    class={timelineDeskSurface() === "playback" ? "active" : ""}
-                    title="Playback"
-                    aria-label="Playback"
-                    aria-pressed={timelineDeskSurface() === "playback"}
-                    data-timeline-desk-surface="playback"
-                    onClick={() => selectTimelineDeskSurface("playback")}
-                  >
-                    <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▦</span>
-                  </button>
-                </nav>
-              </Show>
               <Show when={workspaceTab() === "control" && controlMode() === "edit"}>
                 <nav class="editDeskTabs" aria-label="Live edit desk surface">
                   <button
@@ -24685,93 +24990,6 @@ export default function App() {
                 onBlindCommit={commitProgrammer}
                 onBlindDiscard={clearProgrammer}
               />
-              <Show when={workspaceTab() === "control" && controlMode() === "live" && timelineDeskSurface() === "show"}>
-                <TimelineOperatorBar
-                  childTimelineLabel={timelineChildCue()?.label ?? null}
-                  positionMs={activeTimeline().position_ms}
-                  durationMs={activeTimeline().duration_ms}
-                  playing={activeTimeline().playing}
-                  bpm={snapshot().clock.bpm}
-                  metronomeEnabled={activeTimeline().metronome_enabled ?? false}
-                  countInBeats={activeTimeline().count_in_beats ?? 4}
-                  countInRemainingMs={activeTimeline().count_in_remaining_ms ?? 0}
-                  phases={activeTimeline().phases ?? []}
-                  guideEnabled={activeTimeline().guide_enabled ?? false}
-                  guideAudioStatus={timelineGuideAudioStatus()}
-                  guideAudioDevices={timelineGuideAudioDevices()}
-                  loopRegion={activeTimeline().loop_region ?? null}
-                  loopRuntime={activeTimeline().loop_runtime ?? { generation: 0, status: "disabled", wrap_count: 0 }}
-                  timelines={timelineBank()}
-                  activeTimelineId={activeTimeline().id ?? snapshot().timeline.id ?? 1}
-                  followRuntime={displayedTimelineFollowRuntime()}
-                  followAbortBusy={timelineFollowAbortBusy()}
-                  followAbortFocusFence={timelineFollowAbortFocusFence}
-                  visibleWindow={timelineVisibleWindow()}
-                  overviewShowDurationMs={timelineOverviewShowDurationMs()}
-                  overviewEditExtentMs={timelineOverviewEditExtentMs()}
-                  selectedEventId={selectedTimelineSceneBlockEventId()}
-                  selectedCueId={selectedTimelineCueId()}
-                  selectedCueIsSuperScene={Boolean(
-                    snapshotCues().find((cue) => cue.id === selectedTimelineCueId())?.child_timeline,
-                  )}
-                  contextDrawer={timelineContextDrawer()}
-                  stretchMode={timelineStretchMode()}
-                  magnetEnabled={timelineMagnetEnabled()}
-                  armedCueId={timelineArmedCueId()}
-                  armedCueLabel={timelineArmedCue()?.label ?? null}
-                  deskSurface={timelineDeskSurface()}
-                  onExitChildTimeline={exitSuperScene}
-                  onSeek={seekTimeline}
-                  onPause={pauseTimeline}
-                  onPlay={playTimeline}
-                  onSetMetronome={setTimelineMetronome}
-                  onSetGuideEnabled={setTimelineGuideEnabled}
-                  onConfigureGuideAudio={configureTimelineGuideAudio}
-                  onSetPhases={setTimelinePhases}
-                  onSetLoopRegion={setTimelineLoopRegion}
-                  onSetLoopEnabled={setTimelineLoopEnabled}
-                  onScaleLoop={scaleTimelineLoop}
-                  onCreateTimeline={createTimeline}
-                  onDuplicateTimeline={duplicateTimeline}
-                  onRemoveTimeline={removeTimeline}
-                  onReorderTimelines={reorderTimelines}
-                  onSelectTimeline={selectTimeline}
-                  onSetFollow={setTimelineFollow}
-                  onAbortFollow={abortTimelineFollow}
-                  onPanOverview={panTimelineOverview}
-                  onZoomOverview={zoomTimelineOverview}
-                  onFitOverview={fitTimelineOverview}
-                  onRevealSelected={() => {
-                    const eventId = selectedTimelineSceneBlockEventId();
-                    if (eventId !== null) revealTimelineSceneBlock(eventId);
-                  }}
-                  onRevealPlayhead={revealTimelinePlayhead}
-                  onStretchMode={setTimelineStretchMode}
-                  onMagnetEnabled={setTimelineMagnetEnabled}
-                  onArmCue={toggleTimelineArmedCue}
-                  onOpenOrCreateSuperScene={(cueId) => { void openOrCreateSuperScene(cueId); }}
-                  onContextDrawer={setTimelineContextDrawer}
-                  onDeskSurface={selectTimelineDeskSurface}
-                />
-                <details class="groupLiveMixerDisclosure">
-                  <summary title="Live Mixer" aria-label="Live Mixer">
-                    <span>Live Mixer</span>
-                  </summary>
-                  <div class="groupLiveMixerDisclosurePanel">
-                    <GroupLiveMixerStrip
-                      groupId={selectedFixtureGroupFilter()}
-                      fixtureCount={selectedGroupFixtures().length}
-                      strobeFixtureCount={selectedGroupStrobeFixtureCount()}
-                      submasterLevel={selectedGroupSubmaster()?.level ?? 1}
-                      strobeHz={selectedGroupSubmaster()?.strobe_hz ?? 0}
-                      soloed={selectedGroupFlagState().anySoloed}
-                      onSetSubmaster={setGroupSubmaster}
-                      onSetStrobe={setGroupStrobe}
-                      onSetSolo={setGroupSolo}
-                    />
-                  </div>
-                </details>
-              </Show>
             </>
           }
           stageConfig={{
@@ -25014,12 +25232,6 @@ export default function App() {
             onPatchFixture: () => selectSetupMode("patch"),
             onSelectFixture: selectMappingFixture,
             onSelectOutput: setSelectedVideoOutputId,
-            onSetOutputEnabled: setVideoOutputEnabled,
-            onSetOutputBlackout: setVideoOutputBlackout,
-            onOpenOutputWindow: openVideoOutputWindow,
-            onSyncOutputWindow: syncVideoOutputWindow,
-            onFitOutputToStageObject: fitVideoOutputToStageObject,
-            onSetOutputMapping: setVideoOutputMapping,
             onEditOutputProjection: (outputId) => {
               setSelectedVideoOutputId(outputId);
               selectSetupMode("video");
@@ -25340,9 +25552,15 @@ export default function App() {
           </aside>
           </Show>
           <div class="timelinePanel">
+        <Show when={controlMode() === "live" && timelineUpperHost()?.isConnected}>
+            <Portal mount={timelineUpperHost()!}>
+            <section class="panel faders controlPanel timelineDesk-show">
+            <div class="timelinePanel">
             <div
               class="timelineShowSurface"
-              classList={{ timelineShowSurfaceBlockDrawerOpen: timelineContextDrawer() === "block" }}
+              classList={{
+                timelineShowSurfaceBlockDrawerOpen: timelineContextDrawer() === "block",
+              }}
             >
             <TimelineCueEventsPanel
               embeddedControls={false}
@@ -25378,6 +25596,7 @@ export default function App() {
               overviewEvents={timelineOverviewEvents()}
               timelineLayers={timelineLayers()}
               timelineCueDrag={timelineCueDrag()}
+              onDropExternalSource={placeTimelineExternalSource}
               overviewMarkerAriaLabel={(event) => timelineOverviewMarkerAriaLabel(event, uiLocale())}
               overviewAutomationRanges={timelineOverviewAutomationRanges()}
               itemLanePlacements={timelineItemLanePlacements()}
@@ -25400,6 +25619,7 @@ export default function App() {
               audioClips={activeTimeline().audio_clips ?? []}
               videoClips={activeTimeline().video_clips ?? []}
               mediaAssets={snapshot().video.media_assets}
+              mediaAssetAvailabilityById={mediaAssetAvailabilityById()}
               itemGroups={activeTimeline().item_groups ?? []}
               audioOffsetMs={activeTimeline().audio_offset_ms ?? 0}
               audioMuted={activeTimeline().audio_muted ?? false}
@@ -25509,13 +25729,17 @@ export default function App() {
               onUpdateTimelineLayer={timelineLayerController.update}
               onRemoveTimelineLayer={removeTimelineLayer}
               onReorderTimelineLayer={timelineLayerController.reorder}
-              onTimelineStatus={setMessage}
+              onTimelineStatus={(source) => setMessage(translateUiText(source, uiLocale()))}
               onStretchMode={setTimelineStretchMode}
               onMagnetEnabled={setTimelineMagnetEnabled}
               onArmCue={toggleTimelineArmedCue}
               onContextDrawer={setTimelineContextDrawer}
             />
             </div>
+            </div>
+            </section>
+            </Portal>
+            </Show>
             <div class="timelineAutomationSurface">
             <TimelineLightingAutomationPanel
               activeControls={timelineAutomationControls()}

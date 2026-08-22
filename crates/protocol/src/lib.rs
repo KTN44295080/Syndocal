@@ -1258,6 +1258,13 @@ pub struct VideoClipLayerRuntimeSummary {
 pub struct VideoClipRuntimeSnapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<VideoClipLayerRuntimeSummary>,
+    /// Exact renderer-only Timeline Video projection IDs for this published
+    /// frame.  The set is runtime provenance, never authored state, and is
+    /// intentionally not serialized.  Keeping it beside the public runtime
+    /// snapshot lets audio/output consumers filter projections even when the
+    /// optional authored video payload is omitted from the public snapshot.
+    #[serde(skip, default)]
+    pub timeline_video_projection_layer_ids: Vec<VideoLayerId>,
 }
 
 /// Ephemeral truth for one running Layer Transition Bus. `origin_from` is
@@ -3961,6 +3968,9 @@ pub struct TimelinePhaseSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TimelineVideoClipSummary {
     pub id: TimelineVideoClipId,
+    /// Authored Timeline Video-lane identity.  This is deliberately not a
+    /// `VideoLayerId`; the engine creates a renderer-only projection for an
+    /// active MediaAsset-backed clip when no authored VJ layer exists.
     pub layer_id: u32,
     pub media_asset_id: MediaAssetId,
     pub start_ms: u64,
@@ -4346,6 +4356,11 @@ pub struct TimelineGuideCueSummary {
 /// through this image so linked A/V items can never tear across publication.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TimelineAdvancedAuthoringSummary {
+    /// Optional complete ordered lane image. `None` preserves compatibility
+    /// with older clients that only edit media/items; `Some` is applied in the
+    /// same authoritative transaction as the linked media fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<TimelineLayerSummary>>,
     /// Optional atomic movement of established Scene Blocks and automation
     /// keyframes. Group moves use this same publication as media clips.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -10639,6 +10654,7 @@ mod tests {
                 playing: true,
                 ping_pong_reverse: true,
             }],
+            ..super::VideoClipRuntimeSnapshot::default()
         }
     }
 
@@ -10681,6 +10697,7 @@ mod tests {
                 pending_launch: Some(zero_boundary.clone()),
                 ..super::VideoClipLayerRuntimeSummary::default()
             }],
+            ..super::VideoClipRuntimeSnapshot::default()
         })
         .unwrap();
 
@@ -10774,6 +10791,7 @@ mod tests {
                 playing: true,
                 ..super::VideoClipLayerRuntimeSummary::default()
             }],
+            ..super::VideoClipRuntimeSnapshot::default()
         };
         super::validate_video_clip_runtime_snapshot(&transition_runtime).unwrap();
         super::validate_video_clip_runtime_against_authored_slots(&transition_runtime, &video)
@@ -10822,6 +10840,7 @@ mod tests {
         ] {
             let invalid = super::VideoClipRuntimeSnapshot {
                 layers: vec![inactive_transport],
+                ..super::VideoClipRuntimeSnapshot::default()
             };
             assert!(super::validate_video_clip_runtime_snapshot(&invalid).is_err());
         }
@@ -10832,6 +10851,7 @@ mod tests {
                 queued_slot_id: Some(super::VideoClipSlotId(21)),
                 ..super::VideoClipLayerRuntimeSummary::default()
             }],
+            ..super::VideoClipRuntimeSnapshot::default()
         };
         super::validate_video_clip_runtime_snapshot(&inactive_queued_only).unwrap();
         super::validate_video_clip_runtime_against_authored_slots(&inactive_queued_only, &video)

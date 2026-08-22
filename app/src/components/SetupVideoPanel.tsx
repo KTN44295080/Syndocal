@@ -1,4 +1,3 @@
-import type { VideoOutputConfigDraft } from "../editorDrafts";
 import type { ComponentProps } from "solid-js";
 import type {
   CompositionSummary,
@@ -16,7 +15,6 @@ import { VideoOutputListPanel } from "./VideoOutputListPanel";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 
 type MaybePromise = void | Promise<unknown>;
-type VideoOutputPreviewMode = "output" | "test";
 
 type SetupVideoPanelProps = {
   className: string;
@@ -39,11 +37,9 @@ type SetupVideoPanelProps = {
   selectedMappingPresetLabel: string;
   selectedOutputId: number | null;
   previewOutputId: number | null;
-  previewMode: VideoOutputPreviewMode;
   previewInfo: string;
   previewUrl: string;
   liveAudioInput: ComponentProps<typeof LiveAudioInputRail>;
-  configDraftFor: (output: VideoOutputSummary) => VideoOutputConfigDraft;
   onCompositionLabel: (value: string) => void;
   onToggleCompositionLayer: (layerId: number, checked: boolean) => void;
   onAddComposition: () => MaybePromise;
@@ -65,10 +61,7 @@ type SetupVideoPanelProps = {
   onOutputEndpoint: (value: string) => void;
   invokeCommand: FrontendTauriInvoke;
   onAddDisplayOutput: (monitor: VideoDisplayMonitorDescriptor) => Promise<void>;
-  onConfigDraft: (output: VideoOutputSummary, patch: Partial<VideoOutputConfigDraft>) => void;
-  onApplyConfig: (output: VideoOutputSummary) => MaybePromise;
   onSelectOutput: (outputId: number) => void;
-  onSetRouting: (outputId: number, compositionId: number) => MaybePromise;
   onMappingPresetLabel: (value: string) => void;
   onSelectedMappingPresetLabel: (value: string) => void;
   onSaveMappingPreset: (mapping: VideoOutputMapping) => MaybePromise;
@@ -79,14 +72,17 @@ type SetupVideoPanelProps = {
   onSetMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
   onImportBitmapMask: (output: VideoOutputSummary) => MaybePromise;
   onClearBitmapMask: (output: VideoOutputSummary) => MaybePromise;
-  onSetEnabled: (outputId: number, enabled: boolean) => MaybePromise;
-  onSetBlackout: (outputId: number, blackout: boolean) => MaybePromise;
-  onSetOpacity: (outputId: number, opacity: number) => MaybePromise;
-  onFadeOpacity: (outputId: number, opacity: number) => MaybePromise;
-  onPreview: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onOpenWindow: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onSyncWindow: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onRemoveOutput: (outputId: number) => MaybePromise;
+  windowStateForOutput: (outputId: number) => {
+    stateLabel: string;
+    stateClass: string;
+    detail: string;
+    actualOpen: boolean | null;
+    actionLabel: string;
+    actionDisabled: boolean;
+    error: string | null;
+  };
+  windowActionBusyForOutput: (outputId: number) => boolean;
+  onToggleWindow: (outputId: number, open: boolean) => MaybePromise;
 };
 
 export function SetupVideoPanel(props: SetupVideoPanelProps) {
@@ -155,14 +151,9 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
             selectedMappingPresetLabel={props.selectedMappingPresetLabel}
             selectedOutputId={props.selectedOutputId}
             previewOutputId={props.previewOutputId}
-            previewMode={props.previewMode}
             previewInfo={props.previewInfo}
             previewUrl={props.previewUrl}
-            configDraftFor={props.configDraftFor}
-            onConfigDraft={props.onConfigDraft}
-            onApplyConfig={props.onApplyConfig}
             onSelectOutput={props.onSelectOutput}
-            onSetRouting={props.onSetRouting}
             onMappingPresetLabel={props.onMappingPresetLabel}
             onSelectedMappingPresetLabel={props.onSelectedMappingPresetLabel}
             onSaveMappingPreset={props.onSaveMappingPreset}
@@ -173,14 +164,9 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
             onSetMapping={props.onSetMapping}
             onImportBitmapMask={props.onImportBitmapMask}
             onClearBitmapMask={props.onClearBitmapMask}
-            onSetEnabled={props.onSetEnabled}
-            onSetBlackout={props.onSetBlackout}
-            onSetOpacity={props.onSetOpacity}
-            onFadeOpacity={props.onFadeOpacity}
-            onPreview={props.onPreview}
-            onOpenWindow={props.onOpenWindow}
-            onSyncWindow={props.onSyncWindow}
-            onRemoveOutput={props.onRemoveOutput}
+            windowStateForOutput={props.windowStateForOutput}
+            windowActionBusyForOutput={props.windowActionBusyForOutput}
+            onToggleWindow={props.onToggleWindow}
           />
         </div>
       </div>

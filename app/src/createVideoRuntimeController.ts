@@ -40,9 +40,7 @@ import type {
   VideoLayerTransitionRuntimeReport,
   VideoLayerTransitionRuntimeSnapshot,
   VideoOutputRenderPlan,
-  VideoOutputWindowCloseSummary,
   VideoOutputWindowStatus,
-  VideoOutputWindowSyncSummary,
   VideoPreviewDiagnostics,
   VideoRuntimeStatus,
   VideoRecordingStatus,
@@ -1516,43 +1514,6 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const refreshSnapshotAndVideoOutputRenderPlans = async () => {
     await Promise.all([options.refreshSnapshot(), refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
   };
-  const syncOpenVideoOutputWindows = async () => {
-    try {
-      const summary = await options.invoke<VideoOutputWindowSyncSummary>("sync_open_video_output_windows");
-      await Promise.all([refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
-      options.setMessage(
-        `Synced ${summary.synced_live} live and ${summary.synced_test_pattern} pattern output window(s); ${summary.skipped_closed} closed slot(s) skipped.`,
-      );
-    } catch (error) { options.setMessage(String(error)); }
-  };
-  const closeOpenVideoOutputWindows = async () => {
-    try {
-      const summary = await options.invoke<VideoOutputWindowCloseSummary>("close_open_video_output_windows");
-      await refreshVideoOutputWindowStatuses(true);
-      options.setMessage(
-        `Closed ${summary.closed_live} live and ${summary.closed_test_pattern} pattern output window(s); ${summary.skipped_closed} closed slot(s) skipped.`,
-      );
-    } catch (error) { options.setMessage(String(error)); }
-  };
-  const openAllVideoOutputWindows = async (testPattern = false) => {
-    const displayOutputs = options.snapshot().video.outputs.filter((output) => output.kind === "Display");
-    if (displayOutputs.length === 0) {
-      options.setMessage("No Display video outputs to open.");
-      return;
-    }
-    let opened = 0;
-    let failed = 0;
-    for (const output of displayOutputs) {
-      try {
-        await options.invoke("open_video_output_window", { outputId: output.id, testPattern });
-        opened += 1;
-      } catch { failed += 1; }
-    }
-    await Promise.all([refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
-    options.setMessage(
-      `Opened ${opened}/${displayOutputs.length} ${testPattern ? "pattern" : "live"} output window(s)${failed > 0 ? `; ${failed} failed` : ""}.`,
-    );
-  };
   const refreshVideoRuntimeStatus = async () => {
     try {
       const status = await options.invoke<VideoRuntimeStatus>("get_video_runtime_status");
@@ -1703,7 +1664,6 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     applyVideoEffectCatalog, importVideoEffectScopeIsf, applyVideoEffectPreset, removeVideoEffectChain,
     renderDebugVideoPreview, loadVideoLayerThumbnail, loadMediaAssetThumbnail, beginMediaAssetPreview, loadMediaAssetPreviewFrame, endMediaAssetPreview, refreshVideoPreviewDiagnostics,
     refreshVideoOutputRenderPlans, refreshVideoOutputWindowStatuses, refreshSnapshotAndVideoOutputRenderPlans,
-    syncOpenVideoOutputWindows, closeOpenVideoOutputWindows, openAllVideoOutputWindows,
     refreshVideoRuntimeStatus, refreshExternalVideoIoPlans, syncExternalVideoTransports,
     renderDebugVideoOutputPreview, setVideoLayerState, setVideoLayerTransform, setVideoLayerColor,
     setVideoLayerFx, addVideoCuePoint, removeVideoCuePoint, jumpVideoCuePoint,

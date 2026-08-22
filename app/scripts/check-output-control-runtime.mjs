@@ -564,8 +564,8 @@ assert.doesNotMatch(
   "post-dialog project/coordinator admission must not call Webview monitor RPCs",
 );
 const addDisplayBackend = mainSource.slice(
-  mainSource.indexOf("fn add_display_output_with_output_control_fence("),
-  mainSource.indexOf("fn apply_native_video_output_window_shell(", mainSource.indexOf("fn add_display_output_with_output_control_fence(")),
+  mainSource.indexOf("fn add_display_output_with_output_control_fence_core<"),
+  mainSource.indexOf("fn set_display_output_window_open_with_output_control_fence("),
 );
 const addDisplayCallback = addDisplayBackend.slice(
   addDisplayBackend.indexOf("let (applied, lease_receipt) ="),

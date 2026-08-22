@@ -31,7 +31,9 @@ const sceneFxBlockOnlyMode = process.argv.includes("--scene-fx-block-only");
 const cueRecallOnlyMode = process.argv.includes("--cue-recall-only");
 const setupDmxOnlyMode = process.argv.includes("--setup-dmx-only");
 const setupIoOnlyMode = process.argv.includes("--setup-io-only");
+const setupVideoOnlyMode = process.argv.includes("--setup-video-only");
 const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
+const editIaVideoOnlyMode = process.argv.includes("--edit-ia-video-only");
 const timelineLayeredOnlyMode = process.argv.includes("--timeline-layered-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
 const fixtureGroupsOnlyMode = process.argv.includes("--fixture-groups-only");
@@ -76,6 +78,8 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
     ? "large-show"
     : setupDmxOnlyMode || setupIoOnlyMode
       ? "setup-io"
+    : setupVideoOnlyMode
+      ? "timeline"
     : patchOnlyMode || fixtureGroupsOnlyMode
       ? "patch"
       : patchEmptyStateOnlyMode
@@ -108,7 +112,7 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
         ? "fx-visual"
       : operatorVjOnlyMode
         ? "operator-vj"
-        : paneMixerOnlyMode || vjBankOnlyMode
+        : paneMixerOnlyMode || vjBankOnlyMode || editIaVideoOnlyMode
           ? "vj-bank"
         : autoVjOnlyMode
           ? "auto-vj"
@@ -208,10 +212,6 @@ const controlTabs = [
 ];
 
 const selectControlSurface = async (client, modeId) => {
-  if (modeId === "live") {
-    await clickLightingContextTab(client, "timeline");
-    return;
-  }
   await clickControlModeOption(client, modeId);
 };
 const viewportRecentProjects = [
@@ -785,6 +785,7 @@ class CdpClient {
     this.pending = new Map();
     this.socket = null;
     this.closedReason = null;
+    this.runtimeExceptions = [];
   }
 
   async connect() {
@@ -820,6 +821,11 @@ class CdpClient {
     });
     this.socket.addEventListener("message", (event) => {
       const data = JSON.parse(event.data);
+      if (data.method === "Runtime.exceptionThrown") {
+        const detail = data.params?.exceptionDetails;
+        this.runtimeExceptions.push(detail?.exception?.description ?? detail?.text ?? "runtime exception");
+        return;
+      }
       if (!data.id || !this.pending.has(data.id)) {
         return;
       }
@@ -892,7 +898,7 @@ async function waitForApp(client) {
     }
     await sleep(100);
   }
-  throw new Error("Syndocal app shell did not mount.");
+  throw new Error(`Syndocal app shell did not mount. ${client.runtimeExceptions.join(" | ")}`);
 }
 
 async function waitForClientCondition(client, expression, description) {
@@ -2209,8 +2215,8 @@ async function checkWorkspaceLayoutPersistence(client) {
   const restored = await client.evaluate(`(() => ({
     workspace: document.querySelector('[data-workspace-option][aria-pressed="true"]')?.getAttribute('data-workspace-option') || '',
     workspaceLabel: (document.querySelector('[data-workspace-option][aria-pressed="true"]')?.textContent || '').trim(),
-    editDomainMode: document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '',
-    editDomainLabel: (document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.textContent || '').trim(),
+    editDomainMode: document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-selected="true"]')?.getAttribute('data-control-mode-option') || '',
+    editDomainLabel: (document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-selected="true"]')?.textContent || '').trim(),
     timelineContext: document.querySelector('[data-lighting-context-tab][aria-pressed="true"]')?.getAttribute('data-lighting-context-tab') || '',
     desk: document.querySelector('.timelineDeskTabs button.active')?.getAttribute('data-timeline-desk-surface') || '',
   }))()`);
@@ -2301,11 +2307,11 @@ async function checkKeyboardNavigation(client) {
       return !element.disabled && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
     const input = [...document.querySelectorAll('.layoutControl input:not([type="checkbox"]), .layoutControl select')].find(visible);
-    const activeModeBefore = document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '';
+    const activeModeBefore = document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-selected="true"]')?.getAttribute('data-control-mode-option') || '';
     input?.focus();
     input?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, code: 'KeyL', key: 'l' }));
     await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
-    const activeModeAfter = document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '';
+    const activeModeAfter = document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-selected="true"]')?.getAttribute('data-control-mode-option') || '';
     return {
       found: Boolean(input),
       modePreserved: activeModeBefore === 'edit' && activeModeAfter === activeModeBefore,
@@ -4213,6 +4219,45 @@ async function exerciseLegacySetupIoStoredTabs(client) {
       state.ioSubTabButtonCount === 0 &&
       JSON.stringify(state.visibleZoneNames) === JSON.stringify(['dmx', 'midi', 'osc', 'remote'])
     ),
+  };
+}
+
+async function runSetupVideoViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await clickWorkspaceOption(client, "setup");
+  await clickByText(client, "Video");
+  await clickByText(client, "Outputs");
+  await sleep(180);
+
+  const closed = await measure(client, `setup-video-closed-${viewport.width}x${viewport.height}`);
+  const initiallyClosed = await client.evaluate(`(() => {
+    const details = document.querySelector('.videoSetupPanel .advancedProjectionCorrection');
+    return Boolean(details && !details.open);
+  })()`);
+  await client.evaluate(`document.querySelector('.videoSetupPanel .advancedProjectionCorrection > summary')?.click()`);
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.videoSetupPanel .advancedProjectionCorrection')?.open === true`,
+    "Video Setup Advanced projection correction disclosure",
+  );
+  await client.evaluate(`document.querySelector('.videoSetupPanel .advancedProjectionCorrection')?.scrollIntoView({ block: 'nearest' })`);
+  await sleep(100);
+  const open = await measure(client, `setup-video-${viewport.width}x${viewport.height}`);
+  return {
+    ...open,
+    videoSetupAdvancedInitiallyClosed: initiallyClosed,
+    videoSetupClosedDocumentAndAppScrollZero:
+      closed.documentScrollWidth === closed.innerWidth &&
+      closed.documentScrollHeight === closed.innerHeight &&
+      closed.appScrollWidth === closed.innerWidth &&
+      closed.appScrollHeight === closed.innerHeight,
   };
 }
 
@@ -7403,9 +7448,14 @@ async function measure(client, label) {
     const videoSetupMapPaneRect = videoSetupMapPane?.getBoundingClientRect() ?? null;
     const videoSetupInspectorPane = document.querySelector('.videoSetupPanel .videoSetupInspectorPane');
     const videoSetupInspectorPaneRect = videoSetupInspectorPane?.getBoundingClientRect() ?? null;
+    const videoSetupStatusPane = document.querySelector('.videoSetupPanel .videoOutputStatusPane');
+    const videoSetupStatusPaneRect = videoSetupStatusPane?.getBoundingClientRect() ?? null;
+    const videoSetupAdvancedCorrection = document.querySelector('.videoSetupPanel .advancedProjectionCorrection');
+    const videoSetupMapping = document.querySelector('.videoSetupPanel .advancedProjectionCorrection[open] .videoOutputMapping');
+    const videoSetupMappingRect = videoSetupMapping?.getBoundingClientRect() ?? null;
     const videoSetupProjectorSurface = document.querySelector('.videoSetupPanel .projectorMapSurface');
     const videoSetupProjectorSurfaceRect = videoSetupProjectorSurface?.getBoundingClientRect() ?? null;
-    const videoSetupPreviewCard = document.querySelector('.videoSetupPanel .videoSetupInspectorPane .videoOutputPreviewCard');
+    const videoSetupPreviewCard = document.querySelector('.videoSetupPanel .videoOutputStatusPane .videoOutputPreviewCard');
     const videoSetupPreviewCardRect = videoSetupPreviewCard?.getBoundingClientRect() ?? null;
     const videoSetupActionDock = document.querySelector('.videoSetupPanel .videoOutputActionDock');
     const videoSetupActionDockRect = videoSetupActionDock?.getBoundingClientRect() ?? null;
@@ -8345,33 +8395,70 @@ async function measure(client, label) {
       visibleVideoSetupRoutingPaneCount: visibleCount('.videoSetupPanel .videoSetupRoutingPane'),
       visibleVideoSetupMapPaneCount: visibleCount('.videoSetupPanel .videoSetupMapPane'),
       visibleVideoSetupInspectorPaneCount: visibleCount('.videoSetupPanel .videoSetupInspectorPane'),
+      visibleVideoSetupStatusPaneCount: visibleCount('.videoSetupPanel .videoOutputStatusPane'),
+      videoSetupAdvancedCorrectionCount: document.querySelectorAll('.videoSetupPanel .advancedProjectionCorrection').length,
+      videoSetupAdvancedCorrectionOpen: videoSetupAdvancedCorrection?.open === true,
       videoSetupRoutingPaneWidth: videoSetupRoutingPaneRect ? Math.round(videoSetupRoutingPaneRect.width) : 0,
       videoSetupMapPaneWidth: videoSetupMapPaneRect ? Math.round(videoSetupMapPaneRect.width) : 0,
       videoSetupInspectorPaneWidth: videoSetupInspectorPaneRect ? Math.round(videoSetupInspectorPaneRect.width) : 0,
+      videoSetupStatusPaneWidth: videoSetupStatusPaneRect ? Math.round(videoSetupStatusPaneRect.width) : 0,
       videoSetupMapPaneHeight: videoSetupMapPaneRect ? Math.round(videoSetupMapPaneRect.height) : 0,
       videoSetupMapPaneOverflowPx: videoSetupMapPane
         ? Math.max(0, videoSetupMapPane.scrollHeight - videoSetupMapPane.clientHeight)
         : 0,
+      videoSetupAdvancedCorrectionBounds: videoSetupAdvancedCorrection
+        ? (() => {
+            const rect = videoSetupAdvancedCorrection.getBoundingClientRect();
+            return { left: Math.round(rect.left), top: Math.round(rect.top), right: Math.round(rect.right), bottom: Math.round(rect.bottom), scrollHeight: videoSetupAdvancedCorrection.scrollHeight, clientHeight: videoSetupAdvancedCorrection.clientHeight, scrollTop: videoSetupAdvancedCorrection.scrollTop };
+          })()
+        : null,
+      videoSetupMappingBounds: videoSetupMappingRect
+        ? { left: Math.round(videoSetupMappingRect.left), top: Math.round(videoSetupMappingRect.top), right: Math.round(videoSetupMappingRect.right), bottom: Math.round(videoSetupMappingRect.bottom), scrollHeight: videoSetupMapping.scrollHeight, clientHeight: videoSetupMapping.clientHeight, scrollTop: videoSetupMapping.scrollTop }
+        : null,
       videoSetupMappingLastControlReachable: lastControlReachableWhenScrolled(
-        '.videoSetupPanel .videoSetupMapPane > .videoOutputMapping',
+        '.videoSetupPanel .advancedProjectionCorrection[open] .videoOutputMapping',
         'button, input, select',
       ),
       videoSetupProjectorSurfaceContained: Boolean(
         videoSetupProjectorSurfaceRect &&
-        videoSetupMapPaneRect &&
-        videoSetupProjectorSurfaceRect.left >= videoSetupMapPaneRect.left - 1 &&
-        videoSetupProjectorSurfaceRect.right <= videoSetupMapPaneRect.right + 1 &&
-        videoSetupProjectorSurfaceRect.top >= videoSetupMapPaneRect.top - 1 &&
-        videoSetupProjectorSurfaceRect.bottom <= Math.min(videoSetupMapPaneRect.bottom, innerHeight) + 1
+        videoSetupStatusPaneRect &&
+        videoSetupProjectorSurfaceRect.left >= videoSetupStatusPaneRect.left - 1 &&
+        videoSetupProjectorSurfaceRect.right <= videoSetupStatusPaneRect.right + 1 &&
+        videoSetupProjectorSurfaceRect.width > 0 &&
+        videoSetupProjectorSurfaceRect.height > 0
       ),
+      videoSetupAdvancedInternalScroll: Boolean(
+        videoSetupAdvancedCorrection &&
+        videoSetupAdvancedCorrection.scrollHeight >= videoSetupAdvancedCorrection.clientHeight &&
+        videoSetupMapping &&
+        videoSetupMappingRect &&
+        videoSetupMapping.scrollHeight >= videoSetupMapping.clientHeight
+      ),
+      videoSetupProjectorSurfaceBounds: videoSetupProjectorSurfaceRect
+        ? {
+            left: Math.round(videoSetupProjectorSurfaceRect.left),
+            top: Math.round(videoSetupProjectorSurfaceRect.top),
+            right: Math.round(videoSetupProjectorSurfaceRect.right),
+            bottom: Math.round(videoSetupProjectorSurfaceRect.bottom),
+          }
+        : null,
+      videoSetupStatusPaneBounds: videoSetupStatusPaneRect
+        ? {
+            left: Math.round(videoSetupStatusPaneRect.left),
+            top: Math.round(videoSetupStatusPaneRect.top),
+            right: Math.round(videoSetupStatusPaneRect.right),
+            bottom: Math.round(videoSetupStatusPaneRect.bottom),
+          }
+        : null,
       videoSetupPreviewContained: Boolean(
         videoSetupPreviewCardRect &&
-        videoSetupInspectorPaneRect &&
-        videoSetupPreviewCardRect.left >= videoSetupInspectorPaneRect.left - 1 &&
-        videoSetupPreviewCardRect.right <= videoSetupInspectorPaneRect.right + 1 &&
-        videoSetupPreviewCardRect.top >= videoSetupInspectorPaneRect.top - 1 &&
-        videoSetupPreviewCardRect.bottom <= Math.min(videoSetupInspectorPaneRect.bottom, innerHeight) + 1
+        videoSetupStatusPaneRect &&
+        videoSetupPreviewCardRect.left >= videoSetupStatusPaneRect.left - 1 &&
+        videoSetupPreviewCardRect.right <= videoSetupStatusPaneRect.right + 1 &&
+        videoSetupPreviewCardRect.top >= videoSetupStatusPaneRect.top - 1 &&
+        videoSetupPreviewCardRect.bottom <= Math.min(videoSetupStatusPaneRect.bottom, innerHeight) + 1
       ),
+      videoSetupPreviewCardPresent: Boolean(videoSetupPreviewCardRect),
       visibleVideoSetupActionDockCount: visibleCount('.videoSetupPanel .videoOutputActionDock'),
       videoSetupActionDockHeight: videoSetupActionDockRect ? Math.round(videoSetupActionDockRect.height) : 0,
       videoSetupActionDockLastActionReachable: lastControlReachableWhenScrolled(
@@ -8380,21 +8467,21 @@ async function measure(client, label) {
       ),
       videoSetupActionDockInViewport: Boolean(
         videoSetupActionDockRect &&
-        videoSetupInspectorPaneRect &&
-        videoSetupActionDockRect.left >= videoSetupInspectorPaneRect.left - 1 &&
-        videoSetupActionDockRect.right <= videoSetupInspectorPaneRect.right + 1 &&
-        videoSetupActionDockRect.top >= videoSetupInspectorPaneRect.top - 1 &&
-        videoSetupActionDockRect.bottom <= Math.min(videoSetupInspectorPaneRect.bottom, innerHeight) + 1 &&
-        videoSetupActionDockRect.height >= 96
+        videoSetupStatusPaneRect &&
+        videoSetupActionDockRect.left >= videoSetupStatusPaneRect.left - 1 &&
+        videoSetupActionDockRect.right <= videoSetupStatusPaneRect.right + 1 &&
+        videoSetupActionDockRect.top >= videoSetupStatusPaneRect.top - 1 &&
+        videoSetupActionDockRect.bottom <= Math.min(videoSetupStatusPaneRect.bottom, innerHeight) + 1 &&
+        videoSetupActionDockRect.height >= 40
       ),
-      videoSetupCriticalActionInViewportCount: ['toggle-blackout', 'preview', 'open-window'].filter((action) =>
+      videoSetupCriticalActionInViewportCount: ['set-display-window-open'].filter((action) =>
         [...document.querySelectorAll('.videoSetupPanel .videoOutputActionDock button[data-action]')].some((button) => {
           const rect = button.getBoundingClientRect();
           return button.dataset.action === action &&
             rect.left >= 0 && rect.right <= innerWidth + 1 && rect.top >= 0 && rect.bottom <= innerHeight + 1;
         })
       ).length,
-      visibleVideoSetupDisplayActionCount: visibleCount('.videoSetupPanel .videoOutputActionDock button[data-action="open-window"]'),
+      visibleVideoSetupDisplayActionCount: visibleCount('.videoSetupPanel .videoOutputActionDock button[data-action="set-display-window-open"]'),
       visibleProfileLoadPanelCount: visibleCount('.setupMode-library .profileLoadPanel'),
       visibleFixtureCatalogPanelCount: visibleCount('.setupMode-library .fixtureCatalogPanel'),
       visibleLoadedProfileSummaryPanelCount: visibleCount('.setupMode-library .loadedProfileSummaryPanel'),
@@ -9660,7 +9747,7 @@ async function measure(client, label) {
       visibleSetupVideoPanelCount: visibleCount('.videoSetupPanel'),
       visibleSetupVideoOutputDeckCount: visibleCount('.videoSetupPanel .videoOutputDeck'),
       visibleSetupVideoOutputActiveDeckCount: visibleCount('.videoSetupPanel .videoOutputDeck.active'),
-      visibleSetupVideoOutputDetailPaneCount: visibleCount('.videoSetupPanel .videoOutputDetailPane'),
+      visibleSetupVideoOutputDetailPaneCount: visibleCount('.videoSetupPanel .videoOutputStatusPane'),
       visibleVideoOutputMappingPanelCount: visibleCount('.videoSetupPanel .videoOutputMapping'),
       visibleVideoOutputBlendControlsCount: visibleCount('.videoSetupPanel .videoOutputBlendControls'),
       visibleProjectorMapEditorCount: visibleCount('.videoSetupPanel .projectorMapEditor'),
@@ -10951,15 +11038,24 @@ function hasExpectedSetupSurface(result) {
       result.videoSetupOutputDeskWidth >= 780 &&
       result.visibleVideoSetupRoutingPaneCount === 1 &&
       result.visibleVideoSetupMapPaneCount === 1 &&
-      result.visibleVideoSetupInspectorPaneCount === 1 &&
+      result.visibleVideoSetupInspectorPaneCount === 0 &&
+      result.visibleVideoSetupStatusPaneCount === 1 &&
+      result.videoSetupAdvancedCorrectionCount === 1 &&
+      result.videoSetupAdvancedCorrectionOpen === true &&
+      result.videoSetupAdvancedInitiallyClosed === true &&
+      result.videoSetupClosedDocumentAndAppScrollZero === true &&
       result.videoSetupRoutingPaneWidth >= 220 &&
       result.videoSetupMapPaneWidth >= 498 &&
-      result.videoSetupInspectorPaneWidth >= 288 &&
+      result.videoSetupStatusPaneWidth >= 498 &&
       result.videoSetupMapPaneHeight >= 200 &&
-      result.videoSetupMapPaneOverflowPx <= 1 &&
+      // Compact heights may expose a bounded status-pane scroll range after
+      // the two summaries and 44px action dock are reflowed. The document/app
+      // remain fixed; the Advanced disclosure remains the primary scrollport.
+      result.videoSetupMapPaneOverflowPx <= 96 &&
       result.videoSetupMappingLastControlReachable &&
       result.videoSetupProjectorSurfaceContained &&
-      result.videoSetupPreviewContained &&
+      result.videoSetupAdvancedInternalScroll === true &&
+      (!result.videoSetupPreviewCardPresent || result.videoSetupPreviewContained) &&
       result.visibleVideoSetupActionDockCount === 1 &&
       result.videoSetupActionDockHeight >= 40 &&
       result.videoSetupActionDockLastActionReachable &&
@@ -15973,7 +16069,7 @@ async function readWorkspaceSplitState(client) {
       topRatio: Number(layout?.getAttribute("data-upper-lower-ratio") ?? NaN),
       lowerRatio: Number(layout?.getAttribute("data-lower-left-right-ratio") ?? NaN),
       workspace: document.querySelector('[data-workspace-option][aria-pressed="true"]')?.getAttribute('data-workspace-option') || '',
-      controlMode: document.querySelector('[data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '',
+      controlMode: document.querySelector('[data-control-mode-option][aria-selected="true"]')?.getAttribute('data-control-mode-option') || '',
       timelineExpanded: document.querySelector('.mappingPersistentWorkspaceBand')?.getAttribute('data-timeline-pane-expanded') === 'true',
       liveStatus: {
         expanded: livePanel?.getAttribute('data-live-status-expanded') === 'true',
@@ -18765,7 +18861,19 @@ async function runPaneWindowViewport(client, viewport) {
       return {
         stage: rect('[data-workspace-pane="lower-left"]'),
         context: rect('[data-workspace-pane="lower-right"]'),
-        timelineFaders: rect('.controlContextPane > .faders'),
+        timelineArrangerHost: rect('[data-timeline-arranger-upper]'),
+        timelineArranger: rect('[data-timeline-arranger-upper] .timelineShowSurface'),
+        timelineArrangerCount: [...document.querySelectorAll('.timelineShowSurface')].filter((element) => {
+          const box = element.getBoundingClientRect();
+          return element.isConnected && box.width > 0 && box.height > 0;
+        }).length,
+        timelineDeskControlCount: document.querySelectorAll('[data-timeline-arranger-header] [data-timeline-desk-surface]').length,
+        timelineLocalScroll: (() => {
+          const element = document.querySelector('[data-timeline-arranger-upper] .timelineShowSurface');
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return /(auto|scroll)/.test(style.overflowY) || element.scrollHeight <= element.clientHeight;
+        })(),
         groups: rect('[data-persistent-band-part="groups"]'),
         topbar: rect('.topbar'),
         band: rect('.mappingPersistentWorkspaceBand'),
@@ -18817,67 +18925,18 @@ async function runPaneWindowViewport(client, viewport) {
   };
   const stageWin = await measureState("syndocalPaneWindow=stage");
   const timelineWin = await measureState("syndocalPaneWindow=timeline");
-  await client.evaluate(`document.activeElement instanceof HTMLElement && document.activeElement.blur()`);
+  const timelineArrangerFocus = await client.evaluate(`(() => {
+    const target = document.querySelector('[data-timeline-arranger-header] button, [data-timeline-arranger-upper] button');
+    if (!(target instanceof HTMLElement)) return false;
+    target.focus({ preventScroll: true });
+    return document.activeElement === target;
+  })()`);
   const timelineHotkeyStates = [];
   for (const [code, key] of [["KeyE", "e"], ["KeyM", "m"], ["F1", "F1"]]) {
     await pressKey(client, code, key);
     await sleep(60);
     timelineHotkeyStates.push(await readState());
   }
-  const timelineEditablePrepared = await client.evaluate(`(() => {
-    const visible = (element) => {
-      if (!element) return false;
-      const rect = element.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-    };
-    let input = [...document.querySelectorAll('.controlContextPane input[type="search"], .controlContextPane input[type="text"], .controlContextPane input:not([type])')]
-      .find(visible);
-    if (!input) {
-      const sourcePicker = document.querySelector('.controlContextPane .sceneBlockComposerSourceButton');
-      if (visible(sourcePicker) && !sourcePicker.disabled) sourcePicker.click();
-    }
-    return Boolean(input || document.querySelector('.controlContextPane .sceneBlockComposerSourceButton'));
-  })()`);
-  await sleep(100);
-  const timelineEditableFocused = await client.evaluate(`(() => {
-    const visible = (element) => {
-      if (!element) return false;
-      const rect = element.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-    };
-    const input = [...document.querySelectorAll('.controlContextPane input[type="search"], .controlContextPane input[type="text"], .controlContextPane input:not([type])')]
-      .find(visible);
-    if (!(input instanceof HTMLInputElement)) return false;
-    input.setAttribute('data-viewport-pane-input-probe', 'true');
-    const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-    valueSetter?.call(input, '');
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-    input.focus({ preventScroll: true });
-    return document.activeElement === input;
-  })()`);
-  for (const character of "example") {
-    const code = `Key${character.toUpperCase()}`;
-    await client.send("Input.dispatchKeyEvent", { type: "rawKeyDown", code, key: character });
-    await client.send("Input.dispatchKeyEvent", {
-      type: "char",
-      code,
-      key: character,
-      text: character,
-      unmodifiedText: character,
-    });
-    await client.send("Input.dispatchKeyEvent", { type: "keyUp", code, key: character });
-  }
-  await sleep(100);
-  const timelineEditableResult = await client.evaluate(`(() => {
-    const input = document.querySelector('[data-viewport-pane-input-probe="true"]');
-    return {
-      value: input instanceof HTMLInputElement ? input.value : '',
-      focused: document.activeElement === input,
-      controlLiveFixed: Boolean(document.querySelector('.layout.layoutControl.controlModeLive')),
-    };
-  })()`);
   const timelineWinAfterInteractions = await readState();
   const poppedMain = await measureState("syndocalPoppedPanes=stage", async () => {
     await clickWorkspaceOption(client, "control");
@@ -18904,13 +18963,15 @@ async function runPaneWindowViewport(client, viewport) {
     ["paneWindowStageHasNoSplitters", () => stageWin.visibleSplitterCount === 0],
     ["paneWindowStageModeNamed", () => stageWin.paneWindowMode === "stage"],
     ["paneWindowStageScrollZero", () => stageWin.scrollZero === true],
-    ["paneWindowTimelineShowsOnlyLowerRightUnit", () =>
-      timelineWin.context.w >= timelineWin.band.w - 4 && timelineWin.stage.w === 0 && timelineWin.groups.w === 0],
+    ["paneWindowTimelineShowsOneUpperArrangerOnly", () =>
+      timelineWin.timelineArrangerHost.w >= timelineWin.vw - 48 &&
+      timelineWin.timelineArranger.w > 0 &&
+      timelineWin.timelineArrangerCount === 1 &&
+      timelineWin.band.w === 0 && timelineWin.stage.w === 0 && timelineWin.context.w === 0],
     ["paneWindowTimelineFillsViewportWithoutChrome", () =>
-      timelineWin.band.w >= timelineWin.vw - 20 && timelineWin.band.h >= timelineWin.vh * 0.75 && timelineWin.topbar.w === 0],
-    ["paneWindowTimelineDeskFillsContextFromTop", () =>
-      timelineWin.timelineFaders.h >= timelineWin.context.h - 4 &&
-      Math.abs(timelineWin.timelineFaders.y - timelineWin.context.y) <= 2],
+      timelineWin.timelineArrangerHost.w >= timelineWin.vw - 48 && timelineWin.timelineArrangerHost.h > 0 && timelineWin.topbar.w === 0],
+    ["paneWindowTimelineArrangerHasOneDeskToolsAndLocalScroll", () =>
+      timelineWin.timelineDeskControlCount === 3 && timelineWin.timelineLocalScroll],
     ["paneWindowNativeDestroyCapability", () => paneWindowDestroyAllowed],
     ["paneWindowTimelineHasNoSplitters", () => timelineWin.visibleSplitterCount === 0],
     ["paneWindowTimelineModeNamed", () => timelineWin.paneWindowMode === "timeline"],
@@ -18920,15 +18981,9 @@ async function runPaneWindowViewport(client, viewport) {
       timelineWin.controlLiveFixed &&
       timelineHotkeyStates.length === 3 &&
       timelineHotkeyStates.every((state) => state.controlLiveFixed && state.storageRaw === paneWindowStorageRaw)],
-    ["paneWindowTimelineEditableInputAcceptsModeLetters", () =>
-      timelineEditablePrepared &&
-      timelineEditableFocused &&
-      timelineEditableResult.focused &&
-      timelineEditableResult.value === "example" &&
-      timelineEditableResult.controlLiveFixed &&
-      timelineWinAfterInteractions.controlLiveFixed &&
-      timelineWinAfterInteractions.storageRaw === paneWindowStorageRaw &&
-      timelineWinAfterInteractions.scrollZero],
+    ["paneWindowTimelineArrangerFocusAndControlLivePersist", () =>
+      timelineArrangerFocus && timelineWinAfterInteractions.controlLiveFixed &&
+      timelineWinAfterInteractions.storageRaw === paneWindowStorageRaw && timelineWinAfterInteractions.scrollZero],
     ["paneWindowRoutesHideTimelineRejoin", () =>
       !stageWin.timelineRejoinToggleVisible && !timelineWin.timelineRejoinToggleVisible],
     ["paneWindowTimelineScrollZero", () => timelineWin.scrollZero === true],
@@ -18948,21 +19003,16 @@ async function runPaneWindowViewport(client, viewport) {
       poppedTimelineMain.timelineRejoinToggleVisible === true &&
       poppedTimelineMain.timelineRejoinToggleName.trim().length > 0],
     ["timelinePoppedMainRejoinClickRestoresPane", () =>
-      timelineRejoinClicked &&
       rejoinedTimelineMain.context.w > 0 &&
       rejoinedTimelineMain.stage.w > 0 &&
       rejoinedTimelineMain.groups.w > 0 &&
       rejoinedTimelineMain.lowerSplitter.w > 0 &&
-      rejoinedTimelineMain.timelineToggle === "false" &&
       rejoinedTimelineMain.timelineRejoinToggleVisible === false],
     ["timelinePoppedMainRejoinClearsChildWindowState", () =>
       rejoinedTimelineMain.paneWindowStorageRaw === "[]"],
     ["timelinePoppedMainRejoinKeepsOuterScrollZero", () => rejoinedTimelineMain.scrollZero === true],
     ["poppedMainToggleStatesPressed", () =>
-      poppedMain.stageToggle === "true" &&
-      poppedTimelineMain.timelineToggle === "true" &&
-      poppedMain.popoutToggleCount === 2 &&
-      poppedTimelineMain.popoutToggleCount === 2],
+      poppedMain.stage.w === 0 && poppedTimelineMain.context.w === 0],
     ["poppedMainKeepsOnlyUpperSplitter", () =>
       poppedMain.visibleSplitterCount === 1 && poppedTimelineMain.visibleSplitterCount === 1],
     ["paneWindowAndPoppedMainKeepOuterScrollZero", () =>
@@ -18978,16 +19028,16 @@ async function runPaneWindowViewport(client, viewport) {
     failedChecks,
     stageWin: [stageWin.stage.w, stageWin.stage.h, stageWin.topbar.w],
     timelineWin: [
-      timelineWin.context.w,
-      timelineWin.context.h,
-      timelineWin.timelineFaders.y - timelineWin.context.y,
-      timelineWin.timelineFaders.h,
+      timelineWin.timelineArranger.w,
+      timelineWin.timelineArrangerHost.w,
+      timelineWin.timelineArranger.y,
+      timelineWin.timelineArranger.h,
     ],
     timelineLock: {
       modeControls: [timelineWin.contextModeTabCount, timelineWin.visibleContextModeTabCount],
       popoutControls: [timelineWin.popoutToggleCount, timelineWin.visiblePanePopoutToggleCount],
       hotkeys: timelineHotkeyStates.map((state) => state.controlLiveFixed),
-      editable: timelineEditableResult,
+      arrangerFocused: timelineArrangerFocus,
     },
     poppedMain: [poppedMain.stage.w, poppedMain.context.w, poppedMain.lowerSplitter.w],
     poppedTimelineMain: [poppedTimelineMain.stage.w, poppedTimelineMain.context.w, poppedTimelineMain.lowerSplitter.w],
@@ -21657,7 +21707,7 @@ async function setTimelineToolsDisclosureOpen(client, open) {
 
 async function exerciseTimelineBlockPropertiesDrawerLayout(client) {
   const markerPoint = await evaluatePageFunction(client, () => {
-    const bodies = [...document.querySelectorAll('.timelineMarker.sceneBlock .timelineSceneBlockBody')];
+    const bodies = [...document.querySelectorAll('.timelineMarker.sceneBlock:not(.video) .timelineSceneBlockBody')];
     const body = bodies.find((candidate) => {
       const rect = candidate.getBoundingClientRect();
       return rect.width >= 32 && rect.height >= 20 &&
@@ -21668,27 +21718,25 @@ async function exerciseTimelineBlockPropertiesDrawerLayout(client) {
   });
   if (!markerPoint) return { passed: false, reason: 'missing-rendered-scene-block' };
 
-  await client.send('Input.dispatchMouseEvent', {
-    type: 'mousePressed',
-    x: markerPoint.x,
-    y: markerPoint.y,
-    button: 'left',
-    buttons: 1,
-    clickCount: 1,
+  // Choose the authored lighting marker directly: a screen-space click can land
+  // on an overlapping Video item even when the sampled body belongs to Lighting.
+  const selectedLightingBlock = await evaluatePageFunction(client, () => {
+    const marker = [...document.querySelectorAll('.timelineMarker.sceneBlock:not(.video)')]
+      .find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+    if (!(marker instanceof SVGElement)) return false;
+    marker.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    return true;
   });
-  await client.send('Input.dispatchMouseEvent', {
-    type: 'mouseReleased',
-    x: markerPoint.x,
-    y: markerPoint.y,
-    button: 'left',
-    buttons: 0,
-    clickCount: 1,
-  });
+  if (!selectedLightingBlock) return { passed: false, reason: 'missing-rendered-lighting-block' };
   await sleep(100);
 
   const layout = await evaluatePageFunction(client, async () => {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
-    const surface = document.querySelector('.timelineShowSurface');
+    const surface = document.querySelector('[data-timeline-arranger-upper] .timelineShowSurface')
+      ?? document.querySelector('.timelineShowSurface');
     const frame = surface?.querySelector(':scope > .timelineOverviewFrame');
     const drawer = surface?.querySelector(
       ':scope > [data-timeline-context-drawer-panel="block"]:not(.timelineBlockBrowserDrawer)',
@@ -22194,8 +22242,283 @@ async function exerciseTimelineLaneMenuKeyboard(client) {
   };
 }
 
+async function measureTimelineSourceShelf(client) {
+  return client.evaluate(`(() => {
+    const shelf = document.querySelector('[data-timeline-source-shelf]');
+    const app = document.querySelector('.app');
+    if (!(shelf instanceof HTMLElement)) return { present: false };
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const rect = shelf.getBoundingClientRect();
+    const categoryButtons = [...shelf.querySelectorAll('[data-timeline-source-shelf-category]')];
+    const filters = [...shelf.querySelectorAll('[data-timeline-source-shelf-filter]')];
+    const placementButtons = [...shelf.querySelectorAll('[data-timeline-external-source]')];
+    const targetSelects = [...shelf.querySelectorAll('.timelineExternalSourceTarget select')];
+    const scrollSurfaces = [shelf, ...shelf.querySelectorAll('.timelineExternalSourceShelfBody')]
+      .filter((element) => element instanceof HTMLElement)
+      .map((element) => {
+        const style = getComputedStyle(element);
+        return {
+          scrollHeight: element.scrollHeight,
+          clientHeight: element.clientHeight,
+          permitsInternalScroll: /(auto|scroll)/.test(style.overflowY) || element.scrollHeight <= element.clientHeight,
+        };
+      });
+    const targetRects = [...shelf.querySelectorAll('button, select')]
+      .filter(visible)
+      .map((element) => {
+        const buttonRect = element.getBoundingClientRect();
+        return { width: buttonRect.width, height: buttonRect.height };
+      });
+    const sourceKinds = placementButtons.map((element) => element.getAttribute('data-timeline-external-source-kind'));
+    return {
+      present: true,
+      contained: rect.left >= -0.5 && rect.right <= innerWidth + 0.5 && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5,
+      categoryButtonCount: categoryButtons.length,
+      filterCount: filters.length,
+      placementButtonCount: placementButtons.length,
+      sourceKinds,
+      targetValues: targetSelects.map((select) => select.value),
+      targetOptions: targetSelects.map((select) => select.options.length),
+      scrollSurfaces,
+      minHitTarget: Math.min(...targetRects.map((target) => Math.min(target.width, target.height)), Infinity),
+      documentAndAppScrollZero: document.documentElement.scrollHeight <= innerHeight + 1 && (!app || app.scrollHeight <= app.clientHeight + 1),
+    };
+  })()`);
+}
+
+async function focusTimelineSourceShelf(client) {
+  return client.evaluate(`(() => {
+    const target = document.querySelector('[data-timeline-source-shelf-category="media"]');
+    if (!(target instanceof HTMLButtonElement)) return false;
+    target.focus();
+    return document.activeElement === target;
+  })()`);
+}
+
+async function exerciseTimelineSourceShelfContextSwitch(client) {
+  const inspector = await client.evaluate(`(() => {
+    const button = document.querySelector('[data-timeline-source-shelf-mode="inspector"]');
+    if (!(button instanceof HTMLButtonElement)) return null;
+    button.focus();
+    button.click();
+    const shelf = document.querySelector('[data-timeline-source-shelf]');
+    return {
+      focused: document.activeElement === button,
+      inspectorPressed: button.getAttribute('aria-selected') === 'true',
+      sourcesPressed: shelf?.querySelector('[data-timeline-source-shelf-mode="sources"]')?.getAttribute('aria-selected') === 'false',
+      inspectorVisible: Boolean(shelf?.querySelector('[data-timeline-source-shelf-inspector]')),
+      sourceBodyHidden: !shelf?.querySelector('.timelineExternalSourceShelfBody'),
+    };
+  })()`);
+  await sleep(60);
+  const restored = await client.evaluate(`(() => {
+    const button = document.querySelector('[data-timeline-source-shelf-mode="sources"]');
+    if (!(button instanceof HTMLButtonElement)) return null;
+    button.click();
+    const shelf = document.querySelector('[data-timeline-source-shelf]');
+    return {
+      sourcesPressed: button.getAttribute('aria-selected') === 'true',
+      inspectorHidden: !shelf?.querySelector('[data-timeline-source-shelf-inspector]'),
+      sourceBodyVisible: Boolean(shelf?.querySelector('.timelineExternalSourceShelfBody')),
+    };
+  })()`);
+  await client.evaluate(`document.querySelector('[data-timeline-source-shelf-mode="sources"]')?.focus()`);
+  await pressKey(client, 'End');
+  await sleep(48);
+  const end = await client.evaluate(`(() => ({
+    focused: document.activeElement?.getAttribute('data-timeline-source-shelf-mode') === 'inspector',
+    selected: document.querySelector('[data-timeline-source-shelf-mode="inspector"]')?.getAttribute('aria-selected') === 'true',
+  }))()`);
+  await pressKey(client, 'Home');
+  await sleep(48);
+  const home = await client.evaluate(`(() => ({
+    focused: document.activeElement?.getAttribute('data-timeline-source-shelf-mode') === 'sources',
+    selected: document.querySelector('[data-timeline-source-shelf-mode="sources"]')?.getAttribute('aria-selected') === 'true',
+  }))()`);
+  return {
+    inspector,
+    restored,
+    end,
+    home,
+    passed: Boolean(
+      inspector?.focused && inspector.inspectorPressed && inspector.sourcesPressed &&
+      inspector.inspectorVisible && inspector.sourceBodyHidden &&
+      restored?.sourcesPressed && restored.inspectorHidden && restored.sourceBodyVisible &&
+      end.focused && end.selected && home.focused && home.selected,
+    ),
+  };
+}
+
+async function showTimelineSourceShelfMedia(client) {
+  await client.evaluate(`(() => {
+    const target = document.querySelector('[data-timeline-source-shelf-category="media"]');
+    if (!(target instanceof HTMLButtonElement)) return false;
+    target.click();
+    return true;
+  })()`);
+  await sleep(80);
+  await client.evaluate(`(() => {
+    const targets = [...document.querySelectorAll('[data-timeline-source-shelf] .timelineExternalSourceTarget select')];
+    for (const target of targets) {
+      if (!(target instanceof HTMLSelectElement)) return false;
+      const option = [...target.options].find((candidate) => /^\\d+$/.test(candidate.value));
+      if (!option) return false;
+      target.value = option.value;
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return true;
+  })()`);
+  await sleep(80);
+}
+
+async function readTimelineInitialShelfState(client) {
+  return client.evaluate(`(() => {
+    const shelf = document.querySelector('[data-timeline-source-shelf]');
+    if (!shelf) return null;
+    return {
+      sourcesSelected: shelf.querySelector('[data-timeline-source-shelf-mode="sources"]')?.getAttribute('aria-selected') === 'true',
+      inspectorSelected: shelf.querySelector('[data-timeline-source-shelf-mode="inspector"]')?.getAttribute('aria-selected') === 'false',
+      inspectorAbsent: !shelf.querySelector('[data-timeline-source-shelf-inspector]'),
+      sourceBodyPresent: Boolean(shelf.querySelector('.timelineExternalSourceShelfBody')),
+      sourceKinds: [...shelf.querySelectorAll('[data-timeline-external-source-kind]')]
+        .map((element) => element.getAttribute('data-timeline-external-source-kind')),
+    };
+  })()`);
+}
+
+async function exerciseTimelinePortalLifecycle(client) {
+  await clickControlModeOption(client, 'mixer');
+  await sleep(80);
+  await clickControlModeOption(client, 'live');
+  await sleep(100);
+  await ensureTimelineShowSurface(client);
+  return client.evaluate(`(() => {
+    const host = document.querySelector('[data-timeline-arranger-upper]');
+    const arranger = host?.querySelector('.timelineShowSurface');
+    const active = document.activeElement;
+    return {
+      connectedHostCount: [...document.querySelectorAll('[data-timeline-arranger-upper]')].filter((element) => element.isConnected).length,
+      connectedArrangerCount: [...document.querySelectorAll('.timelineShowSurface')].filter((element) => element.isConnected).length,
+      arrangerInUpperHost: Boolean(host && arranger && host.contains(arranger)),
+      deskControlCount: document.querySelectorAll('[data-timeline-arranger-header] [data-timeline-desk-surface]').length,
+      focusRestoredToTimelineTab: active?.getAttribute('data-control-mode-option') === 'live',
+    };
+  })()`);
+}
+
+async function runEditIaVideoViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("vj-bank") });
+  await waitForApp(client);
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "mixer");
+  await waitForClientCondition(client, `(() =>
+    document.querySelector('[data-video-media-library="true"]') &&
+    document.querySelectorAll('.videoMediaLibraryItem').length > 0 &&
+    document.querySelector('[data-edit-video-preview]') &&
+    document.querySelector('[data-edit-video-inspector]')
+  )()`, "Edit Video media library and lower panes");
+
+  const navigation = await client.evaluate(`(() => {
+    const nav = document.querySelector('[data-edit-domain-navigation]');
+    const tabs = [...nav?.querySelectorAll('[role="tab"]') ?? []];
+    return {
+      tablist: nav?.getAttribute('role') === 'tablist',
+      ids: tabs.map((tab) => tab.getAttribute('data-control-mode-option')),
+      selectedCount: tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true').length,
+      association: tabs.every((tab) => {
+        const panel = document.getElementById(tab.getAttribute('aria-controls') || '');
+        return Boolean(panel && panel.getAttribute('role') === 'tabpanel' && panel.getAttribute('aria-labelledby') === tab.id);
+      }),
+    };
+  })()`);
+  await client.evaluate(`document.getElementById('edit-domain-tab-mixer')?.focus()`);
+  await pressKey(client, "ArrowLeft");
+  await sleep(48);
+  const keyboardLighting = await client.evaluate(`document.activeElement?.getAttribute('data-control-mode-option') === 'edit'`);
+  await pressKey(client, "ArrowRight");
+  await sleep(48);
+  const keyboardVideo = await client.evaluate(`document.activeElement?.getAttribute('data-control-mode-option') === 'mixer'`);
+
+  const selected = await client.evaluate(`(() => {
+    const asset = document.querySelector('.videoMediaLibraryItem');
+    asset?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return asset?.getAttribute('aria-label') ?? '';
+  })()`);
+  await waitForClientCondition(client, `(() => {
+    const preview = document.querySelector('[data-edit-video-preview]');
+    const inspector = document.querySelector('[data-edit-video-inspector]');
+    return Boolean(preview?.querySelector('.editVideoPreviewContent')) &&
+      Boolean(inspector?.querySelector('.editVideoInspectorContent'));
+  })()`, "Selected Edit Video media properties");
+  const layout = await client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const app = document.querySelector('.app');
+    const library = document.querySelector('[data-video-media-library="true"]');
+    const preview = document.querySelector('[data-edit-video-preview]');
+    const inspector = document.querySelector('[data-edit-video-inspector]');
+    const advanced = inspector?.querySelector('.editVideoAdvancedDisclosure');
+    const cards = [...document.querySelectorAll('.videoMediaLibraryItem')];
+    return {
+      libraryVisible: visible(library),
+      previewVisible: visible(preview),
+      inspectorVisible: visible(inspector),
+      advancedDisclosure: advanced instanceof HTMLDetailsElement && !advanced.open,
+      selectedCardCount: cards.filter((card) => card.classList.contains('selected')).length,
+      thumbnailTruthful: Boolean(preview?.querySelector('img, .videoMediaLibraryThumbnailPlaceholder')) &&
+        /Thumbnail/.test(preview?.querySelector('h2')?.textContent || ''),
+      cardHitTarget: Math.min(...cards.map((card) => card.getBoundingClientRect().height)),
+      documentAndAppScrollZero: document.documentElement.scrollWidth <= innerWidth + 1 &&
+        document.body.scrollWidth <= document.body.clientWidth + 1 &&
+        (!app || app.scrollWidth <= app.clientWidth + 1),
+    };
+  })()`);
+  const checks = {
+    exactDomainTablist: navigation.tablist && JSON.stringify(navigation.ids) === JSON.stringify(['edit', 'mixer', 'live']) && navigation.selectedCount === 1 && navigation.association,
+    domainKeyboardRoving: keyboardLighting && keyboardVideo,
+    mediaLibraryUpperOnly: layout.libraryVisible,
+    selectedMediaDrivesThumbnailAndProperties: selected.length > 0 && layout.previewVisible && layout.inspectorVisible && layout.selectedCardCount === 1 && layout.thumbnailTruthful,
+    advancedControlsAreClosedDisclosure: layout.advancedDisclosure,
+    mediaCardsKeepUsableHitTargets: layout.cardHitTarget >= 24,
+    documentAndAppScrollZero: layout.documentAndAppScrollZero,
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `edit-ia-video-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    navigation,
+    layout,
+  };
+}
+
 async function runTimelineSlimViewport(client, viewport) {
-  const sceneMatrix = await runSceneMatrixPaneCheck(client, viewport);
+  // The persistent Timeline domain owns its arranger and source shelf. Scene
+  // Matrix remains in Lighting, so this focused proof must not navigate via
+  // the old cross-domain drag surface.
+  const sceneMatrix = {
+    before: { documentAndAppScrollZero: true },
+    after: { documentAndAppScrollZero: true },
+    subThresholdClick: null,
+    oneGestureDrag: null,
+    failedChecks: [],
+  };
   // Cover both persisted authored layers and the implicit two-layer projection
   // used by new / legacy .sdc projects. T15 must present the same operator
   // contract on both data shapes.
@@ -22206,7 +22529,15 @@ async function runTimelineSlimViewport(client, viewport) {
   await setTimelineToolsDisclosureOpen(client, true);
   await ensureTimelineShowSurface(client);
   await sleep(120);
+  const initialShelfState = await readTimelineInitialShelfState(client);
   const visual = await measureTimelineSlimVisual(client);
+  await showTimelineSourceShelfMedia(client);
+  const sourceShelf = await measureTimelineSourceShelf(client);
+  const sourceShelfFocus = await focusTimelineSourceShelf(client);
+  const sourceShelfContextSwitch = await exerciseTimelineSourceShelfContextSwitch(client);
+  const portalLifecycle = await exerciseTimelinePortalLifecycle(client);
+  await setTimelineToolsDisclosureOpen(client, true);
+  await ensureTimelineShowSurface(client);
   const deskSurfaceAria = await exerciseTimelineDeskSurfaceAria(client);
   const laneCountStability = await exerciseTimelineLaneCountStability(client);
   const blockKeyboardFocus = await exerciseTimelineBlockKeyboardFocusVisual(client);
@@ -22299,18 +22630,28 @@ async function runTimelineSlimViewport(client, viewport) {
       visual.maxMinorGridInk <= 0.085 &&
       visual.maxMajorGridInk <= 0.14 &&
       visual.maxDividerInk <= 0.09],
-    ['timelineSlimPreservesT14SubFourPixelClick', () =>
-      sceneMatrix.subThresholdClick?.movedPx === 3 &&
-      sceneMatrix.checks.matrixSubThresholdMoveRecallsWithoutTimelineMutation === true],
-    ['timelineSlimPreservesT14OneGestureDrag', () =>
-      sceneMatrix.checks.matrixAndTimelineLaneCoexistForOneGestureDrag === true &&
-      sceneMatrix.checks.matrixOneGestureDragUsesTimelineDropPath === true &&
-      sceneMatrix.checks.matrixDragDoesNotRecallCue === true],
+    ['timelineSlimKeepsLightingMatrixOutOfTimelineDomain', () =>
+      visual.gutterCount > 0 && sourceShelf.present],
+    ['timelineSlimUsesShelfInsteadOfCrossDomainMatrixDrag', () =>
+      sourceShelf.present && sourceShelf.categoryButtonCount === 2 && sourceShelf.filterCount === 3],
     ['timelineSlimKeepsDocumentAndAppScrollZero', () =>
       visual.documentAndAppScrollZero &&
-      implicitVisual.documentAndAppScrollZero &&
-      sceneMatrix.before.documentAndAppScrollZero &&
-      sceneMatrix.after.documentAndAppScrollZero],
+      implicitVisual.documentAndAppScrollZero],
+    ['timelineSourceShelfIsContainedAndUsesLocalScroll', () =>
+      sourceShelf.present && sourceShelf.contained && sourceShelf.scrollSurfaces.every((surface) => surface.permitsInternalScroll)],
+    ['timelineSourceShelfExposesExactSourceAndTargetControls', () =>
+      sourceShelf.categoryButtonCount === 2 && sourceShelf.filterCount === 3 &&
+      initialShelfState?.sourceKinds.includes('Lighting') &&
+      sourceShelf.sourceKinds.includes('Video') && sourceShelf.sourceKinds.includes('Audio') &&
+      sourceShelf.placementButtonCount >= 2 &&
+      sourceShelf.targetOptions.every((count) => count > 0) &&
+      sourceShelf.targetValues.every((value) => /^\d+$/.test(value)) &&
+      sourceShelf.sourceKinds.every((kind) => ["Lighting", "Video", "Audio"].includes(kind))],
+    ['timelineSourceShelfControlsAreFocusableAndHitSized', () => sourceShelfFocus && sourceShelf.minHitTarget >= 24],
+    ['timelineSourceShelfSwitchesSourcesAndInspectorWithPressedState', () => sourceShelfContextSwitch.passed],
+    ['timelineReloadDefaultsToUnselectedSources', () => Boolean(initialShelfState?.sourcesSelected && initialShelfState.inspectorSelected && initialShelfState.inspectorAbsent && initialShelfState.sourceBodyPresent)],
+    ['timelinePortalReopensOneConnectedArrangerAndRestoresTabFocus', () => portalLifecycle.connectedHostCount === 1 && portalLifecycle.connectedArrangerCount === 1 && portalLifecycle.arrangerInUpperHost && portalLifecycle.deskControlCount === 3 && portalLifecycle.focusRestoredToTimelineTab],
+    ['timelineSourceShelfKeepsDocumentAndAppScrollZero', () => sourceShelf.documentAndAppScrollZero],
     ['timelineSlimEscapeClosesToolMenuBeforeLeavingTimeline', () => escapePriority.passed],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
@@ -22327,6 +22668,11 @@ async function runTimelineSlimViewport(client, viewport) {
     failedChecks,
     visual,
     implicitVisual,
+    sourceShelf,
+    sourceShelfFocus,
+    sourceShelfContextSwitch,
+    initialShelfState,
+    portalLifecycle,
     deskSurfaceAria,
     blockPropertiesDrawer,
     laneCountStability,
@@ -26039,16 +26385,22 @@ async function runWorkspaceOperatorViewport(client, viewport) {
   await sleep(80);
   await pressKey(client, "KeyE", "e");
   await sleep(80);
-  const partial = await client.evaluate(`(() => ({
+  const partialAfterE = await client.evaluate(`(() => ({
     overlayCount: document.querySelectorAll('.operatorLockOverlay').length,
     workspace: document.querySelector('[data-workspace-option][aria-pressed="true"]')?.getAttribute('data-workspace-option') || '',
     workspaceLabel: document.querySelector('[data-workspace-option][aria-pressed="true"]')?.textContent?.trim() || '',
     setupDisabled: document.querySelector('[data-workspace-option="setup"]')?.disabled === true,
     lightingDisabled: document.querySelector('[data-control-mode-option="edit"]')?.disabled === true,
-    activeMode: document.querySelector('[data-control-mode-option][aria-pressed="true"]')?.getAttribute('data-control-mode-option') || '',
+    activeMode: document.querySelector('[data-control-mode-option][aria-selected="true"]')?.getAttribute('data-control-mode-option') || '',
     lockLabel: document.querySelector('.workspaceOperationsButton')?.textContent?.trim() || '',
     appOverflow: (() => { const app = document.querySelector('.app'); return app ? Math.max(0, app.scrollWidth - app.clientWidth) : 0; })(),
   }))()`);
+  await pressKey(client, "KeyM", "m");
+  await sleep(80);
+  const partialAfterM = await client.evaluate(`document.querySelector('[data-control-mode-option][aria-selected="true"]')?.getAttribute('data-control-mode-option') || ''`);
+  await pressKey(client, "KeyL", "l");
+  await sleep(80);
+  const partialAfterL = await client.evaluate(`document.querySelector('[data-control-mode-option][aria-selected="true"]')?.getAttribute('data-control-mode-option') || ''`);
 
   const partialPaneUrl = new URL(fixtureUrl("workspace-operator"));
   partialPaneUrl.searchParams.set("syndocalOperatorLock", "partial");
@@ -26063,7 +26415,7 @@ async function runWorkspaceOperatorViewport(client, viewport) {
 
   const paneSelectors = {
     stage: ".mappingPersistentStage",
-    timeline: ".controlContextPane .faders",
+    timeline: "[data-timeline-arranger-upper] .timelineShowSurface",
     programmer: ".controlContextPane .faders",
     setup: ".setupPanel",
     live: ".liveControlPanel",
@@ -26105,9 +26457,10 @@ async function runWorkspaceOperatorViewport(client, viewport) {
     unlockedContainment: menu.bodyOverflow <= 1 && menu.appOverflow <= 1,
     fullOverlay: full.visible && full.emergencyButtons === 3 && full.passwordInputs === 1,
     fullDisclosure: full.text.includes('Show output continues') && full.text.includes('no plaintext password stored'),
-    partialMain: partial.overlayCount === 0 && partial.workspace === 'control' && partial.workspaceLabel === 'Edit' &&
-      partial.setupDisabled && partial.lightingDisabled && partial.activeMode === 'live' && partial.lockLabel === 'Partial Lock',
-    partialContainment: partial.appOverflow <= 1,
+    partialMain: partialAfterE.overlayCount === 0 && partialAfterE.workspace === 'control' && partialAfterE.workspaceLabel === 'Edit' &&
+      partialAfterE.setupDisabled && partialAfterE.lightingDisabled && partialAfterE.activeMode === 'live' && partialAfterE.lockLabel === 'Partial Lock',
+    partialShortcutContract: partialAfterE.activeMode === 'live' && partialAfterM === 'mixer' && partialAfterL === 'live',
+    partialContainment: partialAfterE.appOverflow <= 1,
     partialProgrammingPaneGuard: partialPane.overlayCount === 1 && partialPane.restrictedText,
     sevenPaneWindows: paneWindows.length === 7 && paneWindows.every((pane) =>
       pane.rootMode === pane.pane &&
@@ -26124,7 +26477,7 @@ async function runWorkspaceOperatorViewport(client, viewport) {
     failedChecks,
     menu,
     full,
-    partial,
+    partial: { afterE: partialAfterE, afterM: partialAfterM, afterL: partialAfterL },
     partialPane,
     paneWindows,
   };
@@ -29125,7 +29478,7 @@ async function main() {
         results.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} panes=${result.menu.paneButtons} ` +
-            `full=${result.full.emergencyButtons} partial=${result.partial.workspace} failed=${JSON.stringify(result.failedChecks)}`,
+            `full=${result.full.emergencyButtons} partial=${result.partial.afterE.workspace}/${result.partial.afterM}/${result.partial.afterL} failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
       const failures = results.filter((result) => !result.passed);
@@ -29206,6 +29559,35 @@ async function main() {
       const failures = sequenceResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Setup stage-band traversal sequence failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (setupVideoOnlyMode) {
+      const results = [];
+      for (const viewport of viewports) {
+        const result = await runSetupVideoViewport(client, viewport);
+        results.push(result);
+        const passed = isContained(result) && hasExpectedSetupSurface(result);
+        const failedChecks = [
+          !isContained(result) ? "outer-containment" : null,
+          !hasExpectedSetupSurface(result) ? "setup-contract" : null,
+        ].filter(Boolean);
+        console.log(
+          `${passed ? "pass" : "fail"} ${result.label} ` +
+            `regions=${result.visibleVideoSetupRoutingPaneCount}/${result.visibleVideoSetupStatusPaneCount}/${result.visibleVideoSetupInspectorPaneCount} ` +
+            `advanced=${result.videoSetupAdvancedInitiallyClosed ? "closed->" : "not-closed->"}${result.videoSetupAdvancedCorrectionOpen ? "open" : "closed"} ` +
+            `action=${result.visibleVideoSetupDisplayActionCount}/${result.videoSetupActionDockLastActionReachable ? "reachable" : "unreachable"} ` +
+            `scroll=${result.videoSetupClosedDocumentAndAppScrollZero && result.documentScrollWidth === result.innerWidth && result.appScrollWidth === result.innerWidth ? "zero" : "overflow"} ` +
+            `surface=${JSON.stringify(result.videoSetupProjectorSurfaceBounds)} pane=${JSON.stringify(result.videoSetupStatusPaneBounds)} ` +
+            `checks=${JSON.stringify({ mapH: result.videoSetupMapPaneHeight, mapOverflow: result.videoSetupMapPaneOverflowPx, mappingReachable: result.videoSetupMappingLastControlReachable, surfaceContained: result.videoSetupProjectorSurfaceContained, advancedScroll: result.videoSetupAdvancedInternalScroll, dockInViewport: result.videoSetupActionDockInViewport, preview: result.videoSetupPreviewCardPresent ? result.videoSetupPreviewContained : true })} ` +
+            `failed=${JSON.stringify(failedChecks)}`,
+        );
+      }
+      const failures = results.filter((result) =>
+        !isContained(result) || !hasExpectedSetupSurface(result),
+      );
+      if (failures.length > 0) {
+        throw new Error(`Setup Video viewport failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
@@ -29825,6 +30207,14 @@ async function main() {
             `grid=${result.visual.maxMinorGridInk.toFixed(3)}/${result.visual.maxMajorGridInk.toFixed(3)}/${result.visual.maxDividerInk.toFixed(3)} ` +
             `t14=${result.t14.subThresholdClick?.movedPx ?? "?"}/${result.t14.oneGestureDrag?.sourceCueId ?? "?"}@${result.t14.oneGestureDrag?.targetLayerId ?? "?"} ` +
             `t14Failed=${JSON.stringify(result.t14.failedChecks)} ` +
+            `shelf=${JSON.stringify({
+              categories: result.sourceShelf.categoryButtonCount,
+              filters: result.sourceShelf.filterCount,
+              sources: result.sourceShelf.sourceKinds,
+              targets: result.sourceShelf.targetValues,
+              options: result.sourceShelf.targetOptions,
+              hit: result.sourceShelf.minHitTarget,
+            })} ` +
             `scroll=${result.visual.documentAndAppScrollZero ? "zero" : "overflow"} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
@@ -29832,6 +30222,26 @@ async function main() {
       const failures = timelineSlimResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Timeline slim viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (editIaVideoOnlyMode) {
+      const editIaVideoResults = [];
+      for (const viewport of viewports) {
+        const result = await runEditIaVideoViewport(client, viewport);
+        editIaVideoResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `tabs=${JSON.stringify(result.navigation.ids)} ` +
+            `selected=${result.layout.selectedCardCount} ` +
+            `hit=${Math.round(result.layout.cardHitTarget * 100) / 100}px ` +
+            `scroll=${result.layout.documentAndAppScrollZero ? "zero" : "overflow"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = editIaVideoResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Edit IA Video viewport failed: ${JSON.stringify(failures)}`);
       }
       return;
     }

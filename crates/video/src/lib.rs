@@ -13439,6 +13439,7 @@ mod tests {
                 active_slot_id: Some(VideoClipSlotId(2)),
                 ..protocol::VideoClipLayerRuntimeSummary::default()
             }],
+            ..VideoClipRuntimeSnapshot::default()
         };
 
         let active = renderer
@@ -13600,6 +13601,7 @@ mod tests {
                 playing: true,
                 ..protocol::VideoClipLayerRuntimeSummary::default()
             }],
+            ..VideoClipRuntimeSnapshot::default()
         };
         let mut renderer = VideoPreviewRenderer::with_frame_provider(
             VideoRuntimeConfig::default(),

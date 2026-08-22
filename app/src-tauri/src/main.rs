@@ -9,7 +9,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
-        mpsc, Arc, Condvar, Mutex, TryLockError,
+        mpsc, Arc, Condvar, LazyLock, Mutex, TryLockError,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -47,11 +47,11 @@ use protocol::{
         SafetyBlackoutEngageResponseV1, SetEffectEnabledPayload, SetEffectEnabledResponseV1,
         TimelineFollowAbortAuthorityBundleV1, TimelineFollowAbortRuntimeRequestV1,
         TimelineFollowAbortRuntimeResponseV1, OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
-        OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
-        OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
-        OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
-        OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
-        OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+        OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+        OUTPUT_ENABLE_OPERATION_ID, OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
+        OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
+        OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
+        OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
     },
     normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
     validate_engine_ready_video_clip_slots, validate_engine_ready_video_effect_chains,
@@ -270,6 +270,10 @@ static RDM_TRANSACTION_NUMBER: AtomicU8 = AtomicU8::new(1);
 static LIVE_VIDEO_MONITOR_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static PROJECT_SAVE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NATIVE_VIDEO_OUTPUT_QUARANTINE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static LIVE_VIDEO_OUTPUT_WINDOW_INCARNATION: AtomicU64 = AtomicU64::new(0);
+static LIVE_VIDEO_OUTPUT_WINDOW_TRUTH: LazyLock<
+    Mutex<HashMap<VideoOutputId, LiveVideoWindowTruth>>,
+> = LazyLock::new(|| Mutex::new(HashMap::new()));
 /// `mediaAssetAuthority.ts` creates request IDs in the exact JavaScript-safe
 /// range `1..=2^53-1` (`21-bit prefix * 2^32 + 32-bit sequence`). Compatibility
 /// IPC has no request field at all, so it owns this disjoint server-only
@@ -7005,6 +7009,7 @@ fn timeline_advanced_authoring_from_snapshot(
     timeline: &protocol::TimelineSnapshot,
 ) -> TimelineAdvancedAuthoringSummary {
     TimelineAdvancedAuthoringSummary {
+        layers: Some(timeline.layers.clone()),
         snap_request: None,
         video_clips: timeline.video_clips.clone(),
         audio_clips: timeline.audio_clips.clone(),
@@ -9230,18 +9235,39 @@ fn timeline_advanced_candidate_for_request(
                         "MediaAsset {media_asset_id} needs a known non-zero duration before Timeline placement"
                     )
                 })?;
-            let resolve_layer = |requested: Option<u32>, kind: TimelineLayerKind| {
-                requested
-                    .and_then(|id| before.timeline.layers.iter().find(|layer| layer.id == id))
-                    .or_else(|| {
-                        before
-                            .timeline
-                            .layers
-                            .iter()
-                            .find(|layer| layer.kind == kind && !layer.locked)
-                    })
-                    .filter(|layer| layer.kind == kind && !layer.locked)
-                    .map(|layer| layer.id)
+            // An explicit lane comes from a drag/drop target and is therefore
+            // part of the command's meaning.  Silently substituting another
+            // lane when that target is missing, cross-kind, or locked makes a
+            // successful receipt disagree with the UI's intended placement.
+            // Keep the first-unlocked fallback only for the legacy/accessibility
+            // path, where the caller deliberately supplied no lane at all.
+            let resolve_layer = |requested: Option<u32>, kind: TimelineLayerKind| match requested {
+                Some(id) => {
+                    let layer = before
+                        .timeline
+                        .layers
+                        .iter()
+                        .find(|layer| layer.id == id)
+                        .ok_or_else(|| {
+                            format!("Requested {kind:?} Timeline lane {id} was not found")
+                        })?;
+                    if layer.kind != kind {
+                        return Err(format!(
+                            "Requested Timeline lane {id} has kind {:?}, expected {kind:?}",
+                            layer.kind
+                        ));
+                    }
+                    if layer.locked {
+                        return Err(format!("Requested {kind:?} Timeline lane {id} is locked"));
+                    }
+                    Ok(Some(layer.id))
+                }
+                None => Ok(before
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|layer| layer.kind == kind && !layer.locked)
+                    .map(|layer| layer.id)),
             };
             let has_video = matches!(asset.source.kind, VideoSourceKind::StillImage)
                 || asset
@@ -9257,9 +9283,44 @@ fn timeline_advanced_candidate_for_request(
                     "MediaAsset {media_asset_id} has neither a video stream nor an audio stream"
                 ));
             }
-            let video_clip_id = if has_video {
-                let video_layer_id = resolve_layer(*video_layer_id, TimelineLayerKind::Video)
-                    .ok_or_else(|| "An unlocked Video Timeline lane is required".to_string())?;
+            // An explicit target for a stream that this asset does not carry is
+            // still malformed input.  Do not silently discard the target: a
+            // caller that named a Video lane for an audio-only asset (or an
+            // Audio lane for a video-only asset) must receive a failed receipt
+            // with no candidate allocations or publication.
+            if !has_video && video_layer_id.is_some() {
+                return Err(format!(
+                    "MediaAsset {media_asset_id} has no video stream but a Video Timeline lane was requested"
+                ));
+            }
+            if !has_audio && audio_layer_id.is_some() {
+                return Err(format!(
+                    "MediaAsset {media_asset_id} has no audio stream but an Audio Timeline lane was requested"
+                ));
+            }
+            // Resolve every requested target before allocating any item ID.  A
+            // linked AV placement is one authoritative mutation: if either
+            // side is invalid, the candidate must fail before allocation or
+            // publication can begin.
+            let resolved_video_layer_id = if has_video {
+                Some(
+                    resolve_layer(*video_layer_id, TimelineLayerKind::Video)?
+                        .ok_or_else(|| "An unlocked Video Timeline lane is required".to_string())?,
+                )
+            } else {
+                None
+            };
+            let resolved_audio_layer_id = if has_audio {
+                Some(
+                    resolve_layer(*audio_layer_id, TimelineLayerKind::Audio)?.ok_or_else(|| {
+                        "An unlocked Audio Timeline lane is required for this video's audio"
+                            .to_string()
+                    })?,
+                )
+            } else {
+                None
+            };
+            let video_clip_id = if let Some(video_layer_id) = resolved_video_layer_id {
                 let video_clip_id = state.engine.allocate_timeline_video_clip_id();
                 authoring.video_clips.push(TimelineVideoClipSummary {
                     id: video_clip_id,
@@ -9275,12 +9336,7 @@ fn timeline_advanced_candidate_for_request(
             } else {
                 None
             };
-            if has_audio {
-                let audio_layer_id = resolve_layer(*audio_layer_id, TimelineLayerKind::Audio)
-                    .ok_or_else(|| {
-                        "An unlocked Audio Timeline lane is required for this video's audio"
-                            .to_string()
-                    })?;
+            if let Some(audio_layer_id) = resolved_audio_layer_id {
                 let audio_clip_id = state.engine.allocate_timeline_audio_clip_id();
                 authoring.audio_clips.push(TimelineAudioClipSummary {
                     id: audio_clip_id,
@@ -9819,6 +9875,9 @@ fn apply_timeline_advanced_candidate_to_snapshot(
     mut snapshot: EngineSnapshot,
     authoring: &TimelineAdvancedAuthoringSummary,
 ) -> Result<EngineSnapshot, String> {
+    if let Some(layers) = &authoring.layers {
+        snapshot.timeline.layers = layers.clone();
+    }
     snapshot.timeline.video_clips = authoring.video_clips.clone();
     snapshot.timeline.audio_clips = authoring.audio_clips.clone();
     snapshot.timeline.phases = authoring.phases.clone();
@@ -11981,8 +12040,14 @@ fn reset_vj_preview_renderer(state: &State<'_, AppState>) -> Result<(), String> 
 #[derive(Default)]
 struct MediaAudioPlayback {
     stream: Option<rodio::OutputStream>,
+    #[cfg(test)]
+    timeline_test_mixer: Option<rodio::mixer::Mixer>,
     device_name: Option<String>,
     requested_device_name: Option<String>,
+    /// Runtime-only ABA fence for output-stream replacement. Timeline decoder
+    /// preparation happens without holding `media_audio`; installation must
+    /// reject a stream/mixer captured before any intervening device rotation.
+    audio_device_generation: u64,
     sinks: HashMap<VideoLayerId, rodio::Sink>,
     sources: HashMap<VideoLayerId, MediaAudioSourceConfig>,
     last_resync_at: HashMap<VideoLayerId, Instant>,
@@ -11991,6 +12056,7 @@ struct MediaAudioPlayback {
     timeline_failures: HashMap<TimelineAudioSinkKey, TimelineAudioPlaybackFailure>,
     timeline_last_resync_at: HashMap<TimelineAudioSinkKey, Instant>,
     timeline_transport: TimelineAudioTransportState,
+    timeline_source_projection_authority: Option<engine::TimelineAudioProjectionAuthority>,
     metronome: TimelineMetronomePlaybackState,
     guide: TimelineGuideAudioPlayback,
     resync_count: u64,
@@ -11998,6 +12064,12 @@ struct MediaAudioPlayback {
     max_abs_drift_ms: u64,
     last_sync_error: Option<String>,
     timeline_last_sync_error: Option<String>,
+    #[cfg(test)]
+    timeline_start_attempt_count: u64,
+    #[cfg(test)]
+    timeline_stop_count: u64,
+    #[cfg(test)]
+    timeline_last_install_source_position_ms: HashMap<TimelineAudioSinkKey, u64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -12239,6 +12311,14 @@ enum TimelineAudioSinkKey {
         path: Arc<[ChildTimelineTransportPathSegment]>,
         clip_id: TimelineAudioClipId,
     },
+    Follow {
+        source_timeline_id: TimelineId,
+        target_timeline_id: TimelineId,
+        generation: u64,
+        target_root: bool,
+        path: Arc<[ChildTimelineTransportPathSegment]>,
+        clip_id: TimelineAudioClipId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -12255,7 +12335,7 @@ struct TimelineAudioSourceConfig {
     offset_ms: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct TimelineAudioPlaybackFailure {
     source: TimelineAudioSourceConfig,
     error: String,
@@ -12276,10 +12356,50 @@ enum TimelineAudioTransportAction {
     Sync,
 }
 
+#[derive(Debug, Clone)]
+struct TimelineAudioPrepareRequest {
+    key: TimelineAudioSinkKey,
+    clip: TimelineAudioClipSummary,
+    source_position_ms: u64,
+    volume: f32,
+    source: TimelineAudioSourceConfig,
+}
+
+struct TimelineAudioSeekRequest {
+    key: TimelineAudioSinkKey,
+    clip_id: TimelineAudioClipId,
+    sink: rodio::Sink,
+    source_position_ms: u64,
+}
+
+struct TimelineAudioSyncPlan {
+    authority: engine::TimelineAudioProjectionAuthority,
+    device_generation: u64,
+    requested_device_name: Option<String>,
+    mixer: Option<rodio::mixer::Mixer>,
+    prepares: Vec<TimelineAudioPrepareRequest>,
+    seeks: Vec<TimelineAudioSeekRequest>,
+    errors: Vec<String>,
+}
+
+struct PreparedMediaAudioOutput {
+    stream: rodio::OutputStream,
+    mixer: rodio::mixer::Mixer,
+    device_name: Option<String>,
+    requested_device_name: Option<String>,
+}
+
+struct PreparedTimelineAudioClip {
+    request: TimelineAudioPrepareRequest,
+    sink: rodio::Sink,
+    decoder: Option<rodio::Decoder<std::io::BufReader<fs::File>>>,
+}
+
 const MEDIA_AUDIO_RESYNC_THRESHOLD_MS: u64 = 75;
 const MEDIA_AUDIO_RESYNC_COOLDOWN: Duration = Duration::from_millis(250);
 const MEDIA_AUDIO_SYNC_INTERVAL: Duration = Duration::from_millis(25);
 const MEDIA_AUDIO_SYNC_IDLE_INTERVAL: Duration = Duration::from_millis(250);
+const TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET: Duration = Duration::from_millis(750);
 
 #[derive(Debug, Clone, PartialEq)]
 struct ProgramAudioHandoffConfig {
@@ -12478,6 +12598,65 @@ fn timeline_audio_transport_action(
     }
 }
 
+fn timeline_audio_active_clips(
+    timeline: &engine::TimelineAudioRuntimeSnapshot,
+) -> Vec<(TimelineAudioSinkKey, TimelineAudioClipSummary, u64)> {
+    let mut active = timeline
+        .clips
+        .iter()
+        .filter(|clip| {
+            clip.duration_ms > 0
+                && timeline.position_ms >= clip.start_ms
+                && timeline.position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+        })
+        .cloned()
+        .map(|clip| {
+            (
+                TimelineAudioSinkKey::Root(clip.id),
+                clip,
+                timeline.position_ms,
+            )
+        })
+        .collect::<Vec<_>>();
+    active.extend(timeline.child_clips.iter().map(|child| {
+        let key = match child.root {
+            engine::ChildTimelineAudioRuntimeRoot::Direct {
+                parent_cue_id,
+                generation,
+            } => TimelineAudioSinkKey::DirectChild {
+                parent_cue_id,
+                generation,
+                path: Arc::clone(&child.path),
+                clip_id: child.clip.id,
+            },
+            engine::ChildTimelineAudioRuntimeRoot::Timeline {
+                parent_event_id,
+                parent_iteration,
+            } => TimelineAudioSinkKey::Child {
+                parent_event_id,
+                parent_iteration,
+                path: Arc::clone(&child.path),
+                clip_id: child.clip.id,
+            },
+            engine::ChildTimelineAudioRuntimeRoot::Follow {
+                source_timeline_id,
+                target_timeline_id,
+                generation,
+                target_root,
+            } => TimelineAudioSinkKey::Follow {
+                source_timeline_id,
+                target_timeline_id,
+                generation,
+                target_root,
+                path: Arc::clone(&child.path),
+                clip_id: child.clip.id,
+            },
+        };
+        (key, child.clip.clone(), child.position_ms)
+    }));
+    active
+}
+
 fn timeline_audio_clip_volume(clip: &TimelineAudioClipSummary, position_ms: u64) -> f32 {
     let local_ms = position_ms
         .saturating_sub(clip.start_ms)
@@ -12520,12 +12699,19 @@ struct MediaAudioSyncRuntime {
 /// generation actually requires backend audio settlement. Empty/no-audio
 /// quorums are represented by the engine as N/A and must not be fabricated by
 /// the audio worker.
-fn pending_timeline_follow_audio_settlement_ack(
+fn pending_timeline_follow_audio_settlement_ack_for_context(
     engine: &EngineHandle,
+    context: TimelineAudioFollowContext,
     result: TimelineFollowSettlementAckResult,
 ) -> Option<TimelineFollowSettlementAck> {
-    let epoch = engine.output_ownership_status().epoch;
-    let runtime = engine.timeline_follow_runtime_status(epoch);
+    let runtime = engine.timeline_follow_runtime_status(context.epoch);
+    if runtime.epoch != context.epoch
+        || runtime.generation != context.generation
+        || runtime.source_timeline_id != context.source_timeline_id
+        || runtime.target_timeline_id != context.target_timeline_id
+    {
+        return None;
+    }
     pending_timeline_follow_audio_settlement_ack_from_runtime(&runtime, result)
 }
 
@@ -12554,6 +12740,461 @@ fn pending_timeline_follow_audio_settlement_ack_from_runtime(
     })
 }
 
+enum TimelineAudioCommitAttempt {
+    Busy,
+    Completed(Result<(), String>),
+}
+
+#[derive(Debug, Default)]
+struct TimelineAudioPrepareCommitState {
+    cancelled: bool,
+    finalized: bool,
+}
+
+fn sync_timeline_audio_without_blocking_playback_lock(
+    engine: &EngineHandle,
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    timeline: &engine::TimelineAudioRuntimeSnapshot,
+    commit_state: &Arc<Mutex<TimelineAudioPrepareCommitState>>,
+    mut before_prepare: impl FnMut(),
+    mut before_commit_lock: impl FnMut(),
+) -> Result<engine::TimelineAudioProjectionAuthority, String> {
+    let transaction_deadline = Instant::now() + TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET;
+    let mut plan = audio
+        .lock()
+        .map_err(|_| "Timeline audio playback lock was poisoned".to_string())?
+        .plan_timeline_audio_sync(timeline)?;
+    let authority = plan.authority;
+
+    // Tests use this seam to hold an arbitrarily slow media preparation while
+    // proving status/control can still take the playback mutex. Production
+    // invokes a no-op and proceeds to the same decoder/device path.
+    before_prepare();
+    let authority_is_current = || {
+        engine
+            .video_audio_runtime_snapshot()
+            .timeline_audio
+            .source_projection_authority
+            == authority
+    };
+    if !authority_is_current() {
+        for seek in std::mem::take(&mut plan.seeks) {
+            seek.sink.stop();
+        }
+        return Err("Timeline audio source projection changed before preparation".to_string());
+    }
+
+    let mut prepared_output = None;
+    let mixer = if plan.prepares.is_empty() {
+        plan.mixer.clone()
+    } else if let Some(mixer) = plan.mixer.clone() {
+        Some(mixer)
+    } else {
+        let output = prepare_media_audio_output(plan.requested_device_name.as_deref())?;
+        let mixer = output.mixer.clone();
+        prepared_output = Some(output);
+        Some(mixer)
+    };
+    let mut prepared_clips = Vec::with_capacity(plan.prepares.len());
+    if let Some(mixer) = mixer.as_ref() {
+        for request in std::mem::take(&mut plan.prepares) {
+            if Instant::now() >= transaction_deadline {
+                prepared_clips.push(Err((
+                    request,
+                    "Timeline audio decoder preparation transaction exceeded its budget"
+                        .to_string(),
+                )));
+                continue;
+            }
+            if !authority_is_current() {
+                prepared_clips.push(Err((
+                    request,
+                    "Timeline audio source projection changed during decoder preparation"
+                        .to_string(),
+                )));
+                continue;
+            }
+            prepared_clips.push(prepare_timeline_audio_clip(request, mixer));
+        }
+    }
+    let seek_results = std::mem::take(&mut plan.seeks)
+        .into_iter()
+        .map(|seek| {
+            let result = if authority_is_current() {
+                seek.sink
+                    .try_seek(Duration::from_millis(seek.source_position_ms))
+                    .map_err(|error| error.to_string())
+            } else {
+                Err("source projection changed before drift resync".to_string())
+            };
+            (seek, result)
+        })
+        .collect::<Vec<_>>();
+    let mut current = engine.video_audio_runtime_snapshot();
+    // Decoder/open work may span many ordinary 44 Hz position ticks. Those
+    // ticks intentionally share one semantic generation, so rebase every
+    // paused prepared sink to the latest source position before taking the
+    // playback mutex. A stop/seek/source mutation still rotates the semantic
+    // fence and rejects the whole install below.
+    before_commit_lock();
+    let mut plan = Some(plan);
+    let mut prepared_output = Some(prepared_output);
+    let mut seek_results = Some(seek_results);
+    loop {
+        if Instant::now() > transaction_deadline {
+            for prepared in prepared_clips.into_iter().flatten() {
+                prepared.sink.stop();
+            }
+            for (seek, _) in seek_results.take().unwrap_or_default() {
+                seek.sink.stop();
+            }
+            return Err(
+                "Timeline audio position did not stabilize within the decoder preparation budget"
+                    .to_string(),
+            );
+        }
+        prepared_clips =
+            rebase_prepared_timeline_audio_clips(&current.timeline_audio, prepared_clips);
+        prepared_clips = seek_prepared_timeline_audio_decoders(prepared_clips);
+        let latest = engine.video_audio_runtime_snapshot();
+        if latest.timeline_audio.source_projection_authority != authority {
+            for prepared in prepared_clips.into_iter().flatten() {
+                prepared.sink.stop();
+            }
+            for (seek, _) in seek_results.take().unwrap_or_default() {
+                seek.sink.stop();
+            }
+            return Err("Timeline audio source projection changed before sink install".to_string());
+        }
+        if latest.timeline_audio.publication_generation != timeline.publication_generation {
+            for prepared in prepared_clips.into_iter().flatten() {
+                prepared.sink.stop();
+            }
+            for (seek, _) in seek_results.take().unwrap_or_default() {
+                seek.sink.stop();
+            }
+            return Err("Timeline audio transport changed before sink install".to_string());
+        }
+        if prepared_timeline_audio_clips_need_rebase(&latest.timeline_audio, &prepared_clips) {
+            current = latest;
+            continue;
+        }
+        let publication_generation = latest.timeline_audio.publication_generation;
+        let attempt =
+            engine.with_timeline_audio_projection_fence(authority, publication_generation, || {
+                let mut commit_state = match commit_state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        return TimelineAudioCommitAttempt::Completed(Err(
+                            "Timeline audio prepare commit fence was poisoned".to_string(),
+                        ));
+                    }
+                };
+                if commit_state.cancelled {
+                    return TimelineAudioCommitAttempt::Completed(Err(
+                        "Timeline audio prepare was cancelled before sink install".to_string(),
+                    ));
+                }
+                match audio.try_lock() {
+                    Ok(mut playback) => {
+                        if Instant::now() > transaction_deadline {
+                            return TimelineAudioCommitAttempt::Completed(Err(
+                            "Timeline audio decoder preparation transaction exceeded its budget"
+                                .to_string(),
+                        ));
+                        }
+                        // This state lock is the exact timeout/install
+                        // linearization point. Once finalization begins the
+                        // coordinator waits for this short device commit and
+                        // can no longer publish a contradictory timeout.
+                        commit_state.finalized = true;
+                        let appended = append_prepared_timeline_audio_decoders(std::mem::take(
+                            &mut prepared_clips,
+                        ));
+                        TimelineAudioCommitAttempt::Completed(
+                            playback.commit_timeline_audio_sync(
+                                plan.take().expect("Timeline audio plan commits once"),
+                                &latest.timeline_audio,
+                                prepared_output
+                                    .take()
+                                    .expect("Timeline audio output commits once"),
+                                appended,
+                                seek_results
+                                    .take()
+                                    .expect("Timeline audio seeks commit once"),
+                            ),
+                        )
+                    }
+                    Err(TryLockError::WouldBlock) => TimelineAudioCommitAttempt::Busy,
+                    Err(TryLockError::Poisoned(_)) => TimelineAudioCommitAttempt::Completed(Err(
+                        "Timeline audio playback lock was poisoned".to_string(),
+                    )),
+                }
+            });
+        match attempt {
+            Ok(TimelineAudioCommitAttempt::Completed(result)) => {
+                result?;
+                return Ok(authority);
+            }
+            Ok(TimelineAudioCommitAttempt::Busy) => {
+                current = engine.video_audio_runtime_snapshot();
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TimelineAudioPrepareFingerprint {
+    authority: engine::TimelineAudioProjectionAuthority,
+    publication_generation: u64,
+    audio_device_generation: u64,
+    requested_device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TimelineAudioFollowContext {
+    epoch: u64,
+    generation: u64,
+    source_timeline_id: Option<TimelineId>,
+    target_timeline_id: Option<TimelineId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TimelineAudioPrepareContext {
+    fingerprint: TimelineAudioPrepareFingerprint,
+    follow: TimelineAudioFollowContext,
+}
+
+struct TimelineAudioPrepareJob {
+    context: TimelineAudioPrepareContext,
+    started_at: Instant,
+    receiver: mpsc::Receiver<Result<engine::TimelineAudioProjectionAuthority, String>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    result: Option<Result<engine::TimelineAudioProjectionAuthority, String>>,
+    timed_out: bool,
+    commit_state: Arc<Mutex<TimelineAudioPrepareCommitState>>,
+}
+
+#[derive(Debug)]
+enum TimelineAudioPreparePoll {
+    Pending,
+    Quarantined,
+    Obsolete,
+    Completed {
+        context: TimelineAudioPrepareContext,
+        result: Result<(), String>,
+    },
+    TimedOut {
+        context: TimelineAudioPrepareContext,
+        error: String,
+    },
+}
+
+#[derive(Default)]
+struct TimelineAudioPrepareCoordinator {
+    active: Option<TimelineAudioPrepareJob>,
+    blocked: Option<TimelineAudioPrepareFingerprint>,
+    #[cfg(test)]
+    before_prepare: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[cfg(test)]
+    before_commit_lock: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[cfg(test)]
+    spawn_count: u64,
+    #[cfg(test)]
+    reap_count: u64,
+}
+
+impl TimelineAudioPrepareCoordinator {
+    fn context(
+        engine: &EngineHandle,
+        audio: &Arc<Mutex<MediaAudioPlayback>>,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+    ) -> Option<TimelineAudioPrepareContext> {
+        let (audio_device_generation, requested_device_name) = {
+            let playback = audio.try_lock().ok()?;
+            (
+                playback.audio_device_generation,
+                playback.requested_device_name.clone(),
+            )
+        };
+        let epoch = engine.output_ownership_status().epoch;
+        let follow = engine.timeline_follow_runtime_status(epoch);
+        Some(TimelineAudioPrepareContext {
+            fingerprint: TimelineAudioPrepareFingerprint {
+                authority: timeline.source_projection_authority,
+                publication_generation: timeline.publication_generation,
+                audio_device_generation,
+                requested_device_name,
+            },
+            follow: TimelineAudioFollowContext {
+                epoch: follow.epoch,
+                generation: follow.generation,
+                source_timeline_id: follow.source_timeline_id,
+                target_timeline_id: follow.target_timeline_id,
+            },
+        })
+    }
+
+    fn poll_or_spawn(
+        &mut self,
+        engine: &EngineHandle,
+        audio: &Arc<Mutex<MediaAudioPlayback>>,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+    ) -> TimelineAudioPreparePoll {
+        let current_context = Self::context(engine, audio, timeline);
+        if let Some(job) = self.active.as_mut() {
+            if job.result.is_none() {
+                match job.receiver.try_recv() {
+                    Ok(result) => job.result = Some(result),
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        job.result =
+                            Some(Err("Timeline audio prepare worker disconnected".to_string()));
+                    }
+                }
+            }
+            let finished = job
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.is_finished());
+            if finished && job.result.is_some() {
+                let mut job = self.active.take().expect("observed active prepare job");
+                if let Some(worker) = job.worker.take() {
+                    let _ = worker.join();
+                }
+                #[cfg(test)]
+                {
+                    self.reap_count = self.reap_count.saturating_add(1);
+                }
+                if job.timed_out {
+                    return TimelineAudioPreparePoll::Quarantined;
+                }
+                if current_context.as_ref() != Some(&job.context) {
+                    return TimelineAudioPreparePoll::Obsolete;
+                }
+                let result = job
+                    .result
+                    .take()
+                    .expect("finished prepare job carries one result")
+                    .map(|_| ());
+                if result.as_ref().is_err_and(|error| {
+                    error.contains("preparation budget")
+                        || error.contains("decoder preparation budget")
+                }) {
+                    self.blocked = Some(job.context.fingerprint.clone());
+                    return TimelineAudioPreparePoll::TimedOut {
+                        context: job.context,
+                        error: result.unwrap_err(),
+                    };
+                }
+                return TimelineAudioPreparePoll::Completed {
+                    context: job.context,
+                    result,
+                };
+            }
+            if !job.timed_out
+                && job.started_at.elapsed() >= TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET
+            {
+                let mut commit_state = match job.commit_state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        job.result = Some(Err(
+                            "Timeline audio prepare commit fence was poisoned".to_string()
+                        ));
+                        return TimelineAudioPreparePoll::Pending;
+                    }
+                };
+                if commit_state.finalized {
+                    return TimelineAudioPreparePoll::Pending;
+                }
+                commit_state.cancelled = true;
+                job.timed_out = true;
+                self.blocked = Some(job.context.fingerprint.clone());
+                if current_context.as_ref() != Some(&job.context) {
+                    return TimelineAudioPreparePoll::Obsolete;
+                }
+                return TimelineAudioPreparePoll::TimedOut {
+                    context: job.context.clone(),
+                    error: "Timeline audio decoder preparation timed out; the source is quarantined until its in-flight worker exits or the semantic generation or output device changes"
+                        .to_string(),
+                };
+            }
+            return if job.timed_out {
+                TimelineAudioPreparePoll::Quarantined
+            } else {
+                TimelineAudioPreparePoll::Pending
+            };
+        }
+        let Some(context) = current_context else {
+            return TimelineAudioPreparePoll::Pending;
+        };
+        if self.blocked.as_ref() == Some(&context.fingerprint) {
+            return TimelineAudioPreparePoll::Quarantined;
+        }
+
+        let worker_engine = engine.clone();
+        let worker_audio = Arc::clone(audio);
+        let worker_timeline = timeline.clone();
+        #[cfg(test)]
+        let before_prepare = self.before_prepare.clone();
+        #[cfg(test)]
+        let before_commit_lock = self.before_commit_lock.clone();
+        let commit_state = Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default()));
+        let worker_commit_state = Arc::clone(&commit_state);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let worker = std::thread::Builder::new()
+            .name("syndocal-timeline-audio-prepare".to_string())
+            .spawn(move || {
+                let result = sync_timeline_audio_without_blocking_playback_lock(
+                    &worker_engine,
+                    &worker_audio,
+                    &worker_timeline,
+                    &worker_commit_state,
+                    || {
+                        #[cfg(test)]
+                        if let Some(before_prepare) = before_prepare.as_ref() {
+                            before_prepare();
+                        }
+                    },
+                    || {
+                        #[cfg(test)]
+                        if let Some(before_commit_lock) = before_commit_lock.as_ref() {
+                            before_commit_lock();
+                        }
+                    },
+                );
+                let _ = sender.send(result);
+            });
+        let worker = match worker {
+            Ok(worker) => worker,
+            Err(error) => {
+                return TimelineAudioPreparePoll::Completed {
+                    context,
+                    result: Err(format!(
+                        "Timeline audio prepare worker could not start: {error}"
+                    )),
+                };
+            }
+        };
+        self.active = Some(TimelineAudioPrepareJob {
+            context,
+            started_at: Instant::now(),
+            receiver,
+            worker: Some(worker),
+            result: None,
+            timed_out: false,
+            commit_state,
+        });
+        #[cfg(test)]
+        {
+            self.spawn_count = self.spawn_count.saturating_add(1);
+        }
+        TimelineAudioPreparePoll::Pending
+    }
+}
+
 impl MediaAudioSyncRuntime {
     #[cfg(test)]
     fn idle_for_tests(program_handoff: Arc<ProgramAudioHandoffCoordinator>) -> Self {
@@ -12575,6 +13216,7 @@ impl MediaAudioSyncRuntime {
         let worker = std::thread::Builder::new()
             .name("syndocal-media-audio-sync".to_string())
             .spawn(move || {
+                let mut timeline_prepare = TimelineAudioPrepareCoordinator::default();
                 while !worker_stop.load(Ordering::Acquire) {
                     let mut snapshot = engine.video_audio_runtime_snapshot();
                     let job = worker_handoff.state.lock().ok().and_then(|mut state| {
@@ -12593,49 +13235,90 @@ impl MediaAudioSyncRuntime {
                             snapshot.layers.as_slice(),
                             job,
                         );
-                        // Device open and decode can take longer than one sync interval.
-                        snapshot = engine.video_audio_runtime_snapshot();
+                        // The Timeline projection is re-read immediately below,
+                        // after any slow Program device/decode work completes.
                     }
 
-                    let (active, timeline_sync_result) = audio
-                        .lock()
-                        .map(|mut audio| {
-                            if !audio.sinks.is_empty() {
-                                audio.sync_to_video_layers(&snapshot.layers);
-                            }
-                            let timeline_sync_result =
-                                audio.sync_to_timeline_audio(&snapshot.timeline_audio);
-                            audio.sync_metronome(&snapshot.timeline_audio);
-                            audio.sync_timeline_guide(&snapshot.timeline_audio);
-                            (
-                                !audio.sinks.is_empty()
-                                    || !audio.timeline_sinks.is_empty()
-                                    || audio.guide.sink.is_some()
-                                    || snapshot.timeline_audio.playing,
-                                timeline_sync_result,
-                            )
+                    // Re-read immediately before planning. Decoder open,
+                    // output-device creation and seek all run after the short
+                    // planning lock has been released; commit revalidates the
+                    // exact source authority and device generation.
+                    snapshot = engine.video_audio_runtime_snapshot();
+                    if let Ok(mut playback) = audio.try_lock() {
+                        if !playback.sinks.is_empty() {
+                            playback.sync_to_video_layers(&snapshot.layers);
+                        }
+                    }
+                    let applied_projection_authority =
+                        snapshot.timeline_audio.source_projection_authority;
+                    let mut timeline_sync_result = match timeline_prepare.poll_or_spawn(
+                        &engine,
+                        &audio,
+                        &snapshot.timeline_audio,
+                    ) {
+                        TimelineAudioPreparePoll::Completed { context, result } => {
+                            Some((context, result))
+                        }
+                        TimelineAudioPreparePoll::TimedOut { context, error } => {
+                            Some((context, Err(error)))
+                        }
+                        TimelineAudioPreparePoll::Pending
+                        | TimelineAudioPreparePoll::Quarantined
+                        | TimelineAudioPreparePoll::Obsolete => None,
+                    };
+                    let active = audio
+                        .try_lock()
+                        .map(|mut playback| {
+                            let current = engine.video_audio_runtime_snapshot();
+                            playback.sync_metronome(&current.timeline_audio);
+                            playback.sync_timeline_guide(&current.timeline_audio);
+                            !playback.sinks.is_empty()
+                                || !playback.timeline_sinks.is_empty()
+                                || playback.guide.sink.is_some()
+                                || current.timeline_audio.playing
                         })
-                        .unwrap_or_else(|_| {
-                            (
-                                false,
-                                Err("Timeline audio playback lock was poisoned".to_string()),
-                            )
-                        });
+                        .unwrap_or(false);
+                    let after_sync = engine.video_audio_runtime_snapshot();
+                    if after_sync.timeline_audio.source_projection_authority
+                        != applied_projection_authority
+                    {
+                        if let Ok(mut audio) = audio.lock() {
+                            audio.retire_stale_timeline_source_projection();
+                        }
+                        // The result belonged to the retired projection. It
+                        // may clean up its own sinks, but it can never be
+                        // attributed to the newly-current Follow generation.
+                        timeline_sync_result = None;
+                        snapshot = after_sync.clone();
+                    }
                     // Never hold the Rodio/device mutex across an engine
                     // publication acknowledgement. The ACK is generation
                     // fenced, so a Follow that retired while device work was
                     // in flight simply rejects this stale report.
-                    let audio_ack_result = match timeline_sync_result {
-                        Ok(()) => TimelineFollowSettlementAckResult::Applied,
-                        Err(fault) => TimelineFollowSettlementAckResult::Fault { fault },
-                    };
-                    if let Some(acknowledgement) =
-                        pending_timeline_follow_audio_settlement_ack(&engine, audio_ack_result)
-                    {
-                        let _ = engine.acknowledge_timeline_follow_settlement_published(
-                            acknowledgement,
-                            Instant::now() + Duration::from_secs(2),
+                    if let Some((context, timeline_sync_result)) = timeline_sync_result {
+                        let current_context = TimelineAudioPrepareCoordinator::context(
+                            &engine,
+                            &audio,
+                            &after_sync.timeline_audio,
                         );
+                        let audio_ack_result = match timeline_sync_result {
+                            Ok(()) => TimelineFollowSettlementAckResult::Applied,
+                            Err(fault) => TimelineFollowSettlementAckResult::Fault { fault },
+                        };
+                        if current_context.as_ref() == Some(&context) {
+                            if let Some(acknowledgement) =
+                                pending_timeline_follow_audio_settlement_ack_for_context(
+                                    &engine,
+                                    context.follow,
+                                    audio_ack_result,
+                                )
+                            {
+                                let _ = engine.acknowledge_timeline_follow_settlement_published(
+                                    acknowledgement,
+                                    Instant::now() + Duration::from_secs(2),
+                                );
+                            }
+                        }
                     }
                     let low_latency_poll = worker_handoff
                         .state
@@ -13783,16 +14466,248 @@ impl Drop for LiveAudioInput {
     }
 }
 
-impl MediaAudioPlayback {
-    fn ensure_output_stream(&mut self, requested_device_name: Option<&str>) -> Result<(), String> {
-        use rodio::cpal::traits::{DeviceTrait, HostTrait};
+fn prepare_media_audio_output(
+    requested_device_name: Option<&str>,
+) -> Result<PreparedMediaAudioOutput, String> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
+    let requested_device_name = requested_device_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let host = rodio::cpal::default_host();
+    let device = match requested_device_name {
+        Some(name) => host
+            .output_devices()
+            .map_err(|error| format!("Failed to list audio output devices: {error}"))?
+            .find(|device| device.name().ok().as_deref() == Some(name))
+            .ok_or_else(|| format!("Audio output device '{name}' was not found"))?,
+        None => host
+            .default_output_device()
+            .ok_or_else(|| "No default audio output device is available".to_string())?,
+    };
+    let resolved_name = device.name().ok();
+    let stream = rodio::OutputStreamBuilder::from_device(device)
+        .and_then(|builder| builder.open_stream_or_fallback())
+        .map_err(|error| format!("Failed to open audio output: {error}"))?;
+    let mixer = stream.mixer().clone();
+    Ok(PreparedMediaAudioOutput {
+        stream,
+        mixer,
+        device_name: requested_device_name.map(str::to_string).or(resolved_name),
+        requested_device_name: requested_device_name.map(str::to_string),
+    })
+}
+
+fn prepare_timeline_audio_clip(
+    request: TimelineAudioPrepareRequest,
+    mixer: &rodio::mixer::Mixer,
+) -> Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)> {
+    let file = match fs::File::open(&request.clip.path) {
+        Ok(file) => file,
+        Err(error) => {
+            let message = format!(
+                "Timeline audio clip {} could not open '{}': {error}",
+                request.clip.id, request.clip.path
+            );
+            return Err((request, message));
+        }
+    };
+    let decoder = match rodio::Decoder::try_from(file) {
+        Ok(decoder) => decoder,
+        Err(error) => {
+            let message = format!(
+                "Timeline audio clip {} could not decode '{}': {error}",
+                request.clip.id, request.clip.path
+            );
+            return Err((request, message));
+        }
+    };
+    let sink = rodio::Sink::connect_new(mixer);
+    sink.pause();
+    sink.set_volume(request.volume.clamp(0.0, 2.0));
+    Ok(PreparedTimelineAudioClip {
+        request,
+        sink,
+        decoder: Some(decoder),
+    })
+}
+
+fn rebase_prepared_timeline_audio_clips(
+    current: &engine::TimelineAudioRuntimeSnapshot,
+    prepared_clips: Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>>,
+) -> Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>> {
+    let active = timeline_audio_active_clips(current)
+        .into_iter()
+        .map(|(key, clip, position_ms)| (key, (clip, position_ms)))
+        .collect::<HashMap<_, _>>();
+    prepared_clips
+        .into_iter()
+        .map(|prepared| {
+            let mut prepared = prepared?;
+            let Some((clip, position_ms)) = active.get(&prepared.request.key) else {
+                return Ok(prepared);
+            };
+            if clip.path != prepared.request.clip.path
+                || clip.offset_ms != prepared.request.clip.offset_ms
+            {
+                return Ok(prepared);
+            }
+            let source_position_ms = position_ms
+                .saturating_sub(clip.start_ms)
+                .saturating_add(clip.offset_ms);
+            if source_position_ms == prepared.request.source_position_ms {
+                return Ok(prepared);
+            }
+            prepared.request.source_position_ms = source_position_ms;
+            Ok(prepared)
+        })
+        .collect()
+}
+
+fn seek_prepared_timeline_audio_decoders(
+    prepared_clips: Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>>,
+) -> Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>> {
+    use rodio::Source;
+
+    prepared_clips
+        .into_iter()
+        .map(|prepared| {
+            let mut prepared = prepared?;
+            let Some(decoder) = prepared.decoder.as_mut() else {
+                prepared.sink.stop();
+                return Err((
+                    prepared.request,
+                    "Timeline audio decoder was already consumed before sink install".to_string(),
+                ));
+            };
+            if prepared.request.source_position_ms > 0 {
+                if let Err(error) =
+                    decoder.try_seek(Duration::from_millis(prepared.request.source_position_ms))
+                {
+                    prepared.sink.stop();
+                    let message = format!(
+                        "Timeline audio clip {} decoder seek failed: {error}",
+                        prepared.request.clip.id
+                    );
+                    return Err((prepared.request, message));
+                }
+            }
+            Ok(prepared)
+        })
+        .collect()
+}
+
+fn append_prepared_timeline_audio_decoders(
+    prepared_clips: Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>>,
+) -> Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>> {
+    prepared_clips
+        .into_iter()
+        .map(|prepared| {
+            let mut prepared = prepared?;
+            let Some(decoder) = prepared.decoder.take() else {
+                prepared.sink.stop();
+                return Err((
+                    prepared.request,
+                    "Timeline audio decoder was already consumed before sink append".to_string(),
+                ));
+            };
+            prepared.sink.append(decoder);
+            Ok(prepared)
+        })
+        .collect()
+}
+
+fn prepared_timeline_audio_clips_need_rebase(
+    current: &engine::TimelineAudioRuntimeSnapshot,
+    prepared_clips: &[Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>],
+) -> bool {
+    let active = timeline_audio_active_clips(current)
+        .into_iter()
+        .map(|(key, clip, position_ms)| (key, (clip, position_ms)))
+        .collect::<HashMap<_, _>>();
+    prepared_clips.iter().any(|prepared| {
+        let Ok(prepared) = prepared else {
+            return false;
+        };
+        let Some((clip, position_ms)) = active.get(&prepared.request.key) else {
+            return false;
+        };
+        if clip.path != prepared.request.clip.path
+            || clip.offset_ms != prepared.request.clip.offset_ms
+        {
+            return false;
+        }
+        let source_position_ms = position_ms
+            .saturating_sub(clip.start_ms)
+            .saturating_add(clip.offset_ms);
+        source_position_ms.abs_diff(prepared.request.source_position_ms)
+            > MEDIA_AUDIO_RESYNC_THRESHOLD_MS
+    })
+}
+
+impl MediaAudioPlayback {
+    fn accept_timeline_source_projection_authority(
+        &mut self,
+        current: engine::TimelineAudioProjectionAuthority,
+    ) -> Result<(), String> {
+        let Some(previous) = self.timeline_source_projection_authority else {
+            self.timeline_source_projection_authority = Some(current);
+            return Ok(());
+        };
+        if current == previous {
+            return Ok(());
+        }
+        if (current.epoch, current.generation) < (previous.epoch, previous.generation) {
+            self.retire_stale_timeline_source_projection();
+            return Err("Timeline audio source projection authority regressed".to_string());
+        }
+        let expected = protocol::control_plane_command::next_timeline_transport_authority(
+            previous.epoch,
+            previous.generation,
+        )
+        .map(|(epoch, generation)| engine::TimelineAudioProjectionAuthority { epoch, generation });
+        if expected != Some(current) {
+            // The worker did not observe every projection (for example
+            // A->muted B->A while a decoder was opening). Retire sinks and
+            // cached failures exactly once before rearming the current A.
+            self.stop_all_timeline();
+        }
+        self.timeline_source_projection_authority = Some(current);
+        Ok(())
+    }
+
+    fn retire_stale_timeline_source_projection(&mut self) {
+        self.stop_all_timeline();
+        self.timeline_source_projection_authority = None;
+    }
+
+    fn ensure_output_stream(&mut self, requested_device_name: Option<&str>) -> Result<(), String> {
         let requested_device_name = requested_device_name
             .map(str::trim)
             .filter(|name| !name.is_empty());
         if self.stream.is_some() && self.requested_device_name.as_deref() == requested_device_name {
             return Ok(());
         }
+        let prepared = prepare_media_audio_output(requested_device_name)?;
+        self.install_prepared_output(prepared)?;
+        Ok(())
+    }
+
+    fn next_audio_device_generation(&self) -> Result<u64, String> {
+        self.audio_device_generation.checked_add(1).ok_or_else(|| {
+            "Media audio output device generation is exhausted; restart is required before another output stream can be installed"
+                .to_string()
+        })
+    }
+
+    fn install_prepared_output(
+        &mut self,
+        prepared: PreparedMediaAudioOutput,
+    ) -> Result<(), String> {
+        // Reserve the next ABA fence before stopping any sink or replacing the
+        // stream. Exhaustion is a permanent fail-closed boundary; generation
+        // zero/one can never be recycled after u64::MAX.
+        let next_device_generation = self.next_audio_device_generation()?;
         for (_, sink) in self.sinks.drain() {
             sink.stop();
         }
@@ -13804,26 +14719,10 @@ impl MediaAudioPlayback {
         self.timeline_sources.clear();
         self.timeline_failures.clear();
         self.timeline_last_resync_at.clear();
-        self.stream = None;
-        let host = rodio::cpal::default_host();
-        let device = match requested_device_name {
-            Some(name) => host
-                .output_devices()
-                .map_err(|error| format!("Failed to list audio output devices: {error}"))?
-                .find(|device| device.name().ok().as_deref() == Some(name))
-                .ok_or_else(|| format!("Audio output device '{name}' was not found"))?,
-            None => host
-                .default_output_device()
-                .ok_or_else(|| "No default audio output device is available".to_string())?,
-        };
-        let resolved_name = device.name().ok();
-        self.stream = Some(
-            rodio::OutputStreamBuilder::from_device(device)
-                .and_then(|builder| builder.open_stream_or_fallback())
-                .map_err(|error| format!("Failed to open audio output: {error}"))?,
-        );
-        self.device_name = requested_device_name.map(str::to_string).or(resolved_name);
-        self.requested_device_name = requested_device_name.map(str::to_string);
+        self.stream = Some(prepared.stream);
+        self.device_name = prepared.device_name;
+        self.requested_device_name = prepared.requested_device_name;
+        self.audio_device_generation = next_device_generation;
         Ok(())
     }
 
@@ -13957,18 +14856,23 @@ impl MediaAudioPlayback {
         }
     }
 
+    #[cfg(test)]
     fn play_timeline_clip(
         &mut self,
+        source_projection_is_current: &mut impl FnMut() -> bool,
         key: TimelineAudioSinkKey,
         clip: &TimelineAudioClipSummary,
         source_position_ms: u64,
         volume: f32,
     ) -> Result<(), String> {
+        #[cfg(test)]
+        {
+            self.timeline_start_attempt_count = self.timeline_start_attempt_count.saturating_add(1);
+        }
         if let Some(previous) = self.timeline_sinks.remove(&key) {
             previous.stop();
         }
         let requested_device_name = self.requested_device_name.clone();
-        self.ensure_output_stream(requested_device_name.as_deref())?;
         let file = fs::File::open(&clip.path).map_err(|error| {
             format!(
                 "Timeline audio clip {} could not open '{}': {error}",
@@ -13981,6 +14885,13 @@ impl MediaAudioPlayback {
                 clip.id, clip.path
             )
         })?;
+        if !source_projection_is_current() {
+            return Err(
+                "Timeline audio source projection changed while its decoder was opening"
+                    .to_string(),
+            );
+        }
+        self.ensure_output_stream(requested_device_name.as_deref())?;
         let stream = self
             .stream
             .as_ref()
@@ -14008,6 +14919,10 @@ impl MediaAudioPlayback {
 
     fn stop_timeline_clip(&mut self, key: TimelineAudioSinkKey) {
         if let Some(sink) = self.timeline_sinks.remove(&key) {
+            #[cfg(test)]
+            {
+                self.timeline_stop_count = self.timeline_stop_count.saturating_add(1);
+            }
             sink.stop();
         }
         self.timeline_sources.remove(&key);
@@ -14041,10 +14956,273 @@ impl MediaAudioPlayback {
     /// Sync only program Timeline clips. Metronome and Guide are intentionally
     /// outside this result: neither is a Follow audio-settlement consumer, so
     /// their device failures must not incorrectly fault a captured Follow.
-    fn sync_to_timeline_audio_evidenced(
+    fn plan_timeline_audio_sync(
         &mut self,
         timeline: &engine::TimelineAudioRuntimeSnapshot,
+    ) -> Result<TimelineAudioSyncPlan, String> {
+        self.accept_timeline_source_projection_authority(timeline.source_projection_authority)?;
+        let now = Instant::now();
+        let action = timeline_audio_transport_action(
+            self.timeline_transport,
+            timeline.playing,
+            timeline.position_ms,
+            timeline.transport_revision,
+            now,
+        );
+        self.timeline_transport = TimelineAudioTransportState {
+            playing: timeline.playing,
+            position_ms: timeline.position_ms,
+            transport_revision: timeline.transport_revision,
+            synced_at: Some(now),
+        };
+        let mut plan = TimelineAudioSyncPlan {
+            authority: timeline.source_projection_authority,
+            device_generation: self.audio_device_generation,
+            requested_device_name: self.requested_device_name.clone(),
+            mixer: self
+                .stream
+                .as_ref()
+                .map(|stream| stream.mixer().clone())
+                .or_else(|| {
+                    #[cfg(test)]
+                    {
+                        self.timeline_test_mixer.clone()
+                    }
+                    #[cfg(not(test))]
+                    {
+                        None
+                    }
+                }),
+            prepares: Vec::new(),
+            seeks: Vec::new(),
+            errors: Vec::new(),
+        };
+        if !self.apply_timeline_transport_barrier(action, timeline.muted) {
+            self.timeline_last_sync_error = None;
+            return Ok(plan);
+        }
+
+        let active_clips = timeline_audio_active_clips(timeline);
+        let active_ids = active_clips
+            .iter()
+            .map(|(key, _, _)| key.clone())
+            .collect::<HashSet<_>>();
+        let stale_ids = self
+            .timeline_sinks
+            .keys()
+            .cloned()
+            .filter(|key| !active_ids.contains(key))
+            .collect::<Vec<_>>();
+        for key in stale_ids {
+            self.stop_timeline_clip(key);
+        }
+        self.timeline_failures
+            .retain(|key, _| active_ids.contains(key));
+
+        for (key, clip, local_position_ms) in active_clips {
+            let source_position_ms = local_position_ms
+                .saturating_sub(clip.start_ms)
+                .saturating_add(clip.offset_ms);
+            let volume = timeline_audio_clip_volume(&clip, local_position_ms);
+            let source = TimelineAudioSourceConfig {
+                path: PathBuf::from(&clip.path),
+                gain: clip.gain.clamp(0.0, 2.0),
+                offset_ms: clip.offset_ms,
+            };
+            let source_changed = self.timeline_sources.get(&key).is_some_and(|current| {
+                current.path != source.path || current.offset_ms != source.offset_ms
+            });
+            if source_changed {
+                self.stop_timeline_clip(key.clone());
+            }
+            if !self.timeline_sinks.contains_key(&key) {
+                if let Some(failure) = self.timeline_failures.get(&key) {
+                    if failure.source == source
+                        && matches!(action, TimelineAudioTransportAction::Sync)
+                    {
+                        plan.errors.push(failure.error.clone());
+                        continue;
+                    }
+                }
+                self.timeline_failures.remove(&key);
+                #[cfg(test)]
+                {
+                    self.timeline_start_attempt_count =
+                        self.timeline_start_attempt_count.saturating_add(1);
+                }
+                plan.prepares.push(TimelineAudioPrepareRequest {
+                    key,
+                    clip,
+                    source_position_ms,
+                    volume,
+                    source,
+                });
+                continue;
+            }
+            if let Some(source_state) = self.timeline_sources.get_mut(&key) {
+                source_state.gain = clip.gain.clamp(0.0, 2.0);
+                source_state.offset_ms = clip.offset_ms;
+            }
+            let Some(sink) = self.timeline_sinks.get(&key) else {
+                continue;
+            };
+            sink.set_volume(volume.clamp(0.0, 2.0));
+            if sink.empty() {
+                continue;
+            }
+            let actual_ms = sink.get_pos().as_millis().min(i64::MAX as u128) as i64;
+            let desired_ms = source_position_ms.min(i64::MAX as u64) as i64;
+            let drift_ms = actual_ms.saturating_sub(desired_ms);
+            self.last_drift_ms = drift_ms;
+            self.max_abs_drift_ms = self.max_abs_drift_ms.max(drift_ms.unsigned_abs());
+            let cooldown_elapsed = self
+                .timeline_last_resync_at
+                .get(&key)
+                .map(|last| now.saturating_duration_since(*last))
+                .unwrap_or(Duration::MAX);
+            if media_audio_resync_required(drift_ms, cooldown_elapsed) {
+                let sink = self
+                    .timeline_sinks
+                    .remove(&key)
+                    .expect("Timeline seek plan must own the observed sink");
+                plan.seeks.push(TimelineAudioSeekRequest {
+                    key,
+                    clip_id: clip.id,
+                    sink,
+                    source_position_ms,
+                });
+            }
+        }
+        Ok(plan)
+    }
+
+    fn commit_timeline_audio_sync(
+        &mut self,
+        plan: TimelineAudioSyncPlan,
+        current: &engine::TimelineAudioRuntimeSnapshot,
+        prepared_output: Option<PreparedMediaAudioOutput>,
+        prepared_clips: Vec<
+            Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>,
+        >,
+        seek_results: Vec<(TimelineAudioSeekRequest, Result<(), String>)>,
     ) -> Result<(), String> {
+        if current.source_projection_authority != plan.authority
+            || self.timeline_source_projection_authority != Some(plan.authority)
+            || self.audio_device_generation != plan.device_generation
+            || self.requested_device_name != plan.requested_device_name
+        {
+            for prepared in prepared_clips.into_iter().flatten() {
+                prepared.sink.stop();
+            }
+            for (seek, _) in seek_results {
+                seek.sink.stop();
+            }
+            return Err(
+                "Timeline audio source projection or output device changed during preparation"
+                    .to_string(),
+            );
+        }
+
+        if let Some(output) = prepared_output {
+            self.install_prepared_output(output)?;
+            self.timeline_source_projection_authority = Some(plan.authority);
+        }
+        let active = timeline_audio_active_clips(current)
+            .into_iter()
+            .map(|(key, clip, position_ms)| {
+                let source = TimelineAudioSourceConfig {
+                    path: PathBuf::from(&clip.path),
+                    gain: clip.gain.clamp(0.0, 2.0),
+                    offset_ms: clip.offset_ms,
+                };
+                (key, (clip, position_ms, source))
+            })
+            .collect::<HashMap<_, _>>();
+        let now = Instant::now();
+        let mut errors = plan.errors;
+        for (seek, result) in seek_results {
+            let still_current = active.contains_key(&seek.key)
+                && self.timeline_sources.contains_key(&seek.key)
+                && !self.timeline_sinks.contains_key(&seek.key);
+            if !still_current {
+                seek.sink.stop();
+                continue;
+            }
+            match result {
+                Ok(()) => {
+                    self.resync_count = self.resync_count.saturating_add(1);
+                    self.timeline_last_resync_at.insert(seek.key.clone(), now);
+                    self.timeline_sinks.insert(seek.key, seek.sink);
+                }
+                Err(error) => {
+                    seek.sink.stop();
+                    errors.push(format!(
+                        "Timeline audio clip {} drift resync failed: {error}",
+                        seek.clip_id
+                    ));
+                }
+            }
+        }
+        for prepared in prepared_clips {
+            match prepared {
+                Ok(prepared) => {
+                    let Some((current_clip, current_position_ms, current_source)) =
+                        active.get(&prepared.request.key)
+                    else {
+                        prepared.sink.stop();
+                        continue;
+                    };
+                    if current_source.path != prepared.request.source.path
+                        || current_source.offset_ms != prepared.request.source.offset_ms
+                        || self.timeline_sinks.contains_key(&prepared.request.key)
+                    {
+                        prepared.sink.stop();
+                        continue;
+                    }
+                    prepared.sink.set_volume(
+                        timeline_audio_clip_volume(current_clip, *current_position_ms)
+                            .clamp(0.0, 2.0),
+                    );
+                    #[cfg(test)]
+                    self.timeline_last_install_source_position_ms.insert(
+                        prepared.request.key.clone(),
+                        prepared.request.source_position_ms,
+                    );
+                    prepared.sink.play();
+                    self.timeline_sources
+                        .insert(prepared.request.key.clone(), current_source.clone());
+                    self.timeline_last_resync_at
+                        .insert(prepared.request.key.clone(), now);
+                    self.timeline_failures.remove(&prepared.request.key);
+                    self.timeline_sinks
+                        .insert(prepared.request.key, prepared.sink);
+                }
+                Err((request, error)) => {
+                    self.timeline_failures.insert(
+                        request.key,
+                        TimelineAudioPlaybackFailure {
+                            source: request.source,
+                            error: error.clone(),
+                        },
+                    );
+                    errors.push(error);
+                }
+            }
+        }
+        self.timeline_last_sync_error = (!errors.is_empty()).then(|| errors.join("; "));
+        match self.timeline_last_sync_error.clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    #[cfg(test)]
+    fn sync_to_timeline_audio_evidenced_with_fence(
+        &mut self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+        mut source_projection_is_current: impl FnMut() -> bool,
+    ) -> Result<(), String> {
+        self.accept_timeline_source_projection_authority(timeline.source_projection_authority)?;
         let now = Instant::now();
         let action = timeline_audio_transport_action(
             self.timeline_transport,
@@ -14081,20 +15259,39 @@ impl MediaAudioPlayback {
             })
             .collect::<Vec<_>>();
         active_clips.extend(timeline.child_clips.iter().map(|child| {
-            let key = child
-                .direct_parent_cue_id
-                .map(|parent_cue_id| TimelineAudioSinkKey::DirectChild {
+            let key = match child.root {
+                engine::ChildTimelineAudioRuntimeRoot::Direct {
                     parent_cue_id,
-                    generation: child.direct_generation,
+                    generation,
+                } => TimelineAudioSinkKey::DirectChild {
+                    parent_cue_id,
+                    generation,
                     path: Arc::clone(&child.path),
                     clip_id: child.clip.id,
-                })
-                .unwrap_or(TimelineAudioSinkKey::Child {
-                    parent_event_id: child.parent_event_id,
-                    parent_iteration: child.parent_iteration,
+                },
+                engine::ChildTimelineAudioRuntimeRoot::Timeline {
+                    parent_event_id,
+                    parent_iteration,
+                } => TimelineAudioSinkKey::Child {
+                    parent_event_id,
+                    parent_iteration,
                     path: Arc::clone(&child.path),
                     clip_id: child.clip.id,
-                });
+                },
+                engine::ChildTimelineAudioRuntimeRoot::Follow {
+                    source_timeline_id,
+                    target_timeline_id,
+                    generation,
+                    target_root,
+                } => TimelineAudioSinkKey::Follow {
+                    source_timeline_id,
+                    target_timeline_id,
+                    generation,
+                    target_root,
+                    path: Arc::clone(&child.path),
+                    clip_id: child.clip.id,
+                },
+            };
             (key, &child.clip, child.position_ms)
         }));
         let active_ids = active_clips
@@ -14140,9 +15337,13 @@ impl MediaAudioPlayback {
                     }
                 }
                 self.timeline_failures.remove(&key);
-                if let Err(error) =
-                    self.play_timeline_clip(key.clone(), clip, source_position_ms, volume)
-                {
+                if let Err(error) = self.play_timeline_clip(
+                    &mut source_projection_is_current,
+                    key.clone(),
+                    clip,
+                    source_position_ms,
+                    volume,
+                ) {
                     self.stop_timeline_clip(key.clone());
                     self.timeline_failures.insert(
                         key.clone(),
@@ -14196,11 +15397,12 @@ impl MediaAudioPlayback {
         }
     }
 
-    fn sync_to_timeline_audio(
+    #[cfg(test)]
+    fn sync_to_timeline_audio_evidenced(
         &mut self,
         timeline: &engine::TimelineAudioRuntimeSnapshot,
     ) -> Result<(), String> {
-        self.sync_to_timeline_audio_evidenced(timeline)
+        self.sync_to_timeline_audio_evidenced_with_fence(timeline, || true)
     }
 
     fn play_metronome_click(&mut self, accented: bool) -> Result<(), String> {
@@ -15616,7 +16818,7 @@ struct ProjectAuthorityCaptureStamp {
 /// engine publication.  Applying this value after the engine ACK is therefore
 /// assignment-only: no counter overflow can turn an already-published B into
 /// a false error/rollback claim.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PreparedProjectIdentitySwapCounters {
     epoch: u64,
     path_generation: u64,
@@ -16256,7 +17458,8 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::BootstrapVjShow { .. }
         | EngineCommand::BootstrapVjShowWithAllocatedAssets { .. }
         | EngineCommand::SaveVideoOutputMappingPreset { .. }
-        | EngineCommand::RemoveVideoOutputMappingPreset { .. } => None,
+        | EngineCommand::RemoveVideoOutputMappingPreset { .. }
+        | EngineCommand::SetMediaAssetAvailability { .. } => None,
     }
 }
 
@@ -17475,7 +18678,7 @@ fn download_gdtf_from_share(
 
 #[tauri::command]
 fn list_gdtf_fixture_cache(app: tauri::AppHandle) -> Result<Vec<GdtfFixtureCacheEntry>, String> {
-    let directory = app_data_subdirectory(&app, FIXTURE_PROFILE_CACHE_DIRECTORY)?;
+    let directory = app_data_subdirectory_path(&app, FIXTURE_PROFILE_CACHE_DIRECTORY)?;
     inspect_gdtf_fixture_cache_directory(&directory)
 }
 
@@ -17652,10 +18855,13 @@ fn repair_fixture_profile(
 
 #[tauri::command]
 fn create_custom_fixture_profile(
-    state: State<'_, AppState>,
     request: CustomFixtureProfileRequest,
 ) -> Result<FixtureProfileSummary, String> {
-    register_custom_fixture_profile(&state, request)
+    // Retained for older clients, but intentionally mirrors the pure preview
+    // command.  Profile creation must not mutate project state or the cache;
+    // Patch is the sole authoritative commit boundary.
+    validate_custom_fixture_profile_request(&request)?;
+    Ok(custom_fixture_profile_from_request(request))
 }
 
 #[tauri::command]
@@ -24806,6 +26012,30 @@ async fn run_media_asset_availability_inspection(
             return Err("Media asset availability operation already completed".to_string())
         }
         Err(()) => return Err("Media asset operation was cancelled".to_string()),
+    }
+    // Availability is machine-local runtime truth.  Publish each terminal
+    // verdict to the engine after the read-only inspection linearizes so the
+    // Timeline renderer can fail closed without doing filesystem I/O on its
+    // render tick.  The map is cleared on project replacement and is never
+    // included in authored persistence/history.
+    for verdict in &availability {
+        let asset_id = match verdict {
+            MediaAssetAvailability::AvailableVerified { asset_id }
+            | MediaAssetAvailability::AvailableUnverified { asset_id }
+            | MediaAssetAvailability::Missing { asset_id }
+            | MediaAssetAvailability::HashMismatch { asset_id, .. }
+            | MediaAssetAvailability::Unreadable { asset_id, .. }
+            | MediaAssetAvailability::LiveSource { asset_id } => *asset_id,
+        };
+        let available = matches!(
+            verdict,
+            MediaAssetAvailability::AvailableVerified { .. }
+                | MediaAssetAvailability::AvailableUnverified { .. }
+                | MediaAssetAvailability::LiveSource { .. }
+        );
+        state
+            .engine
+            .set_media_asset_availability(asset_id, available)?;
     }
     Ok(MediaAssetAvailabilityReport {
         request_id: handle.request_id,
@@ -35670,6 +36900,24 @@ async fn add_display_output_v2(
         .await
 }
 
+/// Canonical physical live-window mutation.  Legacy open/sync/close routes
+/// remain rejected; this ingress is the only reviewed route for a Display
+/// shell and never accepts a test-pattern selector.
+#[tauri::command]
+async fn set_display_output_window_open_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
 #[tauri::command]
 async fn acquire_output_lease_v2(
     app: tauri::AppHandle,
@@ -39607,6 +40855,7 @@ fn output_lease_resources_for_control_action(
         },
         protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
         | protocol::control_plane_command::OutputControlActionV2::AddDisplay { .. }
+        | protocol::control_plane_command::OutputControlActionV2::SetDisplayWindowOpen { .. }
         | protocol::control_plane_command::OutputControlActionV2::TakeOverStandby { .. } => {
             match action {
                 protocol::control_plane_command::OutputControlActionV2::AddDisplay { .. } => {
@@ -39662,6 +40911,22 @@ pub(crate) fn build_output_lease_authorization_request(
         OutputControlActionV2::AddDisplay { lease, .. } => {
             let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
                 .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
+            OutputLeaseRequestAction::AuthorizeOrRecoverDisplay {
+                lease_id,
+                owner,
+                expected_generation: lease.generation,
+                exact_resources: resources,
+                project_identity: output_lease_project_identity(project_epoch),
+                ttl_ms: output_lease::MAX_OUTPUT_LEASE_TTL_MS,
+            }
+        }
+        OutputControlActionV2::SetDisplayWindowOpen { lease, .. } => {
+            let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
+                .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
+            // The physical-shell lane uses the same exact-Both recovery
+            // semantics as AddDisplay.  A 60-second idle interval therefore
+            // cannot strand a legitimate reopen, while foreign/split leases
+            // remain rejected by the shared durable registry.
             OutputLeaseRequestAction::AuthorizeOrRecoverDisplay {
                 lease_id,
                 owner,
@@ -41153,12 +42418,17 @@ fn redo_project_transaction(
     )
 }
 
-fn app_data_subdirectory(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+fn app_data_subdirectory_path(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
     let directory = app
         .path()
         .app_local_data_dir()
         .map_err(|error| format!("Unable to resolve Syndocal application data: {error}"))?
         .join(name);
+    Ok(directory)
+}
+
+fn app_data_subdirectory(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+    let directory = app_data_subdirectory_path(app, name)?;
     fs::create_dir_all(&directory)
         .map_err(|error| format!("Unable to create {}: {error}", directory.display()))?;
     Ok(directory)
@@ -51849,6 +53119,28 @@ fn retire_native_video_output_window(
     }
 }
 
+fn retire_live_video_output_worker_instances(
+    app: &tauri::AppHandle,
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+    label: &str,
+) -> Result<bool, String> {
+    let quarantine_prefix = format!("{label}::quarantine-");
+    let labels = workers
+        .lock()
+        .map_err(|_| "Native video output worker registry lock was poisoned".to_string())?
+        .keys()
+        .filter(|candidate| {
+            candidate.as_str() == label || candidate.starts_with(&quarantine_prefix)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut retired = false;
+    for instance_label in labels {
+        retired |= retire_native_video_output_window(app, workers, &instance_label)?;
+    }
+    Ok(retired)
+}
+
 fn attempt_native_video_output_retirements<I, F>(labels: I, mut retire: F) -> Vec<String>
 where
     I: IntoIterator,
@@ -52324,14 +53616,25 @@ fn prepare_native_display_output_window(
         )));
     }
     let builder_app = app.clone();
+    let (logical_width, logical_height) =
+        native_video_output_logical_size(output.width, output.height, monitor.scale_factor);
     let builder = tauri::window::WindowBuilder::new(&builder_app, label.clone())
         .title(format!("Syndocal Output - {}", output.label))
-        .inner_size(output.width as f64, output.height as f64)
+        // WindowBuilder::inner_size takes logical pixels.  The persisted
+        // Display contract is physical pixels, so convert only at this
+        // boundary; every post-build size/verification path stays physical.
+        .inner_size(logical_width, logical_height)
         .resizable(true)
         .decorations(!output.fullscreen)
-        .fullscreen(output.fullscreen)
+        // Keep the candidate hidden and windowed until the post-show
+        // activation boundary.  Setting fullscreen while the window is
+        // hidden lets Tao resolve the monitor using the creator's DPI context
+        // and can leave a 3840x2160 target at its 2560x1440 logical extent.
+        .fullscreen(false)
         .visible(false)
-        .position(monitor.position_x as f64, monitor.position_y as f64);
+        // The physical position is applied below through Tauri's
+        // PhysicalPosition API after the HWND exists.
+        ;
     let window = builder.build().map_err(|error| {
         OutputLeaseCandidateCommitFailure::safe(format!(
             "Native video output window creation failed: {error}"
@@ -52553,7 +53856,7 @@ impl DisplayOutputNativeOperations for TauriDisplayOutputNativeOperations {
         let label = candidate.label.clone();
         let output_id = candidate.output_id;
         let start_gate = candidate.worker.start_gate.clone();
-        publish_display_native_candidate_registry_state(
+        let published = publish_display_native_candidate_registry_state(
             &state.native_video_output_workers,
             &state.native_video_output_metrics,
             candidate,
@@ -52562,7 +53865,12 @@ impl DisplayOutputNativeOperations for TauriDisplayOutputNativeOperations {
             start_gate,
             commit,
             |candidate| (candidate.worker, candidate.metrics),
-        )
+        );
+        if published.is_ok() {
+            let incarnation = record_live_video_window_open(&self.app, output_id);
+            install_live_video_window_destroyed_observer(&self.app, output_id, incarnation);
+        }
+        published
     }
 }
 
@@ -52652,6 +53960,7 @@ fn prepare_native_video_output_candidate_worker(
             Arc::clone(&state.spout_inputs),
             Arc::clone(&state.capture_inputs),
             Some((output.width, output.height)),
+            output.fullscreen,
             Some(unpublished_snapshot),
             true,
             Some(expected_fence.clone()),
@@ -56275,6 +57584,7 @@ fn get_debug_video_output_test_pattern(
 struct VideoOutputWindowStatus {
     output_id: VideoOutputId,
     label: String,
+    live_window_incarnation: u64,
     live_open: bool,
     test_pattern_open: bool,
     live_window_label: String,
@@ -56284,6 +57594,524 @@ struct VideoOutputWindowStatus {
     ownership_reason: protocol::OutputOwnershipReason,
     ownership_error: Option<String>,
     performance: Option<NativeVideoOutputPerformance>,
+}
+
+#[derive(Debug, Clone)]
+struct LiveVideoWindowTruth {
+    incarnation: u64,
+    actual_open: bool,
+    retirement_completed: bool,
+    worker_label: String,
+}
+
+fn claim_live_video_window_truth_in(
+    truth: &mut HashMap<VideoOutputId, LiveVideoWindowTruth>,
+    output_id: VideoOutputId,
+    incarnation: u64,
+) -> Option<String> {
+    let current = truth.get(&output_id)?;
+    if current.incarnation != incarnation || !current.actual_open {
+        return None;
+    }
+    let worker_label = current.worker_label.clone();
+    truth.insert(
+        output_id,
+        LiveVideoWindowTruth {
+            incarnation,
+            actual_open: false,
+            retirement_completed: false,
+            worker_label: worker_label.clone(),
+        },
+    );
+    Some(worker_label)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VideoOutputWindowStateEvent {
+    schema_version: u16,
+    output_id: VideoOutputId,
+    mode: &'static str,
+    window_incarnation: u64,
+    actual_open: bool,
+    retirement_outcome: &'static str,
+    reason: &'static str,
+}
+
+fn announce_live_video_window_state(
+    app: &tauri::AppHandle,
+    output_id: VideoOutputId,
+    incarnation: u64,
+    actual_open: bool,
+    retirement_outcome: &'static str,
+    reason: &'static str,
+) {
+    let _ = app.emit(
+        "syndocal://video-output-window-state",
+        VideoOutputWindowStateEvent {
+            schema_version: 1,
+            output_id,
+            mode: "live",
+            window_incarnation: incarnation,
+            actual_open,
+            retirement_outcome,
+            reason,
+        },
+    );
+}
+
+fn record_live_video_window_open(app: &tauri::AppHandle, output_id: VideoOutputId) -> u64 {
+    let incarnation = LIVE_VIDEO_OUTPUT_WINDOW_INCARNATION.fetch_add(1, Ordering::AcqRel) + 1;
+    if let Ok(mut truth) = LIVE_VIDEO_OUTPUT_WINDOW_TRUTH.lock() {
+        truth.insert(
+            output_id,
+            LiveVideoWindowTruth {
+                incarnation,
+                actual_open: true,
+                retirement_completed: false,
+                worker_label: video_output_window_label(output_id, false),
+            },
+        );
+    }
+    announce_live_video_window_state(
+        app,
+        output_id,
+        incarnation,
+        true,
+        "opened",
+        "canonical_open",
+    );
+    incarnation
+}
+
+/// Execute the one physical Destroyed callback against an injectable registry
+/// and metrics seam.  The exact-incarnation truth claim is intentionally the
+/// first operation: a queued Destroyed(A) must never receive B's worker label
+/// or be allowed to touch B's worker/metrics pair.  Both AddDisplay and the
+/// canonical v2 reopen path install observers that call this same function.
+fn handle_live_video_window_destroyed_callback<Retire, IsQuarantined, RemoveMetrics, Emit>(
+    truth: &Mutex<HashMap<VideoOutputId, LiveVideoWindowTruth>>,
+    output_id: VideoOutputId,
+    incarnation: u64,
+    retire: Retire,
+    is_quarantined: IsQuarantined,
+    remove_metrics: RemoveMetrics,
+    mut emit: Emit,
+) -> Option<Result<(), String>>
+where
+    Retire: FnOnce(&str) -> Result<(), String>,
+    IsQuarantined: FnOnce(&str) -> bool,
+    RemoveMetrics: FnOnce(),
+    Emit: FnMut(&'static str),
+{
+    let worker_label = truth.lock().ok().and_then(|mut truth| {
+        claim_live_video_window_truth_in(&mut truth, output_id, incarnation)
+    })?;
+    match retire(&worker_label) {
+        Ok(()) => {
+            if mark_live_video_window_retirement_completed(truth, output_id, incarnation) {
+                remove_metrics();
+                emit("destroyed");
+            }
+            Some(Ok(()))
+        }
+        Err(error) => {
+            // A failed join/window acknowledgement has already transitioned
+            // physical truth to closed, but its worker+metrics pair remains
+            // reserved until a bounded reaper gets a full acknowledgement.
+            emit(if is_quarantined(&worker_label) {
+                "quarantined"
+            } else {
+                "retirement_failed"
+            });
+            Some(Err(error))
+        }
+    }
+}
+
+/// Mark the exact already-closed instance as fully reaped.  This is shared by
+/// the Destroyed callback and the later bounded quarantine reaper so only the
+/// first successful acknowledgement removes metrics or emits `destroyed`.
+fn mark_live_video_window_retirement_completed(
+    truth: &Mutex<HashMap<VideoOutputId, LiveVideoWindowTruth>>,
+    output_id: VideoOutputId,
+    incarnation: u64,
+) -> bool {
+    let Ok(mut truth) = truth.lock() else {
+        return false;
+    };
+    let Some(current) = truth.get_mut(&output_id) else {
+        return false;
+    };
+    if current.incarnation != incarnation || current.actual_open || current.retirement_completed {
+        return false;
+    }
+    current.retirement_completed = true;
+    true
+}
+
+fn complete_quarantined_live_video_window_reap_in<RemoveMetrics, Emit>(
+    truth: &Mutex<HashMap<VideoOutputId, LiveVideoWindowTruth>>,
+    output_id: VideoOutputId,
+    incarnation: u64,
+    remove_metrics: RemoveMetrics,
+    mut emit: Emit,
+) -> bool
+where
+    RemoveMetrics: FnOnce(),
+    Emit: FnMut(),
+{
+    if !mark_live_video_window_retirement_completed(truth, output_id, incarnation) {
+        return false;
+    }
+    remove_metrics();
+    emit();
+    true
+}
+
+fn complete_quarantined_live_video_window_reap(
+    app: &tauri::AppHandle,
+    output_id: VideoOutputId,
+    reason: &'static str,
+) -> bool {
+    let incarnation = LIVE_VIDEO_OUTPUT_WINDOW_TRUTH
+        .lock()
+        .ok()
+        .and_then(|truth| {
+            truth.get(&output_id).and_then(|current| {
+                (!current.actual_open && !current.retirement_completed)
+                    .then_some(current.incarnation)
+            })
+        });
+    let Some(incarnation) = incarnation else {
+        return false;
+    };
+    let state = app.state::<AppState>();
+    complete_quarantined_live_video_window_reap_in(
+        &LIVE_VIDEO_OUTPUT_WINDOW_TRUTH,
+        output_id,
+        incarnation,
+        || {
+            if let Ok(mut metrics) = state.native_video_output_metrics.lock() {
+                metrics.remove(&output_id);
+            }
+        },
+        || {
+            announce_live_video_window_state(
+                app,
+                output_id,
+                incarnation,
+                false,
+                "destroyed",
+                reason,
+            );
+        },
+    )
+}
+
+fn retire_claimed_live_video_window(
+    app: &tauri::AppHandle,
+    output_id: VideoOutputId,
+    incarnation: u64,
+    reason: &'static str,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    handle_live_video_window_destroyed_callback(
+        &LIVE_VIDEO_OUTPUT_WINDOW_TRUTH,
+        output_id,
+        incarnation,
+        |worker_label| {
+            retire_native_video_output_window(app, &state.native_video_output_workers, worker_label)
+                .map(|_| ())
+        },
+        |worker_label| {
+            let quarantine_prefix = format!("{worker_label}::quarantine-");
+            state
+                .native_video_output_workers
+                .lock()
+                .ok()
+                .is_some_and(|workers| {
+                    workers.keys().any(|candidate| {
+                        candidate == worker_label || candidate.starts_with(&quarantine_prefix)
+                    })
+                })
+        },
+        || {
+            if let Ok(mut metrics) = state.native_video_output_metrics.lock() {
+                metrics.remove(&output_id);
+            }
+        },
+        |outcome| {
+            announce_live_video_window_state(app, output_id, incarnation, false, outcome, reason);
+        },
+    )
+    .unwrap_or(Ok(()))
+}
+
+/// The one shared physical truth observer for every production live Display
+/// worker. It is attached only after that worker/metrics pair has reached the
+/// registry. A single exact-incarnation claim fences delayed A callbacks from
+/// B's label and metrics.
+fn install_live_video_window_destroyed_observer(
+    app: &tauri::AppHandle,
+    output_id: VideoOutputId,
+    incarnation: u64,
+) {
+    let label = video_output_window_label(output_id, false);
+    let Some(window) = app.windows().get(&label).cloned() else {
+        return;
+    };
+    let observer_app = app.clone();
+    window.on_window_event(move |event| {
+        if !matches!(event, tauri::WindowEvent::Destroyed) {
+            return;
+        }
+        let callback_app = observer_app.clone();
+        std::thread::spawn(move || {
+            // The shared callback claims exact truth before touching a label,
+            // worker, metrics, or event; stale A is therefore a no-op for B.
+            let _ = retire_claimed_live_video_window(
+                &callback_app,
+                output_id,
+                incarnation,
+                "native_destroyed",
+            );
+        });
+    });
+}
+
+/// Perform the physical part of the canonical Display-window operation.  It
+/// intentionally does not call the legacy Tauri commands: those commands are
+/// permanently fail-closed, whereas this routine is reached only after the
+/// OutputControl v2 fence/owner/lease admission.
+fn set_display_output_window_open_with_output_control_fence(
+    app: &tauri::AppHandle,
+    editor_window: &WebviewWindow,
+    state: &AppState,
+    output_id: VideoOutputId,
+    open: bool,
+    expected_fence: &OutputControlFenceV1,
+    lease_request: &OutputLeaseRequest,
+    lease_now_ms: u64,
+    expected_owner_principal: &str,
+    expected_owner_window_label: &str,
+    expected_owner_incarnation: u64,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
+    let output = state
+        .engine
+        .snapshot()
+        .video
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+        .cloned()
+        .ok_or_else(|| format!("Video output {output_id} was not found"))?;
+    if output.kind != VideoOutputKind::Display {
+        return Err("Only Display outputs have a physical live window".to_string());
+    }
+    // Resolve the persisted stable identity before either no-op observation or
+    // shell mutation.  An index reuse after a topology change never retargets
+    // a physical display.
+    let monitor = authoritative_video_display_monitor_for_output(app, &output)?;
+    let label = video_output_window_label(output_id, false);
+    let already_open = app.windows().contains_key(&label);
+    let has_registered_worker = state
+        .native_video_output_workers
+        .lock()
+        .map_err(|_| "Native video output worker registry lock was poisoned".to_string())?
+        .keys()
+        .any(|candidate| {
+            candidate == &label || candidate.starts_with(&format!("{label}::quarantine-"))
+        });
+    let has_registered_metrics = state
+        .native_video_output_metrics
+        .lock()
+        .map_err(|_| "Native video output metrics registry lock was poisoned".to_string())?
+        .contains_key(&output_id);
+    // Event-loop monitor queries are deliberately outside authority guards.
+    // Recheck after the warning below; an editor move during the OS dialog
+    // fails closed rather than trusting a frontend-supplied flag.
+    let editor_target_before =
+        open && validate_editor_monitor_for_window(editor_window)? == monitor.index;
+
+    // Native preparation/close and worker joins must be guard-free.  The
+    // short exact authority check below releases every guard before entering
+    // this phase; it is repeated at the lease commit boundary by the shared
+    // durable lane.
+    {
+        let _lifecycle = state
+            .standby_sync_lifecycle
+            .lock()
+            .map_err(|_| "Standby synchronization lifecycle lock was poisoned".to_string())?;
+        let _owner_rotation = state
+            .project_transaction_owner_rotation
+            .lock()
+            .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+        let _external = lock_project_external_command_admission(state)?;
+        let mut coordinator = lock_project_coordinator(state)?;
+        if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+            || !control_plane_runtime::exact_output_control_owner_matches(
+                state,
+                expected_owner_principal,
+                expected_owner_window_label,
+                expected_owner_incarnation,
+            )
+            || !control_plane_runtime::exact_output_control_fence_matches(
+                state,
+                &coordinator,
+                expected_fence,
+            )
+            || ensure_no_pending_project_transaction(&coordinator).is_err()
+        {
+            return Err("Output control fence changed before Display window operation".to_string());
+        }
+    }
+    if editor_target_before
+        && !control_plane_runtime::confirm_editor_display_window_open(editor_window)
+    {
+        return Err("Display window open was cancelled".to_string());
+    }
+    if editor_target_before && validate_editor_monitor_for_window(editor_window)? != monitor.index {
+        return Err("Editor monitor changed while confirming Display window open".to_string());
+    }
+
+    // Authorize before a physical delta.  This is the durable exact-Both
+    // lane, so a wrong/foreign/expired-unrecoverable lease fails before a
+    // shell is shown or retired.  The registry mutex is released before all
+    // native work below.
+    let lease_receipt =
+        submit_output_lease_lifecycle_request(state, lease_request, lease_now_ms, false)
+            .map_err(|error| format!("Display window lease authorization failed: {error:?}"))?;
+    let changed =
+        if already_open == open && (open || (!has_registered_worker && !has_registered_metrics)) {
+            // Terminal idempotent result still passes through the exact durable
+            // authorization lane, so reply-loss retries retain one receipt.
+            false
+        } else if !open {
+            let retired = retire_live_video_output_worker_instances(
+                app,
+                &state.native_video_output_workers,
+                &label,
+            )?;
+            if retired {
+                let _ = complete_quarantined_live_video_window_reap(
+                    app,
+                    output_id,
+                    "close_reaped_quarantine",
+                );
+            }
+            if let Ok(mut metrics) = state.native_video_output_metrics.lock() {
+                metrics.remove(&output_id);
+            }
+            retired || has_registered_metrics
+        } else {
+            // A missing HWND with a retained worker is not a closed no-op. Reap
+            // or quarantine it before reusing the label; otherwise a stale worker
+            // could leak behind a successful-looking reopen.
+            if has_registered_worker {
+                let retired = retire_live_video_output_worker_instances(
+                    app,
+                    &state.native_video_output_workers,
+                    &label,
+                )?;
+                if retired {
+                    let _ = complete_quarantined_live_video_window_reap(
+                        app,
+                        output_id,
+                        "reopen_reaped_quarantine",
+                    );
+                }
+            }
+            if !state.engine.output_ownership_status().video_allowed {
+                return Err("Video output ownership is not active".to_string());
+            }
+            let (logical_width, logical_height) =
+                native_video_output_logical_size(output.width, output.height, monitor.scale_factor);
+            let window = tauri::window::WindowBuilder::new(app, label.clone())
+                .title(format!("Syndocal Output - {}", output.label))
+                .inner_size(logical_width, logical_height)
+                .resizable(true)
+                .decorations(!output.fullscreen)
+                .fullscreen(false)
+                .build()
+                .map_err(|error| format!("Native video output window creation failed: {error}"))?;
+            let metrics = Arc::new(Mutex::new(NativeVideoOutputMetrics::default()));
+            let teardown_lease = NativeVideoOutputWorker::new_teardown_lease_slot();
+            let created = (|| -> Result<NativeVideoOutputWorker, String> {
+                apply_native_video_output_window_shell_with_monitor(
+                    &window,
+                    &output,
+                    false,
+                    Some(&monitor),
+                )?;
+                window.show().map_err(|error| error.to_string())?;
+                activate_native_video_output_window_after_show(
+                    &window,
+                    output.width,
+                    output.height,
+                    output.fullscreen,
+                )?;
+                start_native_video_live_output(
+                    window.clone(),
+                    state.engine.clone(),
+                    output_id,
+                    Arc::clone(&metrics),
+                    #[cfg(feature = "ndi")]
+                    Arc::clone(&state.ndi_inputs),
+                    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+                    Arc::clone(&state.spout_inputs),
+                    Arc::clone(&state.capture_inputs),
+                    None,
+                    output.fullscreen,
+                    None,
+                    false,
+                    None,
+                    None,
+                    false,
+                    label.clone(),
+                    Arc::clone(&teardown_lease),
+                )
+            })();
+            let worker = match created {
+                Ok(worker) => worker,
+                Err(error) => {
+                    let _ = window.close();
+                    return Err(error);
+                }
+            };
+            if let Ok(mut active_metrics) = state.native_video_output_metrics.lock() {
+                active_metrics.insert(output_id, Arc::clone(&metrics));
+            }
+            if let Err(error) = insert_native_video_output_worker(
+                &state.native_video_output_workers,
+                label.clone(),
+                worker,
+            ) {
+                if let Ok(mut active_metrics) = state.native_video_output_metrics.lock() {
+                    active_metrics.remove(&output_id);
+                }
+                let message = error.message();
+                let worker = error.into_worker();
+                let _ = retire_unregistered_native_video_output_worker(
+                    app,
+                    &state.native_video_output_workers,
+                    &label,
+                    worker,
+                );
+                return Err(message);
+            }
+            let incarnation = record_live_video_window_open(app, output_id);
+            install_live_video_window_destroyed_observer(app, output_id, incarnation);
+            true
+        };
+    Ok((changed, expected_fence.clone(), lease_receipt))
 }
 
 /// Physical display targets exposed to the local setup UI.  Windows dimensions
@@ -56460,6 +58288,143 @@ struct VideoOutputWindowCloseSummary {
     skipped_closed: usize,
 }
 
+const NATIVE_VIDEO_OUTPUT_GEOMETRY_SETTLE_TIMEOUT: Duration = Duration::from_millis(750);
+const NATIVE_VIDEO_OUTPUT_GEOMETRY_SETTLE_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Convert the persisted physical Display size to the logical size expected
+/// by WindowBuilder.  Tauri/Tao report `inner_size` as physical pixels, while
+/// the builder's f64 size is logical pixels.  Keeping this conversion in one
+/// seam prevents a 3840x2160 target at 150% DPI from being created as a
+/// 2560x1440 content surface.
+fn native_video_output_logical_size(
+    physical_width: u32,
+    physical_height: u32,
+    scale_factor: f64,
+) -> (f64, f64) {
+    let scale_factor = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    (
+        f64::from(physical_width.max(1)) / scale_factor,
+        f64::from(physical_height.max(1)) / scale_factor,
+    )
+}
+
+fn native_video_output_physical_extent_matches(
+    observed: tauri::PhysicalSize<u32>,
+    expected_width: u32,
+    expected_height: u32,
+) -> bool {
+    observed.width == expected_width.max(1) && observed.height == expected_height.max(1)
+}
+
+fn native_video_output_render_extent(width: u32, height: u32) -> Option<(u32, u32)> {
+    (width > 0 && height > 0).then_some((width, height))
+}
+
+fn wait_for_native_video_output_physical_size_with<Query, Sleep>(
+    expected_width: u32,
+    expected_height: u32,
+    timeout: Duration,
+    interval: Duration,
+    mut query: Query,
+    mut sleep: Sleep,
+) -> Result<tauri::PhysicalSize<u32>, String>
+where
+    Query: FnMut() -> Result<tauri::PhysicalSize<u32>, String>,
+    Sleep: FnMut(Duration),
+{
+    let expected = (expected_width.max(1), expected_height.max(1));
+    let deadline = Instant::now() + timeout;
+    loop {
+        let size = query().map_err(|error| {
+            format!("Native video output physical client-size query failed: {error}")
+        })?;
+        let observed = (size.width, size.height);
+        if native_video_output_physical_extent_matches(size, expected.0, expected.1) {
+            return Ok(size);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "Native video output physical client extent did not converge: expected {}x{}, observed {}x{}",
+                expected.0, expected.1, observed.0, observed.1
+            ));
+        }
+        sleep(interval);
+    }
+}
+
+fn wait_for_native_video_output_physical_size(
+    window: &tauri::Window,
+    expected_width: u32,
+    expected_height: u32,
+) -> Result<tauri::PhysicalSize<u32>, String> {
+    wait_for_native_video_output_physical_size_with(
+        expected_width,
+        expected_height,
+        NATIVE_VIDEO_OUTPUT_GEOMETRY_SETTLE_TIMEOUT,
+        NATIVE_VIDEO_OUTPUT_GEOMETRY_SETTLE_INTERVAL,
+        || window.inner_size().map_err(|error| error.to_string()),
+        std::thread::sleep,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeVideoOutputActivationGeometry {
+    Fullscreen,
+    PhysicalSize { width: u32, height: u32 },
+}
+
+fn native_video_output_activation_geometry(
+    width: u32,
+    height: u32,
+    fullscreen: bool,
+) -> NativeVideoOutputActivationGeometry {
+    if fullscreen {
+        NativeVideoOutputActivationGeometry::Fullscreen
+    } else {
+        NativeVideoOutputActivationGeometry::PhysicalSize {
+            width: width.max(1),
+            height: height.max(1),
+        }
+    }
+}
+
+/// Activate a shell only after it is visible.  Borderless fullscreen uses
+/// Tao's current-monitor lookup, so applying it after the physical position
+/// and size have been committed avoids using the editor monitor's logical
+/// extent.  The bounded physical-size check is part of the activation result;
+/// callers must clean up the candidate on failure.
+///
+/// This function queries the native event loop through `inner_size`; reachable
+/// production callers must invoke it only from a guard-free native phase,
+/// never while project or output transition authority locks are held. The
+/// legacy open/sync commands reject before their guarded bodies are entered.
+fn activate_native_video_output_window_after_show(
+    window: &tauri::Window,
+    width: u32,
+    height: u32,
+    fullscreen: bool,
+) -> Result<tauri::PhysicalSize<u32>, String> {
+    match native_video_output_activation_geometry(width, height, fullscreen) {
+        NativeVideoOutputActivationGeometry::Fullscreen => {
+            window.set_fullscreen(true).map_err(|error| {
+                format!("Native video output fullscreen activation failed: {error}")
+            })?;
+        }
+        NativeVideoOutputActivationGeometry::PhysicalSize { width, height } => {
+            window
+                .set_size(tauri::PhysicalSize::new(width, height))
+                .map_err(|error| {
+                    format!("Native video output physical window sizing failed: {error}")
+                })?;
+        }
+    }
+    wait_for_native_video_output_physical_size(window, width, height)
+}
+
 fn apply_native_video_output_window_shell(
     app: &tauri::AppHandle,
     window: &tauri::Window,
@@ -56504,26 +58469,35 @@ fn apply_native_video_output_window_shell_with_monitor(
         let monitor = monitor.ok_or_else(|| {
             "Display output shell is missing its authoritative monitor descriptor".to_string()
         })?;
+        // The shell is always staged in physical pixels and activated only
+        // after show.  This keeps the monitor routing and the client extent
+        // independent of the editor window's DPI context.
+        window
+            .set_fullscreen(false)
+            .map_err(|error| error.to_string())?;
         window
             .set_position(tauri::PhysicalPosition::new(
                 monitor.position_x,
                 monitor.position_y,
             ))
             .map_err(|error| error.to_string())?;
+    } else {
+        window
+            .set_fullscreen(output.fullscreen)
+            .map_err(|error| error.to_string())?;
     }
-    window
-        .set_fullscreen(output.fullscreen)
-        .map_err(|error| error.to_string())?;
     window
         .set_decorations(!output.fullscreen)
         .map_err(|error| error.to_string())?;
-    if !output.fullscreen {
+    if output.kind == VideoOutputKind::Display || !output.fullscreen {
         window
-            .set_size(tauri::LogicalSize::new(
-                f64::from(output.width.max(1)),
-                f64::from(output.height.max(1)),
+            .set_size(tauri::PhysicalSize::new(
+                output.width.max(1),
+                output.height.max(1),
             ))
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                format!("Native video output physical shell sizing failed: {error}")
+            })?;
     }
     Ok(())
 }
@@ -57103,6 +59077,7 @@ fn start_native_video_live_output(
     spout_inputs: spout_transport::SpoutInputRegistry,
     capture_inputs: capture_transport::CaptureInputRegistry,
     initial_size_override: Option<(u32, u32)>,
+    fullscreen: bool,
     unpublished_snapshot: Option<EngineSnapshot>,
     gate_render_loop_until_publication: bool,
     first_frame_fence: Option<OutputControlFenceV1>,
@@ -57119,7 +59094,7 @@ fn start_native_video_live_output(
         );
         return Err(error);
     }
-    let initial_size = match initial_size_override {
+    let mut initial_size = match initial_size_override {
         Some((width, height)) => (width.max(1), height.max(1)),
         None => {
             let size = window.inner_size().map_err(|error| error.to_string())?;
@@ -57127,9 +59102,18 @@ fn start_native_video_live_output(
         }
     };
     let window = Arc::new(window);
-    let mut presenter =
-        video::GpuSurfacePresenter::new(Arc::clone(&window), initial_size.0, initial_size.1)
-            .map_err(|error| format!("Native video output initialization failed: {error:?}"))?;
+    // A hidden Display shell can report its creator-DPI logical extent until
+    // it has been shown and fullscreen activation has completed.  Defer GPU
+    // surface creation for that path so the first configuration is the
+    // verified physical client extent, not a stale 2560x1440/1920x1080 size.
+    let mut presenter = if show_before_first_frame {
+        None
+    } else {
+        Some(
+            video::GpuSurfacePresenter::new(Arc::clone(&window), initial_size.0, initial_size.1)
+                .map_err(|error| format!("Native video output initialization failed: {error:?}"))?,
+        )
+    };
     let decoder =
         ndi_transport::NdiAwareVideoFrameDecoder::from_env().with_capture_inputs(capture_inputs);
     #[cfg(feature = "ndi")]
@@ -57172,7 +59156,25 @@ fn start_native_video_live_output(
             window
                 .show()
                 .map_err(|error| format!("Native video output first-frame show failed: {error}"))?;
+            let size = activate_native_video_output_window_after_show(
+                &window,
+                initial_size.0,
+                initial_size.1,
+                fullscreen,
+            )?;
+            initial_size = (size.width.max(1), size.height.max(1));
+            presenter = Some(
+                video::GpuSurfacePresenter::new(
+                    Arc::clone(&window),
+                    initial_size.0,
+                    initial_size.1,
+                )
+                .map_err(|error| format!("Native video output initialization failed: {error:?}"))?,
+            );
         }
+        let presenter = presenter
+            .as_mut()
+            .ok_or_else(|| "Native video output presenter was not initialized".to_string())?;
         match first_output {
             NativeVideoOutputFrame::Prepared(prepared) => presenter
                 .present_prepared_output(&prepared, initial_size.0, initial_size.1)
@@ -57193,7 +59195,10 @@ fn start_native_video_live_output(
         initial_size.0,
         initial_size.1,
         first_started,
-        presenter.buffer_stats(),
+        presenter
+            .as_ref()
+            .map(video::GpuSurfacePresenter::buffer_stats)
+            .unwrap_or_default(),
         renderer.frame_provider().decoder().diagnostics(),
         first_result.as_ref().err().cloned(),
     );
@@ -57207,6 +59212,8 @@ fn start_native_video_live_output(
         );
     }
     first_result?;
+    let mut presenter =
+        presenter.ok_or_else(|| "Native video output presenter was not initialized".to_string())?;
 
     let mut follow_last_valid = initial_follow_last_valid;
 
@@ -57224,7 +59231,6 @@ fn start_native_video_live_output(
     let start_gate = gate_render_loop_until_publication.then(|| Arc::new(AtomicBool::new(false)));
     let worker_start_gate = start_gate.clone();
     let worker_teardown_lease = Arc::clone(&teardown_lease);
-    let fixed_size = initial_size_override;
     let join = std::thread::Builder::new()
         .name(format!("syndocal-video-output-{output_id}"))
         .spawn(move || -> Result<(), String> {
@@ -57239,31 +59245,28 @@ fn start_native_video_live_output(
             let target_interval = Duration::from_nanos(1_000_000_000 / 60);
             while !worker_stop.load(Ordering::Acquire) {
                 let frame_started = Instant::now();
-                let (width, height) = match fixed_size {
-                    Some((width, height)) => (width, height),
-                    None => match window.inner_size() {
-                        Ok(size) => (size.width, size.height),
-                        Err(error) => {
-                            let error = format!("Native video output window size failed: {error}");
-                            let result = native_video_output_worker_result(
-                                &worker_stop,
-                                engine.output_ownership_status().state,
-                                Err(error),
+                let (width, height) = match window.inner_size() {
+                    Ok(size) => (size.width, size.height),
+                    Err(error) => {
+                        let error = format!("Native video output window size failed: {error}");
+                        let result = native_video_output_worker_result(
+                            &worker_stop,
+                            engine.output_ownership_status().state,
+                            Err(error),
+                        );
+                        if let Err(error) = &result {
+                            arm_native_video_output_failure_fence(
+                                &engine,
+                                &worker_teardown_lease,
+                                &label,
+                                error.clone(),
                             );
-                            if let Err(error) = &result {
-                                arm_native_video_output_failure_fence(
-                                    &engine,
-                                    &worker_teardown_lease,
-                                    &label,
-                                    error.clone(),
-                                );
-                                let _ = window.close();
-                            }
-                            return result;
+                            let _ = window.close();
                         }
-                    },
+                        return result;
+                    }
                 };
-                if width > 0 && height > 0 {
+                if let Some((width, height)) = native_video_output_render_extent(width, height) {
                     let result = native_video_output_live_frame_with_permit(
                         &mut presenter,
                         || engine.acquire_video_output(),
@@ -57425,10 +59428,34 @@ fn get_video_output_window_statuses(
         .map(|output| {
             let live_window_label = video_output_window_label(output.id, false);
             let test_pattern_window_label = video_output_window_label(output.id, true);
+            let actual_live_open = app.windows().contains_key(&live_window_label);
+            let truth = LIVE_VIDEO_OUTPUT_WINDOW_TRUTH
+                .lock()
+                .ok()
+                .and_then(|truth| truth.get(&output.id).cloned());
+            let live_window_incarnation =
+                truth.as_ref().map(|truth| truth.incarnation).unwrap_or(0);
+            // Query is the reconciliation backstop for a native Destroyed
+            // notification that arrived after a process-local callback was
+            // interrupted.  It never revives a stale A incarnation.
+            if truth.is_some_and(|truth| truth.actual_open != actual_live_open) {
+                if actual_live_open {
+                    let incarnation = record_live_video_window_open(&app, output.id);
+                    install_live_video_window_destroyed_observer(&app, output.id, incarnation);
+                } else if live_window_incarnation > 0 {
+                    let _ = retire_claimed_live_video_window(
+                        &app,
+                        output.id,
+                        live_window_incarnation,
+                        "query_reconciliation",
+                    );
+                }
+            }
             VideoOutputWindowStatus {
                 output_id: output.id,
                 label: output.label.clone(),
-                live_open: app.windows().contains_key(&live_window_label),
+                live_window_incarnation,
+                live_open: actual_live_open,
                 test_pattern_open: app.windows().contains_key(&test_pattern_window_label),
                 live_window_label,
                 test_pattern_window_label,
@@ -57508,9 +59535,18 @@ async fn sync_open_video_output_windows(
                 let live_label = video_output_window_label(output.id, false);
                 if let Some(window) = app.windows().get(&live_label).cloned() {
                     resource.1.push(live_label);
-                    if let Err(error) =
-                        apply_native_video_output_window_shell(&app, &window, output, false)
-                    {
+                    let result = (|| {
+                        apply_native_video_output_window_shell(&app, &window, output, false)?;
+                        window.show().map_err(|error| error.to_string())?;
+                        activate_native_video_output_window_after_show(
+                            &window,
+                            output.width,
+                            output.height,
+                            output.fullscreen,
+                        )?;
+                        Ok::<_, String>(())
+                    })();
+                    if let Err(error) = result {
                         return native_video_output_sync_resource_from_shell(resource, Err(error));
                     }
                     resource.0.synced_live += 1;
@@ -57521,9 +59557,18 @@ async fn sync_open_video_output_windows(
                 let test_pattern_label = video_output_window_label(output.id, true);
                 if let Some(window) = app.windows().get(&test_pattern_label).cloned() {
                     resource.1.push(test_pattern_label);
-                    if let Err(error) =
-                        apply_native_video_output_window_shell(&app, &window, output, true)
-                    {
+                    let result = (|| {
+                        apply_native_video_output_window_shell(&app, &window, output, true)?;
+                        window.show().map_err(|error| error.to_string())?;
+                        activate_native_video_output_window_after_show(
+                            &window,
+                            output.width,
+                            output.height,
+                            output.fullscreen,
+                        )?;
+                        Ok::<_, String>(())
+                    })();
+                    if let Err(error) = result {
                         return native_video_output_sync_resource_from_shell(resource, Err(error));
                     }
                     resource.0.synced_test_pattern += 1;
@@ -57678,7 +59723,17 @@ async fn sync_video_output_window(
             };
             native_video_output_sync_resource_from_shell(
                 label.clone(),
-                apply_native_video_output_window_shell(&app, &window, &output, test_pattern),
+                (|| {
+                    apply_native_video_output_window_shell(&app, &window, &output, test_pattern)?;
+                    window.show().map_err(|error| error.to_string())?;
+                    activate_native_video_output_window_after_show(
+                        &window,
+                        output.width,
+                        output.height,
+                        output.fullscreen,
+                    )?;
+                    Ok::<_, String>(())
+                })(),
             )
         },
         |label| {
@@ -57977,6 +60032,12 @@ async fn open_video_output_window(
                                 true,
                             )?;
                             window.show().map_err(|error| error.to_string())?;
+                            activate_native_video_output_window_after_show(
+                                &window,
+                                output.width,
+                                output.height,
+                                output.fullscreen,
+                            )?;
                             window.set_focus().map_err(|error| error.to_string())
                         })(),
                     )
@@ -57991,15 +60052,16 @@ async fn open_video_output_window(
                 },
             );
         }
+        let monitor = authoritative_video_display_monitor_for_output(&app, &output)?;
+        let (logical_width, logical_height) =
+            native_video_output_logical_size(output.width, output.height, monitor.scale_factor);
         let builder_app = app.clone();
-        let mut builder = tauri::window::WindowBuilder::new(&builder_app, label.clone())
+        let builder = tauri::window::WindowBuilder::new(&builder_app, label.clone())
             .title(format!("Syndocal Test Pattern - {}", output.label))
-            .inner_size(output.width as f64, output.height as f64)
+            .inner_size(logical_width, logical_height)
             .resizable(true)
             .decorations(!output.fullscreen)
-            .fullscreen(output.fullscreen);
-        let monitor = authoritative_video_display_monitor_for_output(&app, &output)?;
-        builder = builder.position(monitor.position_x as f64, monitor.position_y as f64);
+            .fullscreen(false);
         let label_for_retire = label.clone();
         let create_app = app.clone();
         let retire_app = app.clone();
@@ -58016,6 +60078,13 @@ async fn open_video_output_window(
                 let teardown_lease = NativeVideoOutputWorker::new_teardown_lease_slot();
                 let worker = match (|| {
                     apply_native_video_output_window_shell(&create_app, &window, &output, true)?;
+                    window.show().map_err(|error| error.to_string())?;
+                    activate_native_video_output_window_after_show(
+                        &window,
+                        output.width,
+                        output.height,
+                        output.fullscreen,
+                    )?;
                     let frame = video::render_video_output_test_pattern(
                         &snapshot.video,
                         output_id,
@@ -58089,6 +60158,12 @@ async fn open_video_output_window(
                             false,
                         )?;
                         window.show().map_err(|error| error.to_string())?;
+                        activate_native_video_output_window_after_show(
+                            &window,
+                            output.width,
+                            output.height,
+                            output.fullscreen,
+                        )?;
                         window.set_focus().map_err(|error| error.to_string())
                     })(),
                 )
@@ -58099,16 +60174,16 @@ async fn open_video_output_window(
             },
         );
     }
+    let monitor = authoritative_video_display_monitor_for_output(&app, &output)?;
+    let (logical_width, logical_height) =
+        native_video_output_logical_size(output.width, output.height, monitor.scale_factor);
     let builder_app = app.clone();
-    let mut builder = tauri::window::WindowBuilder::new(&builder_app, label.clone())
+    let builder = tauri::window::WindowBuilder::new(&builder_app, label.clone())
         .title(format!("Syndocal Output - {}", output.label))
-        .inner_size(output.width as f64, output.height as f64)
+        .inner_size(logical_width, logical_height)
         .resizable(true)
         .decorations(!output.fullscreen)
-        .fullscreen(output.fullscreen);
-
-    let monitor = authoritative_video_display_monitor_for_output(&app, &output)?;
-    builder = builder.position(monitor.position_x as f64, monitor.position_y as f64);
+        .fullscreen(false);
 
     let label_for_retire = label.clone();
     let create_app = app.clone();
@@ -58128,6 +60203,13 @@ async fn open_video_output_window(
             let teardown_lease = NativeVideoOutputWorker::new_teardown_lease_slot();
             let worker = match (|| {
                 apply_native_video_output_window_shell(&create_app, &window, &output, false)?;
+                window.show().map_err(|error| error.to_string())?;
+                activate_native_video_output_window_after_show(
+                    &window,
+                    output.width,
+                    output.height,
+                    output.fullscreen,
+                )?;
                 if let Ok(mut active_metrics) = native_metrics.lock() {
                     active_metrics.insert(output_id, Arc::clone(&metrics));
                 }
@@ -58142,6 +60224,7 @@ async fn open_video_output_window(
                     Arc::clone(&state.spout_inputs),
                     Arc::clone(&state.capture_inputs),
                     None,
+                    output.fullscreen,
                     None,
                     false,
                     None,
@@ -58250,62 +60333,6 @@ fn cache_fixture_profile(
     Ok(())
 }
 
-fn cache_fixture_profile_for_state(
-    state: &AppState,
-    profile: &FixtureProfileSummary,
-) -> Result<(), String> {
-    let source_path = profile.source_path.trim();
-    if source_path.is_empty() {
-        return Ok(());
-    }
-    let _external_admission = lock_project_external_command_admission(state)?;
-    let mut coordinator = lock_project_coordinator(state)?;
-    if !project_fixture_profile_cache_requires_update(
-        coordinator.ancillary.custom_profiles.get(source_path),
-        profile,
-    ) {
-        // Re-resolving an identical profile is strictly idempotent. Keep the
-        // compatibility mirror truthful without manufacturing a project
-        // revision/history/publication or taking an engine persistence image.
-        state
-            .custom_profiles
-            .lock()
-            .map_err(|_| "Fixture profile state lock was poisoned".to_string())?
-            .insert(source_path.to_string(), profile.clone());
-        return Ok(());
-    }
-    drop(
-        state
-            .custom_profiles
-            .lock()
-            .map_err(|_| "Fixture profile state lock was poisoned".to_string())?,
-    );
-    let mut candidate_ancillary = coordinator.ancillary.clone();
-    candidate_ancillary
-        .custom_profiles
-        .insert(source_path.to_string(), profile.clone());
-    let prepared = prepare_direct_project_ancillary_mutation(
-        state,
-        &coordinator,
-        state.engine.persistence_snapshot()?,
-        candidate_ancillary,
-    )?;
-    commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
-    *state
-        .custom_profiles
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner()) =
-        coordinator.ancillary.custom_profiles.clone();
-    Ok(())
-}
-
-fn project_fixture_profile_cache_requires_update(
-    existing: Option<&FixtureProfileSummary>,
-    candidate: &FixtureProfileSummary,
-) -> bool {
-    existing != Some(candidate)
-}
-
 #[cfg(test)]
 fn cached_fixture_profile(
     profiles: &Mutex<HashMap<String, FixtureProfileSummary>>,
@@ -58337,16 +60364,6 @@ fn load_patch_profile_from_cache_or_file(
             format!("Fixture profile {profile_path} could not be loaded from disk or project cache: {error}")
         }),
     }
-}
-
-fn register_custom_fixture_profile(
-    state: &State<'_, AppState>,
-    request: CustomFixtureProfileRequest,
-) -> Result<FixtureProfileSummary, String> {
-    validate_custom_fixture_profile_request(&request)?;
-    let profile = custom_fixture_profile_from_request(request);
-    cache_fixture_profile_for_state(state, &profile)?;
-    Ok(profile)
 }
 
 fn fixture_profile_from_patched_fixture(fixture: &PatchedFixtureSummary) -> FixtureProfileSummary {
@@ -61220,6 +63237,12 @@ fn inspect_gdtf_cache_file(
 fn inspect_gdtf_fixture_cache_directory(
     directory: &Path,
 ) -> Result<Vec<GdtfFixtureCacheEntry>, String> {
+    // Listing is a read-only catalog operation.  A first-run or cleaned
+    // cache is a valid empty state; never manufacture the directory merely
+    // because the user opened the catalog.
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
     let mut entries = Vec::new();
     for entry in fs::read_dir(directory).map_err(|error| {
         format!(
@@ -61825,6 +63848,129 @@ pub(crate) mod tests {
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 
+    #[test]
+    fn production_destroyed_callback_fences_aba_and_preserves_quarantined_metrics_until_reap() {
+        let truth = Mutex::new(HashMap::from([(
+            7,
+            LiveVideoWindowTruth {
+                incarnation: 2,
+                actual_open: true,
+                retirement_completed: false,
+                worker_label: "video-output-7".to_string(),
+            },
+        )]));
+        let workers = std::cell::RefCell::new(HashSet::from(["video-output-7".to_string()]));
+        let metrics_present = std::cell::Cell::new(true);
+        let events = std::cell::RefCell::new(Vec::new());
+
+        // This invokes the exact shared callback seam used by the production
+        // observer.  Delayed A cannot invoke any worker, metric, or event
+        // closure after B has been published.
+        assert_eq!(
+            handle_live_video_window_destroyed_callback(
+                &truth,
+                7,
+                1,
+                |_| panic!("stale A must not retire B"),
+                |_| panic!("stale A must not inspect B quarantine"),
+                || panic!("stale A must not remove B metrics"),
+                |_| panic!("stale A must not emit B state"),
+            ),
+            None
+        );
+        assert!(truth.lock().ok().is_some_and(|truth| {
+            truth
+                .get(&7)
+                .is_some_and(|current| current.incarnation == 2 && current.actual_open)
+        }));
+        assert!(workers.borrow().contains("video-output-7"));
+        assert!(metrics_present.get());
+        assert!(events.borrow().is_empty());
+
+        // B's matching native Destroyed performs the one exact worker+metric
+        // retirement and state event.  A repeated callback remains inert.
+        assert_eq!(
+            handle_live_video_window_destroyed_callback(
+                &truth,
+                7,
+                2,
+                |label| {
+                    assert!(workers.borrow_mut().remove(label));
+                    Ok(())
+                },
+                |_| false,
+                || metrics_present.set(false),
+                |outcome| events.borrow_mut().push(outcome),
+            ),
+            Some(Ok(()))
+        );
+        assert!(!workers.borrow().contains("video-output-7"));
+        assert!(!metrics_present.get());
+        assert_eq!(&*events.borrow(), &["destroyed"]);
+        assert_eq!(
+            handle_live_video_window_destroyed_callback(
+                &truth,
+                7,
+                2,
+                |_| panic!("repeated Destroyed must not retire twice"),
+                |_| false,
+                || panic!("repeated Destroyed must not remove metrics twice"),
+                |_| panic!("repeated Destroyed must not emit twice"),
+            ),
+            None
+        );
+
+        truth.lock().expect("test truth lock").insert(
+            8,
+            LiveVideoWindowTruth {
+                incarnation: 3,
+                actual_open: true,
+                retirement_completed: false,
+                worker_label: "video-output-8".to_string(),
+            },
+        );
+        let quarantined_metrics = std::cell::Cell::new(true);
+        let quarantine_events = std::cell::RefCell::new(Vec::new());
+        assert_eq!(
+            handle_live_video_window_destroyed_callback(
+                &truth,
+                8,
+                3,
+                |_| Err("injected join timeout".to_string()),
+                |_| true,
+                || quarantined_metrics.set(false),
+                |outcome| quarantine_events.borrow_mut().push(outcome),
+            ),
+            Some(Err("injected join timeout".to_string()))
+        );
+        assert!(quarantined_metrics.get());
+        assert!(truth.lock().ok().is_some_and(|truth| {
+            truth.get(&8).is_some_and(|current| {
+                current.incarnation == 3 && !current.actual_open && !current.retirement_completed
+            })
+        }));
+        assert_eq!(&*quarantine_events.borrow(), &["quarantined"]);
+
+        // A later bounded reaper acknowledgement, not a reopen, is the only
+        // path that clears the paired metric and emits the terminal close.
+        assert!(complete_quarantined_live_video_window_reap_in(
+            &truth,
+            8,
+            3,
+            || quarantined_metrics.set(false),
+            || quarantine_events.borrow_mut().push("destroyed"),
+        ));
+        assert!(!quarantined_metrics.get());
+        assert_eq!(&*quarantine_events.borrow(), &["quarantined", "destroyed"]);
+        assert!(!complete_quarantined_live_video_window_reap_in(
+            &truth,
+            8,
+            3,
+            || panic!("completed reap must be idempotent"),
+            || panic!("completed reap must not emit twice"),
+        ));
+    }
+
     const TEST_UPDATE_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVBQTZGNUI4MkEzRDkzQjEKUldTeGt6MHF1UFdtV3FzQUs5OEZubTdXcGNIeTQycmZEQmdseEVub3BHeGtyMUdVVU1Rb3Q3SEIK";
 
     #[test]
@@ -61837,6 +63983,8 @@ pub(crate) mod tests {
             position_ms: 0,
             muted: false,
             transport_revision: 0,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority::default(),
+            publication_generation: 0,
             bpm: 120.0,
             metronome_enabled: true,
             count_in_beats: 4,
@@ -62451,6 +64599,58 @@ pub(crate) mod tests {
             drop(operation);
             MediaAssetA6CommandIdentity {
                 prepared_token: token,
+                request_id,
+                operation_generation: handle.generation,
+                authority,
+            }
+        }
+
+        /// Drive the same reserved Start -> Prepare -> Finalize sequence used
+        /// by the Media Library for an injected real file.  The test harness
+        /// bypasses only Tauri State extraction; all operation admission,
+        /// authority fencing, filesystem probing, and retained-source guards
+        /// remain the production command cores.
+        pub(crate) fn stage_external_import(
+            &self,
+            request_id: u64,
+            path: String,
+        ) -> MediaAssetA6CommandIdentity {
+            let authority = self.authority();
+            let handle = self
+                .state
+                .media_asset_operations
+                .reserve(
+                    request_id,
+                    MEDIA_ASSET_A6_OWNER.to_string(),
+                    authority.clone(),
+                )
+                .expect("reserve injected Media Library import operation");
+            let prepared = tauri::async_runtime::block_on(prepare_reserved_media_assets_impl(
+                &self.state,
+                request_id,
+                handle.generation,
+                VideoSourceKind::File,
+                vec![path],
+                authority.epoch,
+                MEDIA_ASSET_A6_OWNER,
+                None,
+            ))
+            .expect("prepare injected Media Library source through production core");
+            let prepared_token = prepared
+                .prepared_import_token
+                .expect("injected Media Library source produces a token");
+            tauri::async_runtime::block_on(finalize_prepared_media_assets_impl(
+                &self.state,
+                prepared_token,
+                request_id,
+                handle.generation,
+                authority.epoch,
+                MEDIA_ASSET_A6_OWNER,
+                None,
+            ))
+            .expect("finalize injected Media Library source through production core");
+            MediaAssetA6CommandIdentity {
+                prepared_token,
                 request_id,
                 operation_generation: handle.generation,
                 authority,
@@ -64920,6 +67120,7 @@ pub(crate) mod tests {
         StallHidden,
         StallNative,
         RotateBeforeAdmission,
+        TopologyChangeBeforeAdmission,
         AdvanceSafetyBeforeFirstFrame,
         AdvanceSafetyBeforeFinalPublication,
     }
@@ -65132,6 +67333,26 @@ pub(crate) mod tests {
                             )
                         })?
                         .revision += 1;
+                }
+                FakeDisplayNativeScenario::TopologyChangeBeforeAdmission => {
+                    let mut monitors = self.monitors.lock().map_err(|_| {
+                        OutputLeaseCandidateCommitFailure::safe(
+                            "Fake Display monitor registry was poisoned",
+                        )
+                    })?;
+                    let target = monitors
+                        .iter_mut()
+                        .find(|monitor| {
+                            Some(monitor.index) == output.monitor_id
+                                && Some(monitor.identity.as_str())
+                                    == output.monitor_identity.as_deref()
+                        })
+                        .ok_or_else(|| {
+                            OutputLeaseCandidateCommitFailure::safe(
+                                "Fake Display topology target disappeared",
+                            )
+                        })?;
+                    target.position_x = target.position_x.saturating_add(1);
                 }
                 FakeDisplayNativeScenario::Normal
                 | FakeDisplayNativeScenario::StallNative
@@ -65512,12 +67733,33 @@ pub(crate) mod tests {
         OutputLeaseRequest,
         u64,
     ) {
+        build_fake_display_add_request_named(
+            state,
+            authority,
+            monitor,
+            request_id,
+            &format!("Display {}", monitor.index + 1),
+        )
+    }
+
+    fn build_fake_display_add_request_named(
+        state: &Arc<AppState>,
+        authority: &FakeDisplayAddAuthority,
+        monitor: &VideoDisplayMonitor,
+        request_id: u64,
+        label: &str,
+    ) -> (
+        OutputControlCommandRequestV2,
+        DisplayOutputSpecV2,
+        OutputLeaseRequest,
+        u64,
+    ) {
         let fence = authority
             .query_state
             .issue_output_control_fence_for_window("main", state)
             .expect("fake Display Add fence");
         let spec = DisplayOutputSpecV2 {
-            label: format!("Display {}", monitor.index + 1),
+            label: label.to_string(),
             monitor_identity: monitor.identity.clone(),
             monitor_index: monitor.index,
             width: monitor.physical_width,
@@ -65590,6 +67832,345 @@ pub(crate) mod tests {
         );
         response.validate().expect("QA v2 response must validate");
         response
+    }
+
+    fn inspect_sample_media_asset_availability(
+        state: &AppState,
+        request_id: u64,
+        asset_id: MediaAssetId,
+    ) -> Result<MediaAssetAvailabilityReport, String> {
+        let owner_id = MEDIA_ASSET_A6_OWNER.to_string();
+        let (authority, _assets) = capture_media_asset_availability_inventory(state, &owner_id, 0)?;
+        let handle = state.media_asset_operations.reserve_availability(
+            request_id,
+            owner_id.clone(),
+            authority.clone(),
+        )?;
+        let (operation, reserved_authority) = state
+            .media_asset_operations
+            .adopt_reserved_availability(request_id, handle.generation, owner_id.clone())?;
+        let (current_authority, assets) =
+            capture_media_asset_availability_inventory(state, &owner_id, 0)?;
+        ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &current_authority)?;
+        tauri::async_runtime::block_on(run_media_asset_availability_inspection(
+            state,
+            operation,
+            reserved_authority,
+            assets,
+            vec![asset_id],
+            true,
+            authority.epoch,
+            &owner_id,
+        ))
+    }
+
+    /// Backend-only sample driver for the user's real MP4.  It deliberately
+    /// follows the registered Media Library and Timeline command cores in the
+    /// same order as the frontend: staged import, verified availability,
+    /// explicit grouped AV insertion, transport authority, then two Display
+    /// output leases.  Native window/GPU work is replaced only by the existing
+    /// production fake native-operation bundle; no parallel test model is
+    /// allowed to publish a different receipt or snapshot.
+    fn run_sample_media_backend_driver(path: &Path) -> Result<(), String> {
+        if !path.is_file() {
+            return Err(format!(
+                "sample media path is not a regular file: {}",
+                path.display()
+            ));
+        }
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+
+        // Start -> Prepare -> Finalize uses the reserved operation identity;
+        // Commit is the backend-owned authoritative terminal core so its
+        // report/history pair is the same durable receipt the UI recovers.
+        let identity = harness.stage_external_import(91_200, path.to_string_lossy().into_owned());
+        let baseline = harness.mutation_baseline();
+        let args = identity.arguments();
+        let imported = commit_prepared_media_assets_authoritative_command_impl(
+            &state,
+            args.0,
+            args.1,
+            args.2,
+            args.3,
+            args.4,
+            args.5.clone(),
+            args.6.clone(),
+        )?;
+        let retried = commit_prepared_media_assets_authoritative_command_impl(
+            &state, args.0, args.1, args.2, args.3, args.4, args.5, args.6,
+        )?;
+        assert_media_asset_a6_same_terminal(&imported, &retried);
+        assert_eq!(imported.report.imported, 1);
+        harness.assert_one_mutation(baseline);
+        let asset_id = imported.report.entries[0]
+            .asset_id
+            .ok_or_else(|| "sample Media Library import returned no asset ID".to_string())?;
+
+        let availability = inspect_sample_media_asset_availability(&state, 91_201, asset_id)?;
+        assert!(availability.availability.iter().any(|entry| matches!(
+            entry,
+            protocol::MediaAssetAvailability::AvailableVerified { asset_id: id }
+                if *id == asset_id
+        )));
+        let asset = state
+            .engine
+            .snapshot()
+            .video
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .cloned()
+            .ok_or_else(|| format!("imported MediaAsset {asset_id} missing from catalog"))?;
+        let has_audio = asset
+            .source
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.has_audio);
+        if !has_audio {
+            return Err(
+                "sample MP4 has no audio stream; grouped AV driver requires both streams"
+                    .to_string(),
+            );
+        }
+
+        let video_lane_id = state.engine.allocate_timeline_layer_id();
+        let audio_lane_id = state.engine.allocate_timeline_layer_id();
+        // Lane creation is itself an authoritative Apply receipt.  The driver
+        // therefore exercises the same complete authored-image route as the
+        // registered frontend command rather than mutating EngineHandle lanes
+        // directly and reconciling around the transaction boundary.
+        let before_lanes = state.engine.persistence_snapshot()?.timeline;
+        let mut lane_authoring = timeline_advanced_authoring_from_snapshot(&before_lanes);
+        lane_authoring
+            .layers
+            .as_mut()
+            .expect("timeline authoring snapshot must carry its lane image")
+            .extend([
+                protocol::TimelineLayerSummary {
+                    id: video_lane_id,
+                    label: "Sample Video".to_string(),
+                    order: 1,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: true,
+                    kind: TimelineLayerKind::Video,
+                },
+                protocol::TimelineLayerSummary {
+                    id: audio_lane_id,
+                    label: "Sample Audio".to_string(),
+                    order: 2,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: true,
+                    kind: TimelineLayerKind::Audio,
+                },
+            ]);
+        let lane_authority = harness.authority();
+        let lanes = apply_timeline_advanced_authoritative_command_impl(
+            &state,
+            TimelineAdvancedMutationRequest::Apply {
+                authoring: lane_authoring,
+            },
+            91_202,
+            lane_authority.epoch,
+            lane_authority.revision,
+            lane_authority.checkpoint_hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )?;
+        assert!(lanes.authoring.layers.as_ref().is_some_and(|layers| layers
+            .iter()
+            .any(|layer| layer.id == video_lane_id)
+            && layers.iter().any(|layer| layer.id == audio_lane_id)));
+
+        // InsertMedia gets a fresh E/R/H after the lane Apply publication.
+        let authority = harness.authority();
+        let (epoch, revision, checkpoint_hash) = (
+            authority.epoch,
+            authority.revision,
+            authority.checkpoint_hash,
+        );
+        let request = TimelineAdvancedMutationRequest::InsertMedia {
+            media_asset_id: asset_id,
+            start_ms: 0,
+            video_layer_id: Some(video_lane_id),
+            audio_layer_id: Some(audio_lane_id),
+        };
+        let inserted = apply_timeline_advanced_authoritative_command_impl(
+            &state,
+            request.clone(),
+            91_203,
+            epoch,
+            revision,
+            checkpoint_hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )?;
+        let inserted_retry = apply_timeline_advanced_authoritative_command_impl(
+            &state,
+            request,
+            91_203,
+            epoch,
+            revision,
+            checkpoint_hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )?;
+        assert_media_asset_a6_same_terminal(&inserted, &inserted_retry);
+        assert_eq!(inserted.authoring.video_clips.len(), 1);
+        assert_eq!(inserted.authoring.audio_clips.len(), 1);
+        assert_eq!(inserted.authoring.video_clips[0].layer_id, video_lane_id);
+        assert_eq!(inserted.authoring.audio_clips[0].layer_id, audio_lane_id);
+        assert_eq!(inserted.authoring.item_groups.len(), 1);
+
+        // Seek invalidates the old runtime fence.  Wait for its published
+        // successor, then use the same engine-owned authority for Play.
+        let before_seek = state.engine.timeline_transport_authority();
+        state
+            .engine
+            .send(EngineCommand::SeekTimeline(250))
+            .map_err(|error| error.to_string())?;
+        let seek_deadline = Instant::now() + Duration::from_secs(2);
+        let transport = loop {
+            let current = state.engine.timeline_transport_authority();
+            if current != before_seek {
+                break current;
+            }
+            if Instant::now() >= seek_deadline {
+                return Err("Timeline seek did not publish a new transport authority".to_string());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let playing_ack = state.engine.set_timeline_playing_published(
+            transport.epoch,
+            transport.generation,
+            true,
+            Instant::now() + Duration::from_secs(2),
+        )?;
+        assert_eq!(playing_ack.epoch_after, transport.epoch);
+        assert!(playing_ack.generation_after >= transport.generation);
+
+        let render_deadline = Instant::now() + Duration::from_secs(2);
+        let projection_id = loop {
+            let snapshot = state.engine.snapshot();
+            if let Some(layer) = snapshot
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.media_asset_id == Some(asset_id))
+            {
+                break layer.id;
+            }
+            if Instant::now() >= render_deadline {
+                return Err(
+                    "Timeline playback published no renderer projection for the imported asset"
+                        .to_string(),
+                );
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+
+        let output_authority =
+            prepare_fake_display_add_authority(&state, "renderer:sample-media-output");
+        let monitors = native_output_qa_monitors();
+        let display_monitors = monitors
+            .iter()
+            .filter(|monitor| !monitor.is_editor_monitor)
+            .take(2)
+            .collect::<Vec<_>>();
+        let native_ops =
+            FakeDisplayOutputNativeOperations::new(Arc::clone(&state), monitors.clone());
+        for (offset, monitor) in display_monitors.into_iter().enumerate() {
+            let label = match offset {
+                0 => "LED",
+                1 => "Projector",
+                _ => unreachable!("sample driver has exactly two non-editor outputs"),
+            };
+            let (request, spec, lease_request, lease_now) = build_fake_display_add_request_named(
+                &state,
+                &output_authority,
+                monitor,
+                91_300 + offset as u64,
+                label,
+            );
+            let (applied, fence_after, lease_receipt) =
+                add_display_output_with_output_control_fence_core(
+                    &state,
+                    &spec,
+                    &request.expected_fence,
+                    &lease_request,
+                    lease_now,
+                    &output_authority.owner_principal,
+                    "main",
+                    output_authority.owner_incarnation,
+                    native_ops.clone(),
+                )?;
+            let response =
+                native_output_qa_receipt_response(&request, fence_after, &lease_receipt, applied);
+            assert!(matches!(response, OutputControlResponseV2::Receipt(_)));
+        }
+        let snapshot = state.engine.snapshot();
+        let main = snapshot
+            .video
+            .compositions
+            .iter()
+            .find(|composition| composition.id == 1)
+            .ok_or_else(|| "Main video composition missing after Display routing".to_string())?;
+        assert!(main.layer_ids.contains(&projection_id));
+        assert_eq!(main.output_ids.len(), 2);
+        assert_eq!(snapshot.video.outputs.len(), 2);
+        assert_eq!(
+            snapshot
+                .video
+                .outputs
+                .iter()
+                .map(|output| output.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["LED", "Projector"]
+        );
+
+        // The fake native bundle proves output publication only.  Exercise
+        // the production decoder/compositor seam separately so a snapshot
+        // containing a renderer projection cannot be mistaken for a decoded
+        // first frame.  Diagnostics distinguish a real decoder success from
+        // the renderer's optional debug placeholder path.
+        let first_output_id = snapshot.video.outputs[0].id;
+        let mut preview = state
+            .video_preview
+            .lock()
+            .map_err(|_| "sample video preview renderer lock was poisoned".to_string())?;
+        let first_frame = preview
+            .render_output_preview(&snapshot.video, first_output_id, 64, 64)
+            .map_err(|error| {
+                format!("sample production video decode/composition failed: {error:?}")
+            })?;
+        let decoder_diagnostics = preview.frame_provider().decoder().diagnostics();
+        assert_eq!((first_frame.width, first_frame.height), (64, 64));
+        assert!(decoder_diagnostics.total_requests > 0);
+        assert!(
+            decoder_diagnostics.hap_successes > 0
+                || decoder_diagnostics.libav_successes > 0
+                || decoder_diagnostics.cli_fallback_successes > 0
+        );
+        assert_eq!(native_ops.prepared.load(Ordering::Acquire), 2);
+        assert_eq!(native_ops.visible.load(Ordering::Acquire), 2);
+        assert_eq!(native_ops.presented.load(Ordering::Acquire), 2);
+        assert_eq!(native_ops.published.load(Ordering::Acquire), 2);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires SYNDOCAL_SAMPLE_MEDIA_PATH or the local Windows sample MP4"]
+    fn sample_media_backend_driver_uses_production_import_timeline_transport_and_output_cores() {
+        let path = env::var_os("SYNDOCAL_SAMPLE_MEDIA_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(r"C:\Users\kouty\Downloads\06.flash back背景途中経過02.mp4")
+            });
+        run_sample_media_backend_driver(&path).expect("sample media backend driver");
     }
 
     /// This backend repetition driver builds the frontend's canonical v2
@@ -65887,6 +68468,178 @@ pub(crate) mod tests {
             vec![(1920, 1080), (3840, 2160), (1920, 1080), (2560, 720)],
             "QA requests must preserve each authoritative physical size"
         );
+    }
+
+    #[test]
+    fn native_video_output_window_builder_dpi_matrix_round_trips_physical_extent() {
+        const WIDTH: u32 = 3840;
+        const HEIGHT: u32 = 2160;
+        for scale_factor in [1.0, 1.25, 1.5, 2.0] {
+            let (logical_width, logical_height) =
+                native_video_output_logical_size(WIDTH, HEIGHT, scale_factor);
+            assert_eq!(
+                (logical_width * scale_factor).round() as u32,
+                WIDTH,
+                "{}x{} at scale {} must retain its physical width",
+                WIDTH,
+                HEIGHT,
+                scale_factor
+            );
+            assert_eq!(
+                (logical_height * scale_factor).round() as u32,
+                HEIGHT,
+                "{}x{} at scale {} must retain its physical height",
+                WIDTH,
+                HEIGHT,
+                scale_factor
+            );
+        }
+        assert_eq!(
+            native_video_output_logical_size(WIDTH, HEIGHT, 1.5),
+            (2560.0, 1440.0),
+            "150% DPI uses 2560x1440 logical builder pixels for a 3840x2160 physical target"
+        );
+        assert_eq!(
+            native_video_output_logical_size(WIDTH, HEIGHT, 2.0),
+            (1920.0, 1080.0),
+            "200% DPI uses 1920x1080 logical builder pixels for a 3840x2160 physical target"
+        );
+    }
+
+    #[test]
+    fn native_video_output_nonfullscreen_activation_uses_physical_size() {
+        assert_eq!(
+            native_video_output_activation_geometry(3840, 2160, false),
+            NativeVideoOutputActivationGeometry::PhysicalSize {
+                width: 3840,
+                height: 2160,
+            }
+        );
+        assert_eq!(
+            native_video_output_activation_geometry(0, 0, false),
+            NativeVideoOutputActivationGeometry::PhysicalSize {
+                width: 1,
+                height: 1,
+            }
+        );
+        assert_eq!(
+            native_video_output_activation_geometry(3840, 2160, true),
+            NativeVideoOutputActivationGeometry::Fullscreen
+        );
+        let accepted = wait_for_native_video_output_physical_size_with(
+            3840,
+            2160,
+            Duration::ZERO,
+            Duration::ZERO,
+            || Ok(tauri::PhysicalSize::new(3840, 2160)),
+            |_| {},
+        )
+        .expect("nonfullscreen physical client extent should be accepted");
+        assert_eq!(accepted, tauri::PhysicalSize::new(3840, 2160));
+    }
+
+    #[test]
+    fn native_video_output_render_extent_is_always_live_physical_client_size() {
+        // The production worker obtains this pair from Window::inner_size on
+        // every frame.  A stale Add spec must never remain a render-loop
+        // override after a DPI/fullscreen transition.
+        assert_eq!(
+            native_video_output_render_extent(3840, 2160),
+            Some((3840, 2160))
+        );
+        assert_eq!(
+            native_video_output_render_extent(2560, 1440),
+            Some((2560, 1440)),
+            "a live physical resize is accepted instead of retaining the Add spec"
+        );
+        assert_eq!(native_video_output_render_extent(0, 2160), None);
+    }
+
+    #[test]
+    fn native_video_output_physical_extent_mismatch_is_fail_closed() {
+        let expected = (3840, 2160);
+        let observed = tauri::PhysicalSize::new(2560, 1440);
+        assert!(!native_video_output_physical_extent_matches(
+            observed, expected.0, expected.1
+        ));
+        let message = format!(
+            "Native video output physical client extent did not converge: expected {}x{}, observed {}x{}",
+            expected.0, expected.1, observed.width, observed.height
+        );
+        assert!(message.contains("expected 3840x2160"));
+        assert!(message.contains("observed 2560x1440"));
+    }
+
+    #[test]
+    fn native_video_output_post_show_convergence_retries_then_accepts_physical_extent() {
+        let mut observed = std::collections::VecDeque::from([
+            tauri::PhysicalSize::new(2560, 1440),
+            tauri::PhysicalSize::new(3840, 2160),
+        ]);
+        let result = wait_for_native_video_output_physical_size_with(
+            3840,
+            2160,
+            Duration::from_millis(1),
+            Duration::ZERO,
+            || {
+                Ok(observed
+                    .pop_front()
+                    .unwrap_or(tauri::PhysicalSize::new(3840, 2160)))
+            },
+            |_| {},
+        )
+        .expect("post-show physical extent should converge after a DPI transition");
+        assert_eq!(result, tauri::PhysicalSize::new(3840, 2160));
+    }
+
+    #[test]
+    fn native_video_output_post_show_convergence_times_out_and_fails_closed() {
+        let result = wait_for_native_video_output_physical_size_with(
+            3840,
+            2160,
+            Duration::ZERO,
+            Duration::ZERO,
+            || Ok(tauri::PhysicalSize::new(2560, 1440)),
+            |_| {},
+        );
+        let error = result.expect_err("stuck logical extent must fail closed");
+        assert!(error.contains("expected 3840x2160"));
+        assert!(error.contains("observed 2560x1440"));
+    }
+
+    #[test]
+    fn native_video_output_topology_change_after_hidden_staging_is_rejected() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let authority = prepare_fake_display_add_authority(&state, "fake-display-topology-owner");
+        let monitor = native_output_qa_monitors()
+            .into_iter()
+            .find(|monitor| monitor.name == "DISPLAY5")
+            .expect("fake topology DISPLAY5");
+        let (request, spec, lease_request, lease_now) =
+            build_fake_display_add_request(&state, &authority, &monitor, 2);
+        let native_ops =
+            FakeDisplayOutputNativeOperations::new(Arc::clone(&state), native_output_qa_monitors())
+                .with_scenario(FakeDisplayNativeScenario::TopologyChangeBeforeAdmission);
+        let result = add_display_output_with_output_control_fence_core(
+            &state,
+            &spec,
+            &request.expected_fence,
+            &lease_request,
+            lease_now,
+            &authority.owner_principal,
+            "main",
+            authority.owner_incarnation,
+            native_ops.clone(),
+        );
+        let error = result.expect_err("staged monitor topology change must fail closed");
+        assert!(error.contains("topology changed before physical admission"));
+        assert_eq!(native_ops.prepared.load(Ordering::Acquire), 1);
+        assert_eq!(native_ops.visible.load(Ordering::Acquire), 0);
+        assert_eq!(native_ops.presented.load(Ordering::Acquire), 0);
+        assert_eq!(native_ops.published.load(Ordering::Acquire), 0);
+        assert_eq!(native_ops.cleaned.load(Ordering::Acquire), 1);
+        assert!(state.engine.snapshot().video.outputs.is_empty());
     }
 
     #[test]
@@ -76420,6 +79173,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn fixture_cache_listing_missing_directory_is_empty_and_does_not_create_it() {
+        let directory = unique_test_directory("fixture-cache-list-missing");
+        assert!(!directory.exists());
+        let entries = inspect_gdtf_fixture_cache_directory(&directory).unwrap();
+        assert!(entries.is_empty());
+        assert!(
+            !directory.exists(),
+            "read-only fixture catalog listing must not create its cache directory"
+        );
+    }
+
+    #[test]
     fn fixture_cache_health_and_project_fallback_are_explicit() {
         let directory = unique_test_directory("fixture-cache-health");
         fs::create_dir_all(&directory).unwrap();
@@ -76913,6 +79678,58 @@ f 1 2 3
         chunk.extend(((payload.len() + 6) as u32).to_le_bytes());
         chunk.extend(payload);
         chunk
+    }
+
+    #[test]
+    fn legacy_custom_fixture_profile_create_is_pure_preview_without_cache_or_project_delta() {
+        let request = CustomFixtureProfileRequest {
+            manufacturer: "Syndocal".to_string(),
+            name: "Compatibility Preview".to_string(),
+            mode_name: "4ch".to_string(),
+            attributes: vec!["Dimmer".to_string(), "ColorRed".to_string()],
+        };
+        let harness = MediaAssetA6CommandHarness::new();
+        let canonical_project = || {
+            let snapshot = harness
+                .state
+                .engine
+                .persistence_snapshot()
+                .expect("compatibility preview project snapshot");
+            let coordinator = harness
+                .state
+                .project_coordinator
+                .lock()
+                .expect("compatibility preview project coordinator");
+            serde_json::to_string(&project_file_for_save_from_parts(
+                snapshot,
+                &coordinator.ancillary,
+            ))
+            .expect("serialize compatibility preview project file")
+        };
+        let before_project = canonical_project();
+        let before_cache = serde_json::to_string(
+            &*harness
+                .state
+                .custom_profiles
+                .lock()
+                .expect("compatibility preview cache lock"),
+        )
+        .expect("serialize compatibility preview cache");
+        let preview = preview_custom_fixture_profile(request.clone()).unwrap();
+        let created = create_custom_fixture_profile(request).unwrap();
+        assert_eq!(created, preview);
+        assert!(created.source_path.starts_with("memory://custom/"));
+        let after_project = canonical_project();
+        let after_cache = serde_json::to_string(
+            &*harness
+                .state
+                .custom_profiles
+                .lock()
+                .expect("compatibility preview cache lock after create"),
+        )
+        .expect("serialize compatibility preview cache after create");
+        assert_eq!(after_project, before_project);
+        assert_eq!(after_cache, before_cache);
     }
 
     #[test]
@@ -85427,25 +88244,6 @@ f 1 2 3
     }
 
     #[test]
-    fn identical_project_fixture_profile_cache_is_a_strict_noop() {
-        let profile = project_custom_profile();
-        let mut changed = profile.clone();
-        changed.name.push_str(" Updated");
-
-        assert!(!project_fixture_profile_cache_requires_update(
-            Some(&profile),
-            &profile,
-        ));
-        assert!(project_fixture_profile_cache_requires_update(
-            Some(&profile),
-            &changed,
-        ));
-        assert!(project_fixture_profile_cache_requires_update(
-            None, &profile
-        ));
-    }
-
-    #[test]
     fn custom_profile_preview_builds_profile_without_project_registration() {
         let request = CustomFixtureProfileRequest {
             manufacturer: "Preview".to_string(),
@@ -88822,6 +91620,46 @@ mod art_rdm_request_tests {
 mod media_audio_playback_tests {
     use super::*;
 
+    fn write_timeline_audio_test_wav(path: &Path) {
+        let sample_rate = 8_000_u32;
+        let sample_count = sample_rate * 2;
+        let data_bytes = sample_count * 2;
+        let mut wav = Vec::with_capacity((44 + data_bytes) as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_bytes.to_le_bytes());
+        wav.resize((44 + data_bytes) as usize, 0);
+        fs::write(path, wav).unwrap();
+    }
+
+    fn completed_timeline_audio_prepare_job(
+        context: TimelineAudioPrepareContext,
+        result: Result<engine::TimelineAudioProjectionAuthority, String>,
+    ) -> TimelineAudioPrepareJob {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let _ = sender.send(result);
+        });
+        TimelineAudioPrepareJob {
+            context,
+            started_at: Instant::now(),
+            receiver,
+            worker: Some(worker),
+            result: None,
+            timed_out: false,
+            commit_state: Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
+        }
+    }
+
     fn auto_vj_action(sequence: u64, layer_id: VideoLayerId) -> protocol::AutoVjAction {
         protocol::AutoVjAction {
             sequence,
@@ -88846,6 +91684,847 @@ mod media_audio_playback_tests {
 
         assert!(!status.output_open);
         assert!(status.active_layer_ids.is_empty());
+    }
+
+    #[test]
+    fn audio_device_generation_exhaustion_is_fail_closed_without_runtime_delta() {
+        let mut playback = MediaAudioPlayback {
+            audio_device_generation: u64::MAX,
+            requested_device_name: Some("Existing output".to_string()),
+            timeline_source_projection_authority: Some(engine::TimelineAudioProjectionAuthority {
+                epoch: 7,
+                generation: 9,
+            }),
+            ..MediaAudioPlayback::default()
+        };
+        playback.timeline_failures.insert(
+            TimelineAudioSinkKey::Root(1),
+            TimelineAudioPlaybackFailure {
+                source: TimelineAudioSourceConfig {
+                    path: PathBuf::from("existing.wav"),
+                    gain: 1.0,
+                    offset_ms: 0,
+                },
+                error: "existing failure".to_string(),
+            },
+        );
+        let before = (
+            playback.audio_device_generation,
+            playback.requested_device_name.clone(),
+            playback.timeline_source_projection_authority,
+            playback.timeline_failures.clone(),
+        );
+
+        let error = playback.next_audio_device_generation().unwrap_err();
+
+        assert!(error.contains("generation is exhausted"));
+        assert_eq!(
+            (
+                playback.audio_device_generation,
+                playback.requested_device_name.clone(),
+                playback.timeline_source_projection_authority,
+                playback.timeline_failures.clone(),
+            ),
+            before,
+            "overflow must be rejected before stream/sink/source mutation"
+        );
+    }
+
+    #[test]
+    fn timeline_audio_prepare_stall_releases_control_lock_and_rejects_device_aba() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        let worker_engine = engine.clone();
+        let worker_audio = Arc::clone(&audio);
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            sync_timeline_audio_without_blocking_playback_lock(
+                &worker_engine,
+                &worker_audio,
+                &timeline,
+                &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
+                || {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                },
+                || {},
+            )
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let lock_started = Instant::now();
+        {
+            let mut playback = audio
+                .try_lock()
+                .expect("prepare hook must not hold the media_audio mutex");
+            assert!(lock_started.elapsed() < Duration::from_millis(50));
+            playback.audio_device_generation =
+                playback.audio_device_generation.wrapping_add(1).max(1);
+        }
+        release_tx.send(()).unwrap();
+        let error = worker.join().unwrap().unwrap_err();
+        assert!(error.contains("output device changed during preparation"));
+        let playback = audio.lock().unwrap();
+        assert!(playback.timeline_sinks.is_empty());
+        assert_eq!(playback.timeline_start_attempt_count, 0);
+    }
+
+    #[test]
+    fn timeline_audio_real_wav_prepare_survives_multiple_position_ticks_and_installs_once() {
+        let suffix = current_unix_ms();
+        let path = std::env::temp_dir().join(format!(
+            "syndocal-timeline-audio-semantic-generation-{suffix}.wav"
+        ));
+        write_timeline_audio_test_wav(&path);
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .add_timeline_layer(protocol::TimelineLayerSummary {
+                id: 44,
+                label: "Audio".to_string(),
+                order: 0,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: true,
+                kind: TimelineLayerKind::Audio,
+            })
+            .unwrap();
+        engine
+            .add_timeline_audio_clip(TimelineAudioClipSummary {
+                id: 701,
+                layer_id: 44,
+                media_asset_id: None,
+                path: path.to_string_lossy().into_owned(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            })
+            .unwrap();
+        let transport = engine.snapshot().timeline;
+        engine
+            .set_timeline_playing_published(
+                transport.transport_epoch,
+                transport.transport_generation,
+                true,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert!(timeline.playing);
+        assert_eq!(timeline.clips.len(), 1);
+        let captured_generation = timeline.publication_generation;
+
+        let (mixer, _unconsumed_source) = rodio::mixer::mixer(1, 8_000);
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback {
+            timeline_test_mixer: Some(mixer),
+            ..MediaAudioPlayback::default()
+        }));
+        let latest_position_ms = AtomicU64::new(0);
+        let mut contention = None;
+        sync_timeline_audio_without_blocking_playback_lock(
+            &engine,
+            &audio,
+            &timeline,
+            &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
+            || {
+                std::thread::sleep(Duration::from_millis(120));
+                let current = engine.video_audio_runtime_snapshot().timeline_audio;
+                assert!(current.position_ms > timeline.position_ms);
+                latest_position_ms.store(current.position_ms, Ordering::Release);
+                assert_eq!(
+                    current.publication_generation, captured_generation,
+                    "ordinary 44 Hz ticks inside the same active WAV must not invalidate prepare"
+                );
+            },
+            || {
+                let held_audio = Arc::clone(&audio);
+                let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+                contention = Some(std::thread::spawn(move || {
+                    let _guard = held_audio.lock().unwrap();
+                    entered_tx.send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(200));
+                }));
+                entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            },
+        )
+        .unwrap();
+        contention.take().unwrap().join().unwrap();
+        latest_position_ms.store(
+            engine
+                .video_audio_runtime_snapshot()
+                .timeline_audio
+                .position_ms,
+            Ordering::Release,
+        );
+        let playback = audio.lock().unwrap();
+        assert_eq!(playback.timeline_start_attempt_count, 1);
+        assert_eq!(playback.timeline_sinks.len(), 1);
+        let installed_source_position_ms = playback
+            .timeline_last_install_source_position_ms
+            .get(&TimelineAudioSinkKey::Root(701))
+            .copied()
+            .unwrap();
+        assert!(
+            installed_source_position_ms.abs_diff(latest_position_ms.load(Ordering::Acquire)) <= 50,
+            "a decoder that spans ordinary ticks must start from the latest position"
+        );
+        drop(playback);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn timeline_audio_decoder_seek_before_append_does_not_wait_for_mixer_callback() {
+        let suffix = current_unix_ms();
+        let path =
+            std::env::temp_dir().join(format!("syndocal-timeline-audio-bounded-seek-{suffix}.wav"));
+        write_timeline_audio_test_wav(&path);
+        let (mixer, _unconsumed_source) = rodio::mixer::mixer(1, 8_000);
+        let prepared = prepare_timeline_audio_clip(
+            TimelineAudioPrepareRequest {
+                key: TimelineAudioSinkKey::Root(702),
+                clip: TimelineAudioClipSummary {
+                    id: 702,
+                    layer_id: 44,
+                    media_asset_id: None,
+                    path: path.to_string_lossy().into_owned(),
+                    start_ms: 0,
+                    offset_ms: 0,
+                    duration_ms: 2_000,
+                    gain: 1.0,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
+                },
+                source_position_ms: 100,
+                volume: 1.0,
+                source: TimelineAudioSourceConfig {
+                    path: path.clone(),
+                    gain: 1.0,
+                    offset_ms: 0,
+                },
+            },
+            &mixer,
+        )
+        .unwrap();
+        let started = Instant::now();
+        let mut prepared = seek_prepared_timeline_audio_decoders(vec![Ok(prepared)]);
+        assert!(started.elapsed() < Duration::from_millis(250));
+        prepared = append_prepared_timeline_audio_decoders(prepared);
+        let prepared = prepared.pop().unwrap().unwrap();
+        assert_eq!(prepared.request.source_position_ms, 100);
+        assert!(prepared.decoder.is_none());
+        prepared.sink.stop();
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn timeline_audio_prepare_transaction_deadline_is_global_across_clips() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let current = engine.video_audio_runtime_snapshot().timeline_audio;
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            clips: vec![
+                TimelineAudioClipSummary {
+                    id: 801,
+                    layer_id: 44,
+                    media_asset_id: None,
+                    path: r"C:\syndocal-missing\deadline-a.wav".to_string(),
+                    start_ms: 0,
+                    offset_ms: 0,
+                    duration_ms: 2_000,
+                    gain: 1.0,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
+                },
+                TimelineAudioClipSummary {
+                    id: 802,
+                    layer_id: 45,
+                    media_asset_id: None,
+                    path: r"C:\syndocal-missing\deadline-b.wav".to_string(),
+                    start_ms: 0,
+                    offset_ms: 0,
+                    duration_ms: 2_000,
+                    gain: 1.0,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
+                },
+            ],
+            playing: true,
+            position_ms: 100,
+            source_projection_authority: current.source_projection_authority,
+            publication_generation: current.publication_generation,
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+        let (mixer, _unconsumed_source) = rodio::mixer::mixer(1, 8_000);
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback {
+            timeline_test_mixer: Some(mixer),
+            ..MediaAudioPlayback::default()
+        }));
+        let started = Instant::now();
+        let mut contention = None;
+        let error = sync_timeline_audio_without_blocking_playback_lock(
+            &engine,
+            &audio,
+            &timeline,
+            &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
+            || {},
+            || {
+                let held_audio = Arc::clone(&audio);
+                let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+                contention = Some(std::thread::spawn(move || {
+                    let _guard = held_audio.lock().unwrap();
+                    entered_tx.send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(800));
+                }));
+                entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            },
+        )
+        .unwrap_err();
+        contention.take().unwrap().join().unwrap();
+        assert!(error.contains("preparation budget"));
+        assert!(started.elapsed() < Duration::from_millis(1_100));
+        let playback = audio.lock().unwrap();
+        assert_eq!(playback.timeline_start_attempt_count, 2);
+        assert!(playback.timeline_sinks.is_empty());
+        assert!(playback.timeline_sources.is_empty());
+    }
+
+    #[test]
+    fn timeline_audio_prepare_single_flight_quarantines_timeout_and_reaps_exactly_once() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let entered = Arc::new(AtomicU64::new(0));
+        let hook_gate = Arc::clone(&gate);
+        let hook_entered = Arc::clone(&entered);
+        let mut coordinator = TimelineAudioPrepareCoordinator {
+            before_prepare: Some(Arc::new(move || {
+                hook_entered.fetch_add(1, Ordering::AcqRel);
+                let (lock, wake) = &*hook_gate;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+            })),
+            ..TimelineAudioPrepareCoordinator::default()
+        };
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::Pending
+        ));
+        let entered_deadline = Instant::now() + Duration::from_secs(1);
+        while entered.load(Ordering::Acquire) == 0 {
+            assert!(Instant::now() < entered_deadline);
+            std::thread::yield_now();
+        }
+        std::thread::sleep(TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET);
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::TimedOut { .. }
+        ));
+        for _ in 0..100 {
+            assert!(matches!(
+                coordinator.poll_or_spawn(&engine, &audio, &timeline),
+                TimelineAudioPreparePoll::Quarantined
+            ));
+        }
+        assert_eq!(coordinator.spawn_count, 1);
+        assert_eq!(coordinator.reap_count, 0);
+        assert!(audio.lock().unwrap().timeline_sinks.is_empty());
+
+        {
+            let (lock, wake) = &*gate;
+            *lock.lock().unwrap() = true;
+            wake.notify_all();
+        }
+        let reap_deadline = Instant::now() + Duration::from_secs(2);
+        while coordinator.active.is_some() {
+            let _ = coordinator.poll_or_spawn(&engine, &audio, &timeline);
+            assert!(Instant::now() < reap_deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(coordinator.reap_count, 1);
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::Quarantined
+        ));
+        assert_eq!(coordinator.spawn_count, 1);
+
+        let transport = engine.snapshot().timeline;
+        engine
+            .set_timeline_playing_published(
+                transport.transport_epoch,
+                transport.transport_generation,
+                true,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        let next = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert_ne!(next.publication_generation, timeline.publication_generation);
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &next),
+            TimelineAudioPreparePoll::Pending
+        ));
+        assert_eq!(coordinator.spawn_count, 2);
+        let finish_deadline = Instant::now() + Duration::from_secs(2);
+        while coordinator.active.is_some() {
+            let _ = coordinator.poll_or_spawn(&engine, &audio, &next);
+            assert!(Instant::now() < finish_deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(coordinator.reap_count, 2);
+        assert!(audio.lock().unwrap().timeline_sinks.is_empty());
+    }
+
+    #[test]
+    fn timeline_audio_prepare_outcomes_never_cross_follow_contexts() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        let current = TimelineAudioPrepareCoordinator::context(&engine, &audio, &timeline)
+            .expect("idle playback exposes a stable output fingerprint");
+
+        for result in [
+            Ok(current.fingerprint.authority),
+            Err("captured A failed".to_string()),
+        ] {
+            let mut captured_a = current.clone();
+            captured_a.follow.generation = captured_a.follow.generation.saturating_add(1);
+            captured_a.follow.source_timeline_id = Some(TimelineId(41));
+            captured_a.follow.target_timeline_id = Some(TimelineId(42));
+            let mut coordinator = TimelineAudioPrepareCoordinator {
+                active: Some(completed_timeline_audio_prepare_job(captured_a, result)),
+                ..TimelineAudioPrepareCoordinator::default()
+            };
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                match coordinator.poll_or_spawn(&engine, &audio, &timeline) {
+                    TimelineAudioPreparePoll::Pending => {
+                        assert!(Instant::now() < deadline);
+                        std::thread::yield_now();
+                    }
+                    TimelineAudioPreparePoll::Obsolete => break,
+                    other => {
+                        panic!("captured A outcome must not be attributed to current B: {other:?}")
+                    }
+                }
+            }
+            assert!(coordinator.active.is_none());
+        }
+
+        let mut captured_a = current.clone();
+        captured_a.follow.generation = captured_a.follow.generation.saturating_add(1);
+        captured_a.follow.source_timeline_id = Some(TimelineId(51));
+        captured_a.follow.target_timeline_id = Some(TimelineId(52));
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let authority = captured_a.fingerprint.authority;
+        let worker = std::thread::spawn(move || {
+            let _ = release_rx.recv_timeout(Duration::from_secs(1));
+            let _ = sender.send(Ok(authority));
+        });
+        let mut coordinator = TimelineAudioPrepareCoordinator {
+            active: Some(TimelineAudioPrepareJob {
+                context: captured_a,
+                started_at: Instant::now() - TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET,
+                receiver,
+                worker: Some(worker),
+                result: None,
+                timed_out: false,
+                commit_state: Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
+            }),
+            ..TimelineAudioPrepareCoordinator::default()
+        };
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::Obsolete
+        ));
+        assert!(coordinator.active.as_ref().unwrap().timed_out);
+        assert!(
+            coordinator
+                .active
+                .as_ref()
+                .unwrap()
+                .commit_state
+                .lock()
+                .unwrap()
+                .cancelled
+        );
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while coordinator.active.is_some() {
+            let _ = coordinator.poll_or_spawn(&engine, &audio, &timeline);
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn timeline_audio_prepare_timeout_unblocks_only_after_output_device_rotation() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let entered = Arc::new(AtomicBool::new(false));
+        let hook_gate = Arc::clone(&gate);
+        let hook_entered = Arc::clone(&entered);
+        let mut coordinator = TimelineAudioPrepareCoordinator {
+            before_prepare: Some(Arc::new(move || {
+                hook_entered.store(true, Ordering::Release);
+                let (lock, wake) = &*hook_gate;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+            })),
+            ..TimelineAudioPrepareCoordinator::default()
+        };
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::Pending
+        ));
+        let entered_deadline = Instant::now() + Duration::from_secs(1);
+        while !entered.load(Ordering::Acquire) {
+            assert!(Instant::now() < entered_deadline);
+            std::thread::yield_now();
+        }
+        coordinator.active.as_mut().unwrap().started_at =
+            Instant::now() - TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET;
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::TimedOut { .. }
+        ));
+        for _ in 0..10 {
+            assert!(matches!(
+                coordinator.poll_or_spawn(&engine, &audio, &timeline),
+                TimelineAudioPreparePoll::Quarantined
+            ));
+        }
+        assert_eq!(coordinator.spawn_count, 1);
+
+        {
+            let mut playback = audio.lock().unwrap();
+            playback.audio_device_generation =
+                playback.audio_device_generation.checked_add(1).unwrap();
+            playback.requested_device_name = Some("Recovered output".to_string());
+        }
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::Quarantined
+        ));
+        let (lock, wake) = &*gate;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
+        let reap_deadline = Instant::now() + Duration::from_secs(1);
+        while coordinator.active.is_some() {
+            let _ = coordinator.poll_or_spawn(&engine, &audio, &timeline);
+            assert!(Instant::now() < reap_deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(coordinator.reap_count, 1);
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::Pending
+        ));
+        assert_eq!(coordinator.spawn_count, 2);
+        let finish_deadline = Instant::now() + Duration::from_secs(1);
+        let completed_context = loop {
+            match coordinator.poll_or_spawn(&engine, &audio, &timeline) {
+                TimelineAudioPreparePoll::Completed { context, result } => {
+                    result.unwrap();
+                    break context;
+                }
+                TimelineAudioPreparePoll::Pending => {
+                    assert!(Instant::now() < finish_deadline);
+                    std::thread::yield_now();
+                }
+                other => panic!("recovered device requires its own exact job: {other:?}"),
+            }
+        };
+        assert_eq!(completed_context.fingerprint.audio_device_generation, 1);
+        assert_eq!(
+            completed_context
+                .fingerprint
+                .requested_device_name
+                .as_deref(),
+            Some("Recovered output")
+        );
+    }
+
+    #[test]
+    fn timeline_audio_prepare_timeout_cancels_exact_precommit_before_install() {
+        let suffix = current_unix_ms();
+        let path = std::env::temp_dir().join(format!(
+            "syndocal-timeline-audio-timeout-commit-fence-{suffix}.wav"
+        ));
+        write_timeline_audio_test_wav(&path);
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .add_timeline_layer(protocol::TimelineLayerSummary {
+                id: 74,
+                label: "Audio".to_string(),
+                order: 0,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: true,
+                kind: TimelineLayerKind::Audio,
+            })
+            .unwrap();
+        engine
+            .add_timeline_audio_clip(TimelineAudioClipSummary {
+                id: 7401,
+                layer_id: 74,
+                media_asset_id: None,
+                path: path.to_string_lossy().into_owned(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            })
+            .unwrap();
+        let transport = engine.snapshot().timeline;
+        engine
+            .set_timeline_playing_published(
+                transport.transport_epoch,
+                transport.transport_generation,
+                true,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        let (mixer, _unconsumed_source) = rodio::mixer::mixer(1, 8_000);
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback {
+            timeline_test_mixer: Some(mixer),
+            ..MediaAudioPlayback::default()
+        }));
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let entered = Arc::new(AtomicBool::new(false));
+        let hook_gate = Arc::clone(&gate);
+        let hook_entered = Arc::clone(&entered);
+        let mut coordinator = TimelineAudioPrepareCoordinator {
+            before_commit_lock: Some(Arc::new(move || {
+                hook_entered.store(true, Ordering::Release);
+                let (lock, wake) = &*hook_gate;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+            })),
+            ..TimelineAudioPrepareCoordinator::default()
+        };
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::Pending
+        ));
+        let entered_deadline = Instant::now() + Duration::from_secs(1);
+        while !entered.load(Ordering::Acquire) {
+            assert!(Instant::now() < entered_deadline);
+            std::thread::yield_now();
+        }
+        coordinator.active.as_mut().unwrap().started_at =
+            Instant::now() - TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET;
+        assert!(matches!(
+            coordinator.poll_or_spawn(&engine, &audio, &timeline),
+            TimelineAudioPreparePoll::TimedOut { .. }
+        ));
+        let (lock, wake) = &*gate;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
+        let reap_deadline = Instant::now() + Duration::from_secs(1);
+        while coordinator.active.is_some() {
+            let _ = coordinator.poll_or_spawn(&engine, &audio, &timeline);
+            assert!(Instant::now() < reap_deadline);
+            std::thread::yield_now();
+        }
+        let playback = audio.lock().unwrap();
+        assert_eq!(
+            playback.timeline_start_attempt_count, 1,
+            "planning may observe the clip once, but timeout must prevent install"
+        );
+        assert!(playback.timeline_sinks.is_empty());
+        assert!(playback.timeline_sources.is_empty());
+        assert!(playback.timeline_last_install_source_position_ms.is_empty());
+        drop(playback);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn timeline_audio_prepare_single_flight_drop_never_joins_unfinished_worker() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let entered = Arc::new(AtomicBool::new(false));
+        let hook_gate = Arc::clone(&gate);
+        let hook_entered = Arc::clone(&entered);
+        let mut coordinator = TimelineAudioPrepareCoordinator {
+            before_prepare: Some(Arc::new(move || {
+                hook_entered.store(true, Ordering::Release);
+                let (lock, wake) = &*hook_gate;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+            })),
+            ..TimelineAudioPrepareCoordinator::default()
+        };
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        let _ = coordinator.poll_or_spawn(&engine, &audio, &timeline);
+        let entered_deadline = Instant::now() + Duration::from_secs(1);
+        while !entered.load(Ordering::Acquire) {
+            assert!(Instant::now() < entered_deadline);
+            std::thread::yield_now();
+        }
+        let drop_started = Instant::now();
+        drop(coordinator);
+        assert!(drop_started.elapsed() < Duration::from_millis(50));
+        let (lock, wake) = &*gate;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
+    }
+
+    #[test]
+    fn timeline_audio_commit_fence_rejects_publication_after_final_snapshot_read() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        let authority = timeline.source_projection_authority;
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+
+        let error = sync_timeline_audio_without_blocking_playback_lock(
+            &engine,
+            &audio,
+            &timeline,
+            &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
+            || {},
+            || engine.set_timeline_audio_master(0, true).unwrap(),
+        )
+        .unwrap_err();
+        assert!(error.contains("changed before sink install"));
+        assert_ne!(
+            engine
+                .video_audio_runtime_snapshot()
+                .timeline_audio
+                .source_projection_authority,
+            authority
+        );
+        let playback = audio.lock().unwrap();
+        assert!(playback.timeline_sinks.is_empty());
+        assert_eq!(playback.timeline_start_attempt_count, 0);
+    }
+
+    #[test]
+    fn timeline_audio_commit_fence_rejects_same_authority_transport_publication() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        let authority = timeline.source_projection_authority;
+        let publication_generation = timeline.publication_generation;
+        let transport = engine.snapshot().timeline;
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+
+        let error = sync_timeline_audio_without_blocking_playback_lock(
+            &engine,
+            &audio,
+            &timeline,
+            &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
+            || {},
+            || {
+                engine
+                    .set_timeline_playing_published(
+                        transport.transport_epoch,
+                        transport.transport_generation,
+                        true,
+                        Instant::now() + Duration::from_secs(1),
+                    )
+                    .unwrap();
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("transport changed before sink install"));
+        let current = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(current.source_projection_authority, authority);
+        assert_ne!(current.publication_generation, publication_generation);
+        let playback = audio.lock().unwrap();
+        assert!(playback.timeline_sinks.is_empty());
+        assert_eq!(playback.timeline_start_attempt_count, 0);
+    }
+
+    #[test]
+    fn timeline_audio_commit_fence_rejects_same_authority_seek_publication() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+        let authority = timeline.source_projection_authority;
+        let publication_generation = timeline.publication_generation;
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+
+        let error = sync_timeline_audio_without_blocking_playback_lock(
+            &engine,
+            &audio,
+            &timeline,
+            &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
+            || {},
+            || {
+                engine.send(engine::EngineCommand::SeekTimeline(1)).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(1);
+                while engine
+                    .video_audio_runtime_snapshot()
+                    .timeline_audio
+                    .publication_generation
+                    == publication_generation
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "seek publication did not reach the audio commit fence"
+                    );
+                    std::thread::yield_now();
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("transport changed before sink install"));
+        let current = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(current.source_projection_authority, authority);
+        assert_ne!(current.publication_generation, publication_generation);
+        let playback = audio.lock().unwrap();
+        assert!(playback.timeline_sinks.is_empty());
+        assert_eq!(playback.timeline_start_attempt_count, 0);
     }
 
     #[test]
@@ -88973,8 +92652,215 @@ mod media_audio_playback_tests {
     }
 
     #[test]
+    fn timeline_audio_lane_audibility_stops_once_and_rearms_only_on_reappearance() {
+        let (mixer, _mixer_source) = rodio::mixer::mixer(2, 48_000);
+        let mut playback = MediaAudioPlayback::default();
+        let key_a = TimelineAudioSinkKey::Root(70);
+        let key_b = TimelineAudioSinkKey::Root(71);
+        for (key, path) in [(key_a.clone(), "lane-a.wav"), (key_b.clone(), "lane-b.wav")] {
+            playback
+                .timeline_sinks
+                .insert(key.clone(), rodio::Sink::connect_new(&mixer));
+            playback.timeline_sources.insert(
+                key,
+                TimelineAudioSourceConfig {
+                    path: PathBuf::from(path),
+                    gain: 1.0,
+                    offset_ms: 0,
+                },
+            );
+        }
+        playback.timeline_transport = TimelineAudioTransportState {
+            playing: true,
+            position_ms: 500,
+            transport_revision: 7,
+            synced_at: Some(Instant::now()),
+        };
+        let clip = |id, path: &str| TimelineAudioClipSummary {
+            id,
+            layer_id: id as u32,
+            media_asset_id: Some(900),
+            path: path.to_string(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 2_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        };
+        let lane_a = clip(70, r"C:\syndocal-missing\audio-lane-a.wav");
+        let lane_b = clip(71, "lane-b.wav");
+        let mut audible = engine::TimelineAudioRuntimeSnapshot {
+            clips: vec![lane_b.clone()],
+            playing: true,
+            position_ms: 500,
+            transport_revision: 7,
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+
+        playback.sync_to_timeline_audio_evidenced(&audible).unwrap();
+        assert_eq!(playback.timeline_stop_count, 1);
+        assert!(!playback.timeline_sinks.contains_key(&key_a));
+        assert!(playback.timeline_sinks.contains_key(&key_b));
+
+        playback.sync_to_timeline_audio_evidenced(&audible).unwrap();
+        assert_eq!(playback.timeline_stop_count, 1);
+        assert_eq!(playback.timeline_start_attempt_count, 0);
+
+        // Isolate the re-arm phase after proving B survived A's retirement;
+        // the already-running B sink is not part of A's generation count.
+        playback.timeline_sinks.remove(&key_b);
+        playback.timeline_sources.remove(&key_b);
+        audible.clips = vec![lane_a];
+        playback.timeline_transport.synced_at = Some(Instant::now());
+        let _ = playback.sync_to_timeline_audio_evidenced(&audible);
+        assert_eq!(playback.timeline_start_attempt_count, 1);
+        playback.timeline_transport.synced_at = Some(Instant::now());
+        let _ = playback.sync_to_timeline_audio_evidenced(&audible);
+        assert_eq!(
+            playback.timeline_start_attempt_count, 1,
+            "an unchanged visible lane must not be regenerated after the first source attempt"
+        );
+
+        audible.clips.clear();
+        playback.timeline_transport.synced_at = Some(Instant::now());
+        playback.sync_to_timeline_audio_evidenced(&audible).unwrap();
+        assert_eq!(playback.timeline_stop_count, 1);
+    }
+
+    #[test]
+    fn timeline_audio_projection_gap_retires_once_and_rearms_cached_failure_once() {
+        let (mixer, _mixer_source) = rodio::mixer::mixer(2, 48_000);
+        let mut playback = MediaAudioPlayback::default();
+        let key = TimelineAudioSinkKey::Root(90);
+        playback
+            .timeline_sinks
+            .insert(key.clone(), rodio::Sink::connect_new(&mixer));
+        playback.timeline_sources.insert(
+            key,
+            TimelineAudioSourceConfig {
+                path: PathBuf::from("same-source.wav"),
+                gain: 1.0,
+                offset_ms: 0,
+            },
+        );
+        playback.timeline_source_projection_authority =
+            Some(engine::TimelineAudioProjectionAuthority {
+                epoch: 1,
+                generation: 1,
+            });
+        playback.timeline_transport = TimelineAudioTransportState {
+            playing: true,
+            position_ms: 500,
+            transport_revision: 2,
+            synced_at: Some(Instant::now()),
+        };
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            clips: vec![TimelineAudioClipSummary {
+                id: 90,
+                layer_id: 9,
+                media_asset_id: None,
+                path: r"C:\syndocal-missing\same-source.wav".to_string(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            playing: true,
+            position_ms: 500,
+            transport_revision: 2,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 1,
+                generation: 3,
+            },
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+
+        assert!(playback
+            .sync_to_timeline_audio_evidenced(&timeline)
+            .is_err());
+        assert_eq!(playback.timeline_stop_count, 1);
+        assert_eq!(playback.timeline_start_attempt_count, 1);
+        playback.timeline_transport.synced_at = Some(Instant::now());
+        assert!(playback
+            .sync_to_timeline_audio_evidenced(&timeline)
+            .is_err());
+        assert_eq!(playback.timeline_stop_count, 1);
+        assert_eq!(
+            playback.timeline_start_attempt_count, 1,
+            "the current generation must retain exactly one cached open failure"
+        );
+
+        let mut stale = timeline;
+        stale.source_projection_authority = engine::TimelineAudioProjectionAuthority {
+            epoch: 1,
+            generation: 2,
+        };
+        assert!(playback.sync_to_timeline_audio_evidenced(&stale).is_err());
+        assert!(playback.timeline_sinks.is_empty());
+        assert!(playback.timeline_failures.is_empty());
+    }
+
+    #[test]
+    fn timeline_audio_decoder_fence_rejects_stale_source_before_sink_start() {
+        let suffix = current_unix_ms();
+        let path = std::env::temp_dir().join(format!(
+            "syndocal-timeline-audio-projection-fence-{suffix}.wav"
+        ));
+        write_timeline_audio_test_wav(&path);
+        let mut playback = MediaAudioPlayback::default();
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            clips: vec![TimelineAudioClipSummary {
+                id: 91,
+                layer_id: 9,
+                media_asset_id: None,
+                path: path.to_string_lossy().into_owned(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            playing: true,
+            position_ms: 100,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 2,
+                generation: 4,
+            },
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+
+        let error = playback
+            .sync_to_timeline_audio_evidenced_with_fence(&timeline, || false)
+            .unwrap_err();
+        assert!(error.contains("changed while its decoder was opening"));
+        assert!(playback.timeline_sinks.is_empty());
+        assert!(playback.timeline_sources.is_empty());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn child_timeline_audio_sink_keys_isolate_parent_activation_and_clip_id() {
         let root_path = Arc::from([]);
+        let follow_target_root = TimelineAudioSinkKey::Follow {
+            source_timeline_id: TimelineId(10),
+            target_timeline_id: TimelineId(11),
+            generation: 4,
+            target_root: true,
+            path: Arc::clone(&root_path),
+            clip_id: 7,
+        };
+        let follow_child_root = TimelineAudioSinkKey::Follow {
+            source_timeline_id: TimelineId(10),
+            target_timeline_id: TimelineId(11),
+            generation: 4,
+            target_root: false,
+            path: Arc::clone(&root_path),
+            clip_id: 7,
+        };
         let nested_left = Arc::from([ChildTimelineTransportPathSegment {
             event_id: 200,
             iteration: 0,
@@ -88983,7 +92869,7 @@ mod media_audio_playback_tests {
             event_id: 201,
             iteration: 0,
         }]);
-        let keys = HashSet::from([
+        let mut keys = HashSet::from([
             TimelineAudioSinkKey::Root(7),
             TimelineAudioSinkKey::Child {
                 parent_event_id: 100,
@@ -88991,6 +92877,8 @@ mod media_audio_playback_tests {
                 path: Arc::clone(&root_path),
                 clip_id: 7,
             },
+            follow_target_root.clone(),
+            follow_child_root,
             TimelineAudioSinkKey::Child {
                 parent_event_id: 101,
                 parent_iteration: 0,
@@ -89022,7 +92910,12 @@ mod media_audio_playback_tests {
                 clip_id: 7,
             },
         ]);
-        assert_eq!(keys.len(), 7);
+        assert_eq!(keys.len(), 9);
+        assert!(
+            !keys.insert(follow_target_root),
+            "an exact Follow provenance retry must resolve to the same sink key"
+        );
+        assert_eq!(keys.len(), 9);
     }
 
     #[test]
@@ -91393,6 +95286,113 @@ mod live_audio_input_tests {
             .expect("reset B3 coordinator after seed") =
             project_coordinator_for_initial_snapshot(harness.state.engine.snapshot());
         (layer_id, asset_id, alternate_asset_id, slot_id)
+    }
+
+    /// Seed one real local media asset with both streams and the three explicit
+    /// unified-Timeline lane kinds used by InsertMedia tests.  The source file
+    /// is still prepared through the existing EngineHandle fixture; only its
+    /// probe metadata is amended so the command path exercises the linked AV
+    /// branch deterministically without depending on a machine codec.
+    fn seed_timeline_insert_media_fixture(
+        harness: &MediaAssetA6CommandHarness,
+    ) -> (MediaAssetId, u32, u32, u32) {
+        let (_video_layer_id, media_asset_id, _alternate_asset_id, _slot_id) =
+            seed_video_clip_slot_layer(harness);
+        let snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read InsertMedia media seed");
+        let mut asset = snapshot
+            .video
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == media_asset_id)
+            .cloned()
+            .expect("InsertMedia media asset exists");
+        asset.source.metadata = Some(protocol::VideoMediaMetadata {
+            duration_ms: Some(1_000),
+            width: Some(16),
+            height: Some(16),
+            frame_rate: Some(30.0),
+            has_audio: true,
+        });
+        harness
+            .state
+            .engine
+            .media_asset_transaction_published(MediaAssetTransaction::Update(asset))
+            .expect("publish deterministic linked AV metadata");
+
+        let video_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        let audio_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        let lighting_lane_id = harness.state.engine.allocate_timeline_layer_id();
+        for (id, label, order, kind) in [
+            (video_lane_id, "Insert Video", 1, TimelineLayerKind::Video),
+            (audio_lane_id, "Insert Audio", 2, TimelineLayerKind::Audio),
+            (
+                lighting_lane_id,
+                "Insert Lighting",
+                3,
+                TimelineLayerKind::Lighting,
+            ),
+        ] {
+            harness
+                .state
+                .engine
+                .add_timeline_layer(protocol::TimelineLayerSummary {
+                    id,
+                    label: label.to_string(),
+                    order,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind,
+                })
+                .expect("seed InsertMedia Timeline lane");
+        }
+        c1_stabilize_fixture_authority(harness);
+        (
+            media_asset_id,
+            video_lane_id,
+            audio_lane_id,
+            lighting_lane_id,
+        )
+    }
+
+    fn seed_timeline_insert_media_stream_fixture(
+        harness: &MediaAssetA6CommandHarness,
+        has_video: bool,
+        has_audio: bool,
+    ) -> (MediaAssetId, u32, u32, u32) {
+        let ids = seed_timeline_insert_media_fixture(harness);
+        let media_asset_id = ids.0;
+        let snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read stream-specific InsertMedia seed");
+        let mut asset = snapshot
+            .video
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == media_asset_id)
+            .cloned()
+            .expect("stream-specific InsertMedia media asset exists");
+        asset.source.metadata = Some(protocol::VideoMediaMetadata {
+            duration_ms: Some(1_000),
+            width: has_video.then_some(16),
+            height: has_video.then_some(16),
+            frame_rate: has_video.then_some(30.0),
+            has_audio,
+        });
+        harness
+            .state
+            .engine
+            .media_asset_transaction_published(MediaAssetTransaction::Update(asset))
+            .expect("publish stream-specific InsertMedia metadata");
+        c1_stabilize_fixture_authority(harness);
+        ids
     }
 
     fn b3_authority_arguments(harness: &MediaAssetA6CommandHarness) -> (u64, u64, String) {
@@ -94146,6 +98146,619 @@ mod live_audio_input_tests {
             colliding_audio, colliding_before,
             "a failed legacy materialization must leave the complete implicit A image untouched"
         );
+    }
+
+    fn assert_timeline_insert_media_rejected_without_delta(
+        harness: &MediaAssetA6CommandHarness,
+        request: TimelineAdvancedMutationRequest,
+        request_id: u64,
+        expected_error: &str,
+    ) {
+        let before_snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read InsertMedia rejection baseline");
+        let before_project_hash = b3_persistence_hash(harness);
+        let baseline = harness.mutation_baseline();
+        let (epoch, revision, hash) = b3_authority_arguments(harness);
+        let error = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request,
+            request_id,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("invalid explicit InsertMedia lane must fail closed");
+        assert!(
+            error.contains(expected_error),
+            "unexpected InsertMedia rejection: {error}"
+        );
+        let after_snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read InsertMedia rejection result");
+        // Engine runtime telemetry/clock counters continue to tick while a
+        // command is being rejected.  Compare the authored persistence image
+        // (the mutation boundary) rather than those live counters.
+        assert_eq!(
+            after_snapshot.timeline, before_snapshot.timeline,
+            "rejected InsertMedia must not publish a Timeline snapshot delta"
+        );
+        assert_eq!(
+            after_snapshot.timeline_bank, before_snapshot.timeline_bank,
+            "rejected InsertMedia must not publish a Timeline bank delta"
+        );
+        assert_eq!(
+            b3_persistence_hash(harness),
+            before_project_hash,
+            "rejected InsertMedia must not change the authored project checkpoint"
+        );
+        let after = harness.mutation_baseline();
+        assert_eq!(
+            (
+                after.revision,
+                after.history_generation,
+                after.undo_len,
+                after.next_transaction_id,
+                after.publication_generation,
+            ),
+            (
+                baseline.revision,
+                baseline.history_generation,
+                baseline.undo_len,
+                baseline.next_transaction_id,
+                baseline.publication_generation,
+            ),
+            "rejected InsertMedia must not advance history, revision, transaction, or publication"
+        );
+    }
+
+    #[test]
+    fn timeline_insert_media_authoritative_uses_exact_lanes_and_groups_av_once() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (media_asset_id, video_lane_id, audio_lane_id, _lighting_lane_id) =
+            seed_timeline_insert_media_fixture(&harness);
+        let baseline = harness.mutation_baseline();
+        let request = TimelineAdvancedMutationRequest::InsertMedia {
+            media_asset_id,
+            start_ms: 1_250,
+            video_layer_id: Some(video_lane_id),
+            audio_layer_id: Some(audio_lane_id),
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let applied = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            86_100,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("explicit unlocked Video and Audio lanes accept linked AV placement");
+        assert_eq!(applied.authoring.video_clips.len(), 1);
+        assert_eq!(applied.authoring.audio_clips.len(), 1);
+        let video = &applied.authoring.video_clips[0];
+        let audio = &applied.authoring.audio_clips[0];
+        assert_eq!(
+            (video.layer_id, video.media_asset_id, video.start_ms),
+            (video_lane_id, media_asset_id, 1_250)
+        );
+        assert_eq!(
+            (audio.layer_id, audio.media_asset_id, audio.start_ms),
+            (audio_lane_id, Some(media_asset_id), 1_250)
+        );
+        assert_eq!(applied.authoring.item_groups.len(), 1);
+        assert_eq!(
+            applied.authoring.item_groups[0].members,
+            vec![
+                TimelineItemRef::VideoClip { clip_id: video.id },
+                TimelineItemRef::AudioClip { clip_id: audio.id },
+            ],
+            "one linked AV insertion creates one exact Video+Audio group"
+        );
+        assert_one_authoritative_history_mutation(&harness, baseline);
+        let retried = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            request,
+            86_100,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("reply-loss retry returns the exact AV insertion");
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::to_value(&retried).unwrap(),
+            "same InsertMedia request must not allocate or publish a second group"
+        );
+        let conflict_baseline = harness.mutation_baseline();
+        let conflict_snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read AV insertion before shape-conflict retry");
+        let conflict_hash = b3_persistence_hash(&harness);
+        let shape_conflict = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            TimelineAdvancedMutationRequest::InsertMedia {
+                media_asset_id,
+                start_ms: 1_250,
+                video_layer_id: Some(_lighting_lane_id),
+                audio_layer_id: Some(audio_lane_id),
+            },
+            86_100,
+            epoch,
+            revision,
+            hash.clone(),
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect_err("same request ID with a changed target lane must be a shape conflict");
+        assert!(
+            shape_conflict.contains("already completed with shape"),
+            "unexpected InsertMedia shape-conflict error: {shape_conflict}"
+        );
+        let after_conflict = harness.mutation_baseline();
+        assert_eq!(
+            (
+                after_conflict.revision,
+                after_conflict.history_generation,
+                after_conflict.undo_len,
+                after_conflict.next_transaction_id,
+                after_conflict.publication_generation,
+            ),
+            (
+                conflict_baseline.revision,
+                conflict_baseline.history_generation,
+                conflict_baseline.undo_len,
+                conflict_baseline.next_transaction_id,
+                conflict_baseline.publication_generation,
+            ),
+            "shape-conflict retry must not create history or publication"
+        );
+        let after_conflict_snapshot = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read AV insertion after shape-conflict retry");
+        assert_eq!(
+            after_conflict_snapshot.timeline, conflict_snapshot.timeline,
+            "shape-conflict retry must not publish a Timeline snapshot"
+        );
+        assert_eq!(
+            b3_persistence_hash(&harness),
+            conflict_hash,
+            "shape-conflict retry must not change the project checkpoint"
+        );
+        let canonical = get_video_effect_catalog_operation_terminal_result_impl(
+            &harness.state,
+            86_100,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("query canonical InsertMedia receipt after shape conflict")
+        .expect("canonical InsertMedia receipt remains available");
+        match canonical.terminal {
+            VideoEffectCatalogAuthoritativeTerminalResult::Timeline(canonical_result) => {
+                assert_eq!(
+                    serde_json::to_value(&canonical_result).unwrap(),
+                    serde_json::to_value(&applied).unwrap(),
+                    "shape conflict cannot replace the canonical Timeline receipt"
+                );
+            }
+            other => panic!("unexpected canonical InsertMedia terminal: {other:?}"),
+        }
+        let first_video_id = applied.authoring.video_clips[0].id;
+        let first_audio_id = applied.authoring.audio_clips[0].id;
+        let first_group_id = applied.authoring.item_groups[0].id;
+        let next_request = TimelineAdvancedMutationRequest::InsertMedia {
+            media_asset_id,
+            start_ms: 2_500,
+            video_layer_id: Some(video_lane_id),
+            audio_layer_id: Some(audio_lane_id),
+        };
+        let (next_epoch, next_revision, next_hash) = b3_authority_arguments(&harness);
+        let next = apply_timeline_advanced_authoritative_command_impl(
+            &harness.state,
+            next_request,
+            86_120,
+            next_epoch,
+            next_revision,
+            next_hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .expect("a fresh request remains publishable after shape conflict");
+        // Video, Audio, and the linking group intentionally share one
+        // monotonic Timeline allocator.  A fresh AV insertion therefore
+        // advances each domain by three; any shape-conflict allocation would
+        // leave an extra gap here.
+        assert_eq!(next.authoring.video_clips[1].id.0, first_video_id.0 + 3);
+        assert_eq!(next.authoring.audio_clips[1].id, first_audio_id + 3);
+        assert_eq!(next.authoring.item_groups[1].id.0, first_group_id.0 + 3);
+        let after_next = harness.mutation_baseline();
+        assert_eq!(after_next.revision, baseline.revision + 2);
+        assert_eq!(
+            after_next.history_generation,
+            baseline.history_generation + 2
+        );
+        assert_eq!(after_next.undo_len, baseline.undo_len + 2);
+        assert_eq!(
+            after_next.next_transaction_id,
+            baseline.next_transaction_id + 2,
+            "the shape-conflict path did not consume a transaction ID"
+        );
+        let persisted = harness
+            .state
+            .engine
+            .persistence_snapshot()
+            .expect("read linked AV insertion persistence");
+        assert_eq!(
+            timeline_advanced_authoring_from_snapshot(&persisted.timeline),
+            next.authoring,
+            "engine persistence must equal the exact post-retry AV insertion candidate"
+        );
+        b3_assert_authority_matches_persistence(&harness);
+    }
+
+    #[test]
+    fn timeline_insert_media_explicit_lane_errors_are_atomic_and_none_falls_back() {
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, _video, audio, lighting) = seed_timeline_insert_media_fixture(&harness);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 0,
+                    video_layer_id: Some(lighting),
+                    audio_layer_id: Some(audio),
+                },
+                86_101,
+                "expected Video",
+            );
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, _video, audio, _lighting) = seed_timeline_insert_media_fixture(&harness);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 0,
+                    video_layer_id: Some(99_999_991),
+                    audio_layer_id: Some(audio),
+                },
+                86_102,
+                "was not found",
+            );
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, video, audio, _lighting) = seed_timeline_insert_media_fixture(&harness);
+            let mut locked_audio = harness
+                .state
+                .engine
+                .persistence_snapshot()
+                .expect("read lane before locking");
+            locked_audio
+                .timeline
+                .layers
+                .iter_mut()
+                .find(|layer| layer.id == audio)
+                .expect("Audio lane to lock")
+                .locked = true;
+            let locked_audio_layer = locked_audio
+                .timeline
+                .layers
+                .into_iter()
+                .find(|layer| layer.id == audio)
+                .expect("locked Audio lane remains available");
+            harness
+                .state
+                .engine
+                .update_timeline_layer(locked_audio_layer)
+                .expect("publish locked Audio lane for rejection test");
+            c1_stabilize_fixture_authority(&harness);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 0,
+                    video_layer_id: Some(video),
+                    audio_layer_id: Some(audio),
+                },
+                86_103,
+                "is locked",
+            );
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, _video, _audio, _lighting) = seed_timeline_insert_media_fixture(&harness);
+            let fallback_lanes = harness
+                .state
+                .engine
+                .persistence_snapshot()
+                .expect("read fallback lanes")
+                .timeline
+                .layers;
+            let expected_video = fallback_lanes
+                .iter()
+                .find(|layer| layer.kind == TimelineLayerKind::Video && !layer.locked)
+                .expect("fallback Video lane")
+                .id;
+            let expected_audio = fallback_lanes
+                .iter()
+                .find(|layer| layer.kind == TimelineLayerKind::Audio && !layer.locked)
+                .expect("fallback Audio lane")
+                .id;
+            let baseline = harness.mutation_baseline();
+            let (epoch, revision, hash) = b3_authority_arguments(&harness);
+            let applied = apply_timeline_advanced_authoritative_command_impl(
+                &harness.state,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 400,
+                    video_layer_id: None,
+                    audio_layer_id: None,
+                },
+                86_104,
+                epoch,
+                revision,
+                hash,
+                MEDIA_ASSET_A6_OWNER.to_string(),
+                None,
+            )
+            .expect("None lane IDs retain accessibility fallback compatibility");
+            assert_eq!(applied.authoring.video_clips[0].layer_id, expected_video);
+            assert_eq!(applied.authoring.audio_clips[0].layer_id, expected_audio);
+            assert_one_authoritative_history_mutation(&harness, baseline);
+        }
+    }
+
+    #[test]
+    fn timeline_insert_media_stream_presence_requires_exact_requested_lanes() {
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, _video, audio, _lighting) =
+                seed_timeline_insert_media_stream_fixture(&harness, false, true);
+            let (epoch, revision, hash) = b3_authority_arguments(&harness);
+            let applied = apply_timeline_advanced_authoritative_command_impl(
+                &harness.state,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 100,
+                    video_layer_id: None,
+                    audio_layer_id: Some(audio),
+                },
+                86_110,
+                epoch,
+                revision,
+                hash,
+                MEDIA_ASSET_A6_OWNER.to_string(),
+                None,
+            )
+            .expect("audio-only media accepts its exact Audio lane");
+            assert!(applied.authoring.video_clips.is_empty());
+            assert_eq!(applied.authoring.audio_clips.len(), 1);
+            assert_eq!(applied.authoring.audio_clips[0].layer_id, audio);
+            assert!(applied.authoring.item_groups.is_empty());
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, video, audio, _lighting) =
+                seed_timeline_insert_media_stream_fixture(&harness, false, true);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 100,
+                    video_layer_id: Some(video),
+                    audio_layer_id: Some(audio),
+                },
+                86_111,
+                "has no video stream",
+            );
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, _video, audio, lighting) =
+                seed_timeline_insert_media_stream_fixture(&harness, false, true);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 100,
+                    video_layer_id: Some(lighting),
+                    audio_layer_id: Some(audio),
+                },
+                86_112,
+                "has no video stream",
+            );
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, _video, audio, _lighting) =
+                seed_timeline_insert_media_stream_fixture(&harness, false, true);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 100,
+                    video_layer_id: Some(99_999_991),
+                    audio_layer_id: Some(audio),
+                },
+                86_113,
+                "has no video stream",
+            );
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, video, audio, _lighting) =
+                seed_timeline_insert_media_stream_fixture(&harness, false, true);
+            let mut snapshot = harness
+                .state
+                .engine
+                .persistence_snapshot()
+                .expect("read audio-only lane before locking opposite");
+            snapshot
+                .timeline
+                .layers
+                .iter_mut()
+                .find(|layer| layer.id == video)
+                .expect("opposite Video lane to lock")
+                .locked = true;
+            let locked_video = snapshot
+                .timeline
+                .layers
+                .into_iter()
+                .find(|layer| layer.id == video)
+                .expect("locked opposite Video lane remains available");
+            harness
+                .state
+                .engine
+                .update_timeline_layer(locked_video)
+                .expect("publish locked opposite Video lane");
+            c1_stabilize_fixture_authority(&harness);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 100,
+                    video_layer_id: Some(video),
+                    audio_layer_id: Some(audio),
+                },
+                86_114,
+                "has no video stream",
+            );
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, video, audio, _lighting) =
+                seed_timeline_insert_media_stream_fixture(&harness, true, false);
+            let (epoch, revision, hash) = b3_authority_arguments(&harness);
+            let applied = apply_timeline_advanced_authoritative_command_impl(
+                &harness.state,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 200,
+                    video_layer_id: Some(video),
+                    audio_layer_id: None,
+                },
+                86_115,
+                epoch,
+                revision,
+                hash,
+                MEDIA_ASSET_A6_OWNER.to_string(),
+                None,
+            )
+            .expect("video-only media accepts its exact Video lane");
+            assert_eq!(applied.authoring.video_clips.len(), 1);
+            assert_eq!(applied.authoring.video_clips[0].layer_id, video);
+            assert!(applied.authoring.audio_clips.is_empty());
+            assert!(applied.authoring.item_groups.is_empty());
+            let _ = audio;
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, video, audio, _lighting) =
+                seed_timeline_insert_media_stream_fixture(&harness, true, false);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 200,
+                    video_layer_id: Some(video),
+                    audio_layer_id: Some(audio),
+                },
+                86_116,
+                "has no audio stream",
+            );
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, video, _audio, lighting) =
+                seed_timeline_insert_media_stream_fixture(&harness, true, false);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 200,
+                    video_layer_id: Some(video),
+                    audio_layer_id: Some(lighting),
+                },
+                86_117,
+                "has no audio stream",
+            );
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, video, _audio, _lighting) =
+                seed_timeline_insert_media_stream_fixture(&harness, true, false);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 200,
+                    video_layer_id: Some(video),
+                    audio_layer_id: Some(99_999_992),
+                },
+                86_118,
+                "has no audio stream",
+            );
+        }
+        {
+            let harness = MediaAssetA6CommandHarness::new();
+            let (asset, video, audio, _lighting) =
+                seed_timeline_insert_media_stream_fixture(&harness, true, false);
+            let mut snapshot = harness
+                .state
+                .engine
+                .persistence_snapshot()
+                .expect("read video-only lane before locking opposite");
+            snapshot
+                .timeline
+                .layers
+                .iter_mut()
+                .find(|layer| layer.id == audio)
+                .expect("opposite Audio lane to lock")
+                .locked = true;
+            let locked_audio = snapshot
+                .timeline
+                .layers
+                .into_iter()
+                .find(|layer| layer.id == audio)
+                .expect("locked opposite Audio lane remains available");
+            harness
+                .state
+                .engine
+                .update_timeline_layer(locked_audio)
+                .expect("publish locked opposite Audio lane");
+            c1_stabilize_fixture_authority(&harness);
+            assert_timeline_insert_media_rejected_without_delta(
+                &harness,
+                TimelineAdvancedMutationRequest::InsertMedia {
+                    media_asset_id: asset,
+                    start_ms: 200,
+                    video_layer_id: Some(video),
+                    audio_layer_id: Some(audio),
+                },
+                86_119,
+                "has no audio stream",
+            );
+        }
     }
 
     #[test]
@@ -99396,6 +104009,7 @@ fn main() {
             enable_output_control_v2,
             take_over_output_control_v2,
             add_display_output_v2,
+            set_display_output_window_open_v2,
             acquire_output_lease_v2,
             renew_output_lease_v2,
             recover_output_lease_v2,

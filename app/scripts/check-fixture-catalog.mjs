@@ -162,5 +162,12 @@ assert.doesNotMatch(
 );
 assert.match(tauriSource, /fixture_profile_repair_layout_matches/, "repair must compare the exact DMX layout");
 assert.match(tauriSource, /\?rid=\{rid\}[\s\S]*?downloadFile\.php/, "Share downloads must use the public revision-ID GET contract");
+const fixtureCacheListFunction = tauriSource.match(/fn list_gdtf_fixture_cache\([\s\S]*?\n\}/)?.[0] ?? "";
+assert.match(fixtureCacheListFunction, /app_data_subdirectory_path\(/, "fixture cache listing must resolve its directory without creating it");
+assert.doesNotMatch(fixtureCacheListFunction, /app_data_subdirectory\(/, "fixture cache listing must not use the creating resolver");
+assert.match(tauriSource, /if !directory\.exists\(\)\s*\{\s*return Ok\(Vec::new\(\)\);/, "missing fixture cache directories must be an empty read-only state");
+const legacyCreateFunction = tauriSource.match(/fn create_custom_fixture_profile\([\s\S]*?\n\}/)?.[0] ?? "";
+assert.doesNotMatch(legacyCreateFunction, /State<'_, AppState>/, "legacy custom profile create must not receive mutable app state");
+assert.match(legacyCreateFunction, /validate_custom_fixture_profile_request[\s\S]*custom_fixture_profile_from_request/, "legacy custom profile create must remain a pure preview/build compatibility command");
 
-console.log("fixture catalog helpers: 63 assertions passed");
+console.log("fixture catalog helpers: 69 assertions passed");

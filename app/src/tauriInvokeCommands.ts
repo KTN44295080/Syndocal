@@ -289,6 +289,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "set_cue_steps",
   "set_default_video_clip_slot_authoritative",
   "set_direct_child_timeline_playing",
+  "set_display_output_window_open_v2",
   "set_dmx_outputs",
   "set_effect_enabled",
   "set_effect_video_target_position",

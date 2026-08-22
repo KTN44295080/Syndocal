@@ -4,7 +4,7 @@
 > requirement and final-gate authority, but its frozen checkpoint, 75.5% planning
 > roll-up, and Media A1 resume instructions are historical. Use
 > `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for the current dependency order,
-> `1.2.0-alpha.2` version train, warning ratchet, AI3 resume point, and checkpoint
+> `1.2.0-alpha.3` version train, warning ratchet, AI3 resume point, and checkpoint
 > workflow. Do not compare old and current percentages without identical denominators.
 
 > **OutputControl supersession (2026-08-21):** physical six-digit/Raw Input/Enter
@@ -12,6 +12,19 @@
 > local v2 click for exact Both; dangerous advanced output mutations use a parented
 > native Warning/Yes-No confirmation. Older physical-consent acceptance items are
 > historical. Owner/fence/durable/S0 requirements remain in force.
+
+> **Windows-only completion scope (2026-08-22):** the active product target is
+> this operator's Windows PC. macOS/Linux control and native acceptance, and the
+> distribution/legal/signing/SBOM/clean-machine/updater/publication tranche, are
+> deferred and removed from the current completion denominator. Windows native,
+> warning-zero, the final editor + LED panel + projector topology, ASIO, hardware, crash recovery, security, and soak
+> requirements remain. Use 71 active items; E1 leaves progress at 14/71 (19.7%).
+
+> **Windows verification workflow (2026-08-22):** routine validation drives the
+> same registered Tauri/control-plane production commands through backend
+> drivers. Do not repeat Computer Use during each implementation loop. Perform
+> one maximized release-executable UI/hardware pass after the integrated bundle
+> passes implementation, adversarial review, warning, build, and document gates.
 
 Status: implementation resumed on 2026-08-13 (JST). Media Asset A1-A8 are accepted for the current Windows tranche, including the rebuilt Media Library thumbnail/hover supplement; the whole-product Q5 completion query still fails and Critical Path B is next.
 Roadmap revision: v4, current Windows Media Asset A8 evidence integrated on 2026-08-14 (JST).
@@ -1317,8 +1330,8 @@ Timeline transport snapshot; native playback uses embedded deterministic English
 an independent session-local gain/device bus, cancels stale generations, and reports unsupported
 custom labels as text-only faults. Browser fixtures retain Web Speech only outside Tauri to prevent
 double announcements. Protocol/engine/backend decoding tests, localization, production build, and
-the real-browser 1920/1366/1280/860 containment proof are green. Custom-label offline TTS/cache and
-physical multi-device routing acceptance remain part of the final L-TL7 boundary.
+the real-browser 1920/1366/1280/860 containment proof are green. The fixed English vocabulary is the
+accepted show scope; physical multi-device routing acceptance remains part of the final L-TL7 boundary.
 
 - Add stable authored `TimelinePhaseId` and ordered, non-overlapping Phase ranges on a Timeline.
 - A Phase has a canonical label and a typed role. Built-in roles include `Intro`, `Verse`,
@@ -1331,8 +1344,8 @@ physical multi-device routing acceptance remain part of the final L-TL7 boundary
 - Guide speech is a dedicated monitor/cue bus, never Program audio and never recorded unless that cue bus
   is explicitly routed into the recording. Click and Guide have independent enable, gain, device/routing,
   and fault truth.
-- Built-in English guide vocabulary is recorded/localized and deterministic. Custom labels use a bounded
-  offline TTS/cache path or fail visibly to text-only guidance; they never require a live network service.
+- Built-in English guide vocabulary is recorded and deterministic. Custom labels fail visibly to text-only
+  guidance; they do not require TTS, an additional language pack, or a live network service.
 - Project replacement, timeline switch, seek, loop wrap, follow transition, and clock discontinuity reset
   the guide de-duplication fence explicitly; stale speech from the previous generation is cancelled.
 
@@ -1462,8 +1475,10 @@ returns the fresh logical selection, and is exactly recoverable without a second
 - Click BPM slews monotonically from outgoing to incoming BPM across the exact transition duration. Beat
   phase remains continuous; it does not reset at admission or completion.
 - When Guide is enabled, `Trans` is spoken on a configurable musical cadence during the transition,
-  defaulting to every four bars, plus at most one final destination Phase announcement. `Trans` cues use
-  the same monitor-only guide bus and generation cancellation rules as Phase/Loop cues.
+  defaulting to every four bars. After and only after successful Follow settlement, the fixed one-word
+  cue `Complete` is spoken exactly once, followed by at most one destination Phase announcement. Abort,
+  fault, stale generation, or failed settlement must never speak `Complete`. `Trans` and `Complete` cues
+  use the same monitor-only guide bus and generation cancellation rules as Phase/Loop cues.
 - Missing media, unavailable audio device, late decoder, clock discontinuity, or next-Timeline validation
   failure follows an explicit Hold/Cut/Fault policy selected before publication. It must never leave both
   Timelines emitting indefinitely or advance history twice.
@@ -2071,7 +2086,7 @@ state is `qa/CODEX_HANDOFF_2026-08-19.md`.
   shrinking adjacent UI; non-header master controls remain.
 - Windows native release and frontend warning output are currently zero. Promote
   the seven locally measurable P2 warning rows, keep both macOS rows pending, then
-  run the requested five-display and final three-display native VJ exercise.
+  run one final three-screen editor + LED panel + projector VJ exercise.
 
 ## 28. 2026-08-21 warning-P2 promotion closure
 
@@ -2081,8 +2096,9 @@ state is `qa/CODEX_HANDOFF_2026-08-19.md`.
 - The structured warning matrix is now 11 enforced and 2 pending. macOS dev and
   release remain the only pending rows; `requiredMatrixComplete` remains false.
 - The immediate next gate is the exact-executable, one-window, maximized native VJ
-  exercise across all five OS-visible displays, followed by the requested retained
-  three-screen editor + LED panel + projector state.
+  exercise in the requested retained three-screen editor + LED panel + projector
+  state. The earlier five-display exercise is historical capacity evidence and is
+  not repeated in the final pass.
 
 ## 29. 2026-08-21 Windows release-integrity and durable-R4 closure
 

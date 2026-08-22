@@ -252,6 +252,7 @@ interface ProjectorMapEditorProps {
   mapping: VideoOutputMapping;
   outputId: number;
   label: string;
+  readOnly?: boolean;
   onPatch: (patch: Partial<VideoOutputMapping>) => void;
 }
 
@@ -291,12 +292,15 @@ export function ProjectorMapPreview(props: ProjectorMapPreviewProps) {
 }
 
 export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
+  const patchMapping = (patch: Partial<VideoOutputMapping>) => {
+    if (!props.readOnly) props.onPatch(patch);
+  };
   const patchNumber = (field: NumericVideoOutputMappingField, value: number, min: number, max: number, digits = 3) => {
-    props.onPatch({ [field]: roundedRangeValue(value, min, max, digits) } as Partial<VideoOutputMapping>);
+    patchMapping({ [field]: roundedRangeValue(value, min, max, digits) } as Partial<VideoOutputMapping>);
   };
 
   const resetCornerOffset = (corner: ProjectorCorner) => {
-    props.onPatch({ [corner.xField]: 0, [corner.yField]: 0 } as Partial<VideoOutputMapping>);
+    patchMapping({ [corner.xField]: 0, [corner.yField]: 0 } as Partial<VideoOutputMapping>);
   };
 
   const setCornerFromPointer = (event: PointerEvent & { currentTarget: SVGCircleElement }, corner: ProjectorCorner) => {
@@ -306,7 +310,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
       return;
     }
     const base = projectorMapBasePoint(props.mapping, corner);
-    props.onPatch({
+    patchMapping({
       [corner.xField]: roundedMappingValue((pointer.x - base.x) / projectorCornerGain),
       [corner.yField]: roundedMappingValue((pointer.y - base.y) / projectorCornerGain),
     } as Partial<VideoOutputMapping>);
@@ -326,7 +330,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
     const sin = Math.sin(rotation);
     const localX = deltaX * cos + deltaY * sin;
     const localY = -deltaX * sin + deltaY * cos;
-    props.onPatch({
+    patchMapping({
       offset_x: roundedMappingValue(finiteOr(props.mapping.offset_x, 0) + localX / 20),
       offset_y: roundedMappingValue(finiteOr(props.mapping.offset_y, 0) + localY / 20),
     });
@@ -341,7 +345,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
     if (!pointer) {
       return;
     }
-    props.onPatch({
+    patchMapping({
       [axis === "x" ? "keystone_x" : "keystone_y"]: roundedMappingValue(
         ((axis === "x" ? pointer.x : pointer.y) - 50) / projectorKeystoneGain,
       ),
@@ -365,7 +369,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
     const aspectScale = projectorAspectScales(props.mapping);
     const denominator = 30 * (axis === "x" ? aspectScale.x : aspectScale.y);
     const nextScale = Math.abs(axis === "x" ? localX : localY) / denominator;
-    props.onPatch({
+    patchMapping({
       [axis === "x" ? "scale_x" : "scale_y"]: roundedRangeValue(nextScale, 0.25, 2.5),
     } as Partial<VideoOutputMapping>);
   };
@@ -378,7 +382,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
     }
     const center = projectorMapBaseCenter(props.mapping);
     const angleDeg = (Math.atan2(pointer.y - center.y, pointer.x - center.x) * 180) / Math.PI;
-    props.onPatch({
+    patchMapping({
       rotation_deg: roundedRangeValue(normalizeRotationDeg(angleDeg + 90), -180, 180, 1),
     });
   };
@@ -386,7 +390,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
   const nudgeCornerFromKeyboard = (event: KeyboardEvent, corner: ProjectorCorner) => {
     if (event.key === "Home") {
       event.preventDefault();
-      props.onPatch({ [corner.xField]: 0, [corner.yField]: 0 } as Partial<VideoOutputMapping>);
+      patchMapping({ [corner.xField]: 0, [corner.yField]: 0 } as Partial<VideoOutputMapping>);
       return;
     }
     const delta = projectorMapArrowDelta(event);
@@ -394,7 +398,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
       return;
     }
     event.preventDefault();
-    props.onPatch({
+    patchMapping({
       [corner.xField]: roundedMappingValue(mappingNumber(props.mapping, corner.xField, 0) + delta.x),
       [corner.yField]: roundedMappingValue(mappingNumber(props.mapping, corner.yField, 0) + delta.y),
     } as Partial<VideoOutputMapping>);
@@ -403,7 +407,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
   const nudgeOffsetFromKeyboard = (event: KeyboardEvent) => {
     if (event.key === "Home") {
       event.preventDefault();
-      props.onPatch({ offset_x: 0, offset_y: 0 });
+      patchMapping({ offset_x: 0, offset_y: 0 });
       return;
     }
     const delta = projectorMapArrowDelta(event);
@@ -411,7 +415,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
       return;
     }
     event.preventDefault();
-    props.onPatch({
+    patchMapping({
       offset_x: roundedMappingValue(mappingNumber(props.mapping, "offset_x", 0) + delta.x),
       offset_y: roundedMappingValue(mappingNumber(props.mapping, "offset_y", 0) + delta.y),
     });
@@ -421,7 +425,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
     const field = axis === "x" ? "keystone_x" : "keystone_y";
     if (event.key === "Home") {
       event.preventDefault();
-      props.onPatch({ [field]: 0 } as Partial<VideoOutputMapping>);
+      patchMapping({ [field]: 0 } as Partial<VideoOutputMapping>);
       return;
     }
     const delta = projectorMapArrowDelta(event);
@@ -430,7 +434,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
       return;
     }
     event.preventDefault();
-    props.onPatch({
+    patchMapping({
       [field]: roundedMappingValue(mappingNumber(props.mapping, field, 0) + axisDelta),
     } as Partial<VideoOutputMapping>);
   };
@@ -439,7 +443,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
     const field = axis === "x" ? "scale_x" : "scale_y";
     if (event.key === "Home") {
       event.preventDefault();
-      props.onPatch({ [field]: 1 } as Partial<VideoOutputMapping>);
+      patchMapping({ [field]: 1 } as Partial<VideoOutputMapping>);
       return;
     }
     const delta = projectorMapArrowDelta(event);
@@ -448,7 +452,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
       return;
     }
     event.preventDefault();
-    props.onPatch({
+    patchMapping({
       [field]: roundedRangeValue(mappingNumber(props.mapping, field, 1) + axisDelta, 0.25, 2.5),
     } as Partial<VideoOutputMapping>);
   };
@@ -456,7 +460,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
   const nudgeRotationFromKeyboard = (event: KeyboardEvent) => {
     if (event.key === "Home") {
       event.preventDefault();
-      props.onPatch({ rotation_deg: 0 });
+      patchMapping({ rotation_deg: 0 });
       return;
     }
     const step = event.shiftKey ? 5 : event.altKey ? 0.1 : 1;
@@ -464,7 +468,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
       return;
     }
     event.preventDefault();
-    props.onPatch({
+    patchMapping({
       rotation_deg: roundedRangeValue(
         normalizeRotationDeg(mappingNumber(props.mapping, "rotation_deg", 0) + (event.key === "ArrowRight" ? step : -step)),
         -180,
@@ -475,7 +479,10 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
   };
 
   return (
-    <div class="projectorMapEditor">
+    <div
+      class={props.readOnly ? "projectorMapEditor readOnly" : "projectorMapEditor"}
+      aria-disabled={props.readOnly}
+    >
       <svg
         class="projectorMapSurface"
         viewBox={`0 0 ${projectorMapViewBoxSize} ${projectorMapViewBoxSize}`}
@@ -510,7 +517,8 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
                 cx={point().x}
                 cy={point().y}
                 r="3.8"
-                tabIndex={0}
+                tabIndex={props.readOnly ? -1 : 0}
+                aria-disabled={props.readOnly}
                 onPointerDown={(event) => {
                   event.currentTarget.setPointerCapture(event.pointerId);
                   setRotationFromPointer(event);
@@ -544,7 +552,8 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
                   cx={point().x}
                   cy={point().y}
                   r="3.8"
-                  tabIndex={0}
+                  tabIndex={props.readOnly ? -1 : 0}
+                  aria-disabled={props.readOnly}
                   onPointerDown={(event) => {
                     event.currentTarget.setPointerCapture(event.pointerId);
                     setScaleFromPointer(event, handle.axis);
@@ -586,7 +595,8 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
                   cx={point().x}
                   cy={point().y}
                   r="3.7"
-                  tabIndex={0}
+                  tabIndex={props.readOnly ? -1 : 0}
+                  aria-disabled={props.readOnly}
                   onPointerDown={(event) => {
                     event.currentTarget.setPointerCapture(event.pointerId);
                     setKeystoneFromPointer(event, handle.axis);
@@ -616,7 +626,8 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
           cx={projectorMapCenter(props.mapping).x}
           cy={projectorMapCenter(props.mapping).y}
           r="4.2"
-          tabIndex={0}
+          tabIndex={props.readOnly ? -1 : 0}
+          aria-disabled={props.readOnly}
           onPointerDown={(event) => {
             event.currentTarget.setPointerCapture(event.pointerId);
             setOffsetFromPointer(event);
@@ -651,7 +662,8 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
                   cx={point().x}
                   cy={point().y}
                   r="4"
-                  tabIndex={0}
+                  tabIndex={props.readOnly ? -1 : 0}
+                  aria-disabled={props.readOnly}
                   onPointerDown={(event) => {
                     event.currentTarget.setPointerCapture(event.pointerId);
                     setCornerFromPointer(event, corner);
@@ -690,19 +702,19 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
       <div class="projectorMapModeRow" aria-label={`${props.label} aspect mode`}>
         <button
           class={props.mapping.aspect_mode === "Stretch" ? "active" : ""}
-          onClick={() => props.onPatch({ aspect_mode: "Stretch" })}
+          onClick={() => patchMapping({ aspect_mode: "Stretch" })}
         >
           Stretch
         </button>
         <button
           class={props.mapping.aspect_mode === "Fit" ? "active" : ""}
-          onClick={() => props.onPatch({ aspect_mode: "Fit" })}
+          onClick={() => patchMapping({ aspect_mode: "Fit" })}
         >
           Fit
         </button>
         <button
           class={props.mapping.aspect_mode === "Fill" ? "active" : ""}
-          onClick={() => props.onPatch({ aspect_mode: "Fill" })}
+          onClick={() => patchMapping({ aspect_mode: "Fill" })}
         >
           Fill
         </button>
@@ -712,7 +724,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
           {(preset) => (
             <button
               class={Math.abs(finiteOr(props.mapping.aspect_ratio, 1) - preset.ratio) < 0.01 ? "active" : ""}
-              onClick={() => props.onPatch({ aspect_ratio: roundedRangeValue(preset.ratio, 0.25, 4), aspect_mode: "Fit" })}
+              onClick={() => patchMapping({ aspect_ratio: roundedRangeValue(preset.ratio, 0.25, 4), aspect_mode: "Fit" })}
             >
               {preset.label}
             </button>
@@ -730,7 +742,7 @@ export function ProjectorMapEditor(props: ProjectorMapEditorProps) {
                   : ""
               }
               onClick={() =>
-                props.onPatch({
+                patchMapping({
                   keystone_x: preset.keystoneX,
                   keystone_y: preset.keystoneY,
                 })

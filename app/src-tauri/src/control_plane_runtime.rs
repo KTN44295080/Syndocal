@@ -148,9 +148,32 @@ fn confirm_native_dangerous_output_action(
                 .ok()
                 .is_some_and(|index| index == spec.monitor_index)
         }
+        // SetDisplayWindowOpen is LocalExplicitAction.  Its narrow
+        // editor-target warning is performed by the physical-window core,
+        // after it has resolved the persisted target; non-editor close/open
+        // intentionally has no modal here.
+        OutputControlActionV2::SetDisplayWindowOpen { .. } => false,
         _ => false,
     };
     let (title, description) = native_output_confirmation_copy_for_editor_target(editor_target);
+    matches!(
+        MessageDialog::new()
+            .set_level(MessageLevel::Warning)
+            .set_title(title)
+            .set_description(description)
+            .set_buttons(MessageButtons::YesNo)
+            .set_parent(window)
+            .show(),
+        MessageDialogResult::Yes
+    )
+}
+
+/// The physical Display-window operation is normally a LocalExplicitAction.
+/// Opening over the editor is the sole exception: use the same parented
+/// Warning/Yes-No helper as AddDisplay and treat every response except Yes as
+/// a terminal cancellation.
+pub(crate) fn confirm_editor_display_window_open(window: &WebviewWindow) -> bool {
+    let (title, description) = native_output_confirmation_copy_for_editor_target(true);
     matches!(
         MessageDialog::new()
             .set_level(MessageLevel::Warning)
@@ -645,6 +668,21 @@ where
                 binding.owner_incarnation,
             )
         }
+        OutputControlActionV2::SetDisplayWindowOpen {
+            output_id, open, ..
+        } => super::set_display_output_window_open_with_output_control_fence(
+            app,
+            window,
+            state,
+            *output_id,
+            *open,
+            &request.expected_fence,
+            &lease_request,
+            lease_now_ms,
+            &binding.principal,
+            &binding.window_label,
+            binding.owner_incarnation,
+        ),
         OutputControlActionV2::AcquireLease { .. }
         | OutputControlActionV2::RenewLease { .. }
         | OutputControlActionV2::RecoverLease { .. }
@@ -825,6 +863,24 @@ fn validate_output_action_current(
                     && output.monitor_id == Some(spec.monitor_index)
             }) {
                 return Err("A Display output already targets this monitor".to_string());
+            }
+            Ok(())
+        }
+        OutputControlActionV2::SetDisplayWindowOpen { output_id, .. } => {
+            let snapshot = state.engine.snapshot();
+            let output = snapshot
+                .video
+                .outputs
+                .iter()
+                .find(|output| output.id == *output_id)
+                .ok_or_else(|| "Display output no longer exists".to_string())?;
+            if output.kind != protocol::VideoOutputKind::Display {
+                return Err("Only Display outputs have a physical live window".to_string());
+            }
+            if output.monitor_id.is_none()
+                || output.monitor_identity.as_deref().is_none_or(str::is_empty)
+            {
+                return Err("Display output monitor identity is missing".to_string());
             }
             Ok(())
         }
@@ -1586,7 +1642,10 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         OutputControlActionV2::Arm { .. }
         | OutputControlActionV2::ReleaseBlackout { .. }
         | OutputControlActionV2::TakeOverStandby { .. }
-        | OutputControlActionV2::AddDisplay { .. } => OutputLeaseReceiptOutcomeV2::Authorized,
+        | OutputControlActionV2::AddDisplay { .. }
+        | OutputControlActionV2::SetDisplayWindowOpen { .. } => {
+            OutputLeaseReceiptOutcomeV2::Authorized
+        }
         OutputControlActionV2::AcquireLease { .. } => OutputLeaseReceiptOutcomeV2::Acquired,
         OutputControlActionV2::RenewLease { .. } => OutputLeaseReceiptOutcomeV2::Renewed,
         OutputControlActionV2::RecoverLease { .. } => OutputLeaseReceiptOutcomeV2::Recovered,

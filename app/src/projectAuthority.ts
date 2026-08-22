@@ -1,6 +1,7 @@
 import type {
   ProjectAuthorityDisposition,
   ProjectAuthorityPublicationKind,
+  ProjectInputRuntimeStatus,
   ProjectRecoveryAuthorityTransition,
 } from "./types";
 
@@ -36,6 +37,56 @@ export interface ProjectAuthorityRequest {
 export interface ProjectAuthorityApplication {
   applicationGeneration: number;
 }
+
+export const projectAuthorityGenerationIsValid = (value: number): boolean =>
+  Number.isSafeInteger(value) && value >= 0;
+
+export type ProjectAuthorityInputRuntimeVerdict = "apply" | "duplicate" | "stale";
+
+const projectInputRuntimeFlagsEqual = (
+  left: ProjectInputRuntimeStatus,
+  right: ProjectInputRuntimeStatus,
+): boolean => left.midi_clock_active === right.midi_clock_active
+  && left.midi_control_active === right.midi_control_active
+  && left.midi_feedback_output_active === right.midi_feedback_output_active
+  && left.midi_feedback_runtime_active === right.midi_feedback_runtime_active
+  && left.osc_active === right.osc_active
+  && left.dmx_active === right.dmx_active;
+
+/**
+ * Input worker generations are two independent monotonic fences which must
+ * be compared as one pair.  A candidate which regresses either member is an
+ * old event/reply and cannot update any runtime flag.  Equal generations are
+ * still allowed to apply a changed liveness flag: DMX packet/liveness polling
+ * is runtime-only and must converge without manufacturing a new worker epoch.
+ */
+export const projectAuthorityInputRuntimeVerdict = (
+  candidate: ProjectInputRuntimeStatus,
+  observed: Pick<
+    ProjectInputRuntimeStatus,
+    "project_input_runtime_generation" | "mapping_input_runtime_generation"
+  >,
+  current: ProjectInputRuntimeStatus | null,
+): ProjectAuthorityInputRuntimeVerdict => {
+  const candidateProjectGeneration = candidate.project_input_runtime_generation;
+  const candidateMappingGeneration = candidate.mapping_input_runtime_generation;
+  const observedProjectGeneration = observed.project_input_runtime_generation;
+  const observedMappingGeneration = observed.mapping_input_runtime_generation;
+  if (![candidateProjectGeneration, candidateMappingGeneration,
+    observedProjectGeneration, observedMappingGeneration].every(projectAuthorityGenerationIsValid)) {
+    return "stale";
+  }
+  if (candidateProjectGeneration < observedProjectGeneration
+    || candidateMappingGeneration < observedMappingGeneration) {
+    return "stale";
+  }
+  if (current === null
+    || candidateProjectGeneration > observedProjectGeneration
+    || candidateMappingGeneration > observedMappingGeneration) {
+    return "apply";
+  }
+  return projectInputRuntimeFlagsEqual(candidate, current) ? "duplicate" : "apply";
+};
 
 export type ProjectAuthorityReplacementVerdict = "apply" | "duplicate" | "stale";
 
@@ -80,6 +131,19 @@ export const projectAuthorityTokenIsCurrent = (
 ): boolean => captured.project_epoch === current.project_epoch
   && captured.project_revision === current.project_revision
   && captured.checkpoint_hash === current.checkpoint_hash;
+
+/**
+ * Recovery intent delivery is a side effect of an accepted current bundle,
+ * never of a rejected or exact-duplicate poll/reply. Keep this gate beside
+ * the token predicate so all production entry points use the same ownership
+ * rule before touching browser storage or issuing an ACK.
+ */
+export const projectAuthorityBundleMayConsumeRecoveryIntent = (
+  application: "applied" | "duplicate" | "stale",
+  candidate: ProjectAuthorityToken,
+  current: ProjectAuthorityToken,
+): boolean => application === "applied"
+  && projectAuthorityTokenIsCurrent(candidate, current);
 
 /**
  * A replacement result has stronger semantics than a regular status refresh:

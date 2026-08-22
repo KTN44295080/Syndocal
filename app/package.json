@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.2",
+  "version": "1.2.0-alpha.3",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
@@ -46,6 +46,9 @@
     "check:identity-color": "node scripts/check-identity-color.mjs",
     "check:output-ownership": "node scripts/check-output-ownership.mjs",
     "check:output-control-runtime": "node scripts/check-output-control-runtime.mjs",
+    "check:video-output-window-runtime": "node scripts/check-video-output-window-runtime.mjs",
+    "check:timeline-external-dnd": "node scripts/check-timeline-external-dnd.mjs",
+    "check:video-setup-viewport": "node scripts/check-viewport-containment.mjs --setup-video-only",
     "check:dj-link": "node scripts/check-dj-link-runtime.mjs",
     "check:bundled-library": "node scripts/check-bundled-library-runtime.mjs",
     "check:localization": "node scripts/check-localization.mjs",
@@ -92,6 +95,8 @@
     "check:safety-blackout-runtime": "node scripts/check-safety-blackout-runtime.mjs",
     "check:timeline-overlap-clusters": "node scripts/check-timeline-overlap-clusters.mjs",
     "check:timeline-slim": "node scripts/check-viewport-containment.mjs --timeline-slim-only",
+    "check:timeline-source-shelf": "node scripts/check-viewport-containment.mjs --timeline-slim-only",
+    "check:edit-ia-video": "node scripts/check-viewport-containment.mjs --edit-ia-video-only",
     "check:timeline-layered": "node scripts/check-viewport-containment.mjs --timeline-layered-only",
     "check:timeline-operator": "node scripts/check-viewport-containment.mjs --timeline-expansion-only",
     "check:timeline-performance": "node scripts/check-timeline-performance-browser.mjs",

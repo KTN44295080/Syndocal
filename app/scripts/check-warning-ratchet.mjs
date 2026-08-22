@@ -13,6 +13,7 @@ import {
   loadInventoryAtRef,
   resolveTrustedComparison,
   auditZeroWarningPromotion,
+  auditOutputMarkerRebaseline,
   runWarningConfiguration,
   validateInventory,
 } from "./warning-ratchet-lib.mjs";
@@ -29,6 +30,7 @@ function parseArgs(values) {
     headRef: process.env.WARNING_RATCHET_HEAD_REF || "HEAD",
     bootstrap: false,
     promotion: false,
+    outputMarkerRebaseline: false,
     baseRefExplicit: false,
     headRefExplicit: false,
   };
@@ -46,15 +48,19 @@ function parseArgs(values) {
     }
     else if (value === "--bootstrap-baseline") result.bootstrap = true;
     else if (value === "--promote-zero-warning") result.promotion = true;
+    else if (value === "--rebaseline-output-markers") result.outputMarkerRebaseline = true;
     else throw new Error(`unknown argument: ${value}`);
   }
-  if (result.promotion && (!result.baseRefExplicit || !result.headRefExplicit)) {
-    throw new Error("--promote-zero-warning requires explicit --base-ref and --head-ref");
+  if (result.promotion && result.outputMarkerRebaseline) {
+    throw new Error("--promote-zero-warning and --rebaseline-output-markers are mutually exclusive");
   }
-  if (result.promotion && !result.configuration) {
-    throw new Error("--promote-zero-warning requires --configuration");
+  if ((result.promotion || result.outputMarkerRebaseline) && (!result.baseRefExplicit || !result.headRefExplicit)) {
+    throw new Error(`${result.promotion ? "--promote-zero-warning" : "--rebaseline-output-markers"} requires explicit --base-ref and --head-ref`);
   }
-  if (!result.promotion && !result.configuration) throw new Error("--configuration is required");
+  if ((result.promotion || result.outputMarkerRebaseline) && !result.configuration) {
+    throw new Error(`${result.promotion ? "--promote-zero-warning" : "--rebaseline-output-markers"} requires --configuration`);
+  }
+  if (!result.promotion && !result.outputMarkerRebaseline && !result.configuration) throw new Error("--configuration is required");
   return result;
 }
 
@@ -160,6 +166,19 @@ if (args.promotion) {
   console.log(`executed configuration: ${promotion.configurationId}`);
   console.log(`changed files: ${promotion.modifiedFiles.size}`);
   console.log("zero-warning promotion audit ok; inventory was not written");
+} else if (args.outputMarkerRebaseline) {
+  const schema = loadInventory(schemaPath);
+  const rebaseline = await auditOutputMarkerRebaseline({
+    repoRoot,
+    baseRef: args.baseRef,
+    headRef: args.headRef,
+    configurationId: args.configuration,
+    schema,
+  });
+  console.log(`output-marker rebaseline audit: ${rebaseline.comparison.base}...${rebaseline.comparison.head}`);
+  console.log(`executed configuration: ${rebaseline.configurationId}`);
+  console.log(`changed files: ${rebaseline.modifiedFiles.size}`);
+  console.log("output-marker rebaseline audit ok; inventory was not written");
 } else {
   await runNormalWarningGate();
 }

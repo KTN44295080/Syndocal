@@ -27,13 +27,16 @@ export const setupSubTabsForArea = (area: SetupArea) => setupSubTabs.filter((tab
 export const controlModes: { id: ControlMode; label: string; description: string }[] = [
   { id: "edit", label: "Lighting", description: "Lighting editing, fixture attributes, visual controls, and presets" },
   { id: "live", label: "Timeline", description: "Cue playback, timeline, and blackout controls" },
-  { id: "mixer", label: "Video", description: "Video clip launch, preview/program mixing, layers, and outputs" },
+  { id: "mixer", label: "Video", description: "Media Library preparation, verification, preview, and clip properties" },
 ];
 
-// Timeline is a Lighting context, not a peer workspace.  Keep its internal
-// mode for keyboard commands, saved layouts, and pane-window compatibility,
-// but only expose the two real Edit domains in the persistent chrome.
-export const editDomainModes = controlModes.filter((mode) => mode.id !== "live");
+// The persistent Edit chrome exposes each existing control mode as one domain.
+// Mode IDs remain stable for saved layouts, shortcuts, and pane-window compatibility.
+export const editDomainModes = [
+  controlModes.find((mode) => mode.id === "edit")!,
+  controlModes.find((mode) => mode.id === "mixer")!,
+  controlModes.find((mode) => mode.id === "live")!,
+];
 
 export const controlCategories: { id: ControlCategory; label: string }[] = [
   { id: "dimmer", label: "Dimmer" },

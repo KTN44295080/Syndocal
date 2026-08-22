@@ -4,6 +4,210 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-08-22 superseding local Windows show-core scope
+
+The active completion target is now the operator's current Windows PC and the
+show workflow below. It supersedes the broader Windows denominator for priority
+and completion reporting:
+
+- one Syndocal editor/control window plus two real fullscreen VJ display outputs,
+  assigned to the LED-panel and projector roles;
+- serial-port DMX lighting output and authored lighting scenes/banks at or above
+  the pinned Daslight production workflow, including Static scenes;
+- one authoritative Timeline arranging lighting scenes, real Media Library video
+  files such as MP4, and audio-output clips;
+- MIDI Time Code synchronization, DJ Link semantic synchronization through the
+  completed DJ-PC Agent, MIDI-controller fader/control input, and audio input/output;
+- the local separately built Windows ASIO path, including fail-closed driver,
+  buffer, callback, fault, and restart behavior.
+
+NDI and Spout are deferred from this target, not cancelled. macOS/Linux control and native proof,
+distribution, signing, installer/updater publication, and legal/package disposition
+are also deferred rather than removed. They remain recorded follow-on work and must not be described as complete,
+but they do not block the local Windows show-core stop condition.
+
+The former 14/71 percentage described the broader Windows product checklist and
+is not the primary progress number for this narrowed target. Report show-core
+software implementation, automated production-path proof, and current-PC physical
+acceptance separately. Routine validation remains backend-first through the same
+registered Tauri/control-plane paths; perform one final maximized native UI pass
+only after the integrated backend bundle is green.
+
+The operator confirmed on 2026-08-22 that a real lighting fixture and its serial
+DMX interface are available for acceptance at any time. Lighting scene, Static,
+Bank, FX, and Timeline authoring and the serial/Art-Net/sACN software output paths
+are implementation-complete scope, not missing product features. Their remaining
+stop gate is one batched current-PC physical run covering exact channel output,
+44 Hz cadence, blackout/release, disconnect/reconnect, and bounded soak. It must
+run through the production backend path before the single final UI pass.
+
+### Edit workspace and unified Timeline UI contract
+
+The Edit workspace has three persistent authoring domains: `Lighting`, `Video`,
+and `Timeline`. They are product domains, not three independent playback engines:
+
+- `Lighting` keeps the Bank-and-Scene matrix as its primary upper library;
+- `Video` uses the Media Library as its primary upper library rather than replacing
+  the whole Edit desk with a dense standalone mixer;
+- `Timeline` exposes one named-timeline arranger with Lighting, Video, and Audio
+  layers on the same time axis and playhead. It must never split those media types
+  into separate timelines merely because their source libraries differ.
+
+`Video` is the source-preparation domain, parallel to authoring a Lighting Scene.
+It imports, verifies/relinks, organizes, and previews Media Library assets and
+edits the reusable clip/source properties supported by the production model (for
+example in/out, loop, fit/crop/aspect, audio use, effects, and authored routing).
+It does not arrange show time. Physical display discovery, creation, calibration,
+and projector mapping remain in Setup Video; Timeline alone owns temporal
+placement and playback order. Advanced layer/Clip Slot/mixer tools remain
+available by disclosure where they have authoritative routes, not as the default
+Video workspace.
+
+The Timeline domain keeps a co-visible source pane in the existing lower-right
+desk position while the unified arranger occupies the upper pane. Its
+`Scenes / Media Library` source switch presents the same authored Scene and
+MediaAsset identities used by the full Lighting and Video domains; it is not a
+second catalog or copied project state. Media may be filtered as All, Video, or
+Audio. Operators drag upward from this pane directly to the visible target layer,
+so no cross-tab drag or remembered hidden-tab gesture is required. The same
+lower-right pane may switch to the selected-placement Inspector, but Sources is
+the default Timeline authoring surface and remains directly reopenable and
+internally scrollable at 1280x720.
+
+The lower-left and lower-right Edit panes remain the shared desk skeleton. Their
+contents are contextual: Lighting uses stage/selection plus fixture/scene
+attributes, Video uses preview/output context plus selected media/clip properties,
+and Timeline uses transport/preview plus the selected placement inspector. A Video
+selection must not leave Lighting-only controls in the lower-right pane.
+
+Media Library assets, including files containing both video and audio, are dragged
+onto compatible Video or Audio layers. A single audiovisual file may create one
+grouped Video plus Audio placement through one authoritative production mutation.
+Authored Lighting scenes are dragged from their Bank column onto Lighting layers.
+Every drag-and-drop route must retain a keyboard-accessible placement action and
+must call the same registered Tauri/control-plane production operation as the
+frontend pointer gesture. Wrong-kind layer drops fail closed with no project or
+history delta.
+
+### Timeline click and variable-meter contract
+
+The current 25 ms polling metronome is not a completion-quality click engine. It
+detects a changed quarter-note index after the fact, accents every fourth beat,
+and emits a detached native sine tone. That implementation cannot prove bounded
+jitter under load, exact MTC/DJ/loop behavior, or the 5/4 and 6/4 measures required
+by the pinned song material.
+
+The Windows show-core therefore requires one authored Timeline tempo/meter map
+with an exact numerator and denominator per change point and a 4/4 default. The
+same map drives arranger measure lines, snap, count-in, click accents, displayed
+bar/beat position, MTC position conversion, and backend playback. The native
+audio path schedules clicks against output sample frames with bounded lookahead;
+UI timers and the 25 ms media-sync poll may request work but never define the
+audible boundary. Stop, seek, loop, BPM/meter change, Timeline replacement, MTC
+discontinuity, and DJ semantic transport rotation cancel stale queued frames by
+an engine-owned generation before rescheduling.
+
+The reference click tone is a 50 ms square wave: 1320 Hz on the measure downbeat,
+920 Hz on other quarter-note beats, gain 0.1 with a 45 ms exponential decay to
+0.0001. It has a separately controllable click bus and smooth gain change rather
+than sharing the Program-media gain. Count-in uses the meter at the playback start
+measure. Deterministic acceptance includes the `惑う星` meter sequence from
+`C:\Users\kouty\Documents\Guiter\docs\click-engine-spec-ja.md`: measures 113-128
+at 194 BPM must produce exactly 74 clicks with downbeats at the authored measure
+boundaries. Full 7/8 and 3/8 handling is included by the numerator/denominator
+model rather than narrowing the product schema to only n/4 meters.
+
+### Timeline Guide voice contract
+
+The existing Guide path is a retained foundation, not the completed Guide voice
+surface. The engine already publishes generation-fenced `Phase`, `Looping`,
+`Break`, and `Trans` cues; the native runtime plays the bundled deterministic
+English WAV vocabulary through an independent session-local device/gain bus and
+reports a missing requested device or unsupported custom label without silently
+falling back. Browser-only fixtures may use Web Speech, but the Tauri product must
+not speak the same cue twice.
+
+The fixed embedded English vocabulary is the intended show scope. Custom Phase
+labels remain visible text-only Guide faults and do not require TTS, a Japanese
+voice pack, or a network service. Guide events must still be scheduled against
+the same output-sample-frame and authored
+tempo/meter authority as the click engine rather than appended after a 25 ms poll.
+Loop and Follow-transition cadence must use the active numerator/denominator map,
+not a fixed four-beat bar. Stop, seek, loop wrap, Timeline/project replacement,
+Follow settlement, MTC/DJ discontinuity, and output-device restart cancel stale
+queued speech by generation, while ordinary continuous MTC/DJ phase correction
+does not truncate an already valid utterance.
+
+Successful Follow settlement emits the fixed one-word guide `Complete` exactly
+once. It is not emitted at admission, visual transition end, abort, Hold/Fault,
+failed quorum, or stale-generation cleanup. If a destination Phase cue is also
+due, `Complete` precedes that Phase announcement on the same Guide bus.
+
+Guide enable remains project-authored. Physical device selection and monitor gain
+are machine-local settings, must survive an application restart, and must stay
+locked with a visible fault when the explicitly selected device is absent. The
+Guide bus remains separate from Program audio and the Click bus. Playback captures
+the Timeline BPM at each cue boundary and applies only a small pitch-preserving
+rate adjustment to the fixed voice: 120 BPM is 1.00x and the effective rate is
+bounded to 0.92x-1.08x. A later BPM or sync correction cannot retime a word that
+is already in progress. Deterministic backend proof must cover every built-in
+English asset, unsupported/corrupt custom
+labels, exact ordering when multiple boundaries are crossed,
+stale-generation cancellation, missing-device fail-closed behavior, and parity
+between the registered UI command path and the backend production driver.
+
+### 2026-08-22 pinned two-song click and Guide material
+
+The operator-confirmed show chart, rather than the currently truncated FRET STEP
+`totalMeasures: 151`, is authoritative for this Syndocal material. `人生オーバー`
+has 156 authored 4/4 measures at 170 BPM. Measure 34 emits `Chorus` on its
+downbeat. Measure 98 is performed exactly eight times; every pass emits
+`Looping`, and the first downbeat of measure 99 emits `Break`. Measures 149-156
+form one phase-continuous 32-quarter-note tempo ramp from 170 to 194 BPM. Each
+of those eight measure downbeats emits `Trans`. The songs do not overlap;
+`惑う星` measure 1 begins on the exact ramp-end sample frame at 194 BPM and
+emits `Complete` once. `惑う星` then uses its confirmed 207-measure map with
+5/4 at measures 117-119 and 121-123, 6/4 at 18, 120, and 124, and 4/4 elsewhere.
+
+The deterministic pre-render tool is
+`tools/audio/export-jinsei-madow-click-guide.mjs`; the matching Zira voice
+generator is `tools/audio/generate-guide-complete.ps1`, and the product source
+asset is `app/src-tauri/assets/timeline-guide/en/complete.wav`. Canonical
+audition outputs live outside Git at `C:\TEMP\syndocal-show-audio`: nine
+48 kHz, PCM16, mono WAVs (per-song and connected click/Guide/mix stems) plus a
+sample-frame manifest. Independent review recomputed all PCM samples and accepted
+P0/P1/P2 as zero: 652 `人生オーバー` performance clicks, 840 `惑う星`
+clicks, 1,492 total clicks, and 19 Guide events. The connected boundary is frame
+11,010,639; duration is 23,480,742 frames / 489.182125 seconds. Fresh export
+reproduced every WAV SHA-256 exactly and no output clipped. These files prove the
+pinned authored material and provide audition/backstop stems; they do not replace
+the required runtime sample-frame click/Guide scheduler for DJ/MTC seek, loop,
+tempo, or discontinuity handling.
+
+## 2026-08-22 broader Windows-only reference scope
+
+The current completion target is this operator's Windows PC, not a public
+cross-platform distribution. macOS/Linux control, native acceptance, and warning
+rows, plus distribution/legal/signing/notarization/SBOM/clean-machine/updater/
+publication work, are deferred outside the active denominator. They remain useful
+future roadmap material but do not block the current Windows completion claim.
+
+This scope change does not weaken Windows requirements. Native release builds,
+zero first-party warnings, the final three-screen VJ topology, Windows ASIO, DMX/MIDI/OSC,
+DJ Link/Pedal integration, crash/reply-loss recovery, accessibility, security,
+hardware fault tests, and one-hour Windows soak remain mandatory. The active
+checklist denominator is 71 rather than 79; after E1 it is 14/71 (19.7%).
+
+### Windows verification execution rule
+
+Routine validation must drive the same registered Tauri/control-plane commands
+as the frontend from backend production-path drivers. Repeated Computer Use or
+manual UI passes are prohibited during individual implementation loops. Bundle
+implementation, adversarial review, warning/build gates, and documentation into
+stable checkpoints, and reserve one maximized release-executable UI/hardware pass
+for the final integrated acceptance of the bundle. Backend drivers do not replace
+that final native pass; they remove redundant intermediate UI operation.
+
 ## 2026-08-21 superseding OutputControl decision
 
 The physical-input consent design is retired in full. Any older section or
@@ -115,7 +319,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active development train advances from the long-lived `1.1.0` metadata to
-`1.2.0-alpha.2`. The branch name may remain historical; artifact metadata and tags
+`1.2.0-alpha.3`. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from the branch name.
 
 The synchronized product-version surfaces are:
@@ -246,8 +450,9 @@ blocked every job, so no CI/platform claim is derived from that run.
 - [x] Replace stale resume instructions and percentages with current AI3 truth.
 - [ ] Build Q1-Q4 coverage from every phase below; assign Supported/External/etc.
 - [x] Create the structured W0 inventory and enforce the W1 no-new-warning ratchet.
-- [ ] Measure and enforce macOS dev/release so the W0 required matrix can change
-  from 11 enforced / 2 pending to `requiredMatrixComplete=true`.
+- **Deferred outside the Windows target:** macOS dev/release warning enforcement.
+  The global inventory may remain 11 enforced / 2 pending without blocking the
+  current Windows completion target.
 - [ ] Extend `check:release` with tag/previous-version/updater/artifact checks.
 
 Exit: synchronized version metadata, warning baseline, current traceability/risk/
@@ -334,8 +539,8 @@ Audio/recording/live-source clock and ownership semantics are complete.
 
 - [ ] Reintegrate accepted Windows Clip Slot/Layer Bus/FX tranches into the full gate.
 - [ ] C2 Clip Take and C4 mapping/Timeline integration.
-- [ ] L-TL5 Follow/crossfade, BPM slew, failure policy, and `Trans` Guide.
-- [ ] L-TL7 Undo/Redo/save/reload group selection/focus, custom Guide TTS/device
+- [ ] L-TL5 Follow/crossfade, BPM slew, failure policy, and `Trans`/`Complete` Guide.
+- [ ] L-TL7 Undo/Redo/save/reload group selection/focus, fixed Guide device
   routing, native A/V/Lighting synchronization, fault, and viewport proof.
 - [ ] M thumbnail/waveform/proxy/analysis identity, bounded background workers,
   cancellation, cache/eviction, predecode/prefetch/degraded operation, and cold/warm
@@ -426,8 +631,8 @@ driver/device, raw logs, operator, date, and measurement source.
   device/software/repository/NIC/mapping/timestamp evidence.
 - [ ] Dual display/HDMI/fullscreen/DPI/refresh/unplug/reorder/GPU reset; NDI/Spout/
   Syphon, camera, and screen-capture fault and one-hour matrices.
-- [ ] macOS and Linux real-machine display/media/audio/project save/reload; CI package
-  launch alone is insufficient.
+- **Deferred outside the Windows target:** macOS/Linux real-machine display,
+  media, audio, project save/reload, and package acceptance.
 - [ ] Venue GPU maximum ISF/layer/Preview/Program/output/recording one-hour run with
   frame/drop/CPU/GPU/RAM/VRAM/operator-response logs.
 - [ ] Two-machine real-switch crash/restart/partition/rejoin/device-loss rehearsal
@@ -436,21 +641,13 @@ driver/device, raw logs, operator, date, and measurement source.
   comparisons, preserving first failures, unmeasured rows, timings, operations, and
   synchronized output evidence. Never infer parity from counts or loopback.
 
-## 9. Distribution, legal, clean-machine, and publication
+## 9. Distribution, legal, clean-machine, and publication — deferred
 
-- [ ] Freeze supported Windows/macOS/Linux architecture/package/feature matrix and
-  exact normal MIT/WASAPI versus separate ASIO artifacts.
-- [ ] Windows Authenticode; Apple Developer ID, hardened runtime, notarization,
-  staple/Gatekeeper; key custody/rotation/revocation and CI secret policy.
-- [ ] Release BOM/SBOM and package/file-accurate licenses/notices for FFmpeg/libav,
-  NDI, Spout/Syphon, ISF, GDTF/OFL, fonts/icons/samples/media, ASIO, Rust, and npm.
-- [ ] Clean-machine download/hash/signature/install/first launch/open/save/import/
-  output-disabled startup/file association; previous-version upgrade, interrupted
-  rollback, repair, reboot, uninstall, and user-data retention on each platform.
-- [ ] Signed updater N -> N+1, downgrade/wrong-channel/wrong-key/expired/corrupt/
-  partial/offline/unavailable endpoint, rollback artifact, and emergency disable.
-- [ ] Freeze version/tag/commit/release notes; publish SHA-256/manifests/artifacts;
-  archive logs, locks, SBOM, notices, tests, native/hardware evidence under one ID.
+The six former completion checkboxes in this section are outside the active
+Windows-local target: platform/package matrix, Authenticode/Apple signing,
+BOM/SBOM and notices, clean-machine install/upgrade/uninstall, signed updater,
+and public tag/artifact/evidence publication. Reopen them only when distribution
+becomes a product goal; they are not counted in the active 71-item denominator.
 
 ## 10. Warning cleanup workstream
 
@@ -484,9 +681,12 @@ closed, execute master roadmap section 22.2 without omission against one release
    UI/accessibility workflows;
 5. physical K/ASIO matrix, cold/warm performance and extended soak;
 6. distributed ShowClock/two-PC fault matrix;
-7. migration/corruption/security/updater/clean-machine matrices;
-8. signed/notarized artifact comparison and pinned commercial benchmarks;
-9. Q5 query against exact tag, artifact hashes, logs, and evidence manifest.
+7. Windows migration/corruption/security matrices;
+8. pinned commercial benchmarks against the verified Windows executable;
+9. Q5 query against the exact Windows checkpoint, logs, and evidence manifest.
+
+Distribution signing/updater/clean-machine/publication and macOS/Linux rows are
+explicitly deferred by the Windows-only scope above and are not final-stop gates.
 
 Stop and report rather than claiming completion if any command selects zero tests,
 any warning is unowned, any artifact differs from the evidence hash, any external
@@ -524,8 +724,8 @@ acceptance.
 
 The exact rebuilt executable was launched as one responsive maximized Syndocal and
 five Display targets were enumerated. The Raw Input failure recorded at that time
-is historical because the feature was later removed. Repeat only the current
-one-click OutputControl v2 five-display exercise and leave the final editor + LED
+is historical because the feature was later removed. Do not repeat a five-display
+exercise for the active target; the final pass retains exactly the editor + LED
 panel + projector state.
 
 ## 14. 2026-08-21 warning-P2 promotion result
@@ -555,15 +755,12 @@ The implementation/documentation commit is
 `origin/codex/syndocal-v1.2`. Warning-ratchet self-test (61 groups), release
 metadata, workflow YAML parsing, and `git diff --check` passed before commit.
 
-The exact Windows native executable is responsive and the sole main Syndocal window
-is maximized. Five enabled Display outputs are configured against monitor indices
-0..4. Physical fullscreen activation is still fenced because OutputControl R4
-requires an acquired backend lease and the visible challenge code entered through
-real Raw Input. Synthetic input must not be used to bypass that boundary. The next
-hardware action is one coordinated physical-keyboard consent pass, followed by
-opening all five output windows, verifying their screen origins, and leaving the
-operator state as editor plus LED panel plus projector. Until that pass is recorded,
-the five-display and final three-display acceptance boxes remain unchecked.
+The exact Windows native executable was responsive and the sole main Syndocal window
+was maximized. Five enabled Display outputs were historically configured against
+monitor indices 0..4 before the physical-input design was removed. That old setup
+is not the active acceptance target. The remaining native pass opens exactly the
+LED-panel and projector outputs beside the editor and verifies their screen origins,
+fullscreen sizing, playback, close/reopen truth, and output authority.
 
 ## 16. Historical OutputControl Raw Input checkpoint (superseded)
 

@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup,
 import type { TimelineEventDraft } from "../editorDrafts";
 import type {
   AudioAnalysisSummary,
+  MediaAssetAvailability,
   MediaAssetSummary,
   TimelineAudioClipSummary,
   TimelineCueEventSummary,
@@ -25,6 +26,7 @@ import type {
 import { planTimelineItemLaneMove } from "../types";
 import type { CueIdentitySource } from "../identityColor";
 import type { TimelineCueDragState } from "../timelineCueDrag";
+import type { TimelineExternalDragPayload } from "../timelineExternalDrag";
 import { expandTimelineItemGroupSelection, timelineItemKey } from "../timelineAdvancedAuthoring";
 import { applyTimelineDirectTrim } from "../timelineDirectResize";
 import { applyTimelineSplitAtPlayhead } from "../timelineSplitAction";
@@ -104,6 +106,11 @@ interface TimelineCueEventsPanelProps {
   overviewEvents: TimelineOverviewEvent[];
   timelineLayers: TimelineLayerSummary[];
   timelineCueDrag: TimelineCueDragState | null;
+  onDropExternalSource: (
+    source: TimelineExternalDragPayload,
+    targetLayer: TimelineLayerSummary,
+    timeMs: number,
+  ) => void | Promise<void>;
   overviewMarkerAriaLabel: (event: TimelineOverviewEvent) => string;
   overviewAutomationRanges: TimelineOverviewAutomationRange[];
   overviewOverlapClusters: TimelineOverviewOverlapCluster[];
@@ -120,6 +127,7 @@ interface TimelineCueEventsPanelProps {
   audioClips: TimelineAudioClipSummary[];
   videoClips: TimelineVideoClipSummary[];
   mediaAssets: MediaAssetSummary[];
+  mediaAssetAvailabilityById: Record<number, MediaAssetAvailability>;
   itemGroups: TimelineItemGroupSummary[];
   itemLanePlacements: TimelineItemLanePlacement[];
   audioOffsetMs: number;
@@ -1334,6 +1342,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onSelectItemForContextMenu={selectTimelineItemForContextMenu}
         onInspectOverlapCluster={inspectOverlapCluster}
         onUpdateLayer={(layer) => void props.onUpdateTimelineLayer(layer)}
+        onDropExternalSource={props.onDropExternalSource}
         onAddAudioClip={(layerId) => void props.onAddAudioClip(layerId)}
         onUpdateAudioClip={(clip) => void updateAudioClipFromOverview(clip)}
         onUpdateVideoClip={(clip) => void updateVideoClipFromOverview(clip)}

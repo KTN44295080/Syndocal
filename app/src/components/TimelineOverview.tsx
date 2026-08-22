@@ -31,6 +31,12 @@ import type {
   TimelineVideoClipSummary,
 } from "../types";
 import type { TimelineCueDragState } from "../timelineCueDrag";
+import {
+  createTimelineExternalDropGate,
+  parseTimelineExternalDragDataTransfer,
+  timelineExternalDragDataIsAdvertised,
+  type TimelineExternalDragPayload,
+} from "../timelineExternalDrag";
 import { timelineDirectTrimGesture } from "../timelineDirectResize";
 import {
   TIMELINE_BLOCK_FADE_EDGE_PX,
@@ -144,6 +150,11 @@ interface TimelineOverviewProps {
   onInspectOverlapCluster: (cluster: TimelineOverviewOverlapCluster) => void;
   onUpdateLayer: (layer: TimelineLayerSummary) => void | Promise<void>;
   onOpenLayerMenu: (layer: TimelineLayerSummary, point: { x: number; y: number }) => void;
+  onDropExternalSource: (
+    source: TimelineExternalDragPayload,
+    targetLayer: TimelineLayerSummary,
+    timeMs: number,
+  ) => void | Promise<void>;
   onAddAudioClip: (layerId: number) => void | Promise<void>;
   onUpdateAudioClip: (clip: TimelineAudioClipSummary) => void | Promise<void>;
   onUpdateVideoClip: (clip: TimelineVideoClipSummary) => void | Promise<void>;
@@ -393,6 +404,27 @@ const timelineAudioClipName = (path: string) => {
   return normalized.split("/").pop() || path || "Audio Clip";
 };
 
+/**
+ * The native Timeline canvas is the first receiver of an external shelf drop.
+ * Keep its fail-closed validation pure so it can be exercised without DOM
+ * mutation, then report the source message through App's localized status
+ * callback.
+ */
+export const timelineOverviewExternalDropPreflight = (
+  source: TimelineExternalDragPayload | null,
+  targetLayer: TimelineLayerSummary | null,
+): string | null => {
+  if (!source) return "This Timeline drop is not a recognized source.";
+  if (!targetLayer) return "Choose a Timeline lane before dropping a source.";
+  if (source.lane_kind !== targetLayer.kind) {
+    return `${source.lane_kind} sources can only be dropped on a ${source.lane_kind} lane.`;
+  }
+  if (targetLayer.locked) {
+    return `Timeline lane ${targetLayer.label} is locked. No source was placed.`;
+  }
+  return null;
+};
+
 export function TimelineOverview(props: TimelineOverviewProps) {
   const [markerDrag, setMarkerDrag] = createSignal<TimelineMarkerDrag | null>(null);
   const [eventResizeDrag, setEventResizeDrag] = createSignal<TimelineEventResizeDrag | null>(null);
@@ -545,6 +577,39 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     if (!target || !target.closest(".timelineOverviewFrame")) return null;
     const layerId = Number(target.getAttribute("data-timeline-layer-id"));
     return Number.isFinite(layerId) && layerById().has(layerId) ? layerId : null;
+  };
+  const layerFromDropPoint = (clientX: number, clientY: number) => {
+    const layerId = layerIdFromPoint(clientX, clientY);
+    return layerId === null ? null : layerById().get(layerId) ?? null;
+  };
+  const handleExternalDragOver = (event: DragEvent) => {
+    const targetLayer = layerFromDropPoint(event.clientX, event.clientY);
+    // Chromium protects drag data during dragover: getData() is commonly
+    // empty, while the advertised MIME types remain available. Accept the
+    // browser drop for any unlocked lane and let the strict drop parser reject
+    // malformed or wrong-kind payloads without invoking the backend.
+    if (!timelineExternalDragDataIsAdvertised(event.dataTransfer) || !targetLayer || targetLayer.locked) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  };
+  const handledExternalDrops = createTimelineExternalDropGate();
+  const handleExternalDrop = (event: DragEvent) => {
+    if (!handledExternalDrops(event)) return;
+    event.preventDefault();
+    const source = parseTimelineExternalDragDataTransfer(event.dataTransfer);
+    const targetLayer = layerFromDropPoint(event.clientX, event.clientY);
+    const rejection = timelineOverviewExternalDropPreflight(source, targetLayer);
+    if (rejection) {
+      props.onStatus(rejection);
+      return;
+    }
+    // The pure preflight handles both null cases above; retain this narrow
+    // guard for TypeScript without ever forwarding a malformed source.
+    if (!source || !targetLayer) return;
+    if (!overviewElement) return;
+    const ratio = ratioFromPointer(event, overviewElement);
+    const timeMs = props.snapTimeMs(timelineVisibleRatioToTimeMs(ratio, props.visibleWindow));
+    void props.onDropExternalSource(source, targetLayer, timeMs);
   };
   const cueDragTargetLayerId = createMemo(() => {
     const drag = props.cueDrag;
@@ -2455,6 +2520,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       onPointerMove={moveCanvasPointer}
       onPointerUp={(event) => finishCanvasPointer(event, false)}
       onPointerCancel={(event) => finishCanvasPointer(event, true)}
+      onDragOver={handleExternalDragOver}
+      onDrop={handleExternalDrop}
     >
       <rect class="timelineOverviewBg" x="0" y="0" width={overviewW()} height={canvasH()} />
       <Show

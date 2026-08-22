@@ -4,7 +4,6 @@ import type {
   PatchedFixtureSummary,
   StageObjectKind,
   StageObjectSummary,
-  VideoOutputMapping,
   VideoOutputSummary,
 } from "../types";
 import { MappingFixtureTypeStrip } from "./MappingFilterStrips";
@@ -93,12 +92,6 @@ export interface MappingSelectionPanelProps {
   onPatchFixture: () => void;
   onSelectFixture: (fixture: PatchedFixtureSummary, event: MappingSelectionEvent) => void;
   onSelectOutput: (outputId: number) => void;
-  onSetOutputEnabled: (outputId: number, enabled: boolean) => MaybePromise;
-  onSetOutputBlackout: (outputId: number, blackout: boolean) => MaybePromise;
-  onOpenOutputWindow: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onSyncOutputWindow: (outputId: number) => MaybePromise;
-  onFitOutputToStageObject: (output: VideoOutputSummary, object: StageObjectSummary) => MaybePromise;
-  onSetOutputMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
   onEditOutputProjection: (outputId: number) => void;
 }
 
@@ -244,12 +237,6 @@ export function MappingSetupContextPanel(props: MappingSelectionPanelProps) {
         selectedOutputId={props.selectedOutputId}
         selectedStageObject={props.selectedStageObject}
         onSelectOutput={props.onSelectOutput}
-        onSetEnabled={props.onSetOutputEnabled}
-        onSetBlackout={props.onSetOutputBlackout}
-        onOpenWindow={props.onOpenOutputWindow}
-        onSyncWindow={props.onSyncOutputWindow}
-        onFitStageObject={props.onFitOutputToStageObject}
-        onSetMapping={props.onSetOutputMapping}
         onEditProjection={props.onEditOutputProjection}
       />
     </div>

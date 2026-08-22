@@ -749,6 +749,31 @@ export function resolveTrustedComparison(repoRoot, baseRef, headRef = "HEAD") {
   return { base: mergeBase, head };
 }
 
+/**
+ * Rebaseline audits must bind their evidence and inventory diff to the exact
+ * caller-provided commits. Unlike normal ratchets, never substitute merge-base
+ * for the requested base: that would let a sibling branch rebaseline against a
+ * different inventory than the reviewer named.
+ */
+export function resolveExplicitAncestorComparison(repoRoot, baseRef, headRef) {
+  if (typeof baseRef !== "string" || baseRef.trim().length === 0
+    || typeof headRef !== "string" || headRef.trim().length === 0) {
+    throw new Error("explicit comparison requires base and head refs");
+  }
+  const base = resolveCommit(repoRoot, baseRef);
+  const head = resolveCommit(repoRoot, headRef);
+  if (base === head) throw new Error("explicit comparison base and head must differ");
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", base, head], {
+      cwd: repoRoot,
+      stdio: "ignore",
+    });
+  } catch {
+    throw new Error(`explicit comparison base is not an ancestor of head: ${base} ${head}`);
+  }
+  return { base, head };
+}
+
 function parseNameOnlyZ(output) {
   return output.split("\0").filter(Boolean).map(normalizeComparisonPath);
 }
@@ -820,6 +845,13 @@ const ZERO_WARNING_PROMOTION_FIELDS = [
 export const ZERO_WARNING_PROMOTION_ALLOWED_FILES = Object.freeze([
   "qa/warnings/warning-inventory.json",
 ]);
+
+export const OUTPUT_MARKER_REBASELINE_ALLOWED_FILES = Object.freeze([
+  "qa/warnings/warning-inventory.json",
+]);
+
+const VARIABLE_MODULE_COUNT_MARKER = /^\d+ modules transformed\.$/;
+const STABLE_MODULE_TRANSFORMED_MARKER = "modules transformed.";
 
 function selectedConfigurationShape(configuration) {
   return Object.fromEntries(ZERO_WARNING_PROMOTION_FIELDS.map((field) => [field, configuration?.[field]]));
@@ -982,6 +1014,146 @@ export async function auditZeroWarningPromotion({
     modifiedFiles,
     results: [{ id: configuration.id, result }],
   };
+}
+
+function expectedEvidenceCommand(configuration) {
+  return `${configuration.command.executable} ${configuration.command.args.join(" ")}`;
+}
+
+function assertOutputMarkerRebaselineConfiguration(previous, current, comparison) {
+  if (previous.status !== "enforced" || current.status !== "enforced") {
+    throw new Error(`output-marker rebaseline only supports an enforced configuration: ${current.id}`);
+  }
+  if (previous.command?.executable === "cargo" || current.command?.executable === "cargo") {
+    throw new Error(`output-marker rebaseline only supports an enforced generic configuration: ${current.id}`);
+  }
+  if ((previous.expectedArtifacts?.length ?? 0) !== 0
+    || (current.expectedArtifacts?.length ?? 0) !== 0
+    || (previous.diagnostics?.length ?? 0) !== 0
+    || (current.diagnostics?.length ?? 0) !== 0
+    || (previous.externalWarningAllows?.length ?? 0) !== 0
+    || (current.externalWarningAllows?.length ?? 0) !== 0) {
+    throw new Error(`output-marker rebaseline requires a generic zero-warning configuration: ${current.id}`);
+  }
+
+  const previousShape = { ...previous };
+  const currentShape = { ...current };
+  delete previousShape.expectedOutputMarkers;
+  delete previousShape.evidence;
+  delete currentShape.expectedOutputMarkers;
+  delete currentShape.evidence;
+  if (!sameJson(previousShape, currentShape)) {
+    throw new Error(`output-marker rebaseline changed immutable configuration fields: ${current.id}`);
+  }
+
+  validateExpectedOutputMarkers(previous.expectedOutputMarkers);
+  validateExpectedOutputMarkers(current.expectedOutputMarkers);
+  const changedMarkers = previous.expectedOutputMarkers
+    .map((marker, index) => ({ marker, replacement: current.expectedOutputMarkers[index] }))
+    .filter(({ marker, replacement }) => marker !== replacement);
+  if (previous.expectedOutputMarkers.length !== current.expectedOutputMarkers.length
+    || changedMarkers.length !== 1
+    || !VARIABLE_MODULE_COUNT_MARKER.test(changedMarkers[0]?.marker ?? "")
+    || changedMarkers[0]?.replacement !== STABLE_MODULE_TRANSFORMED_MARKER) {
+    throw new Error(
+      `output-marker rebaseline only permits one literal module-count marker to become '${STABLE_MODULE_TRANSFORMED_MARKER}': ${current.id}`,
+    );
+  }
+
+  if (current.evidence?.commit !== comparison.base) {
+    throw new Error(`output-marker rebaseline evidence.commit must equal trusted base ${comparison.base}: ${current.id}`);
+  }
+  if (current.evidence?.command !== expectedEvidenceCommand(current)) {
+    throw new Error(`output-marker rebaseline evidence.command must exactly match the generic command: ${current.id}`);
+  }
+}
+
+function assertOutputMarkerRebaselineRunnerResult(configuration, result) {
+  if (result.timedOut) throw new Error(`${configuration.id} warning command timed out during output-marker rebaseline`);
+  if (result.outputLimitExceeded) throw new Error(`${configuration.id} warning command exceeded output limit during output-marker rebaseline`);
+  if (result.exitCode !== 0) throw new Error(`${configuration.id} warning command exited with ${result.exitCode} during output-marker rebaseline`);
+  if (result.warningShaped) throw new Error(`${configuration.id} emitted warning-shaped output during output-marker rebaseline`);
+  if (!result.markerCoverage?.ok) {
+    throw new Error(`${configuration.id} output marker coverage mismatch during output-marker rebaseline`);
+  }
+  if ((result.diagnostics?.length ?? 0) !== 0) {
+    throw new Error(`${configuration.id} produced diagnostics during output-marker rebaseline`);
+  }
+}
+
+/**
+ * Audits one reviewed generic-output marker rebaseline. This deliberately does
+ * not relax normal inventory immutability or write the inventory itself.
+ */
+export async function auditOutputMarkerRebaseline({
+  repoRoot,
+  baseRef,
+  headRef,
+  configurationId,
+  inventoryPath = "qa/warnings/warning-inventory.json",
+  schema = null,
+  environment = process.env,
+  runConfiguration = runWarningConfiguration,
+  allowedFiles = OUTPUT_MARKER_REBASELINE_ALLOWED_FILES,
+}) {
+  if (typeof baseRef !== "string" || baseRef.trim().length === 0
+    || typeof headRef !== "string" || headRef.trim().length === 0) {
+    throw new Error("output-marker rebaseline requires explicit base and head refs");
+  }
+  if (typeof configurationId !== "string" || configurationId.trim().length === 0) {
+    throw new Error("output-marker rebaseline requires an explicit configuration id");
+  }
+  const comparison = resolveExplicitAncestorComparison(repoRoot, baseRef, headRef);
+  const priorInventory = loadInventoryAtRef(repoRoot, comparison.base, inventoryPath);
+  const currentInventory = loadInventoryAtRef(repoRoot, comparison.head, inventoryPath);
+  const priorErrors = validateInventory(priorInventory, schema);
+  if (priorErrors.length > 0) throw new Error(`trusted prior inventory validation failed: ${priorErrors.join("; ")}`);
+  const currentErrors = validateInventory(currentInventory, schema);
+  if (currentErrors.length > 0) throw new Error(`output-marker rebaseline head inventory validation failed: ${currentErrors.join("; ")}`);
+  if (!sameJson(priorInventory.policy, currentInventory.policy)) {
+    throw new Error("output-marker rebaseline cannot change inventory policy");
+  }
+
+  const priorById = configurationsById(priorInventory, "trusted prior");
+  const currentById = configurationsById(currentInventory, "rebaseline head");
+  const priorIds = [...priorById.keys()].sort();
+  const currentIds = [...currentById.keys()].sort();
+  if (!sameJson(priorIds, currentIds)) {
+    throw new Error("output-marker rebaseline rejects configuration add/remove");
+  }
+  const previous = priorById.get(configurationId);
+  const configuration = currentById.get(configurationId);
+  if (!previous || !configuration) throw new Error(`warning inventory has no configuration named ${configurationId}`);
+  for (const id of priorIds) {
+    if (id === configurationId) continue;
+    if (!sameJson(priorById.get(id), currentById.get(id))) {
+      throw new Error(`output-marker rebaseline changed another configuration: ${id}`);
+    }
+  }
+  assertOutputMarkerRebaselineConfiguration(previous, configuration, comparison);
+
+  const modifiedFiles = collectModifiedFiles(repoRoot, comparison);
+  const allowed = new Set(allowedFiles.map((file) => normalizeComparisonPath(file)));
+  const disallowed = [...modifiedFiles].filter((file) => !allowed.has(normalizeComparisonPath(file))).sort();
+  if (disallowed.length > 0) {
+    throw new Error(`output-marker rebaseline changed files outside inventory/warning gate scope: ${disallowed.join(", ")}`);
+  }
+  const suppressions = findAddedSuppressions(repoRoot, comparison);
+  if (suppressions.length > 0) throw new Error(`output-marker rebaseline found suppression loopholes: ${suppressions.join(", ")}`);
+
+  const hostPlatform = detectHostPlatform();
+  if (configuration.platform !== hostPlatform) {
+    throw new Error(`configuration ${configuration.id} targets ${configuration.platform}, but this host is ${hostPlatform}`);
+  }
+  const currentToolchain = detectToolchain();
+  for (const [tool, expected] of Object.entries(configuration.evidence?.toolchain ?? {})) {
+    if (currentToolchain[tool] !== expected) {
+      throw new Error(`toolchain drift for ${tool}: inventory=${expected}; current=${currentToolchain[tool]}`);
+    }
+  }
+  const result = await runConfiguration(configuration, repoRoot, environment);
+  assertOutputMarkerRebaselineRunnerResult(configuration, result);
+  return { comparison, configurationId, modifiedFiles, result };
 }
 
 export function loadInventory(file) {

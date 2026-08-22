@@ -1,5 +1,4 @@
 import { For, Show, createMemo, type JSX } from "solid-js";
-import type { VideoOutputConfigDraft } from "../editorDrafts";
 import type {
   CompositionSummary,
   VideoOutputMapping,
@@ -8,11 +7,19 @@ import type {
 } from "../types";
 import { mappingCorrectionReadout } from "../videoOutputMapping";
 import { VideoOutputActionsPanel } from "./VideoOutputActionsPanel";
-import { VideoOutputConfigPanel } from "./VideoOutputConfigPanel";
 import { VideoOutputMappingPanel } from "./VideoOutputMappingPanel";
 
 type MaybePromise = void | Promise<unknown>;
-type VideoOutputPreviewMode = "output" | "test";
+
+export interface VideoOutputSetupWindowState {
+  stateLabel: string;
+  stateClass: string;
+  detail: string;
+  actualOpen: boolean | null;
+  actionLabel: string;
+  actionDisabled: boolean;
+  error: string | null;
+}
 
 type VideoOutputListPanelProps = {
   setupTools: JSX.Element;
@@ -23,14 +30,9 @@ type VideoOutputListPanelProps = {
   selectedMappingPresetLabel: string;
   selectedOutputId: number | null;
   previewOutputId: number | null;
-  previewMode: VideoOutputPreviewMode;
   previewInfo: string;
   previewUrl: string;
-  configDraftFor: (output: VideoOutputSummary) => VideoOutputConfigDraft;
-  onConfigDraft: (output: VideoOutputSummary, patch: Partial<VideoOutputConfigDraft>) => void;
-  onApplyConfig: (output: VideoOutputSummary) => MaybePromise;
   onSelectOutput: (outputId: number) => void;
-  onSetRouting: (outputId: number, compositionId: number) => MaybePromise;
   onMappingPresetLabel: (value: string) => void;
   onSelectedMappingPresetLabel: (value: string) => void;
   onSaveMappingPreset: (mapping: VideoOutputMapping) => MaybePromise;
@@ -41,14 +43,9 @@ type VideoOutputListPanelProps = {
   onSetMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
   onImportBitmapMask: (output: VideoOutputSummary) => MaybePromise;
   onClearBitmapMask: (output: VideoOutputSummary) => MaybePromise;
-  onSetEnabled: (outputId: number, enabled: boolean) => MaybePromise;
-  onSetBlackout: (outputId: number, blackout: boolean) => MaybePromise;
-  onSetOpacity: (outputId: number, opacity: number) => MaybePromise;
-  onFadeOpacity: (outputId: number, opacity: number) => MaybePromise;
-  onPreview: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onOpenWindow: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onSyncWindow: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onRemoveOutput: (outputId: number) => MaybePromise;
+  windowStateForOutput: (outputId: number) => VideoOutputSetupWindowState;
+  windowActionBusyForOutput: (outputId: number) => boolean;
+  onToggleWindow: (outputId: number, open: boolean) => MaybePromise;
 };
 
 export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
@@ -61,11 +58,6 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
     props.compositions.find((composition) => composition.id === output.composition_id)?.label ??
     `Composition ${output.composition_id}`;
 
-  const previewLabel = (output: VideoOutputSummary) =>
-    props.previewOutputId === output.id
-      ? `${props.previewMode === "test" ? "Pattern" : "Output"} / ${props.previewInfo}`
-      : "No preview";
-
   return (
     <div class="videoOutputSetupShell">
       <aside class="videoSetupRoutingPane" aria-labelledby="video-output-routing-heading">
@@ -75,10 +67,16 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
         </div>
         <div class="videoOutputRail">
           <div class="videoOutputDeckList" aria-label="Video outputs">
-            <Show when={props.outputs.length > 0} fallback={<span class="emptyState">No video outputs</span>}>
+            <Show when={props.outputs.length > 0} fallback={
+              <div class="videoOutputEmptyState" data-empty-state="video-output">
+                <strong>No configured video outputs.</strong>
+                <span>Add a Display output to control its live window.</span>
+              </div>
+            }>
               <For each={props.outputs}>
                 {(output) => {
                   const active = () => selectedOutput()?.id === output.id;
+                  const windowState = () => props.windowStateForOutput(output.id);
                   return (
                     <button
                       type="button"
@@ -87,13 +85,12 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
                       onClick={() => props.onSelectOutput(output.id)}
                     >
                       <strong data-no-localize>{output.label}</strong>
-                      <span>
-                        {output.kind} / {output.width}x{output.height} / {Math.round(output.opacity * 100)}%
-                      </span>
+                      <span>{output.kind} / {output.width}x{output.height}</span>
                       <small>
-                        {compositionLabel(output)} / {mappingCorrectionReadout(output.mapping)}
-                        {!output.enabled ? " / Disabled" : ""}
-                        {output.blackout ? " / Blackout" : ""}
+                        Authored enabled: {output.enabled ? "yes" : "no"} / {mappingCorrectionReadout(output.mapping)}
+                      </small>
+                      <small class={`outputWindowStatus state-${windowState().stateClass}`}>
+                        {windowState().stateLabel}
                       </small>
                     </button>
                   );
@@ -105,90 +102,92 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
         </div>
       </aside>
 
-      <Show when={selectedOutput()}>
-        {(output) => (
-          <>
-            <section
-              class="videoSetupMapPane"
-              aria-labelledby={`video-output-map-heading-${output().id}`}
+      <Show when={selectedOutput()} fallback={
+        <main class="videoSetupMapPane videoOutputNoSelection" aria-live="polite">
+          <h3>Video output status</h3>
+          <p>No configured video outputs. Add a Display output to control its live window.</p>
+        </main>
+      }>
+        {(output) => {
+          const windowState = () => props.windowStateForOutput(output().id);
+          const busy = () => props.windowActionBusyForOutput(output().id);
+          const ownershipBlocked = () => windowState().stateClass === "blocked";
+          return (
+            <main
+              class="videoSetupMapPane videoOutputStatusPane"
+              aria-labelledby={`video-output-status-heading-${output().id}`}
             >
               <div class="videoOutputDetailHeader">
                 <div>
-                  <h3 id={`video-output-map-heading-${output().id}`} data-no-localize>{output().label}</h3>
-                  <span>
-                    {output().kind} / {output().width}x{output().height} / {compositionLabel(output())}
-                  </span>
+                  <h3 id={`video-output-status-heading-${output().id}`} data-no-localize>{output().label}</h3>
+                  <span>{output().kind} / {output().width}x{output().height}</span>
                 </div>
-                <strong>{output().enabled ? (output().blackout ? "Blackout" : "Live") : "Disabled"}</strong>
+                <strong>{output().enabled ? "Authored enabled" : "Authored disabled"}</strong>
               </div>
-              <label>
-                Route
-                <select
-                  value={output().composition_id}
-                  onInput={(event) => void props.onSetRouting(output().id, Number(event.currentTarget.value))}
-                >
-                  <For each={props.compositions}>
-                    {(composition) => <option data-no-localize value={composition.id}>{composition.label}</option>}
-                  </For>
-                </select>
-              </label>
-              <VideoOutputMappingPanel
-                output={output()}
-                mappingPresetLabel={props.mappingPresetLabel}
-                selectedMappingPresetLabel={props.selectedMappingPresetLabel}
-                mappingPresets={props.mappingPresets}
-                onMappingPresetLabel={props.onMappingPresetLabel}
-                onSelectedMappingPresetLabel={props.onSelectedMappingPresetLabel}
-                onSavePreset={props.onSaveMappingPreset}
-                onExportPreset={props.onExportMappingPreset}
-                onImportPreset={props.onImportMappingPreset}
-                onApplyPreset={props.onApplyMappingPreset}
-                onRemovePreset={props.onRemoveMappingPreset}
-                onSetMapping={props.onSetMapping}
-                onImportBitmapMask={props.onImportBitmapMask}
-                onClearBitmapMask={props.onClearBitmapMask}
-              />
-            </section>
-            <aside
-              class="videoSetupInspectorPane videoOutputDetailPane"
-              aria-labelledby={`video-output-inspector-heading-${output().id}`}
-            >
-              <div class="videoSetupPaneHeader">
-                <h3 id={`video-output-inspector-heading-${output().id}`}>Output Controls</h3>
-                <span>Configuration and live actions</span>
-              </div>
-              <div class="videoOutputPreviewCard">
-                <div class="sectionHeader">
-                  <h4>Output Preview</h4>
-                  <span>{previewLabel(output())}</span>
+
+              <div class="videoOutputStatusSummary" role={windowState().stateClass === "error" ? "alert" : "status"} aria-live="polite">
+                <div>
+                  <span>Physical window state</span>
+                  <strong class={`outputWindowStatus state-${windowState().stateClass}`}>
+                    {windowState().stateLabel}
+                  </strong>
                 </div>
-                <Show
-                  when={props.previewOutputId === output().id && props.previewUrl}
-                  fallback={<span class="emptyState">No preview</span>}
-                >
-                  {(url) => <img src={url()} alt={`${output().label} preview`} />}
-                </Show>
+                <small>{windowState().detail}</small>
               </div>
-              <VideoOutputConfigPanel
-                output={output()}
-                draft={props.configDraftFor(output())}
-                onDraft={props.onConfigDraft}
-                onApply={props.onApplyConfig}
-              />
+
+              <div class="videoOutputRouteSummary">
+                <div>
+                  <span>Route</span>
+                  <strong>{compositionLabel(output())}</strong>
+                </div>
+                <small>Output routing is read-only until a canonical v2 route exists.</small>
+              </div>
+
+              <Show when={props.previewOutputId === output().id}>
+                <div class="videoOutputPreviewCard" aria-label="Output Preview">
+                  <div class="sectionHeader">
+                    <h4>Output Preview</h4>
+                    <span>{props.previewInfo}</span>
+                  </div>
+                  <Show when={props.previewUrl} fallback={<span class="emptyState">No preview</span>}>
+                    {(url) => <img src={url()} alt={`${output().label} preview`} />}
+                  </Show>
+                </div>
+              </Show>
+
               <VideoOutputActionsPanel
                 output={output()}
-                onSetEnabled={props.onSetEnabled}
-                onSetBlackout={props.onSetBlackout}
-                onSetOpacity={props.onSetOpacity}
-                onFadeOpacity={props.onFadeOpacity}
-                onPreview={props.onPreview}
-                onOpenWindow={props.onOpenWindow}
-                onSyncWindow={props.onSyncWindow}
-                onRemove={props.onRemoveOutput}
+                actualOpen={windowState().actualOpen}
+                busy={busy()}
+                blocked={ownershipBlocked() || windowState().actionDisabled}
+                error={windowState().error}
+                onToggleWindow={props.onToggleWindow}
               />
-            </aside>
-          </>
-        )}
+
+              <details class="advancedProjectionCorrection">
+                <summary>Advanced projection correction</summary>
+                <p>Ordinary fullscreen display output does not need this; use it for projector and corner correction.</p>
+                <VideoOutputMappingPanel
+                  output={output()}
+                  mappingPresetLabel={props.mappingPresetLabel}
+                  selectedMappingPresetLabel={props.selectedMappingPresetLabel}
+                  mappingPresets={props.mappingPresets}
+                  onMappingPresetLabel={props.onMappingPresetLabel}
+                  onSelectedMappingPresetLabel={props.onSelectedMappingPresetLabel}
+                  onSavePreset={props.onSaveMappingPreset}
+                  onExportPreset={props.onExportMappingPreset}
+                  onImportPreset={props.onImportMappingPreset}
+                  onApplyPreset={props.onApplyMappingPreset}
+                  onRemovePreset={props.onRemoveMappingPreset}
+                  onSetMapping={props.onSetMapping}
+                  onImportBitmapMask={props.onImportBitmapMask}
+                  onClearBitmapMask={props.onClearBitmapMask}
+                  readOnly
+                />
+              </details>
+            </main>
+          );
+        }}
       </Show>
     </div>
   );

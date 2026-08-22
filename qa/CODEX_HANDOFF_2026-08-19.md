@@ -3,7 +3,45 @@
 ## Current checkpoint
 
 - Branch: `codex/syndocal-v1.2`
-- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.2`.
+- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.3`.
+- **2026-08-22 Windows-only scope:** current completion targets this operator's
+  Windows PC. macOS/Linux control/native/warning rows and the six distribution,
+  legal, signing, SBOM, clean-machine, updater, and publication rows are deferred
+  outside the active denominator. Windows native release, zero warnings,
+  the final editor + LED panel + projector topology, ASIO, physical I/O/DJ Link, crash recovery, security, and soak
+  remain required. The post-E1 baseline is 14/71 (19.7%), not 14/79.
+- **2026-08-22 backend-first verification rule:** routine tests must invoke the
+  same registered Tauri/control-plane production paths from backend drivers.
+  Do not repeat Computer Use for every fix. Run one maximized release-executable
+  UI/hardware acceptance after the integrated bundle is otherwise green.
+- **2026-08-22 Timeline click gap:** the present Rodio click is a 25 ms polling,
+  fixed-4/4 sine-tone implementation. It is not accepted for the show-core. The
+  next independent tranche after the real MediaAsset path must add an authored
+  numerator/denominator meter map, sample-frame scheduling and generation-fenced
+  cancellation, the reference 1320/920 Hz square-wave envelope and click bus,
+  and exact `惑う星` 113-128 / 194 BPM / 74-click proof. MTC, loop, seek, BPM,
+  replacement and DJ transport discontinuities must not emit stale clicks.
+- **2026-08-22 Timeline Guide scope/gap:** the engine/native path already emits and
+  generation-fences Phase/`Looping`/`Break`/`Trans` cues and plays the fixed
+  embedded English WAV vocabulary through its own device/gain bus. It is not the
+  final timing/routing path: playback is appended after the 25 ms media-audio
+  poll, `Trans` cadence assumes four beats per bar, and device/gain selection is
+  only session-local. The fixed English vocabulary is sufficient by product
+  decision; custom labels remain visible text-only faults and TTS/Japanese voice
+  packs are not required. Guide speech follows Timeline BPM only through a
+  pitch-preserving rate captured at cue start and bounded to 0.92x-1.08x around
+  1.00x at 120 BPM; ordinary sync correction must not wobble a word. The Guide
+  tranche must share the new sample-frame
+  tempo/meter authority, retain a separate bus, persist machine-local routing
+  safely, and prove stale-generation/device/custom-label failures through the
+  production command path before completion.
+- **2026-08-22 Guide completion cue:** the selected Follow-end phrase is the
+  single word `Complete`, generated with the same `Microsoft Zira Desktop`, Rate
+  2, Volume 100 voice as the existing fixed pack. It must play exactly once only
+  after successful Follow settlement, before a due destination Phase cue; abort,
+  failure, or stale generation must produce zero `Complete` cues. The temporary
+  audition file is `C:\TEMP\syndocal-guide-candidates\complete.wav` and is not yet
+  a product asset.
 - Baseline HEAD at takeover: `df7e335c14fe82bb534fbd8867dcd431777e1522`
 - Verified local OutputControl R4 implementation checkpoint: `105c522e795ad021776649bff07d2ecf77bb0d0f` (`feat: route local output controls through R4`). The verified documentation follow-up is `94f4259eb982b4ecfa7b6ea3c645bbf8bd0c64ac`; both were pushed successfully to `origin/codex/syndocal-v1.0`.
 - The owner-incarnation output-lease acceptance contract was fixed in docs-only checkpoint `7b411c4e5a7b26ddf9ae91cea4fa8181daedfa24` (`docs: define AI3 output lease contract`). The later pure transition-core checkpoint is `2b889a753a6f55fc308ff5d82509138cfffd41a0` (`feat: add pure output lease transition core`); it is intentionally not AppState/runtime integration.
@@ -631,8 +669,8 @@ maximized for every native action.
 
 That historical six-digit attempt did not reach Ready before expiry. The feature
 was subsequently removed and must not be resumed. Current acceptance uses one
-local Enable click for exact `Both`, then measures all five stable-identity native
-output windows and leaves the requested editor + LED panel + projector state.
+local Enable click for exact `Both`, then measures the LED-panel and projector
+native output windows beside the editor.
 
 ## 2026-08-21 simple-operation and Scene Matrix continuation
 
@@ -662,8 +700,8 @@ native gates close:
 
 This paragraph records the state before the OutputControl v2 supersession. The
 current remaining Windows output work is an exact-process native rebuild, one
-maximized responsive editor, five detected-display window/identity checks, the
-final editor + LED panel + projector state, documentation refresh, descriptive
+maximized responsive editor, exact LED-panel and projector window/identity checks,
+the final three-screen state, documentation refresh, descriptive
 commit, and push. No Raw Input, six-digit, Enter, or 15-second challenge remains.
 
 ### 2026-08-21 Bank semantics and native checkpoint
@@ -990,7 +1028,265 @@ It launched as exactly one responsive exact-path process/window titled
 E1 changes transaction recovery rather than a visible workflow, no redundant
 Computer Use mutation sequence was repeated.
 
-Current progress is E1 100% and product checklist 14/79 (17.7%). This is not a
+Current progress is E1 100% and the active Windows-only product checklist is
+14/71 (19.7%). This is not a
 whole-product completion claim. Resume at E2 authority bundle/generation
 consistency, then E3 restart-durable recovery and E4 Save/Save As. macOS warning
 rows and all external/hardware acceptance outside this E1 boundary remain open.
+
+### 2026-08-22 Video Setup truth and simplification checkpoint
+
+Current source inspection confirms that the Video Setup inspector still exposes
+legacy output mutation buttons whose Tauri handlers intentionally fail closed,
+including enable, blackout release, opacity/fade, mapping, open, sync, and
+remove routes. The projection-mapping canvas is an advanced projector alignment
+surface, not a required part of the ordinary detected-display workflow. It must
+move behind an initially closed semantic disclosure with a plain explanation;
+no typography, control, or hit-target shrink is authorized.
+
+The saved `VideoOutputSummary.enabled` state is also not physical window truth.
+Native CloseRequested/Destroyed handlers currently stop their renderer worker,
+while the setup list continues to describe the authored output and receives no
+immediate close event. The next integrated video tranche therefore has one
+truthful normal surface: authored desired state, actual live-window state, and a
+single canonical reopen/close action. Manual window close must originate a
+backend native-window event/status refresh, retire worker/metrics truth exactly
+once, and update the selected output inline. Legacy commands that always reject
+must not remain as actionable controls; diagnostics and test-pattern controls
+belong under Advanced only when backed by a working canonical route.
+
+Routine proof for this tranche must drive the same registered Tauri/control-plane
+production operations as the frontend. Repeated Computer Use is forbidden; the
+only UI pass for the active show-core is the final rebuilt, maximized editor plus
+two physical VJ output windows. At this checkpoint the accepted numerator remains 14/71. E2/D1,
+physical-pixel 4K/DPI correction, and Video Setup/window-lifecycle integration
+are still in progress and do not advance the product count.
+
+#### Accepted implementation evidence after the checkpoint
+
+### 2026-08-22 Edit domain and unified Timeline correction
+
+Current source still presents `Lighting` and `Video` as the only persistent Edit
+domains. `Video` swaps to a standalone dense mixer containing Media Library,
+Preview/Program, Outputs, Layers, FX, and automation, while Timeline is retained as
+a hidden Lighting-context mode. The operator rejected that information architecture.
+
+The accepted target is one Edit desk with `Lighting / Video / Timeline` domains.
+Lighting's upper surface remains Banks/Scenes; Video's upper surface becomes Media
+Library; Timeline is one arranger containing Lighting, Video, and Audio layers.
+The two lower panes retain their layout and change contextual content only. The
+lower-right pane shows lighting attributes, selected video/media properties, or
+selected Timeline-placement properties according to the active domain.
+
+Domain ownership is explicit: Lighting authors reusable lighting Scenes; Video
+imports/previews/organizes media and authors reusable clip/source properties;
+Timeline sequences those sources. Video is not a second arranger and not the
+physical display setup page. Detected displays, fullscreen output creation, and
+projection calibration remain under Setup Video. The current dense Video mixer
+may survive only as advanced disclosed tools backed by working canonical routes.
+
+Timeline must render a co-visible source pane in the existing lower-right desk
+position while the arranger remains in the upper pane. It switches between the
+same `Scenes` and `Media Library` project sources (with All/Video/Audio media
+filters), with a sibling Inspector view for the selected placement. Sources is
+the default authoring view. Dragging from a different persistent Edit tab is not
+the product flow because the target would not be visible. The pane reuses source
+identities and drag contracts rather than maintaining a second catalog, and keeps
+an accessible keyboard placement action for each item.
+
+The active implementation tranche is the prerequisite unified DnD contract:
+Lighting Scene -> Lighting layer and Media Library asset -> compatible Video/Audio
+layers through existing authoritative mutations, with one grouped Video+Audio
+placement for an audiovisual asset. The navigation/desk refactor follows after
+that tranche freezes and passes independent review. Do not perform intermediate
+Computer Use passes; rebuild once and reserve native UI operation for the final
+three-screen acceptance: one maximized editor/control window plus one LED-panel
+output and one projector output.
+
+The pinned final native sample is
+`C:\Users\kouty\Downloads\06.flash back背景途中経過02.mp4`, SHA-256
+`70C2B6C9D9F7F0F687E309C3207E9EEB78FDADCD738D1980165A643F15A45012`.
+Current `ffprobe` evidence is H.264 1920x768 at 30000/1001 fps plus AAC 48 kHz
+stereo, duration 84.3843 seconds, size 146,312,255 bytes. Import it once through
+the Media Library production transaction, then place it through the unified DnD
+route and verify one grouped Video+Audio placement. The same video image is the
+temporary content for both the LED-panel and projector outputs in the single
+final native pass.
+
+The 4K/DPI and D1 backend slice subsequently passed independent frozen review
+with P0/P1/P2 all zero. It now treats authored dimensions as physical pixels,
+converges the post-show client/surface extent at 100/125/150/200 percent DPI,
+uses `PhysicalSize` for windowed outputs, follows the live physical client size,
+and fails closed on convergence timeout or staged monitor-topology change. The
+focused native-video suite passed 23/23 and the no-default Rust check reported
+zero first-party warnings. D1 cache listing no longer creates a missing cache
+directory and the retired custom-fixture compatibility command is pure preview.
+The reviewed git blobs were `main.rs` `5676eea3616cf7f060206e71babe633ff6e5fbfe`,
+video checker `2cc88d90c59af8f1c2263e800563a81efe9ffc29`, and fixture
+checker `62bbed6bf5586cbae4670fa5b6d6f054b0797a80`.
+
+E2 authority/runtime application and the D1 frontend preview-only boundary also
+passed independent frozen review with P0/P1/P2 all zero. The production module
+is imported by App event, reply, poll, and fallback paths; its executable harness
+covers delayed lower input generations, duplicate/reordered replacement,
+mapping hydrate/rebase, stale recovery consumption, and startup recovery intent
+delivery. Final SHA-256 values were App
+`146A07F3812EC92A2041B3435EA9C6D83DFEFBC2A0839B5D0508EB1EEC153F3D`,
+authority runtime
+`911D0C623AA05587A31FE6C5CE692242701BFA9EE6B72B85907DBC4E7665A884`,
+and checker
+`D7DEA3AA8C24B054A9A7E6856B754E513E4D4D5420FA2DD2CF0C3E36B662F555`.
+Project-transaction/authority, localization 3538/3538, fixture catalog 69,
+TypeScript, Vite, and diff gates passed. Neither accepted slice has yet had the
+required integrated native release/UI pass, so the product numerator remains
+14/71 until the current Video Setup/window-lifecycle bundle is integrated.
+
+The Video window backend slice subsequently reached a second independent frozen
+review with P0/P1/P2 all zero. It adds the sole canonical live-window mutation
+`set_display_output_window_open_v2`, exact-Both acquire/recover authority, strict
+wire/registry binding, and the schema-1 `syndocal://video-output-window-state`
+event. The shared AddDisplay/reopen Destroyed observer claims the exact monotonic
+window incarnation before cleanup; delayed A cannot retire reopened B, and a
+join timeout retains metrics/quarantine truth until acknowledged reaping. Final
+SHA-256 values were `main.rs`
+`4A303FD730F0347B9932F1813ED1F8287C324BA326EFF3C81BB208EFB22BFC79`,
+runtime `131656CC5D958EB8D3B55EB35392631DA6B819AFB932A8BA435AC2AADBAC9EF0`,
+control-plane `1C6E8535CB27A7AA885329B3C941B81994E70D207840E3629CCF2439ECF78FC8`,
+and protocol command
+`6790F622FB94AB421AAE0E95EB8D76C257D8EBD8563AF05DBF82A8FEA7126AD5`.
+Protocol (11), control-plane (25), output-lease (31), the production callback
+seam, both OutputControl/video-window Node gates, no-default Rust check, fmt,
+and diff-check were green with zero first-party warnings. Native HWND proof is
+still deliberately pending the integrated frontend build.
+
+The operator also confirmed that a real fixture/serial DMX interface is available
+without an external scheduling blocker. Lighting scene, Static, Bank, FX, and
+Timeline authoring plus serial/Art-Net/sACN output are already implemented; do
+not count them as missing features. Remaining lighting acceptance is the batched
+production-path fixture run (channel values, 44 Hz, blackout/release, reconnect,
+and soak) followed by the one final maximized integrated UI pass.
+
+### 2026-08-22 unified Timeline DnD and real-media checkpoint
+
+The backend `InsertMedia` tranche is frozen at `app/src-tauri/src/main.rs`
+SHA-256 `3A34268A3781BC54423AAEF84444D9F7750792BC26DF48B467625BF0D3BA1F30`.
+Independent review returned P0/P1/P2 all zero and the focused no-default suite
+passed 3/3. Explicit Video and Audio lane targets are exact command meaning;
+wrong-kind, missing, locked, or stream-incompatible lanes reject before any
+allocator, snapshot, history, transaction, or publication delta. AV placement
+creates one linked Video+Audio group and one history entry. Exact retries are
+idempotent and a changed target under the same request identity is a shape
+conflict whose canonical receipt remains queryable.
+
+The first frontend freeze was not accepted. Independent review found no P0 but
+four P1 and two P2: a generic target-less Add-to-Timeline route remained in the
+Video panel; selected Video/Audio companion lanes were not both propagated;
+stale Scenes reached the placement callback; the frontend warning gate still
+expected a variable literal module count; and the new source shelf lacked
+complete semantic/five-viewport proof. These are being fixed as one batch before
+the `Lighting / Video / Timeline` desk refactor resumes. The warning work uses a
+new explicit, inventory-only output-marker rebaseline audit; it must not relax
+normal inventory immutability or the pending-to-enforced promotion path.
+
+Read-only tracing of the pinned MP4 production path found a separate real-playback
+blocker: Timeline Video lane IDs and runtime VJ `VideoLayerId` values are allocated
+in different domains, while the current engine treats them as the same ID during
+`apply_timeline_video_clips`. Therefore an import and authoritative Timeline
+receipt can succeed while actual playback reports a missing Video layer. The
+active engine repair must make `media_asset_id` the Timeline clip source authority
+and provide a distinct, non-persisted runtime projection (or an equivalently
+explicit persisted mapping) without conflating the two ID spaces. Completion
+requires real source resolution, linked AV seek/play/pause coherence, no ephemeral
+runtime state in project persistence/history, and a backend driver that exercises
+the same staged import, availability, Timeline receipt, transport, and output
+cores. Native HWND/GPU proof remains reserved for the final single maximized pass.
+
+The repaired frontend DnD freeze subsequently cleared both independent P0/P1
+reviews. `VideoControlPanel` no longer owns a generic target-less Timeline
+insert or drag entry. `TimelineSourceShelf` is the sole visible source entry and
+propagates the operator's exact Video and Audio lane IDs; the shared runtime
+revalidates the current Scene/MediaAsset and both lane identities, kinds, and
+locks before calling the one authoritative placement callback. There is no
+first-unlocked companion fallback, and stale Scenes are rejected with callback
+count zero. Pointer drop and keyboard/click placement use the same runtime route.
+The accepted freeze hashes were App
+`2A7A6AD1AEB70A6152C256D1DA9C0DE824A95E12A2F30C5FD1D8B2E79F5F87E0`,
+source shelf
+`38C928163FC93600F277B99FE7DF3E160E58DE88DF6DB53752C9A9733BDCEAE0`,
+drag payload
+`1205CBF31946D6365D6E400CCE28BB4A53DC112697F522B7CD7C92C79B4E3AEE`,
+drop runtime
+`37C1D7F41BB8D9E39239F57F7BF01CD14E55505284640F53847976EAB87C9296`,
+and focused checker
+`7E259EDA3D4C5D9663307467A3CC527828CE62222D4DA0B1EDCECCF412433C97`.
+The focused DnD, localization, empty-state, invoke, build, and source-shelf
+viewport gates passed. Two proof-strength P2 assertions -- Audio-origin AV
+placement and a dedicated locked-lane callback-zero case -- are being added to
+the active three-domain Edit IA checkpoint; the source switches intentionally
+remain semantic pressed-button groups rather than claiming tablist semantics.
+
+The warning output-marker rebaseline implementation also passed a second
+independent review with code P0/P1/P2 all zero. Its dedicated audit now requires
+the caller's explicit base and head, verifies that exact base is an ancestor,
+and never substitutes a merge base. Normal ratchet and pending-to-enforced
+promotion behavior remain unchanged. The executable self-test covers the real
+A-to-B inventory-only rebaseline, a B-to-C normal gate, non-ancestor rejection,
+multi/broad marker changes, Cargo/pending and sibling configuration changes,
+toolchain/evidence drift, inventory-external files, and warning-suppression
+attempts. `check:warnings:self-test`, Node syntax, diff-check, and the frontend
+build passed; Vite transformed 268 modules with no warning-shaped output. The
+accepted script hashes were
+`33AF03258F7CF9DB68E061370194D65E197E97808446AF6AEC7D7AB5396B1358`,
+`10E9DACFB820AC2EED6C21688D446AF0F518BEC4349CD46996B75B4FDC6C3736`,
+and `C4CC9F83844CB92CAC4BB9B4CDD311F3F9E439E99EB6F450330E28BB8B5A4CD9`.
+Final operation is deliberately deferred until all feature files freeze: commit
+A with feature code plus audit implementation, commit B containing only the
+inventory marker/evidence update and run the explicit A..B audit, then create an
+inventory-unchanged child C and run the normal B..C gate.
+
+### 2026-08-22 final Edit IA and pinned show-audio checkpoint
+
+The three-domain Edit IA is frozen and independently accepted with P0/P1/P2 all
+zero. `Lighting / Video / Timeline` are the persistent domains; Lighting owns the
+Bank/Scene matrix, Video owns the Media Library plus thumbnail and selected-media
+properties, and Timeline owns one upper arranger with the co-visible lower-right
+Sources/Inspector shelf. Scene and MediaAsset pointer and keyboard placement
+share one exact-lane production route. Wrong, locked, stale, missing, unreadable,
+hash-mismatched, and live-only sources reject before a mutation callback.
+Timeline pre-callback and runtime rejection strings now pass the App locale
+boundary; Japanese output does not expose internal availability enum tokens.
+The final focused gates passed DnD orchestration, localization 3530/3530,
+TypeScript, frontend invokes 411, five source-shelf viewports, five pane-window
+viewports, and diff-check. Final reviewed hashes were TimelineOverview
+`5C181D051C5EFAFB0B9993190F6F5012676BD6BA519D7022DF88B282D20D383A`,
+App `0FBE4BFE4AD3B88E1D7C28A974F83888CE26C6D54454FA93343BEB093B36015E`,
+localization `66F29B4BA44EFBD9FA13BD17F94F414E70EB80003914CC8FEAD2F49C85DE9BB9`,
+and DnD checker `0BE8D1D967D986314F45440265232D644AD621494F05B2C8F3139FA5635AC3E3`.
+
+The operator confirmed the show chart as `人生オーバー` 156 measures, all 4/4,
+despite the separate FRET STEP definition still ending at 151. Measure 34
+announces `Chorus`; measure 98 is performed for eight total passes with `Looping`
+on every pass and `Break` at measure 99. Measures 149-156 ramp phase-continuously
+from 170 to 194 BPM with `Trans` on each downbeat. There is no song overlap:
+`惑う星` begins at 194 BPM on the identical boundary frame and announces
+`Complete`, then follows the pinned 207-measure 4/4, 5/4, and 6/4 map.
+
+The reproducible exporter and Zira generator are
+`tools/audio/export-jinsei-madow-click-guide.mjs` and
+`tools/audio/generate-guide-complete.ps1`; `complete.wav` is now in the embedded
+English Guide source pack. Canonical audition files are in
+`C:\TEMP\syndocal-show-audio`. Independent PCM review accepted P0/P1/P2 all zero:
+all nine WAVs are 48 kHz PCM16 mono, total click count is 1,492, Guide event count
+is 19, the song boundary is frame 11,010,639, connected duration is 489.182125
+seconds, fresh-export WAV hashes are identical, and all mixes remain below clip.
+This is a pre-rendered material checkpoint only. Runtime click/Guide completion
+still requires the shared sample-frame tempo/meter scheduler and discontinuity
+generation fences.
+
+Audio-lane mute/solo and sink-generation work is not accepted at this checkpoint.
+Its latest independent review found two P1 issues: Follow settlement did not wait
+for active child-only audio sinks, and potentially blocking media open/decode/
+stream/sink/seek work still occurred while holding the shared media-audio mutex.
+The owner is repairing both before the next immutable review. Do not advance the
+product numerator from this checkpoint, and do not run the native UI before the
+integrated backend bundle is green.

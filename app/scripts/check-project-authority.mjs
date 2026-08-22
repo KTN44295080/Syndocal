@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   acknowledgeProjectAuthorityPersist,
   beginProjectAuthorityApplication,
@@ -9,8 +10,11 @@ import {
   projectAuthorityApplicationIsCurrent,
   projectAuthorityCanApply,
   projectAuthorityCanApplyHistoryStatus,
+  projectAuthorityBundleMayConsumeRecoveryIntent,
+  projectAuthorityInputRuntimeVerdict,
   projectAuthorityDispositionClearsRecovery,
   projectAuthorityDispositionTransition,
+  projectAuthorityGenerationIsValid,
   projectAuthorityRecoveryTombstonePreflight,
   projectAuthorityHasDirtyMappings,
   projectAuthorityMappingCommitRetiredInputs,
@@ -31,6 +35,17 @@ import {
   rebaseDirtyProjectAuthorityMappings,
   runAfterProjectAuthorityFlush,
 } from "../src/projectAuthority.ts";
+import {
+  applyPolledProjectAuthorityBundleProduction,
+  applyProjectAuthorityBundleProduction,
+  projectAuthorityBundleGenerationsAreValid,
+  projectAuthorityFallbackIsCurrent,
+  projectAuthorityStartupRecoveryDeliveryIsCurrent,
+  deliverProjectAuthorityStartupRecoveryIntentProduction,
+  applyProjectAuthorityReplacementProduction,
+  applyProjectAuthorityRuntimeStatusProduction,
+  beginProjectAuthorityRuntimeApplication,
+} from "../src/projectAuthorityRuntime.ts";
 import {
   createProjectRecoveryCheckpoint,
   loadProjectRecoveryCheckpoint,
@@ -370,6 +385,658 @@ for (const source of ["MIDI", "OSC", "DMX"]) {
   );
   assert.equal(projectAuthorityTokenIsCurrent(learnB, learnB), true);
 }
+
+// Input runtime is one coherent pair of callback fences. A delayed A event,
+// reply, or poll cannot lower either member or overwrite B's live truth; a
+// same-generation DMX liveness change remains applicable because it is
+// runtime-only and does not imply a worker replacement.
+const runtimeA = {
+  project_input_runtime_generation: 8,
+  mapping_input_runtime_generation: 12,
+  midi_clock_active: true,
+  midi_control_active: true,
+  midi_feedback_output_active: true,
+  midi_feedback_runtime_active: true,
+  osc_active: true,
+  dmx_active: false,
+};
+const runtimeB = {
+  ...runtimeA,
+  project_input_runtime_generation: 9,
+  mapping_input_runtime_generation: 13,
+  dmx_active: true,
+};
+assert.equal(
+  projectAuthorityInputRuntimeVerdict(runtimeB, runtimeA, runtimeA),
+  "apply",
+  "a newer project+mapping runtime pair applies",
+);
+assert.equal(
+  projectAuthorityInputRuntimeVerdict(runtimeA, runtimeB, runtimeB),
+  "stale",
+  "a delayed A runtime pair cannot rewind B",
+);
+assert.equal(
+  projectAuthorityInputRuntimeVerdict(
+    { ...runtimeB, mapping_input_runtime_generation: 12 },
+    runtimeB,
+    runtimeB,
+  ),
+  "stale",
+  "a mixed pair which regresses one callback fence is rejected as a whole",
+);
+assert.equal(
+  projectAuthorityInputRuntimeVerdict({ ...runtimeB }, runtimeB, runtimeB),
+  "duplicate",
+  "an exact duplicate runtime delivery is side-effect free",
+);
+assert.equal(
+  projectAuthorityInputRuntimeVerdict({ ...runtimeB, dmx_active: false }, runtimeB, runtimeB),
+  "apply",
+  "same-generation runtime-only DMX liveness still converges",
+);
+assert.equal(projectAuthorityGenerationIsValid(0), true, "generation zero is valid");
+assert.equal(projectAuthorityGenerationIsValid(Number.MAX_SAFE_INTEGER), true, "safe max generation is valid");
+assert.equal(projectAuthorityGenerationIsValid(Number.MAX_SAFE_INTEGER + 1), false, "unsafe generation fails closed");
+assert.equal(
+  projectAuthorityInputRuntimeVerdict(
+    { ...runtimeB, project_input_runtime_generation: Number.MAX_SAFE_INTEGER + 1 },
+    runtimeB,
+    runtimeB,
+  ),
+  "stale",
+  "an unsafe runtime generation cannot poison the observed fence",
+);
+assert.equal(
+  projectAuthorityBundleMayConsumeRecoveryIntent("applied", learnB, learnB),
+  true,
+  "only an accepted current bundle owns recovery intent consumption",
+);
+assert.equal(
+  projectAuthorityBundleMayConsumeRecoveryIntent("stale", learnA, learnB),
+  false,
+  "a rejected stale poll cannot tombstone or ACK the current recovery intent",
+);
+assert.equal(
+  projectAuthorityBundleMayConsumeRecoveryIntent("duplicate", learnB, learnB),
+  false,
+  "an exact duplicate bundle cannot consume recovery twice",
+);
+let recoveryIntentSideEffects = 0;
+const deliverRecoveryIntent = (application, candidate, current) => {
+  if (projectAuthorityBundleMayConsumeRecoveryIntent(application, candidate, current)) {
+    recoveryIntentSideEffects += 1;
+  }
+};
+// Active C recovery intent: a delayed A event/reply/poll and a duplicate B
+// poll are all rejected before they can abandon, tombstone, write, message,
+// or stage drafts. Only the one accepted B application owns delivery.
+deliverRecoveryIntent("stale", learnA, learnB);
+deliverRecoveryIntent("stale", learnB, learnB);
+deliverRecoveryIntent("duplicate", learnB, learnB);
+assert.equal(recoveryIntentSideEffects, 0, "stale/duplicate A/B poll deliveries have no recovery side effect");
+deliverRecoveryIntent("applied", learnB, learnB);
+deliverRecoveryIntent("duplicate", learnB, learnB);
+assert.equal(recoveryIntentSideEffects, 1, "one accepted B application consumes recovery exactly once");
+
+// The following tests drive the imported production orchestration used by
+// App.tsx. Effects are observable callbacks around the real staged-batch,
+// runtime-status, replacement, and poll entry points; no verdict helper is
+// reimplemented in this harness.
+const makeProductionBundle = (token, input, overrides = {}) => ({
+  project_epoch: token.project_epoch,
+  project_revision: token.project_revision,
+  checkpoint_hash: token.checkpoint_hash,
+  publication_generation: overrides.publication_generation ?? token.project_revision + 1,
+  publication_kind: overrides.publication_kind ?? "mutation",
+  mapping_replacement_generation: overrides.mapping_replacement_generation ?? 0,
+  authority_disposition_generation: overrides.authority_disposition_generation ?? 1,
+  authority_disposition: overrides.authority_disposition ?? "runtime_sanitize",
+  recovery_authority_serial: overrides.recovery_authority_serial ?? 1,
+  recovery_authority_last_transition: overrides.recovery_authority_last_transition ?? { kind: "project_publication" },
+  path_generation: overrides.path_generation ?? 1,
+  history_generation: overrides.history_generation ?? 1,
+  current_project_path: overrides.current_project_path ?? null,
+  snapshot: overrides.snapshot ?? {},
+  profiles: overrides.profiles ?? [],
+  fixture_groups: overrides.fixture_groups ?? [],
+  operator_policy: overrides.operator_policy ?? null,
+  midi_mappings: overrides.midi_mappings ?? [],
+  osc_mappings: overrides.osc_mappings ?? [],
+  dmx_mappings: overrides.dmx_mappings ?? [],
+  dj_track_triggers: overrides.dj_track_triggers ?? [],
+  history: overrides.history ?? { history_generation: overrides.history_generation ?? 1 },
+  input_runtime: input,
+});
+
+const makeProductionState = (authority) => ({
+  authority,
+  authorityReady: true,
+  sync: createProjectAuthoritySyncState(),
+  lastAppliedProjectReplacement: authority,
+  observedProjectInputRuntimeGeneration: 0,
+  observedMappingInputRuntimeGeneration: 0,
+  observedProjectInputRuntime: null,
+  observedProjectPathGeneration: 0,
+  observedProjectPathInitialized: false,
+  observedProjectHistoryGeneration: 0,
+  observedProjectHistoryInitialized: false,
+  observedMappingReplacementGeneration: 0,
+  observedAuthorityDispositionGeneration: 0,
+  observedRecoveryAuthoritySerial: 0,
+  disposition: {
+    baseline: null,
+    observedDispositionGeneration: 0,
+    dispositionInitialized: false,
+    dirty: true,
+  },
+  mappingSyncInFlight: false,
+  hasDirtyMappings: false,
+});
+
+const makeProductionEffects = () => {
+  const trace = {
+    prepares: 0,
+    commits: [],
+    runtimeCommits: [],
+    preflights: 0,
+    dirty: 0,
+    recovery: 0,
+    invalidations: 0,
+    visible: {
+      mapping: "A-mapping",
+      snapshot: "A-snapshot",
+      groups: "A-groups",
+      policy: "A-policy",
+      runtime: "A-runtime",
+    },
+  };
+  return {
+    trace,
+    effects: {
+      preflightRecoveryDisposition: () => {
+        trace.preflights += 1;
+        return true;
+      },
+      prepareBundle: () => {
+        trace.prepares += 1;
+        return { prepared: true };
+      },
+      invalidateMappingIdentity: () => { trace.invalidations += 1; },
+      commitBundle: (bundle, _prepared, options) => {
+        trace.commits.push(options);
+        if (!options.preserveDirtyMappings) trace.visible.mapping = bundle.midi_mappings;
+        trace.visible.snapshot = bundle.snapshot;
+        trace.visible.groups = bundle.fixture_groups;
+        trace.visible.policy = bundle.operator_policy;
+        if (options.applyInputRuntime) trace.visible.runtime = bundle.input_runtime;
+      },
+      commitRuntimeStatus: (bundle, plan) => {
+        trace.runtimeCommits.push(plan);
+        if (plan.applyInput) trace.visible.runtime = bundle.input_runtime;
+      },
+      applyDirtyState: () => { trace.dirty += 1; },
+      consumeRecoveryIntent: () => { trace.recovery += 1; },
+    },
+  };
+};
+
+const productionTokenA = { project_epoch: 20, project_revision: 0, checkpoint_hash: "production-A" };
+const productionTokenB = { project_epoch: 20, project_revision: 1, checkpoint_hash: "production-B" };
+const productionTokenC = { project_epoch: 20, project_revision: 2, checkpoint_hash: "production-C" };
+const productionTokenD = { project_epoch: 20, project_revision: 3, checkpoint_hash: "production-D" };
+const productionInputA = { ...runtimeA, project_input_runtime_generation: 8, mapping_input_runtime_generation: 12 };
+const productionInputB = { ...runtimeB, project_input_runtime_generation: 9, mapping_input_runtime_generation: 13 };
+const productionBundleB = makeProductionBundle(productionTokenB, productionInputB, {
+  snapshot: { image: "B-snapshot" },
+  fixture_groups: [{ id: 2, label: "B-groups" }],
+  operator_policy: { lock_on_load: false, lock_mode: null },
+  midi_mappings: [{ id: "B-mapping" }],
+});
+assert.equal(
+  projectAuthorityBundleGenerationsAreValid(
+    makeProductionBundle(productionTokenB, productionInputB, {
+      publication_generation: Number.MAX_SAFE_INTEGER + 1,
+    }),
+  ),
+  false,
+  "an exhausted publication generation fails closed before any batch or recovery side effect",
+);
+const boundedHarness = makeProductionEffects();
+const boundedStarted = beginProjectAuthorityRuntimeApplication(makeProductionState(productionTokenA));
+const boundedResult = applyProjectAuthorityBundleProduction(
+  boundedStarted.state,
+  makeProductionBundle(productionTokenB, productionInputB, {
+    publication_generation: Number.MAX_SAFE_INTEGER + 1,
+  }),
+  boundedStarted.application,
+  true,
+  false,
+  boundedHarness.effects,
+);
+assert.equal(boundedResult.disposition, "stale", "an exhausted bundle is rejected by the production entry");
+assert.equal(boundedHarness.trace.commits.length, 0, "an exhausted bundle stages no Solid batch");
+assert.equal(boundedHarness.trace.preflights, 0, "an exhausted bundle runs no recovery preflight");
+
+const applyProductionReplacement = (state, bundle, harness) => applyProjectAuthorityReplacementProduction(
+  state,
+  bundle,
+  {
+    applyBundle: (startedState, candidate, application) => applyProjectAuthorityBundleProduction(
+      startedState,
+      candidate,
+      application,
+      true,
+      false,
+      harness.effects,
+    ),
+  },
+);
+
+// Event -> reply and reply -> event both apply B once. A local edit after B
+// survives the exact duplicate and the duplicate emits no batch/dirty/recovery
+// callback.
+let productionHarness = makeProductionEffects();
+let productionResult = applyProductionReplacement(
+  makeProductionState(productionTokenA),
+  productionBundleB,
+  productionHarness,
+);
+assert.equal(productionResult.verdict, "apply");
+let productionAfterEvent = {
+  ...productionResult.state,
+  sync: noteLocalProjectAuthorityEdit(productionResult.state.sync),
+};
+productionHarness.trace.visible.mapping = "local-post-B-edit";
+const productionDuplicateReply = applyProductionReplacement(
+  productionAfterEvent,
+  productionBundleB,
+  productionHarness,
+);
+assert.equal(productionDuplicateReply.verdict, "duplicate", "event then reply B is an exact duplicate");
+assert.equal(productionHarness.trace.commits.length, 1, "event then reply stages one Solid batch");
+assert.equal(productionHarness.trace.dirty, 1, "event then reply runs dirty side effects once");
+assert.equal(productionDuplicateReply.state.sync.localGeneration, productionAfterEvent.sync.localGeneration);
+assert.equal(
+  productionHarness.trace.visible.mapping,
+  "local-post-B-edit",
+  "event then reply preserves a local mapping edit after B",
+);
+
+productionHarness = makeProductionEffects();
+let productionReplyFirst = applyProductionReplacement(
+  makeProductionState(productionTokenA),
+  productionBundleB,
+  productionHarness,
+);
+const productionEventDuplicate = applyProductionReplacement(
+  productionReplyFirst.state,
+  productionBundleB,
+  productionHarness,
+);
+assert.equal(productionEventDuplicate.verdict, "duplicate", "reply then event B is an exact duplicate");
+assert.equal(productionHarness.trace.commits.length, 1, "reply then event stages one Solid batch");
+
+// Startup recovery handshake race: B may already be hydrated before the
+// renderer installs the stored intent. Only the startup duplicate consumes
+// that newly installed intent; later event/poll duplicates remain no-ops.
+const startupIntent = {
+  source_serial: 4,
+  expected_target_serial: 5,
+  request_generation: 1,
+  request_id: "startup-recovery-request",
+};
+const startupBundleB = makeProductionBundle(productionTokenB, productionInputB, {
+  authority_disposition: "recovery_pending_ack",
+  recovery_authority_serial: 5,
+  recovery_authority_last_transition: {
+    kind: "recovery_publication",
+    source_serial: startupIntent.source_serial,
+    request_id: startupIntent.request_id,
+    target_checkpoint_hash: productionTokenB.checkpoint_hash,
+  },
+});
+const startupHarness = makeProductionEffects();
+let startupIntentActive = false;
+startupHarness.effects.consumeRecoveryIntent = () => {
+  if (startupIntentActive) {
+    startupHarness.trace.recovery += 1;
+    startupIntentActive = false;
+  }
+};
+const earlyStartupB = applyProductionReplacement(
+  makeProductionState(productionTokenA),
+  startupBundleB,
+  startupHarness,
+);
+assert.equal(earlyStartupB.verdict, "apply", "early B replacement hydrates before recovery handshake");
+assert.equal(startupHarness.trace.recovery, 0, "early B with no installed intent does not consume");
+startupIntentActive = true;
+const startupDuplicateB = applyProductionReplacement(
+  earlyStartupB.state,
+  startupBundleB,
+  startupHarness,
+);
+assert.equal(startupDuplicateB.verdict, "duplicate", "handshake sees the already-applied B as duplicate");
+assert.equal(
+  projectAuthorityStartupRecoveryDeliveryIsCurrent(startupDuplicateB.state, startupIntent, startupBundleB),
+  true,
+  "startup duplicate matches exact B token, serial, transition, and current authority",
+);
+assert.equal(
+  deliverProjectAuthorityStartupRecoveryIntentProduction(
+    startupDuplicateB.state,
+    startupIntent,
+    startupBundleB,
+    (bundle) => startupHarness.effects.consumeRecoveryIntent(bundle),
+  ),
+  true,
+  "startup production handoff delivers the admitted intent",
+);
+assert.equal(startupHarness.trace.recovery, 1, "startup duplicate consumes/ACKs/stages the intent once");
+const startupEventDuplicate = applyProductionReplacement(
+  startupDuplicateB.state,
+  startupBundleB,
+  startupHarness,
+);
+assert.equal(startupEventDuplicate.verdict, "duplicate", "later duplicate event remains a no-op");
+const startupPollDuplicate = applyPolledProjectAuthorityBundleProduction(
+  startupDuplicateB.state,
+  startupBundleB,
+  {
+    applyRuntimeStatus: (state, bundle) => applyProjectAuthorityRuntimeStatusProduction(
+      state,
+      bundle,
+      true,
+      startupHarness.effects,
+    ),
+    applyReplacement: () => { throw new Error("duplicate startup poll reached replacement"); },
+    applyOrdinaryBundle: () => { throw new Error("duplicate startup poll reached ordinary apply"); },
+  },
+);
+assert.equal(startupPollDuplicate.disposition, "duplicate", "later duplicate poll remains a no-op");
+assert.equal(startupHarness.trace.recovery, 1, "later event/poll duplicates do not consume twice");
+assert.equal(
+  deliverProjectAuthorityStartupRecoveryIntentProduction(
+    startupDuplicateB.state,
+    startupIntent,
+    makeProductionBundle(productionTokenC, productionInputB, {
+      authority_disposition: "recovery_pending_ack",
+      recovery_authority_serial: 5,
+      recovery_authority_last_transition: startupBundleB.recovery_authority_last_transition,
+    }),
+    () => { throw new Error("mismatched token reached startup consume"); },
+  ),
+  false,
+  "mismatched startup token cannot consume",
+);
+assert.equal(
+  deliverProjectAuthorityStartupRecoveryIntentProduction(
+    startupDuplicateB.state,
+    startupIntent,
+    makeProductionBundle(productionTokenB, productionInputB, {
+      authority_disposition: "recovery_pending_ack",
+      recovery_authority_serial: 4,
+      recovery_authority_last_transition: startupBundleB.recovery_authority_last_transition,
+    }),
+    () => { throw new Error("mismatched serial reached startup consume"); },
+  ),
+  false,
+  "mismatched startup serial cannot consume",
+);
+assert.equal(
+  deliverProjectAuthorityStartupRecoveryIntentProduction(
+    startupDuplicateB.state,
+    startupIntent,
+    makeProductionBundle(productionTokenA, productionInputA, {
+      authority_disposition: "recovery_pending_ack",
+      recovery_authority_serial: 5,
+      recovery_authority_last_transition: startupBundleB.recovery_authority_last_transition,
+    }),
+    () => { throw new Error("older bundle reached startup consume"); },
+  ),
+  false,
+  "older startup bundle cannot consume",
+);
+
+// B runtime truth cannot be rewound by lower-generation A through either the
+// poll route or the recovery-status route, and neither route consumes C's
+// active recovery intent.
+const productionRuntimeState = {
+  ...makeProductionState(productionTokenB),
+  observedProjectInputRuntimeGeneration: productionInputB.project_input_runtime_generation,
+  observedMappingInputRuntimeGeneration: productionInputB.mapping_input_runtime_generation,
+  observedProjectInputRuntime: productionInputB,
+  observedProjectPathGeneration: 1,
+  observedProjectPathInitialized: true,
+  observedProjectHistoryGeneration: 1,
+  observedProjectHistoryInitialized: true,
+  observedMappingReplacementGeneration: 0,
+  observedAuthorityDispositionGeneration: 1,
+  observedRecoveryAuthoritySerial: 1,
+  disposition: {
+    baseline: null,
+    observedDispositionGeneration: 1,
+    dispositionInitialized: true,
+    dirty: true,
+  },
+};
+const staleGenerationHarness = makeProductionEffects();
+const staleGenerationStarted = beginProjectAuthorityRuntimeApplication(productionRuntimeState);
+const staleGenerationResult = applyProjectAuthorityBundleProduction(
+  staleGenerationStarted.state,
+  makeProductionBundle(productionTokenC, productionInputB, { path_generation: 0 }),
+  staleGenerationStarted.application,
+  true,
+  false,
+  staleGenerationHarness.effects,
+);
+assert.equal(staleGenerationResult.disposition, "stale", "a newer token cannot carry a regressed path generation");
+assert.equal(staleGenerationHarness.trace.commits.length, 0, "a regressed project generation stages no batch");
+assert.equal(staleGenerationHarness.trace.preflights, 0, "a regressed project generation runs no recovery preflight");
+const delayedProductionA = makeProductionBundle(productionTokenB, productionInputA);
+const delayedRuntimeHarness = makeProductionEffects();
+delayedRuntimeHarness.trace.visible.runtime = "B-runtime";
+const delayedPoll = applyPolledProjectAuthorityBundleProduction(
+  productionRuntimeState,
+  delayedProductionA,
+  {
+    applyRuntimeStatus: (state, bundle) => applyProjectAuthorityRuntimeStatusProduction(
+      state,
+      bundle,
+      true,
+      delayedRuntimeHarness.effects,
+    ),
+    applyReplacement: (state) => ({ state, disposition: "stale" }),
+    applyOrdinaryBundle: (state) => ({ state, disposition: "stale" }),
+  },
+);
+assert.equal(delayedPoll.disposition, "duplicate", "poll route rejects lower same-token input as a no-op");
+const delayedRecoveryStatus = applyProjectAuthorityRuntimeStatusProduction(
+  delayedPoll.state,
+  delayedProductionA,
+  false,
+  delayedRuntimeHarness.effects,
+);
+assert.equal(delayedRecoveryStatus.disposition, "duplicate", "recovery-status route rejects lower input");
+assert.equal(delayedRuntimeHarness.trace.runtimeCommits.length, 0, "lower A emits no runtime batch");
+assert.equal(delayedRuntimeHarness.trace.preflights, 0, "lower A emits no recovery preflight");
+assert.equal(delayedRuntimeHarness.trace.dirty, 0, "lower A emits no dirty side effect");
+assert.equal(delayedRuntimeHarness.trace.recovery, 0, "stale poll/recovery cannot consume active C intent");
+assert.equal(delayedRuntimeHarness.trace.visible.runtime, "B-runtime", "lower A cannot rewind B runtime truth");
+
+let activeRecoveryIntent = true;
+const stalePollHarness = makeProductionEffects();
+stalePollHarness.trace.visible = {
+  mapping: "B-mapping",
+  snapshot: "B-snapshot",
+  groups: "B-groups",
+  policy: "B-policy",
+  runtime: "B-runtime",
+};
+stalePollHarness.effects.consumeRecoveryIntent = () => {
+  activeRecoveryIntent = false;
+  stalePollHarness.trace.recovery += 1;
+};
+const stalePoll = applyPolledProjectAuthorityBundleProduction(
+  productionRuntimeState,
+  makeProductionBundle(productionTokenA, productionInputA, { recovery_authority_serial: 0 }),
+  {
+    applyRuntimeStatus: () => { throw new Error("stale poll reached runtime status"); },
+    applyReplacement: () => { throw new Error("stale poll reached replacement"); },
+    applyOrdinaryBundle: () => { throw new Error("stale poll reached ordinary apply"); },
+  },
+);
+assert.equal(stalePoll.disposition, "stale", "older-token poll is rejected at the production poll entry");
+assert.equal(activeRecoveryIntent, true, "stale poll cannot abandon the active recovery intent");
+assert.equal(stalePollHarness.trace.preflights, 0, "stale poll cannot run recovery preflight");
+assert.equal(stalePollHarness.trace.recovery, 0, "stale poll cannot consume the active recovery intent");
+assert.deepEqual(
+  stalePollHarness.trace.visible,
+  {
+    mapping: "B-mapping",
+    snapshot: "B-snapshot",
+    groups: "B-groups",
+    policy: "B-policy",
+    runtime: "B-runtime",
+  },
+  "stale A cannot overwrite B snapshot/group/policy/runtime state",
+);
+
+// Dirty A is forced to hydrate for identity/history B, while ordinary C
+// rebases the local mapping edit and keeps the local arrays.
+const dirtyAState = {
+  ...makeProductionState(productionTokenA),
+  sync: noteLocalProjectAuthorityEdit(createProjectAuthoritySyncState()),
+};
+const identityB = makeProductionBundle(productionTokenB, productionInputB, {
+  publication_kind: "identity_replacement",
+  mapping_replacement_generation: 1,
+});
+const mappingHarness = makeProductionEffects();
+const identityResult = applyPolledProjectAuthorityBundleProduction(
+  dirtyAState,
+  identityB,
+  {
+    applyRuntimeStatus: (state, bundle) => applyProjectAuthorityRuntimeStatusProduction(
+      state,
+      bundle,
+      true,
+      mappingHarness.effects,
+    ),
+    applyReplacement: (state, bundle) => {
+      const replacement = applyProductionReplacement(state, bundle, mappingHarness);
+      return {
+        state: replacement.state,
+        disposition: replacement.verdict === "apply"
+          ? "applied"
+          : replacement.verdict === "duplicate" ? "duplicate" : "stale",
+      };
+    },
+    applyOrdinaryBundle: (state) => ({ state, disposition: "stale" }),
+  },
+);
+assert.equal(identityResult.disposition, "applied", "identity B takes the forced-hydrate route");
+assert.equal(mappingHarness.trace.commits.length, 1);
+assert.equal(mappingHarness.trace.commits[0].preserveDirtyMappings, false);
+
+const dirtyBState = {
+  ...identityResult.state,
+  sync: noteLocalProjectAuthorityEdit(identityResult.state.sync),
+};
+const ordinaryC = makeProductionBundle(productionTokenC, productionInputB, {
+  publication_kind: "mutation",
+  mapping_replacement_generation: 1,
+});
+const ordinaryHarness = makeProductionEffects();
+let ordinaryRebased = false;
+const ordinaryResult = applyPolledProjectAuthorityBundleProduction(
+  dirtyBState,
+  ordinaryC,
+  {
+    applyRuntimeStatus: (state, bundle) => applyProjectAuthorityRuntimeStatusProduction(
+      state,
+      bundle,
+      true,
+      ordinaryHarness.effects,
+    ),
+    applyReplacement: (state) => ({ state, disposition: "stale" }),
+    applyOrdinaryBundle: (state, bundle, preserveDirtyMappings) => {
+      const started = beginProjectAuthorityRuntimeApplication(state);
+      const rebased = preserveDirtyMappings
+        ? { ...started.state, sync: rebaseDirtyProjectAuthorityMappings(started.state.sync, true) }
+        : started.state;
+      ordinaryRebased = preserveDirtyMappings;
+      return applyProjectAuthorityBundleProduction(
+        rebased,
+        bundle,
+        started.application,
+        false,
+        preserveDirtyMappings,
+        ordinaryHarness.effects,
+      );
+    },
+  },
+);
+assert.equal(ordinaryResult.disposition, "applied", "ordinary C applies");
+assert.equal(ordinaryRebased, true, "ordinary C rebases dirty A mappings");
+assert.equal(ordinaryHarness.trace.commits[0].preserveDirtyMappings, true);
+
+const historyD = makeProductionBundle(productionTokenD, productionInputB, {
+  publication_kind: "history_navigation",
+  mapping_replacement_generation: 2,
+});
+const historyHarness = makeProductionEffects();
+const historyResult = applyPolledProjectAuthorityBundleProduction(
+  ordinaryResult.state,
+  historyD,
+  {
+    applyRuntimeStatus: (state, bundle) => applyProjectAuthorityRuntimeStatusProduction(
+      state,
+      bundle,
+      true,
+      historyHarness.effects,
+    ),
+    applyReplacement: (state, bundle) => {
+      const replacement = applyProductionReplacement(state, bundle, historyHarness);
+      return {
+        state: replacement.state,
+        disposition: replacement.verdict === "apply" ? "applied" : replacement.verdict === "duplicate" ? "duplicate" : "stale",
+      };
+    },
+    applyOrdinaryBundle: (state) => ({ state, disposition: "stale" }),
+  },
+);
+assert.equal(historyResult.disposition, "applied", "history B takes the forced-hydrate route");
+assert.equal(historyHarness.trace.commits[0].preserveDirtyMappings, false);
+
+// A compatibility fallback captured for B cannot apply after C advances the
+// authority/application generation; no raw refresh/storage/reset callback is
+// reachable from this guard.
+const fallbackBState = makeProductionState(productionTokenB);
+const fallbackBStarted = beginProjectAuthorityRuntimeApplication(fallbackBState);
+const fallbackCStarted = beginProjectAuthorityRuntimeApplication({
+  ...fallbackBStarted.state,
+  authority: productionTokenC,
+});
+assert.equal(
+  projectAuthorityFallbackIsCurrent(
+    fallbackCStarted.state,
+    productionTokenB,
+    fallbackBStarted.application,
+    productionTokenB,
+  ),
+  false,
+  "late B fallback is rejected after C without stale refresh side effects",
+);
+
+const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+assert.match(appSource, /invoke<FixtureProfileSummary>\("preview_custom_fixture_profile"/);
+assert.doesNotMatch(
+  appSource.slice(appSource.indexOf("const projectMutationCommands"), appSource.indexOf("const projectMutationCommands") + 2_000),
+  /create_custom_fixture_profile/,
+);
+assert.match(appSource, /captureProjectAuthorityIdentity\(\)[\s\S]*?preview_custom_fixture_profile[\s\S]*?isProjectAuthorityIdentityCurrent/);
 
 // Recovery invalidation uses one storage key. A v1 payload remains readable
 // until an UnsavedReplacement atomically overwrites it with a v3 tombstone;

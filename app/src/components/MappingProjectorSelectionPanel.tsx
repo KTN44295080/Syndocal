@@ -1,8 +1,6 @@
 import { For, Show } from "solid-js";
-import type { StageObjectSummary, VideoOutputMapping, VideoOutputSummary } from "../types";
+import type { StageObjectSummary, VideoOutputSummary } from "../types";
 import { MappingProjectorControlsPanel } from "./MappingProjectorControlsPanel";
-
-type MaybePromise = void | Promise<unknown>;
 
 type MappingProjectorSelectionPanelProps = {
   outputs: VideoOutputSummary[];
@@ -10,12 +8,6 @@ type MappingProjectorSelectionPanelProps = {
   selectedOutputId: number | null;
   selectedStageObject: StageObjectSummary | null;
   onSelectOutput: (outputId: number) => void;
-  onSetEnabled: (outputId: number, enabled: boolean) => MaybePromise;
-  onSetBlackout: (outputId: number, blackout: boolean) => MaybePromise;
-  onOpenWindow: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onSyncWindow: (outputId: number) => MaybePromise;
-  onFitStageObject: (output: VideoOutputSummary, object: StageObjectSummary) => MaybePromise;
-  onSetMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
   onEditProjection: (outputId: number) => void;
 };
 
@@ -43,12 +35,6 @@ export function MappingProjectorSelectionPanel(props: MappingProjectorSelectionP
           <MappingProjectorControlsPanel
             output={output()}
             selectedStageObject={props.selectedStageObject}
-            onSetEnabled={props.onSetEnabled}
-            onSetBlackout={props.onSetBlackout}
-            onOpenWindow={props.onOpenWindow}
-            onSyncWindow={props.onSyncWindow}
-            onFitStageObject={props.onFitStageObject}
-            onSetMapping={props.onSetMapping}
             onEditProjection={props.onEditProjection}
           />
         )}

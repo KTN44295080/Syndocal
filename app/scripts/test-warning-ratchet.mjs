@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   aggregateDiagnostics,
   auditZeroWarningPromotion,
+  auditOutputMarkerRebaseline,
   artifactIdentity,
   compareArtifactCoverage,
   compareOutputMarkerCoverage,
@@ -26,6 +27,7 @@ import {
   normalizeRepoPath,
   parseCargoJsonLines,
   resolveTrustedComparison,
+  resolveExplicitAncestorComparison,
   runCargoConfiguration,
   runGenericConfiguration,
   runProcessWithTimeout,
@@ -637,6 +639,284 @@ try {
 } finally {
   rmSync(promotionFixtureRoot, { recursive: true, force: true });
 }
+const outputMarkerFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-output-marker-rebaseline-"));
+try {
+  const fixtureGit = (args) => execFileSync("git", args, { cwd: outputMarkerFixtureRoot, encoding: "utf8" }).trim();
+  fixtureGit(["init", "--initial-branch=main"]);
+  fixtureGit(["config", "user.name", "Warning Ratchet Output Marker Rebaseline Test"]);
+  fixtureGit(["config", "user.email", "warning-ratchet-output-marker@example.invalid"]);
+  mkdirSync(path.join(outputMarkerFixtureRoot, "qa/warnings"), { recursive: true });
+  mkdirSync(path.join(outputMarkerFixtureRoot, "app/scripts"), { recursive: true });
+  writeFileSync(path.join(outputMarkerFixtureRoot, ".gitignore"), "app/node_modules/\n");
+  writeFileSync(
+    path.join(outputMarkerFixtureRoot, "qa/warnings/warning-inventory.schema.json"),
+    readFileSync(path.join(repoRoot, "qa/warnings/warning-inventory.schema.json"), "utf8"),
+  );
+  for (const script of ["check-warning-ratchet.mjs", "warning-ratchet-lib.mjs"]) {
+    writeFileSync(
+      path.join(outputMarkerFixtureRoot, "app/scripts", script),
+      readFileSync(path.join(repoRoot, "app/scripts", script), "utf8"),
+    );
+  }
+  symlinkSync(path.join(repoRoot, "app/node_modules"), path.join(outputMarkerFixtureRoot, "app/node_modules"), "junction");
+  const outputMarkerCommand = {
+    executable: "pnpm",
+    args: [
+      "--dir",
+      path.join(repoRoot, "app"),
+      "exec",
+      "node",
+      "-e",
+      "process.stdout.write('vite v6.4.2 building for production...\\n268 modules transformed.\\nbuilt in')",
+    ],
+  };
+  const outputMarkerToolchain = detectToolchain();
+  const outputMarkerBaseInventory = structuredClone(inventory);
+  const outputMarkerBaseConfiguration = outputMarkerBaseInventory.configurations.find(
+    (candidate) => candidate.id === "frontend-typescript-vite-windows",
+  );
+  outputMarkerBaseConfiguration.command = outputMarkerCommand;
+  outputMarkerBaseConfiguration.expectedOutputMarkers = [
+    "vite v6.4.2 building for production...",
+    "265 modules transformed.",
+    "built in",
+  ];
+  outputMarkerBaseConfiguration.evidence = {
+    commit: "a".repeat(40),
+    capturedAt: "2026-08-22T00:00:00Z",
+    command: `pnpm ${outputMarkerCommand.args.join(" ")}`,
+    toolchain: outputMarkerToolchain,
+  };
+  const outputMarkerInventoryFile = path.join(outputMarkerFixtureRoot, "qa/warnings/warning-inventory.json");
+  writeFileSync(outputMarkerInventoryFile, `${JSON.stringify(outputMarkerBaseInventory, null, 2)}\n`);
+  fixtureGit(["add", ".gitignore", "app/scripts", "qa/warnings/warning-inventory.json", "qa/warnings/warning-inventory.schema.json"]);
+  fixtureGit(["commit", "-m", "trusted output marker inventory"]);
+  const outputMarkerBase = fixtureGit(["rev-parse", "HEAD"]);
+  const outputMarkerHeadInventory = structuredClone(outputMarkerBaseInventory);
+  const outputMarkerHeadConfiguration = outputMarkerHeadInventory.configurations.find(
+    (candidate) => candidate.id === "frontend-typescript-vite-windows",
+  );
+  outputMarkerHeadConfiguration.expectedOutputMarkers[1] = "modules transformed.";
+  outputMarkerHeadConfiguration.evidence = {
+    ...outputMarkerHeadConfiguration.evidence,
+    commit: outputMarkerBase,
+    capturedAt: "2026-08-22T00:01:00Z",
+  };
+  writeFileSync(outputMarkerInventoryFile, `${JSON.stringify(outputMarkerHeadInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "rebaseline stable Vite marker"]);
+  const outputMarkerHead = fixtureGit(["rev-parse", "HEAD"]);
+  const runOutputMarkerCli = (args) => execFileSync(
+    "pnpm",
+    ["--dir", path.join(repoRoot, "app"), "exec", "node", path.join(outputMarkerFixtureRoot, "app/scripts/check-warning-ratchet.mjs"), ...args],
+    {
+      cwd: outputMarkerFixtureRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  const outputMarkerResult = await auditOutputMarkerRebaseline({
+    repoRoot: outputMarkerFixtureRoot,
+    baseRef: outputMarkerBase,
+    headRef: outputMarkerHead,
+    configurationId: "frontend-typescript-vite-windows",
+    schema,
+  });
+  assert.equal(outputMarkerResult.configurationId, "frontend-typescript-vite-windows");
+  assert.equal(outputMarkerResult.comparison.base, outputMarkerBase);
+  assert.equal(outputMarkerResult.comparison.head, outputMarkerHead);
+  assert.match(
+    runOutputMarkerCli([
+      "--rebaseline-output-markers",
+      "--base-ref", outputMarkerBase,
+      "--head-ref", outputMarkerHead,
+      "--configuration", "frontend-typescript-vite-windows",
+    ]),
+    /output-marker rebaseline audit ok; inventory was not written/,
+  );
+  fixtureGit(["checkout", "-b", "output-marker-sibling", outputMarkerBase]);
+  writeFileSync(outputMarkerInventoryFile, `${JSON.stringify(outputMarkerHeadInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "sibling output marker inventory"]);
+  const outputMarkerSibling = fixtureGit(["rev-parse", "HEAD"]);
+  assert.throws(
+    () => resolveExplicitAncestorComparison(outputMarkerFixtureRoot, outputMarkerSibling, outputMarkerHead),
+    /base is not an ancestor of head/,
+  );
+  assert.throws(
+    () => resolveExplicitAncestorComparison(outputMarkerFixtureRoot, outputMarkerHead, outputMarkerSibling),
+    /base is not an ancestor of head/,
+  );
+  await assert.rejects(
+    auditOutputMarkerRebaseline({
+      repoRoot: outputMarkerFixtureRoot,
+      baseRef: outputMarkerSibling,
+      headRef: outputMarkerHead,
+      configurationId: "frontend-typescript-vite-windows",
+      schema,
+    }),
+    /base is not an ancestor of head/,
+  );
+  fixtureGit(["checkout", "main"]);
+  writeFileSync(path.join(outputMarkerFixtureRoot, "handoff.md"), "inventory unchanged checkpoint\n");
+  fixtureGit(["add", "handoff.md"]);
+  fixtureGit(["commit", "-m", "normal warning checkpoint"]);
+  const outputMarkerNormalHead = fixtureGit(["rev-parse", "HEAD"]);
+  assert.match(
+    runOutputMarkerCli([
+      "--configuration", "frontend-typescript-vite-windows",
+      "--base-ref", outputMarkerHead,
+      "--head-ref", outputMarkerNormalHead,
+    ]),
+    /warning ratchet ok/,
+  );
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: null, headRef: outputMarkerHead, configurationId: "frontend-typescript-vite-windows", schema }),
+    /requires explicit base and head refs/,
+  );
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerBase, headRef: outputMarkerHead, schema }),
+    /requires an explicit configuration id/,
+  );
+  fixtureGit(["checkout", "-b", "cargo-output-marker-rejection", outputMarkerHead]);
+  const cargoRejectionInventory = structuredClone(outputMarkerHeadInventory);
+  cargoRejectionInventory.configurations.find((candidate) => candidate.id === "windows-default-all-targets")
+    .evidence.capturedAt = "2026-08-22T00:02:00Z";
+  writeFileSync(outputMarkerInventoryFile, `${JSON.stringify(cargoRejectionInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "reject Cargo output marker rebaseline"]);
+  const cargoRejectionHead = fixtureGit(["rev-parse", "HEAD"]);
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerHead, headRef: cargoRejectionHead, configurationId: "windows-default-all-targets", schema }),
+    /only supports an enforced generic configuration/,
+  );
+  fixtureGit(["checkout", "main"]);
+  fixtureGit(["checkout", "-b", "pending-output-marker-rejection", outputMarkerHead]);
+  const pendingRejectionInventory = structuredClone(outputMarkerHeadInventory);
+  pendingRejectionInventory.configurations.find((candidate) => candidate.id === "macos-default-all-targets")
+    .nextAction = "still unavailable in test fixture";
+  writeFileSync(outputMarkerInventoryFile, `${JSON.stringify(pendingRejectionInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "reject pending output marker rebaseline"]);
+  const pendingRejectionHead = fixtureGit(["rev-parse", "HEAD"]);
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerHead, headRef: pendingRejectionHead, configurationId: "macos-default-all-targets", schema }),
+    /only supports an enforced configuration/,
+  );
+  fixtureGit(["checkout", "main"]);
+  fixtureGit(["checkout", "-b", "output-marker-negative-cases", outputMarkerHead]);
+  await assert.rejects(
+    auditOutputMarkerRebaseline({
+      repoRoot: outputMarkerFixtureRoot,
+      baseRef: outputMarkerBase,
+      headRef: outputMarkerHead,
+      configurationId: "frontend-typescript-vite-windows",
+      schema,
+      runConfiguration: async () => ({
+        timedOut: false,
+        outputLimitExceeded: false,
+        exitCode: 0,
+        warningShaped: true,
+        markerCoverage: { ok: true },
+        diagnostics: [],
+      }),
+    }),
+    /warning-shaped output/,
+  );
+
+  const commitOutputMarkerInventory = (next, message) => {
+    writeFileSync(outputMarkerInventoryFile, `${JSON.stringify(next, null, 2)}\n`);
+    fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+    fixtureGit(["commit", "-m", message]);
+    return fixtureGit(["rev-parse", "HEAD"]);
+  };
+  const broadMarkerInventory = structuredClone(outputMarkerHeadInventory);
+  broadMarkerInventory.configurations.find((candidate) => candidate.id === "frontend-typescript-vite-windows")
+    .expectedOutputMarkers[1] = "modules";
+  const broadMarkerHead = commitOutputMarkerInventory(broadMarkerInventory, "reject broad output marker");
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerBase, headRef: broadMarkerHead, configurationId: "frontend-typescript-vite-windows", schema }),
+    /only permits one literal module-count marker/,
+  );
+  const multipleMarkerInventory = structuredClone(outputMarkerHeadInventory);
+  const multipleMarkerConfiguration = multipleMarkerInventory.configurations.find(
+    (candidate) => candidate.id === "frontend-typescript-vite-windows",
+  );
+  multipleMarkerConfiguration.expectedOutputMarkers[0] = "vite v6 building for production...";
+  multipleMarkerConfiguration.expectedOutputMarkers[1] = "modules transformed.";
+  const multipleMarkerHead = commitOutputMarkerInventory(multipleMarkerInventory, "reject multiple output marker changes");
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerBase, headRef: multipleMarkerHead, configurationId: "frontend-typescript-vite-windows", schema }),
+    /only permits one literal module-count marker/,
+  );
+  const emptyMarkerInventory = structuredClone(outputMarkerHeadInventory);
+  emptyMarkerInventory.configurations.find((candidate) => candidate.id === "frontend-typescript-vite-windows")
+    .expectedOutputMarkers = [];
+  const emptyMarkerHead = commitOutputMarkerInventory(emptyMarkerInventory, "reject empty output marker");
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerBase, headRef: emptyMarkerHead, configurationId: "frontend-typescript-vite-windows", schema }),
+    /head inventory validation failed/,
+  );
+  const immutableFieldInventory = structuredClone(outputMarkerHeadInventory);
+  immutableFieldInventory.configurations.find((candidate) => candidate.id === "frontend-typescript-vite-windows")
+    .timeoutMs = 1_001;
+  const immutableFieldHead = commitOutputMarkerInventory(immutableFieldInventory, "reject immutable output marker field");
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerBase, headRef: immutableFieldHead, configurationId: "frontend-typescript-vite-windows", schema }),
+    /changed immutable configuration fields/,
+  );
+  const otherConfigurationInventory = structuredClone(outputMarkerHeadInventory);
+  otherConfigurationInventory.configurations.find((candidate) => candidate.id === "windows-native-release")
+    .evidence.capturedAt = "2026-08-22T00:02:00Z";
+  const otherConfigurationHead = commitOutputMarkerInventory(otherConfigurationInventory, "reject other output marker configuration");
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerBase, headRef: otherConfigurationHead, configurationId: "frontend-typescript-vite-windows", schema }),
+    /changed another configuration/,
+  );
+  const badEvidenceInventory = structuredClone(outputMarkerHeadInventory);
+  badEvidenceInventory.configurations.find((candidate) => candidate.id === "frontend-typescript-vite-windows")
+    .evidence.command = "pnpm unrelated";
+  const badEvidenceHead = commitOutputMarkerInventory(badEvidenceInventory, "reject output marker evidence command");
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerBase, headRef: badEvidenceHead, configurationId: "frontend-typescript-vite-windows", schema }),
+    /evidence\.command must exactly match/,
+  );
+  const badToolchainInventory = structuredClone(outputMarkerHeadInventory);
+  badToolchainInventory.configurations.find((candidate) => candidate.id === "frontend-typescript-vite-windows")
+    .evidence.toolchain = { ...outputMarkerToolchain, node: "toolchain-drift" };
+  const badToolchainHead = commitOutputMarkerInventory(badToolchainInventory, "reject output marker toolchain drift");
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerBase, headRef: badToolchainHead, configurationId: "frontend-typescript-vite-windows", schema }),
+    /toolchain drift for node/,
+  );
+  fixtureGit(["checkout", "-b", "suppression-output-marker-rejection", outputMarkerHead]);
+  writeFileSync(path.join(outputMarkerFixtureRoot, "suppression.rs"), "#[allow(dead_code)]\nfn hidden() {}\n");
+  fixtureGit(["add", "suppression.rs"]);
+  fixtureGit(["commit", "-m", "reject output marker suppression"]);
+  const suppressionHead = fixtureGit(["rev-parse", "HEAD"]);
+  await assert.rejects(
+    auditOutputMarkerRebaseline({
+      repoRoot: outputMarkerFixtureRoot,
+      baseRef: outputMarkerBase,
+      headRef: suppressionHead,
+      configurationId: "frontend-typescript-vite-windows",
+      schema,
+      allowedFiles: ["qa/warnings/warning-inventory.json", "suppression.rs"],
+    }),
+    /found suppression loopholes: rust-allow-or-expect-attribute/,
+  );
+  fixtureGit(["checkout", "-b", "outside-output-marker-rejection", outputMarkerHead]);
+  writeFileSync(path.join(outputMarkerFixtureRoot, "outside.txt"), "not inventory-only\n");
+  fixtureGit(["add", "outside.txt"]);
+  fixtureGit(["commit", "-m", "reject non-inventory output marker file"]);
+  const outsideFileHead = fixtureGit(["rev-parse", "HEAD"]);
+  await assert.rejects(
+    auditOutputMarkerRebaseline({ repoRoot: outputMarkerFixtureRoot, baseRef: outputMarkerBase, headRef: outsideFileHead, configurationId: "frontend-typescript-vite-windows", schema }),
+    /outside inventory\/warning gate scope/,
+  );
+} finally {
+  rmSync(outputMarkerFixtureRoot, { recursive: true, force: true });
+}
 await assert.rejects(
   runCargoConfiguration(spoutConfiguration, repoRoot, { ...process.env, RUSTFLAGS: "-A" + "warnings" }),
   /warning-affecting environment is forbidden/,
@@ -746,4 +1026,4 @@ assert.equal(malformed.invalidJsonLines.length, 1);
 assert.deepEqual(malformed.buildFinished, []);
 assert.deepEqual(parseCargoJsonLines([JSON.stringify({ reason: "build-finished", success: false })], configuration, context).buildFinished, [false]);
 
-console.log("warning ratchet self-tests ok: 61 assertion groups");
+console.log("warning ratchet self-tests ok");

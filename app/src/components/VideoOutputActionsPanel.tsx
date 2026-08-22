@@ -5,63 +5,46 @@ type MaybePromise = void | Promise<unknown>;
 
 type VideoOutputActionsPanelProps = {
   output: VideoOutputSummary;
-  onSetEnabled: (outputId: number, enabled: boolean) => MaybePromise;
-  onSetBlackout: (outputId: number, blackout: boolean) => MaybePromise;
-  onSetOpacity: (outputId: number, opacity: number) => MaybePromise;
-  onFadeOpacity: (outputId: number, opacity: number) => MaybePromise;
-  onPreview: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onOpenWindow: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onSyncWindow: (outputId: number, testPattern?: boolean) => MaybePromise;
-  onRemove: (outputId: number) => MaybePromise;
+  actualOpen: boolean | null;
+  busy: boolean;
+  blocked: boolean;
+  error: string | null;
+  onToggleWindow: (outputId: number, open: boolean) => MaybePromise;
 };
 
+/** The only routine action exposed for a Display output in Setup. */
 export function VideoOutputActionsPanel(props: VideoOutputActionsPanelProps) {
+  if (props.output.kind !== "Display") return null;
+  const actionUnavailable = props.blocked || props.actualOpen === null;
+  const label = props.busy
+    ? props.actualOpen ? "Closing output window…" : "Opening output…"
+    : props.actualOpen ? "Close output window" : "Open/Reopen output";
   return (
-    <div class="buttonRow videoOutputActionDock">
+    <div class="videoOutputActionDock" data-action="display-window">
       <button
-        data-action="toggle-enabled"
-        aria-pressed={props.output.enabled}
-        onClick={() => void props.onSetEnabled(props.output.id, !props.output.enabled)}
+        type="button"
+        class="primary"
+        data-action="set-display-window-open"
+        disabled={actionUnavailable || props.busy}
+        aria-busy={props.busy}
+        onClick={() => {
+          if (props.actualOpen === null) return;
+          void props.onToggleWindow(props.output.id, !props.actualOpen);
+        }}
       >
-        {props.output.enabled ? "Disable" : "Enable"}
+        {label}
       </button>
-      <button
-        data-action="toggle-blackout"
-        aria-pressed={props.output.blackout}
-        onClick={() => void props.onSetBlackout(props.output.id, !props.output.blackout)}
-      >
-        {props.output.blackout ? "Clear" : "Blackout"}
-      </button>
-      <button data-action="toggle-opacity" onClick={() => void props.onSetOpacity(props.output.id, props.output.opacity >= 1 ? 0.5 : 1)}>
-        {props.output.opacity >= 1 ? "Half" : "Full"}
-      </button>
-      <button data-action="fade-out" onClick={() => void props.onFadeOpacity(props.output.id, 0)}>
-        Fade Out
-      </button>
-      <button data-action="fade-in" onClick={() => void props.onFadeOpacity(props.output.id, 1)}>
-        Fade In
-      </button>
-      <button data-action="preview" onClick={() => void props.onPreview(props.output.id)}>
-        Preview
-      </button>
-      <button data-action="preview-pattern" onClick={() => void props.onPreview(props.output.id, true)}>
-        Pattern Preview
-      </button>
-      <Show when={props.output.kind === "Display"}>
-        <button data-action="open-window" onClick={() => void props.onOpenWindow(props.output.id)}>
-          Open Window
-        </button>
-        <button data-action="open-test-pattern" onClick={() => void props.onOpenWindow(props.output.id, true)}>
-          Test Pattern
-        </button>
-        <button data-action="sync-window" onClick={() => void props.onSyncWindow(props.output.id)}>
-          Sync Window
-        </button>
-        <button data-action="sync-pattern" onClick={() => void props.onSyncWindow(props.output.id, true)}>
-          Sync Pattern
-        </button>
+      <small>
+        A native Windows warning may appear when this output targets the editor display.
+      </small>
+      <Show when={props.error}>
+        {(error) => (
+          <div class="videoOutputActionError" role="alert" aria-live="assertive">
+            <strong>Window action failed.</strong>{" "}
+            <span data-no-localize>{error()}</span>
+          </div>
+        )}
       </Show>
-      <button data-action="remove-output" class="danger" onClick={() => void props.onRemove(props.output.id)}>Remove</button>
     </div>
   );
 }

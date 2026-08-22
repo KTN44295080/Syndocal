@@ -39,11 +39,14 @@ type VideoOutputMappingPanelProps = {
   onSetMapping: (outputId: number, mapping: VideoOutputMapping) => MaybePromise;
   onImportBitmapMask: (output: VideoOutputSummary) => MaybePromise;
   onClearBitmapMask: (output: VideoOutputSummary) => MaybePromise;
+  readOnly?: boolean;
 };
 
 export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
-  const patchMapping = (patch: Partial<VideoOutputMapping>) =>
-    props.onSetMapping(props.output.id, { ...props.output.mapping, ...patch });
+  const patchMapping = (patch: Partial<VideoOutputMapping>) => {
+    if (props.readOnly) return;
+    return props.onSetMapping(props.output.id, { ...props.output.mapping, ...patch });
+  };
 
   const setAspectPreset = (aspectRatio: number) =>
     patchMapping({
@@ -80,10 +83,17 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
         <strong>{mappingCorrectionReadout(props.output.mapping)}</strong>
         <span>{mappingReadout(props.output.mapping)}</span>
       </div>
+      <Show when={props.readOnly}>
+        <p class="inlineUnavailable" role="status">
+          Projection mapping/configuration mutation is unavailable until a canonical path exists. This view is read-only.
+        </p>
+      </Show>
+      <fieldset disabled={props.readOnly}>
       <ProjectorMapEditor
         mapping={props.output.mapping}
         outputId={props.output.id}
         label={props.output.label}
+        readOnly={props.readOnly}
         onPatch={(patch) => void patchMapping(patch)}
       />
       <div class="split">
@@ -464,6 +474,7 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
           />
         </label>
       </div>
+      </fieldset>
     </div>
   );
 }
