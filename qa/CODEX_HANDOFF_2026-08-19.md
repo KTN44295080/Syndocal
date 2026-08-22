@@ -3,6 +3,9 @@
 ## Current checkpoint
 
 - Branch: `codex/syndocal-v1.2`
+- Pushed checkpoint HEAD: `4b3781d7e998d70f56d738c64af0fdf473421c51`
+  (`feat: expand two-song guide cues`), with the complete five-commit checkpoint
+  range `486d420..4b3781d` published to `origin/codex/syndocal-v1.2`.
 - Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.3`.
 - **2026-08-22 Windows-only scope:** current completion targets this operator's
   Windows PC. macOS/Linux control/native/warning rows and the six distribution,
@@ -38,7 +41,9 @@
   FileVersion/ProductVersion are both `1.2.0-alpha.3`. PID 102788 supplied exactly
   one responsive `Syndocal` window and was maximized. No feature UI operation was
   repeated; the single full operator/hardware pass remains reserved for final
-  acceptance. The only remaining action for this checkpoint is push.
+  acceptance. The normal warning gate from the reviewed `4120539` baseline to
+  `4b3781d` passed with total/first-party/third-party counts `0/0/0`, and the
+  checkpoint push completed successfully.
 - **2026-08-22 Timeline click gap:** the present Rodio click is a 25 ms polling,
   fixed-4/4 sine-tone implementation. It is not accepted for the show-core. The
   next independent tranche after the real MediaAsset path must add an authored
