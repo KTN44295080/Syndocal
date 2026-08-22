@@ -3,6 +3,11 @@ import type {
   ProjectAuthorityPublicationKind,
   ProjectInputRuntimeStatus,
 } from "./types.ts";
+import type {
+  ProjectRecoveryCheckpoint,
+  ProjectRecoveryIntent,
+  ProjectRecoveryStorageState,
+} from "./projectRecoveryStorage.ts";
 import {
   beginProjectAuthorityApplication,
   projectAuthorityApplicationIsCurrent,
@@ -16,7 +21,10 @@ import {
   projectAuthorityPollPreservesDirtyMappings,
   projectAuthorityReplacementVerdict,
   projectAuthorityTokenIsCurrent,
+  projectRecoveryAcknowledgementApplicationIsCurrent,
+  projectRecoveryAcknowledgementCanClear,
   projectRecoveryIntentDeliveryForAuthority,
+  projectRecoveryIntentStartupAction,
   invalidateProjectAuthorityIdentity,
   type ProjectAuthorityApplication,
   type ProjectAuthorityDispositionState,
@@ -25,6 +33,53 @@ import {
   type ProjectAuthorityReplacementVerdict,
   type ProjectRecoveryIntentToken,
 } from "./projectAuthority.ts";
+
+export type ProjectRecoveryAcknowledgementRequest = {
+  expectedEpoch: number;
+  expectedRevision: number;
+  expectedCheckpointHash: string;
+  expectedAuthorityDispositionGeneration: number;
+  recoveryRequestId: string;
+};
+
+export type ProjectRecoveryIntentConsumerEffects = {
+  getActiveIntent: () => ProjectRecoveryIntent | null;
+  setActiveIntent: (intent: ProjectRecoveryIntent | null) => void;
+  currentAuthority: () => ProjectAuthorityToken;
+  currentRecoverySerial: () => number | null;
+  currentDraftSignature: () => string;
+  expectedDraftSignature: (
+    bundle: ProjectAuthorityBundle,
+    intent: ProjectRecoveryIntent,
+  ) => string;
+  stageDrafts: (
+    bundle: ProjectAuthorityBundle,
+    intent: ProjectRecoveryIntent,
+  ) => string;
+  persistCheckpoint: (intent: ProjectRecoveryIntent, serial: number) => boolean;
+  setRecoveryOffer: (intent: ProjectRecoveryIntent | null) => void;
+  setCheckpointNeedsReplacement: (required: boolean) => void;
+  resetRecoveryCaptureSignature: () => void;
+  tombstone: (serial: number) => void;
+  acknowledge: (
+    request: ProjectRecoveryAcknowledgementRequest,
+  ) => Promise<ProjectAuthorityBundle>;
+  applyAcknowledgementRuntimeStatus: (bundle: ProjectAuthorityBundle) => void;
+  message: (message: string) => void;
+  recoveredMessage: (intent: ProjectRecoveryIntent) => string;
+};
+
+export type ProjectRecoveryIntentConsumer = {
+  consume: (bundle: ProjectAuthorityBundle) => Promise<void>;
+};
+
+export type ProjectRecoveryStartupEffects = {
+  setRecoveryOffer: (checkpoint: ProjectRecoveryCheckpoint | null) => void;
+  setActiveIntent: (intent: ProjectRecoveryIntent) => void;
+  applyReplacement: (bundle: ProjectAuthorityBundle) => ProjectAuthorityReplacementVerdict;
+  currentRuntimeState: () => ProjectAuthorityRuntimeState;
+  consume: (bundle: ProjectAuthorityBundle) => void;
+};
 
 export type ProjectAuthorityBundleApplicationDisposition = "applied" | "duplicate" | "stale";
 
@@ -457,6 +512,136 @@ export const applyPolledProjectAuthorityBundleProduction = (
 };
 
 /**
+ * One browser-recovery handoff can be observed by a Tauri event, the command
+ * reply, or a later authority poll. This controller is the sole production
+ * draft-staging and acknowledgement owner used by App and the E3 restart
+ * driver. Its private single-flight promise prevents duplicate deliveries
+ * from issuing a second acknowledgement.
+ */
+export const createProjectRecoveryIntentConsumerProduction = (
+  effects: ProjectRecoveryIntentConsumerEffects,
+): ProjectRecoveryIntentConsumer => {
+  let inFlight: { intent: ProjectRecoveryIntent; promise: Promise<void> } | null = null;
+
+  const retainAcknowledgedCheckpoint = (
+    intent: ProjectRecoveryIntent,
+    recoveryAuthoritySerial: number,
+  ): boolean => {
+    if (!effects.persistCheckpoint(intent, recoveryAuthoritySerial)) {
+      effects.message(
+        "Recovered project is active, but its crash-recovery checkpoint could not be updated. Keep Syndocal open and save the project.",
+      );
+      return false;
+    }
+    effects.setActiveIntent(null);
+    effects.setCheckpointNeedsReplacement(true);
+    effects.resetRecoveryCaptureSignature();
+    effects.setRecoveryOffer(null);
+    effects.message(effects.recoveredMessage(intent));
+    return true;
+  };
+
+  const consume = (bundle: ProjectAuthorityBundle): Promise<void> => {
+    const intent = effects.getActiveIntent();
+    if (!intent) return Promise.resolve();
+    const delivery = projectRecoveryIntentDeliveryForAuthority(intent, bundle);
+    if (delivery === "keep") return Promise.resolve();
+    if (delivery === "offer") {
+      if (effects.persistCheckpoint(intent, bundle.recovery_authority_serial)) {
+        effects.setActiveIntent(null);
+        effects.setCheckpointNeedsReplacement(false);
+        effects.setRecoveryOffer(intent);
+        effects.message(
+          "Project recovery did not publish. The recovery checkpoint remains available to retry.",
+        );
+      } else {
+        effects.message(
+          "Project recovery did not publish, and browser storage could not be refreshed. Keep Syndocal open and retry recovery.",
+        );
+      }
+      return Promise.resolve();
+    }
+    if (delivery === "invalidate") {
+      effects.setActiveIntent(null);
+      effects.setCheckpointNeedsReplacement(true);
+      effects.resetRecoveryCaptureSignature();
+      effects.setRecoveryOffer(null);
+      effects.tombstone(bundle.recovery_authority_serial);
+      return Promise.resolve();
+    }
+    if (delivery === "acknowledged") {
+      const expectedDraftSignature = effects.expectedDraftSignature(bundle, intent);
+      if (effects.currentDraftSignature() === expectedDraftSignature) {
+        retainAcknowledgedCheckpoint(intent, bundle.recovery_authority_serial);
+      } else {
+        effects.message(
+          "Recovered project acknowledgement arrived after local draft changes. The recovery intent remains available until the project is saved.",
+        );
+      }
+      return Promise.resolve();
+    }
+    if (inFlight?.intent === intent) return inFlight.promise;
+
+    const capturedIntent = intent;
+    const capturedAuthority = authorityToken(bundle);
+    const work = (async () => {
+      if (effects.getActiveIntent() !== capturedIntent
+        || !projectAuthorityTokenIsCurrent(capturedAuthority, effects.currentAuthority())
+        || effects.currentRecoverySerial() !== capturedIntent.expected_target_serial) {
+        return;
+      }
+      const stagedDraftSignature = effects.stageDrafts(bundle, capturedIntent);
+      try {
+        const acknowledged = await effects.acknowledge({
+          expectedEpoch: bundle.project_epoch,
+          expectedRevision: bundle.project_revision,
+          expectedCheckpointHash: bundle.checkpoint_hash,
+          expectedAuthorityDispositionGeneration: bundle.authority_disposition_generation,
+          recoveryRequestId: capturedIntent.request_id,
+        });
+        const acknowledgementApplicationCurrent = projectRecoveryAcknowledgementApplicationIsCurrent(
+          effects.getActiveIntent() === capturedIntent,
+          capturedAuthority,
+          effects.currentAuthority(),
+        );
+        if (!acknowledgementApplicationCurrent) return;
+
+        effects.applyAcknowledgementRuntimeStatus(acknowledged);
+        if (acknowledged.recovery_authority_serial === capturedIntent.expected_target_serial + 1
+          && projectRecoveryAcknowledgementCanClear(
+            stagedDraftSignature,
+            effects.currentDraftSignature(),
+            capturedAuthority,
+            authorityToken(acknowledged),
+            effects.currentAuthority(),
+            acknowledgementApplicationCurrent,
+          )) {
+          retainAcknowledgedCheckpoint(capturedIntent, acknowledged.recovery_authority_serial);
+        } else {
+          // B is still authoritative but local drafts changed while ACK was in
+          // flight. Preserve those drafts and force a coherent replacement
+          // capture instead of clearing browser recovery.
+          effects.setActiveIntent(null);
+          effects.setCheckpointNeedsReplacement(true);
+          effects.resetRecoveryCaptureSignature();
+        }
+      } catch (error) {
+        if (effects.getActiveIntent() === capturedIntent) {
+          effects.message(`Recovered project is waiting for acknowledgement: ${String(error)}`);
+        }
+      }
+    })();
+    const settled = work.finally(() => {
+      if (inFlight?.promise === settled) inFlight = null;
+    });
+    inFlight = { intent: capturedIntent, promise: settled };
+    return settled;
+  };
+
+  return { consume };
+};
+
+/**
  * Compatibility-load guard used by the real post-load fallback path. It is
  * intentionally independent from raw snapshot/history refreshes: once C has
  * advanced either authority or application generation, a late B is stale.
@@ -500,6 +685,50 @@ export const deliverProjectAuthorityStartupRecoveryIntentProduction = (
   if (!projectAuthorityStartupRecoveryDeliveryIsCurrent(state, intent, bundle)) return false;
   consume(bundle);
   return true;
+};
+
+/**
+ * Coherent startup handoff after the native journal status and authority
+ * bundle have selected one v3 browser envelope. App and the E3 restart driver
+ * both use this exact route; no caller independently interprets the stored
+ * intent or invents a duplicate-delivery exception.
+ */
+export const applyProjectRecoveryStartupProduction = (
+  bundle: ProjectAuthorityBundle,
+  stored: ProjectRecoveryStorageState,
+  effects: ProjectRecoveryStartupEffects,
+): "offer" | "resume" | "suppress" => {
+  if (stored.kind === "checkpoint") {
+    effects.setRecoveryOffer(stored.checkpoint);
+    return "offer";
+  }
+  if (stored.kind !== "intent") return "suppress";
+  const startup = projectRecoveryIntentStartupAction(
+    stored.intent,
+    bundle.recovery_authority_serial,
+    bundle.authority_disposition,
+    bundle.recovery_authority_last_transition,
+    bundle.checkpoint_hash,
+  );
+  if (startup === "offer_checkpoint") {
+    effects.setRecoveryOffer(stored.intent.checkpoint);
+    return "offer";
+  }
+  if (startup !== "resume_intent") return "suppress";
+
+  effects.setActiveIntent(stored.intent);
+  const verdict = effects.applyReplacement(bundle);
+  if (verdict === "apply") {
+    effects.consume(bundle);
+  } else if (verdict === "duplicate") {
+    deliverProjectAuthorityStartupRecoveryIntentProduction(
+      effects.currentRuntimeState(),
+      stored.intent,
+      bundle,
+      effects.consume,
+    );
+  }
+  return "resume";
 };
 
 /** Small helper for production tests to reserve an application generation. */

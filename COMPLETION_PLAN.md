@@ -6,7 +6,7 @@
 日々のスライス記録は従来どおり `CLAUDE.md` に追記する。定期的または意味のある進捗チェックポイントでは、関連するロードマップ/リリース/QA文書と引き継ぎを更新し、検証後にコミット・プッシュする。
 
 > **Current authority (2026-08-19):** this file preserves the historical v1.0
-> baseline. The dependency-ordered flow from the active `1.2.0-alpha.4` train to
+> baseline. The dependency-ordered flow from the active `1.2.0-alpha.5` train to
 > truthful completion is `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. Its current
 > version, warning, commit/push, AI3, ASIO, native/hardware, legal, and clean-machine
 > gates override historical resume instructions in this file.

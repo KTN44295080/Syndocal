@@ -115,6 +115,7 @@ mod control_plane;
 mod control_plane_query;
 mod control_plane_runtime;
 mod dvc_import;
+mod e3_native_acceptance;
 mod ndi_transport;
 mod output_lease;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -18017,6 +18018,55 @@ fn lock_project_transaction_owner_lifecycle_admission<'a>(
     Ok(guard)
 }
 
+/// Admit a legacy renderer-ticketed mutation after `Begin` has armed the
+/// shared project flag. These commands predate server-authoritative receipts,
+/// so their exact ticket is carried in the command arguments and bound here to
+/// the invoking WebView, owner incarnation, epoch, and command name. An active
+/// flag without a pending ticket is the Display publication reservation and
+/// remains fail-closed.
+fn lock_renderer_ticketed_project_mutation<'a>(
+    state: &'a AppState,
+    window_label: &str,
+    command_name: &str,
+    transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &str,
+) -> Result<
+    (
+        std::sync::MutexGuard<'a, ()>,
+        std::sync::MutexGuard<'a, ProjectCoordinator>,
+        ProjectTransactionLaneGuard,
+    ),
+    String,
+> {
+    let external_admission = lock_project_transaction_owner_lifecycle_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    if !state.project_transaction_active.load(Ordering::Acquire) {
+        return Err("Project transaction ticket is no longer active".to_string());
+    }
+    if coordinator.history.pending.is_empty() {
+        return Err(
+            "Project transaction is active; retry after Display output publication".to_string(),
+        );
+    }
+    let owner_id = normalize_project_transaction_owner_id(owner_id.to_string())?;
+    let pending = project_transaction_for_owner_epoch(
+        &coordinator,
+        transaction_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+    ensure_project_transaction_pending_binding(state, &pending, window_label, &owner_id)?;
+    if pending.command_name != command_name {
+        return Err(format!(
+            "Project transaction {transaction_id} belongs to command '{}' rather than '{command_name}'",
+            pending.command_name
+        ));
+    }
+    let transaction_admission = admit_project_transaction_command(state, &pending)?;
+    Ok((external_admission, coordinator, transaction_admission))
+}
+
 fn lock_project_external_command_admission_inner<'a>(
     state: &'a AppState,
     allow_active_display_finalize: bool,
@@ -20089,12 +20139,52 @@ fn set_group_fixture_limits(
 
 #[tauri::command]
 fn set_fixture_groups(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     fixture_id: FixtureId,
     group_ids: Vec<String>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<(), String> {
+    set_fixture_groups_for_window_label(
+        &state,
+        fixture_id,
+        group_ids,
+        RendererTicketedProjectMutationContext {
+            window_label: window.label(),
+            project_transaction_id,
+            expected_epoch,
+            owner_id: &owner_id,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct RendererTicketedProjectMutationContext<'a> {
+    window_label: &'a str,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &'a str,
+}
+
+fn set_fixture_groups_for_window_label(
+    state: &AppState,
+    fixture_id: FixtureId,
+    group_ids: Vec<String>,
+    context: RendererTicketedProjectMutationContext<'_>,
 ) -> Result<(), String> {
     let group_ids = normalize_group_ids(group_ids)?;
-    validate_fixture_group_memberships(&state, &group_ids)?;
+    let (_external_admission, coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            context.window_label,
+            "set_fixture_groups",
+            context.project_transaction_id,
+            context.expected_epoch,
+            context.owner_id,
+        )?;
+    validate_fixture_group_memberships_against(&coordinator.ancillary.fixture_groups, &group_ids)?;
     state
         .engine
         .send(EngineCommand::SetFixtureGroups {
@@ -20293,14 +20383,6 @@ fn commit_direct_project_ancillary_mutation_after_preflight(
     commit_project_swap_ancillary_state_after_preflight(state, &coordinator.ancillary);
 }
 
-fn validate_fixture_group_memberships(
-    state: &State<'_, AppState>,
-    group_ids: &[String],
-) -> Result<(), String> {
-    let coordinator = lock_project_coordinator(state)?;
-    validate_fixture_group_memberships_against(&coordinator.ancillary.fixture_groups, group_ids)
-}
-
 fn validate_fixture_group_memberships_against(
     groups: &[FixtureGroupSummary],
     group_ids: &[String],
@@ -20334,15 +20416,47 @@ fn get_fixture_groups(state: State<'_, AppState>) -> Result<Vec<FixtureGroupSumm
 
 #[tauri::command]
 fn create_fixture_group(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     label: String,
     color: Option<String>,
     fixture_ids: Vec<FixtureId>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<FixtureGroupSummary, String> {
+    create_fixture_group_for_window_label(
+        &state,
+        label,
+        color,
+        fixture_ids,
+        RendererTicketedProjectMutationContext {
+            window_label: window.label(),
+            project_transaction_id,
+            expected_epoch,
+            owner_id: &owner_id,
+        },
+    )
+}
+
+fn create_fixture_group_for_window_label(
+    state: &AppState,
+    label: String,
+    color: Option<String>,
+    fixture_ids: Vec<FixtureId>,
+    context: RendererTicketedProjectMutationContext<'_>,
 ) -> Result<FixtureGroupSummary, String> {
     let label = normalize_fixture_group_label(label)?;
     let color = normalize_fixture_group_color(color)?;
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    let (_external_admission, mut coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            context.window_label,
+            "create_fixture_group",
+            context.project_transaction_id,
+            context.expected_epoch,
+            context.owner_id,
+        )?;
     let snapshot = state.engine.persistence_snapshot()?;
     let fixture_ids = fixture_ids.into_iter().collect::<HashSet<_>>();
     if let Some(fixture_id) = fixture_ids.iter().find(|fixture_id| {
@@ -20391,25 +20505,55 @@ fn create_fixture_group(
     candidate_ancillary.fixture_group_delete_undo = None;
     let published_snapshot = candidate_snapshot.clone();
     let prepared = publish_direct_project_ancillary_mutation(
-        &state,
+        state,
         &coordinator,
         candidate_snapshot,
         candidate_ancillary,
         || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
     )?;
-    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
     Ok(group)
 }
 
 #[tauri::command]
 fn rename_fixture_group(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     group_id: String,
     label: String,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<FixtureGroupSummary, String> {
+    rename_fixture_group_for_window_label(
+        &state,
+        group_id,
+        label,
+        RendererTicketedProjectMutationContext {
+            window_label: window.label(),
+            project_transaction_id,
+            expected_epoch,
+            owner_id: &owner_id,
+        },
+    )
+}
+
+fn rename_fixture_group_for_window_label(
+    state: &AppState,
+    group_id: String,
+    label: String,
+    context: RendererTicketedProjectMutationContext<'_>,
 ) -> Result<FixtureGroupSummary, String> {
     let label = normalize_fixture_group_label(label)?;
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    let (_external_admission, mut coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            context.window_label,
+            "rename_fixture_group",
+            context.project_transaction_id,
+            context.expected_epoch,
+            context.owner_id,
+        )?;
     if coordinator
         .ancillary
         .fixture_groups
@@ -20429,25 +20573,55 @@ fn rename_fixture_group(
     let candidate_snapshot = state.engine.persistence_snapshot()?;
     let published_snapshot = candidate_snapshot.clone();
     let prepared = publish_direct_project_ancillary_mutation(
-        &state,
+        state,
         &coordinator,
         candidate_snapshot,
         candidate_ancillary,
         || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
     )?;
-    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
     Ok(group)
 }
 
 #[tauri::command]
 fn recolor_fixture_group(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     group_id: String,
     color: Option<String>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<FixtureGroupSummary, String> {
+    recolor_fixture_group_for_window_label(
+        &state,
+        group_id,
+        color,
+        RendererTicketedProjectMutationContext {
+            window_label: window.label(),
+            project_transaction_id,
+            expected_epoch,
+            owner_id: &owner_id,
+        },
+    )
+}
+
+fn recolor_fixture_group_for_window_label(
+    state: &AppState,
+    group_id: String,
+    color: Option<String>,
+    context: RendererTicketedProjectMutationContext<'_>,
 ) -> Result<FixtureGroupSummary, String> {
     let color = normalize_fixture_group_color(color)?;
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    let (_external_admission, mut coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            context.window_label,
+            "recolor_fixture_group",
+            context.project_transaction_id,
+            context.expected_epoch,
+            context.owner_id,
+        )?;
     if !coordinator
         .ancillary
         .fixture_groups
@@ -20477,23 +20651,52 @@ fn recolor_fixture_group(
     let group = group.clone();
     let published_snapshot = candidate_snapshot.clone();
     let prepared = publish_direct_project_ancillary_mutation(
-        &state,
+        state,
         &coordinator,
         candidate_snapshot,
         candidate_ancillary,
         || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
     )?;
-    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
     Ok(group)
 }
 
 #[tauri::command]
 fn delete_fixture_group(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     group_id: String,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
 ) -> Result<FixtureGroupSummary, String> {
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    delete_fixture_group_for_window_label(
+        &state,
+        window.label(),
+        group_id,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+    )
+}
+
+fn delete_fixture_group_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    group_id: String,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &str,
+) -> Result<FixtureGroupSummary, String> {
+    let (_external_admission, mut coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            window_label,
+            "delete_fixture_group",
+            project_transaction_id,
+            expected_epoch,
+            owner_id,
+        )?;
     let (group_index, group) = coordinator
         .ancillary
         .fixture_groups
@@ -20530,22 +20733,49 @@ fn delete_fixture_group(
     });
     let published_snapshot = candidate_snapshot.clone();
     let prepared = publish_direct_project_ancillary_mutation(
-        &state,
+        state,
         &coordinator,
         candidate_snapshot,
         candidate_ancillary,
         || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
     )?;
-    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
     Ok(group)
 }
 
 #[tauri::command]
 fn undo_delete_fixture_group(
+    window: WebviewWindow,
     state: State<'_, AppState>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
 ) -> Result<Option<FixtureGroupSummary>, String> {
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    undo_delete_fixture_group_for_window_label(
+        &state,
+        window.label(),
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+    )
+}
+
+fn undo_delete_fixture_group_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &str,
+) -> Result<Option<FixtureGroupSummary>, String> {
+    let (_external_admission, mut coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            window_label,
+            "undo_delete_fixture_group",
+            project_transaction_id,
+            expected_epoch,
+            owner_id,
+        )?;
     let deleted = coordinator.ancillary.fixture_group_delete_undo.clone();
     let Some(deleted) = deleted else {
         return Ok(None);
@@ -20599,13 +20829,13 @@ fn undo_delete_fixture_group(
     candidate_ancillary.fixture_group_delete_undo = None;
     let published_snapshot = candidate_snapshot.clone();
     let prepared = publish_direct_project_ancillary_mutation(
-        &state,
+        state,
         &coordinator,
         candidate_snapshot,
         candidate_ancillary,
         || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
     )?;
-    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
     Ok(Some(deleted.group))
 }
 
@@ -25678,9 +25908,32 @@ fn set_cue_color(
 
 #[tauri::command]
 fn set_group_color(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     group_id: String,
     color: Option<String>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<(), String> {
+    set_group_color_for_window_label(
+        &state,
+        group_id,
+        color,
+        RendererTicketedProjectMutationContext {
+            window_label: window.label(),
+            project_transaction_id,
+            expected_epoch,
+            owner_id: &owner_id,
+        },
+    )
+}
+
+fn set_group_color_for_window_label(
+    state: &AppState,
+    group_id: String,
+    color: Option<String>,
+    context: RendererTicketedProjectMutationContext<'_>,
 ) -> Result<(), String> {
     if group_id.trim().is_empty() {
         return Err("Group id is required".to_string());
@@ -25689,8 +25942,15 @@ fn set_group_color(
         validate_video_cue_point_color(color)?;
     }
     let color = normalize_fixture_group_color(color)?;
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    let (_external_admission, mut coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            context.window_label,
+            "set_group_color",
+            context.project_transaction_id,
+            context.expected_epoch,
+            context.owner_id,
+        )?;
     let affects_project_groups = coordinator
         .ancillary
         .fixture_groups
@@ -25718,13 +25978,13 @@ fn set_group_color(
     }
     let published_snapshot = candidate_snapshot.clone();
     let prepared = publish_direct_project_ancillary_mutation(
-        &state,
+        state,
         &coordinator,
         candidate_snapshot,
         candidate_ancillary,
         || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
     )?;
-    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
     Ok(())
 }
 
@@ -38989,9 +39249,42 @@ fn get_operator_policy(state: State<'_, AppState>) -> Result<Option<OperatorPoli
 }
 
 #[tauri::command]
-fn set_operator_policy(state: State<'_, AppState>, policy: OperatorPolicy) -> Result<(), String> {
+fn set_operator_policy(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    policy: OperatorPolicy,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<(), String> {
+    set_operator_policy_for_window_label(
+        &state,
+        window.label(),
+        policy,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+    )
+}
+
+fn set_operator_policy_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    policy: OperatorPolicy,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &str,
+) -> Result<(), String> {
     validate_operator_policy(&policy)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    let (_external_admission, mut coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            window_label,
+            "set_operator_policy",
+            project_transaction_id,
+            expected_epoch,
+            owner_id,
+        )?;
     // Preflight the legacy compatibility mirror before producing a candidate;
     // after the authoritative assignment this path must not return an error.
     drop(
@@ -39003,12 +39296,12 @@ fn set_operator_policy(state: State<'_, AppState>, policy: OperatorPolicy) -> Re
     let mut candidate_ancillary = coordinator.ancillary.clone();
     candidate_ancillary.operator_policy = Some(policy);
     let prepared = prepare_direct_project_ancillary_mutation(
-        &state,
+        state,
         &coordinator,
         state.engine.persistence_snapshot()?,
         candidate_ancillary,
     )?;
-    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
     *state
         .operator_policy
         .lock()
@@ -39018,8 +39311,38 @@ fn set_operator_policy(state: State<'_, AppState>, policy: OperatorPolicy) -> Re
 }
 
 #[tauri::command]
-fn clear_operator_policy(state: State<'_, AppState>) -> Result<(), String> {
-    let mut coordinator = lock_project_coordinator(&state)?;
+fn clear_operator_policy(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<(), String> {
+    clear_operator_policy_for_window_label(
+        &state,
+        window.label(),
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+    )
+}
+
+fn clear_operator_policy_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &str,
+) -> Result<(), String> {
+    let (_external_admission, mut coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            window_label,
+            "clear_operator_policy",
+            project_transaction_id,
+            expected_epoch,
+            owner_id,
+        )?;
     drop(
         state
             .operator_policy
@@ -39029,12 +39352,12 @@ fn clear_operator_policy(state: State<'_, AppState>) -> Result<(), String> {
     let mut candidate_ancillary = coordinator.ancillary.clone();
     candidate_ancillary.operator_policy = None;
     let prepared = prepare_direct_project_ancillary_mutation(
-        &state,
+        state,
         &coordinator,
         state.engine.persistence_snapshot()?,
         candidate_ancillary,
     )?;
-    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
     *state
         .operator_policy
         .lock()
@@ -44021,12 +44344,28 @@ fn advance_project_recovery_authority_serial_before_publication(
 ) -> Result<u64, String> {
     let app = project_swap_app_handle(state)?;
     let path = project_recovery_authority_state_path(&app)?;
-    let next = prepare_next_project_recovery_authority_serial(
-        coordinator.recovery_authority_serial,
-        last_transition.clone(),
+    advance_project_recovery_authority_serial_with_persist(
+        coordinator,
+        last_transition,
         |next, transition| {
             persist_project_recovery_authority_serial_to_path(&path, next, transition)
         },
+    )
+}
+
+/// Exact durable serial/transition commit shared by registered recovery
+/// commands and the process-boundary E3 harness. The caller supplies only the
+/// persistence destination; checked serial allocation and the live
+/// coordinator commit remain the production implementation.
+fn advance_project_recovery_authority_serial_with_persist(
+    coordinator: &mut ProjectCoordinator,
+    last_transition: ProjectRecoveryAuthorityTransition,
+    persist: impl FnOnce(u64, ProjectRecoveryAuthorityTransition) -> Result<(), String>,
+) -> Result<u64, String> {
+    let next = prepare_next_project_recovery_authority_serial(
+        coordinator.recovery_authority_serial,
+        last_transition.clone(),
+        persist,
     )?;
     coordinator.recovery_authority_serial = next;
     coordinator.recovery_authority_last_transition = last_transition;
@@ -44352,6 +44691,22 @@ fn load_and_reconcile_project_recovery_authority_state_from_path(
         path,
         strong_target_file_digest,
     )
+}
+
+/// Startup's durable recovery installation boundary. A fresh process adopts
+/// only the reconciled serial/tag pair; no prior runtime project image or
+/// disposition is inferred from the journal.
+fn install_project_recovery_authority_from_path(
+    state: &AppState,
+    path: &Path,
+) -> Result<ProjectRecoveryAuthorityStatus, String> {
+    let recovery_authority = load_and_reconcile_project_recovery_authority_state_from_path(path)?;
+    let mut coordinator = state.project_coordinator.lock().map_err(|_| {
+        "Project coordinator lock was poisoned during recovery authority initialization".to_string()
+    })?;
+    coordinator.recovery_authority_serial = recovery_authority.recovery_authority_serial;
+    coordinator.recovery_authority_last_transition = recovery_authority.last_transition.clone();
+    Ok(recovery_authority)
 }
 
 /// Reconciliation core with the target-digest step exposed as an injectable
@@ -46746,6 +47101,58 @@ fn load_project_checkpoint(
     expected_recovery_authority_serial: u64,
     recovery_request_id: String,
 ) -> Result<ProjectLoadResult, String> {
+    let app = project_swap_app_handle(&state)?;
+    let platform = WryProjectReplacementPlatform { app };
+    load_project_checkpoint_core(
+        &state,
+        project,
+        label,
+        current_path,
+        expected_recovery_authority_serial,
+        recovery_request_id,
+        &platform,
+    )
+}
+
+/// Registered recovery-load service boundary. The Wry command and the E3
+/// process-restart driver share this complete path: candidate preparation,
+/// external-command lifecycle/standby stop, output retirement, engine
+/// publication, coordinator commit, durable authority journal, and event.
+fn load_project_checkpoint_core<Platform: ProjectReplacementPlatform>(
+    state: &AppState,
+    project: Value,
+    label: String,
+    current_path: Option<String>,
+    expected_recovery_authority_serial: u64,
+    recovery_request_id: String,
+    platform: &Platform,
+) -> Result<ProjectLoadResult, String> {
+    let prepared = prepare_project_recovery_load(
+        project,
+        label,
+        current_path,
+        expected_recovery_authority_serial,
+        recovery_request_id,
+    )?;
+    replace_prepared_project_snapshot_with_platform(
+        state,
+        prepared,
+        ProjectSnapshotReplacementScope::ExternalCaller,
+        None,
+        platform,
+    )
+}
+
+/// Registered-command preparation boundary. Intent source serial/request
+/// validation and RecoveryPendingAck ownership live here so the E3 driver can
+/// exercise the same candidate before the Wry-only output retirement shell.
+fn prepare_project_recovery_load(
+    project: Value,
+    label: String,
+    current_path: Option<String>,
+    expected_recovery_authority_serial: u64,
+    recovery_request_id: String,
+) -> Result<PreparedProjectLoad, String> {
     let current_path = current_path.map(PathBuf::from);
     if let Some(path) = current_path.as_deref() {
         if !is_syndocal_project_path(path) {
@@ -46766,12 +47173,7 @@ fn load_project_checkpoint(
         source_serial: expected_recovery_authority_serial,
         request_id: request_id.to_string(),
     });
-    replace_prepared_project_snapshot(
-        &state,
-        prepared,
-        ProjectSnapshotReplacementScope::ExternalCaller,
-        None,
-    )
+    Ok(prepared)
 }
 
 /// Browser recovery drafts are local-only and are applied after the fenced
@@ -46779,6 +47181,95 @@ fn load_project_checkpoint(
 /// them: the originating frontend explicitly acknowledges success against the
 /// exact authority/disposition token, then this durable state changes to the
 /// normal unsaved-project interpretation for poll/event-loss convergence.
+fn pause_e3_native_acceptance_after_durable_authority(
+    state: &AppState,
+    app: Option<&tauri::AppHandle>,
+    phase: e3_native_acceptance::E3NativeAcceptancePhase,
+    authority: &ProjectAuthorityBundle,
+) -> Result<(), String> {
+    let Some(config) = e3_native_acceptance::config_from_environment()? else {
+        // The normal product path performs no app-handle lookup, journal I/O,
+        // output-registry lock, trace write, sleep, or extra state mutation.
+        return Ok(());
+    };
+    let owned_app = if app.is_none() {
+        Some(project_swap_app_handle(state)?)
+    } else {
+        None
+    };
+    let app = app
+        .or(owned_app.as_ref())
+        .ok_or_else(|| "E3 acceptance application handle is unavailable".to_string())?;
+    let journal_path = project_recovery_authority_state_path(app)?;
+    let journal = load_project_recovery_authority_state_from_path(&journal_path)?;
+    if journal.serial != authority.recovery_authority_serial
+        || journal.last_transition != authority.recovery_authority_last_transition
+    {
+        return Err(
+            "E3 acceptance durable journal does not match the published recovery authority"
+                .to_string(),
+        );
+    }
+    let (source_serial, request_id, target_checkpoint_hash) = match (
+        phase,
+        &authority.recovery_authority_last_transition,
+    ) {
+        (
+            e3_native_acceptance::E3NativeAcceptancePhase::RecoveryPublicationCommittedBeforeEvent,
+            ProjectRecoveryAuthorityTransition::RecoveryPublication {
+                source_serial,
+                request_id,
+                target_checkpoint_hash,
+            },
+        ) => (
+            *source_serial,
+            request_id.clone(),
+            target_checkpoint_hash.clone(),
+        ),
+        (
+            e3_native_acceptance::E3NativeAcceptancePhase::RecoveryAcknowledgedBeforeReply,
+            ProjectRecoveryAuthorityTransition::RecoveryAcknowledged {
+                recovery_publication_serial,
+                request_id,
+                target_checkpoint_hash,
+            },
+        ) => (
+            *recovery_publication_serial,
+            request_id.clone(),
+            target_checkpoint_hash.clone(),
+        ),
+        _ => {
+            return Err(
+                "E3 acceptance phase does not match the durable recovery transition".to_string(),
+            )
+        }
+    };
+    let target_serial = authority.recovery_authority_serial;
+    if source_serial.checked_add(1) != Some(target_serial)
+        || target_checkpoint_hash != authority.checkpoint_hash
+    {
+        return Err(
+            "E3 acceptance recovery transition is not bound to the published authority".to_string(),
+        );
+    }
+    let incarnation = state
+        .output_lease_registry
+        .lock()
+        .map_err(|_| "Output lease registry lock was poisoned".to_string())?
+        .process_session_incarnation();
+    let trace = e3_native_acceptance::E3NativeAcceptanceTrace::new(
+        phase,
+        std::process::id(),
+        incarnation,
+        request_id,
+        source_serial,
+        target_serial,
+        target_checkpoint_hash,
+        journal.serial,
+    )?;
+    e3_native_acceptance::pause_with_config(Some(&config), trace)
+}
+
 #[tauri::command]
 fn acknowledge_project_recovery_applied(
     state: State<'_, AppState>,
@@ -46788,8 +47279,113 @@ fn acknowledge_project_recovery_applied(
     expected_authority_disposition_generation: u64,
     recovery_request_id: String,
 ) -> Result<ProjectAuthorityBundle, String> {
+    acknowledge_project_recovery_applied_service_with_acceptance(
+        &state,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        expected_authority_disposition_generation,
+        recovery_request_id,
+        advance_project_recovery_authority_serial_before_publication,
+        |authority| {
+            if let Err(error) = pause_e3_native_acceptance_after_durable_authority(
+                &state,
+                None,
+                e3_native_acceptance::E3NativeAcceptancePhase::RecoveryAcknowledgedBeforeReply,
+                authority,
+            ) {
+                eprintln!("E3 native acceptance fault after durable acknowledgement: {error}");
+            }
+            Ok(())
+        },
+    )
+}
+
+fn acknowledge_project_recovery_applied_service_with_acceptance<Advance, Pause>(
+    state: &AppState,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    expected_authority_disposition_generation: u64,
+    recovery_request_id: String,
+    advance: Advance,
+    pause_after_durable_ack: Pause,
+) -> Result<ProjectAuthorityBundle, String>
+where
+    Advance: FnOnce(
+        &AppState,
+        &mut ProjectCoordinator,
+        ProjectRecoveryAuthorityTransition,
+    ) -> Result<u64, String>,
+    Pause: FnOnce(&ProjectAuthorityBundle) -> Result<(), String>,
+{
+    let authority = acknowledge_project_recovery_applied_service(
+        state,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        expected_authority_disposition_generation,
+        recovery_request_id,
+        advance,
+    )?;
+    // This is deliberately outside the coordinator/admission guards. The
+    // durable RecoveryAcknowledged transition and disposition commit are
+    // complete, while the registered command has not returned and therefore
+    // the frontend cannot have started acknowledgement cleanup from its reply.
+    pause_after_durable_ack(&authority)?;
+    Ok(authority)
+}
+
+fn acknowledge_project_recovery_applied_service<Advance>(
+    state: &AppState,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    expected_authority_disposition_generation: u64,
+    recovery_request_id: String,
+    advance: Advance,
+) -> Result<ProjectAuthorityBundle, String>
+where
+    Advance: FnOnce(
+        &AppState,
+        &mut ProjectCoordinator,
+        ProjectRecoveryAuthorityTransition,
+    ) -> Result<u64, String>,
+{
     let _external_admission = lock_project_external_command_admission(&state)?;
     let mut coordinator = lock_project_coordinator(&state)?;
+    acknowledge_project_recovery_applied_core(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        expected_authority_disposition_generation,
+        recovery_request_id,
+        advance,
+    )
+}
+
+/// Registered acknowledgement command core. The injected durable advance is
+/// the sole Wry/path boundary; every CAS, request/hash binding, serial update,
+/// disposition commit, and returned authority bundle is the production path.
+fn acknowledge_project_recovery_applied_core<Advance>(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    expected_authority_disposition_generation: u64,
+    recovery_request_id: String,
+    advance: Advance,
+) -> Result<ProjectAuthorityBundle, String>
+where
+    Advance: FnOnce(
+        &AppState,
+        &mut ProjectCoordinator,
+        ProjectRecoveryAuthorityTransition,
+    ) -> Result<u64, String>,
+{
     ensure_no_pending_project_transaction(&coordinator)?;
     if coordinator.epoch != expected_epoch
         || coordinator.revision != expected_revision
@@ -46827,9 +47423,9 @@ fn acknowledge_project_recovery_applied(
     let next_generation =
         checked_project_authority_disposition_generation_after_change(&coordinator)?;
     let recovery_publication_serial = coordinator.recovery_authority_serial;
-    advance_project_recovery_authority_serial_before_publication(
-        &state,
-        &mut coordinator,
+    advance(
+        state,
+        coordinator,
         ProjectRecoveryAuthorityTransition::RecoveryAcknowledged {
             recovery_publication_serial,
             request_id: publication_request_id,
@@ -46837,13 +47433,13 @@ fn acknowledge_project_recovery_applied(
         },
     )?;
     commit_project_authority_disposition_after_preflight(
-        &mut coordinator,
+        coordinator,
         next_generation,
         ProjectAuthorityDisposition::UnsavedReplacement,
     );
     Ok(project_authority_bundle_from_coordinator(
-        &state,
-        &coordinator,
+        state,
+        coordinator,
     ))
 }
 
@@ -47463,6 +48059,44 @@ fn replace_prepared_project_snapshot(
     )
 }
 
+fn replace_prepared_project_snapshot_with_platform<Platform: ProjectReplacementPlatform>(
+    state: &AppState,
+    prepared: PreparedProjectLoad,
+    scope: ProjectSnapshotReplacementScope,
+    abort_before_publication: Option<&AtomicBool>,
+    platform: &Platform,
+) -> Result<ProjectLoadResult, String> {
+    if scope == ProjectSnapshotReplacementScope::ExternalCaller {
+        let _lifecycle_guard = lock_standby_sync_lifecycle_for_project_swap(state)?;
+        return run_project_snapshot_replacement_scope(
+            scope,
+            || stop_standby_sync_for_project_swap(state),
+            || {
+                replace_prepared_project_snapshot_after_standby_stop_with_platform(
+                    state,
+                    prepared,
+                    scope,
+                    abort_before_publication,
+                    platform,
+                )
+            },
+        );
+    }
+    run_project_snapshot_replacement_scope(
+        scope,
+        || Ok(()),
+        || {
+            replace_prepared_project_snapshot_after_standby_stop_with_platform(
+                state,
+                prepared,
+                scope,
+                abort_before_publication,
+                platform,
+            )
+        },
+    )
+}
+
 fn run_project_snapshot_replacement_scope<Stop, Replace, T>(
     scope: ProjectSnapshotReplacementScope,
     stop_and_join: Stop,
@@ -47504,6 +48138,26 @@ fn replace_prepared_project_snapshot_after_standby_stop(
     scope: ProjectSnapshotReplacementScope,
     abort_before_publication: Option<&AtomicBool>,
 ) -> Result<ProjectLoadResult, String> {
+    let app = project_swap_app_handle(state)?;
+    let platform = WryProjectReplacementPlatform { app };
+    replace_prepared_project_snapshot_after_standby_stop_with_platform(
+        state,
+        prepared,
+        scope,
+        abort_before_publication,
+        &platform,
+    )
+}
+
+fn replace_prepared_project_snapshot_after_standby_stop_with_platform<
+    Platform: ProjectReplacementPlatform,
+>(
+    state: &AppState,
+    prepared: PreparedProjectLoad,
+    scope: ProjectSnapshotReplacementScope,
+    abort_before_publication: Option<&AtomicBool>,
+    platform: &Platform,
+) -> Result<ProjectLoadResult, String> {
     // External callbacks/remote control can never enqueue between input
     // retirement, the fenced publication and the authoritative coordinator
     // commit.  This must precede the coordinator (see callback helper).
@@ -47518,7 +48172,7 @@ fn replace_prepared_project_snapshot_after_standby_stop(
     } else {
         ProjectReplacementCoordinatorEffect::IdentitySwap
     };
-    replace_prepared_project_snapshot_with_coordinator(
+    replace_prepared_project_snapshot_with_coordinator_and_platform(
         state,
         prepared,
         &mut coordinator,
@@ -47533,6 +48187,7 @@ fn replace_prepared_project_snapshot_after_standby_stop(
         },
         |_, _, _| (),
         None,
+        platform,
     )
     .map(|(result, (), _)| result)
 }
@@ -47634,9 +48289,119 @@ fn replace_prepared_project_snapshot_with_expected_output_fence(
 /// authoritative local commit have finished.  This makes the baseline for a
 /// later serialized replacement the project actually published by its
 /// predecessor, not a stale pre-lock observation.
+trait ProjectReplacementPlatform {
+    fn advance_recovery_authority(
+        &self,
+        state: &AppState,
+        coordinator: &mut ProjectCoordinator,
+        transition: ProjectRecoveryAuthorityTransition,
+    ) -> Result<u64, String>;
+
+    fn fence_and_retire_outputs(&self, state: &AppState) -> Result<(), String>;
+
+    #[cfg(test)]
+    fn observe_engine_publication(&self, _state: &AppState) {}
+
+    #[cfg(test)]
+    fn observe_coordinator_commit(
+        &self,
+        _state: &AppState,
+        _coordinator: &ProjectCoordinator,
+        _result: &ProjectLoadResult,
+    ) {
+    }
+
+    /// E3 acceptance-only boundary: the engine image and coordinator are
+    /// committed and the RecoveryPublication journal is durable, but neither
+    /// the authority event nor the registered command reply has escaped.
+    /// Normal platforms remain a zero-cost no-op unless the explicit
+    /// machine-local acceptance environment is configured.
+    fn pause_after_recovery_commit_before_event(
+        &self,
+        _state: &AppState,
+        _result: &ProjectLoadResult,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn emit_authority_event(
+        &self,
+        coordinator_effect: ProjectReplacementCoordinatorEffect,
+        result: &ProjectLoadResult,
+    );
+}
+
+struct WryProjectReplacementPlatform {
+    app: tauri::AppHandle,
+}
+
+impl ProjectReplacementPlatform for WryProjectReplacementPlatform {
+    fn advance_recovery_authority(
+        &self,
+        _state: &AppState,
+        coordinator: &mut ProjectCoordinator,
+        transition: ProjectRecoveryAuthorityTransition,
+    ) -> Result<u64, String> {
+        let path = project_recovery_authority_state_path(&self.app)?;
+        advance_project_recovery_authority_serial_with_persist(
+            coordinator,
+            transition,
+            |serial, transition| {
+                persist_project_recovery_authority_serial_to_path(&path, serial, transition)
+            },
+        )
+    }
+
+    fn fence_and_retire_outputs(&self, state: &AppState) -> Result<(), String> {
+        fence_and_retire_project_swap_output_resources(&self.app, state)
+    }
+
+    fn pause_after_recovery_commit_before_event(
+        &self,
+        state: &AppState,
+        result: &ProjectLoadResult,
+    ) -> Result<(), String> {
+        let Some(authority) = result.authority.as_ref() else {
+            return Ok(());
+        };
+        if authority.authority_disposition != ProjectAuthorityDisposition::RecoveryPendingAck {
+            return Ok(());
+        }
+        if !matches!(
+            authority.recovery_authority_last_transition,
+            ProjectRecoveryAuthorityTransition::RecoveryPublication { .. }
+        ) {
+            return Ok(());
+        }
+        if let Err(error) = pause_e3_native_acceptance_after_durable_authority(
+            state,
+            Some(&self.app),
+            e3_native_acceptance::E3NativeAcceptancePhase::RecoveryPublicationCommittedBeforeEvent,
+            authority,
+        ) {
+            eprintln!("E3 native acceptance fault after recovery publication: {error}");
+        }
+        Ok(())
+    }
+
+    fn emit_authority_event(
+        &self,
+        coordinator_effect: ProjectReplacementCoordinatorEffect,
+        result: &ProjectLoadResult,
+    ) {
+        if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
+            let _ = self
+                .app
+                .emit(PROJECT_AUTHORITY_REPLACED_EVENT, result.clone());
+        } else {
+            let _ = self.app.emit(PROJECT_CONTROL_INPUTS_RETIRED_EVENT, ());
+        }
+    }
+}
+
 fn replace_prepared_project_snapshot_with_coordinator<Validate, Validation, Capture, Captured>(
     state: &AppState,
-    mut prepared: PreparedProjectLoad,
+    prepared: PreparedProjectLoad,
     coordinator: &mut ProjectCoordinator,
     coordinator_effect: ProjectReplacementCoordinatorEffect,
     emit_authority_event: bool,
@@ -47660,6 +48425,58 @@ where
     Capture: FnOnce(&AppState, &ProjectCoordinator, &std::sync::MutexGuard<'_, ()>) -> Captured,
 {
     let app = project_swap_app_handle(state)?;
+    let platform = WryProjectReplacementPlatform { app };
+    replace_prepared_project_snapshot_with_coordinator_and_platform(
+        state,
+        prepared,
+        coordinator,
+        coordinator_effect,
+        emit_authority_event,
+        validate_before_publication,
+        capture_after_commit,
+        lease_authorization,
+        &platform,
+    )
+}
+
+/// Full production replacement transaction with only the Wry window/output
+/// adapter abstracted. Registered commands call this through the Wry wrapper;
+/// process-boundary tests provide a durable journal adapter while exercising
+/// the exact same validation, engine publication, coordinator commit, and
+/// authoritative result path.
+fn replace_prepared_project_snapshot_with_coordinator_and_platform<
+    Validate,
+    Validation,
+    Capture,
+    Captured,
+    Platform,
+>(
+    state: &AppState,
+    mut prepared: PreparedProjectLoad,
+    coordinator: &mut ProjectCoordinator,
+    coordinator_effect: ProjectReplacementCoordinatorEffect,
+    emit_authority_event: bool,
+    validate_before_publication: Validate,
+    capture_after_commit: Capture,
+    lease_authorization: Option<(&OutputLeaseRequest, u64)>,
+    platform: &Platform,
+) -> Result<
+    (
+        ProjectLoadResult,
+        Captured,
+        Option<output_lease::OutputLeaseRequestReceipt>,
+    ),
+    String,
+>
+where
+    Validate: FnOnce(
+        &AppState,
+        &mut ProjectCoordinator,
+        &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<Validation, String>,
+    Capture: FnOnce(&AppState, &ProjectCoordinator, &std::sync::MutexGuard<'_, ()>) -> Captured,
+    Platform: ProjectReplacementPlatform,
+{
     let next_project = project_file_from_prepared_load(&prepared);
     let next_checkpoint_hash = project_checkpoint_hash(&next_project, &prepared.mappings)?;
     let recovery_transition =
@@ -47832,11 +48649,7 @@ where
                     )
                 }
             };
-            advance_project_recovery_authority_serial_before_publication(
-                state,
-                coordinator,
-                transition,
-            )?;
+            platform.advance_recovery_authority(state, coordinator, transition)?;
         }
         // Fence callbacks before taking any input slot. A constructor can
         // receive data immediately, so every callback compares this
@@ -47868,7 +48681,7 @@ where
     };
 
     let replacement = (|| {
-        fence_and_retire_project_swap_output_resources(&app, state)?;
+        platform.fence_and_retire_outputs(state)?;
         publish_project_snapshot_with_runtime_reset_admission(state, prepared.snapshot.clone())
     })();
 
@@ -47901,6 +48714,9 @@ where
             None => format!("Project replacement could not publish: {error}"),
         });
     }
+
+    #[cfg(test)]
+    platform.observe_engine_publication(state);
 
     // The engine acknowledgement is the commit point.  Everything below was
     // preflighted and is deliberately infallible; do not claim a rollback
@@ -48008,16 +48824,15 @@ where
         state,
         coordinator,
     ));
+    #[cfg(test)]
+    platform.observe_coordinator_commit(state, coordinator, &prepared.result);
+    platform.pause_after_recovery_commit_before_event(state, &prepared.result)?;
     // An emit fault cannot invalidate an already-acknowledged publication.
     // The periodic authority refresh remains a recovery path, while this
     // immediate signal clears stale input-connected UI state after every
     // retirement, including a warm polling replacement and Take Over.
     if emit_authority_event {
-        if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
-            let _ = app.emit(PROJECT_AUTHORITY_REPLACED_EVENT, prepared.result.clone());
-        } else {
-            let _ = app.emit(PROJECT_CONTROL_INPUTS_RETIRED_EVENT, ());
-        }
+        platform.emit_authority_event(coordinator_effect, &prepared.result);
     }
     let captured = capture_after_commit(state, coordinator, &_transition_guard);
     drop(_publication_validation);
@@ -75612,6 +76427,1093 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn e3_recovery_command_core_persists_publish_and_ack_across_reply_loss_and_restart() {
+        struct E3RecoveryPlatform {
+            journal: PathBuf,
+            emitted: AtomicU64,
+            fail_retirement: AtomicBool,
+            order: Mutex<Vec<&'static str>>,
+        }
+
+        impl ProjectReplacementPlatform for E3RecoveryPlatform {
+            fn advance_recovery_authority(
+                &self,
+                _state: &AppState,
+                coordinator: &mut ProjectCoordinator,
+                transition: ProjectRecoveryAuthorityTransition,
+            ) -> Result<u64, String> {
+                let serial = advance_project_recovery_authority_serial_with_persist(
+                    coordinator,
+                    transition,
+                    |serial, transition| {
+                        persist_project_recovery_authority_serial_to_path(
+                            &self.journal,
+                            serial,
+                            transition,
+                        )
+                    },
+                )?;
+                self.order.lock().unwrap().push("durable");
+                Ok(serial)
+            }
+
+            fn fence_and_retire_outputs(&self, _state: &AppState) -> Result<(), String> {
+                self.order.lock().unwrap().push("retire");
+                if self.fail_retirement.load(Ordering::Acquire) {
+                    return Err("injected E3 output retirement failure".to_string());
+                }
+                Ok(())
+            }
+
+            fn observe_engine_publication(&self, state: &AppState) {
+                assert!(state.engine.snapshot().blackout);
+                self.order.lock().unwrap().push("publish");
+            }
+
+            fn observe_coordinator_commit(
+                &self,
+                _state: &AppState,
+                coordinator: &ProjectCoordinator,
+                result: &ProjectLoadResult,
+            ) {
+                let authority = result
+                    .authority
+                    .as_ref()
+                    .expect("committed result owns authority metadata");
+                assert_eq!(authority.project_epoch, coordinator.epoch);
+                assert_eq!(authority.checkpoint_hash, coordinator.checkpoint_hash);
+                self.order.lock().unwrap().push("commit");
+            }
+
+            fn pause_after_recovery_commit_before_event(
+                &self,
+                _state: &AppState,
+                result: &ProjectLoadResult,
+            ) -> Result<(), String> {
+                let authority = result
+                    .authority
+                    .as_ref()
+                    .expect("acceptance pause observes committed authority");
+                assert_eq!(
+                    authority.authority_disposition,
+                    ProjectAuthorityDisposition::RecoveryPendingAck
+                );
+                assert_eq!(
+                    load_project_recovery_authority_state_from_path(&self.journal)
+                        .unwrap()
+                        .serial,
+                    authority.recovery_authority_serial,
+                    "B journal is durable before the acceptance pause"
+                );
+                assert_eq!(
+                    self.emitted.load(Ordering::Relaxed),
+                    0,
+                    "authority event cannot precede the B acceptance pause"
+                );
+                self.order.lock().unwrap().push("pause");
+                Ok(())
+            }
+
+            fn emit_authority_event(
+                &self,
+                _coordinator_effect: ProjectReplacementCoordinatorEffect,
+                _result: &ProjectLoadResult,
+            ) {
+                self.order.lock().unwrap().push("event");
+                self.emitted.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let directory = unique_test_directory("e3-recovery-command-core");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        persist_project_recovery_authority_serial_to_path(
+            &journal,
+            4,
+            ProjectRecoveryAuthorityTransition::ProjectPublication,
+        )
+        .unwrap();
+
+        let mut recovered_project = empty_project_file();
+        recovered_project.snapshot.blackout = true;
+        recovered_project
+            .snapshot
+            .video
+            .compositions
+            .push(CompositionSummary {
+                id: 1,
+                label: "Main".to_string(),
+                layer_ids: Vec::new(),
+                output_ids: vec![1],
+            });
+        recovered_project
+            .snapshot
+            .video
+            .outputs
+            .push(VideoOutputSummary {
+                id: 1,
+                label: "Recovered Display".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: true,
+                composition_id: 1,
+                fullscreen: true,
+                monitor_id: Some(1),
+                monitor_identity: Some("d".repeat(64)),
+                width: 1920,
+                height: 1080,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: VideoOutputMapping::default(),
+            });
+        let request_id = "e3-recovery-request-00000001".to_string();
+        {
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            coordinator.recovery_authority_serial = 4;
+            coordinator.recovery_authority_last_transition =
+                ProjectRecoveryAuthorityTransition::ProjectPublication;
+        }
+        let platform = E3RecoveryPlatform {
+            journal: journal.clone(),
+            emitted: AtomicU64::new(0),
+            fail_retirement: AtomicBool::new(false),
+            order: Mutex::new(Vec::new()),
+        };
+        let published_result = load_project_checkpoint_core(
+            state,
+            serde_json::to_value(recovered_project).unwrap(),
+            "E3 recovery B".to_string(),
+            Some("C:/shows/recovered.sdc".to_string()),
+            4,
+            request_id.clone(),
+            &platform,
+        )
+        .unwrap();
+        let published = published_result
+            .authority
+            .expect("production replacement returns its authoritative bundle");
+        assert_eq!(platform.emitted.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            *platform.order.lock().unwrap(),
+            ["durable", "retire", "publish", "commit", "pause", "event"]
+        );
+        let target_hash = published.checkpoint_hash.clone();
+        let publication_transition = ProjectRecoveryAuthorityTransition::RecoveryPublication {
+            source_serial: 4,
+            request_id: request_id.clone(),
+            target_checkpoint_hash: target_hash.clone(),
+        };
+        assert_eq!(published.checkpoint_hash, target_hash);
+        assert_eq!(published.recovery_authority_serial, 5);
+        assert_eq!(
+            published.authority_disposition,
+            ProjectAuthorityDisposition::RecoveryPendingAck
+        );
+        assert_eq!(
+            published.recovery_authority_last_transition,
+            publication_transition
+        );
+
+        let mut coordinator = state.project_coordinator.lock().unwrap();
+
+        // Drop the load command reply. A restart observes the durably tagged B
+        // publication and can converge through event/reply/poll without ever
+        // publishing B twice.
+        let after_lost_load_reply =
+            load_and_reconcile_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(after_lost_load_reply.recovery_authority_serial, 5);
+        assert_eq!(
+            after_lost_load_reply.last_transition,
+            publication_transition
+        );
+
+        // A fresh native process starts from a fresh runtime project but reads
+        // the same durable tag. It can re-offer A; it cannot infer or silently
+        // ACK the vanished B runtime image.
+        let restarted_before_ack = MediaAssetA6CommandHarness::new();
+        let installed_before_ack =
+            install_project_recovery_authority_from_path(&restarted_before_ack.state, &journal)
+                .unwrap();
+        assert_eq!(
+            installed_before_ack.recovery_authority_serial,
+            after_lost_load_reply.recovery_authority_serial
+        );
+        assert_eq!(
+            installed_before_ack.last_transition,
+            after_lost_load_reply.last_transition
+        );
+        {
+            let restarted_coordinator = restarted_before_ack
+                .state
+                .project_coordinator
+                .lock()
+                .unwrap();
+            assert_eq!(restarted_coordinator.recovery_authority_serial, 5);
+            assert_ne!(restarted_coordinator.checkpoint_hash, target_hash);
+        }
+
+        let expected_epoch = coordinator.epoch;
+        let expected_revision = coordinator.revision;
+        let expected_disposition_generation = coordinator.authority_disposition_generation;
+        let journal_before_ack = fs::read(&journal).unwrap();
+        let coordinator_before_bad_ack = project_authority_capture_stamp(&coordinator);
+        let wrong_request_error = acknowledge_project_recovery_applied_core(
+            state,
+            &mut coordinator,
+            expected_epoch,
+            expected_revision,
+            target_hash.clone(),
+            expected_disposition_generation,
+            "e3-recovery-request-wrong-0001".to_string(),
+            |_, _, _| panic!("wrong request ID must not reach persistence"),
+        )
+        .unwrap_err();
+        assert!(wrong_request_error.contains("no longer owns"));
+        assert_eq!(
+            project_authority_capture_stamp(&coordinator),
+            coordinator_before_bad_ack
+        );
+        assert_eq!(fs::read(&journal).unwrap(), journal_before_ack);
+
+        let wrong_hash_error = acknowledge_project_recovery_applied_core(
+            state,
+            &mut coordinator,
+            expected_epoch,
+            expected_revision,
+            "wrong-checkpoint-hash".to_string(),
+            expected_disposition_generation,
+            request_id.clone(),
+            |_, _, _| panic!("wrong checkpoint hash must not reach persistence"),
+        )
+        .unwrap_err();
+        assert!(wrong_hash_error.contains("changed"));
+        assert_eq!(
+            project_authority_capture_stamp(&coordinator),
+            coordinator_before_bad_ack
+        );
+        assert_eq!(fs::read(&journal).unwrap(), journal_before_ack);
+
+        let mut c_before_ack = ProjectCoordinator {
+            epoch: expected_epoch.checked_add(1).unwrap(),
+            revision: 0,
+            checkpoint_hash: "checkpoint-c-before-ack".to_string(),
+            authority_disposition_generation: expected_disposition_generation
+                .checked_add(1)
+                .unwrap(),
+            authority_disposition: ProjectAuthorityDisposition::UnsavedReplacement,
+            recovery_authority_serial: 6,
+            recovery_authority_last_transition:
+                ProjectRecoveryAuthorityTransition::ProjectPublication,
+            ..ProjectCoordinator::default()
+        };
+        let c_before_ack_stamp = project_authority_capture_stamp(&c_before_ack);
+        let c_rejects_b = acknowledge_project_recovery_applied_core(
+            state,
+            &mut c_before_ack,
+            expected_epoch,
+            expected_revision,
+            target_hash.clone(),
+            expected_disposition_generation,
+            request_id.clone(),
+            |_, _, _| panic!("C must reject delayed B before persistence"),
+        )
+        .unwrap_err();
+        assert!(c_rejects_b.contains("changed"));
+        assert_eq!(
+            project_authority_capture_stamp(&c_before_ack),
+            c_before_ack_stamp
+        );
+        assert_eq!(fs::read(&journal).unwrap(), journal_before_ack);
+
+        drop(coordinator);
+        let acknowledgement_order = Mutex::new(Vec::new());
+        let acknowledged = acknowledge_project_recovery_applied_service_with_acceptance(
+            state,
+            expected_epoch,
+            expected_revision,
+            target_hash.clone(),
+            expected_disposition_generation,
+            request_id.clone(),
+            |_, coordinator, transition| {
+                let serial = advance_project_recovery_authority_serial_with_persist(
+                    coordinator,
+                    transition,
+                    |serial, transition| {
+                        persist_project_recovery_authority_serial_to_path(
+                            &journal, serial, transition,
+                        )
+                    },
+                )?;
+                acknowledgement_order.lock().unwrap().push("durable_ack");
+                Ok(serial)
+            },
+            |authority| {
+                let durable = load_project_recovery_authority_state_from_path(&journal).unwrap();
+                assert_eq!(durable.serial, authority.recovery_authority_serial);
+                assert_eq!(
+                    durable.last_transition,
+                    authority.recovery_authority_last_transition
+                );
+                acknowledgement_order
+                    .lock()
+                    .unwrap()
+                    .push("pause_before_reply");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            *acknowledgement_order.lock().unwrap(),
+            ["durable_ack", "pause_before_reply"]
+        );
+        assert_eq!(acknowledged.recovery_authority_serial, 6);
+        assert_eq!(
+            acknowledged.authority_disposition,
+            ProjectAuthorityDisposition::UnsavedReplacement
+        );
+
+        // Drop the acknowledgement reply too. The journal retains the exact
+        // request/checkpoint tag across a process boundary, and an exact retry
+        // cannot acknowledge or advance it twice.
+        let after_lost_ack_reply =
+            load_and_reconcile_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(after_lost_ack_reply.recovery_authority_serial, 6);
+        assert_eq!(
+            after_lost_ack_reply.last_transition,
+            ProjectRecoveryAuthorityTransition::RecoveryAcknowledged {
+                recovery_publication_serial: 5,
+                request_id: request_id.clone(),
+                target_checkpoint_hash: target_hash.clone(),
+            }
+        );
+        let restarted_after_ack = MediaAssetA6CommandHarness::new();
+        let installed_after_ack =
+            install_project_recovery_authority_from_path(&restarted_after_ack.state, &journal)
+                .unwrap();
+        assert_eq!(
+            installed_after_ack.recovery_authority_serial,
+            after_lost_ack_reply.recovery_authority_serial
+        );
+        assert_eq!(
+            installed_after_ack.last_transition,
+            after_lost_ack_reply.last_transition
+        );
+        {
+            let restarted_coordinator = restarted_after_ack
+                .state
+                .project_coordinator
+                .lock()
+                .unwrap();
+            assert_eq!(restarted_coordinator.recovery_authority_serial, 6);
+            assert!(matches!(
+                restarted_coordinator.recovery_authority_last_transition,
+                ProjectRecoveryAuthorityTransition::RecoveryAcknowledged { .. }
+            ));
+        }
+        let durable_before_retry = fs::read(&journal).unwrap();
+        let mut coordinator = state.project_coordinator.lock().unwrap();
+        let retry_error = acknowledge_project_recovery_applied_core(
+            state,
+            &mut coordinator,
+            expected_epoch,
+            expected_revision,
+            target_hash.clone(),
+            expected_disposition_generation,
+            request_id,
+            |_, _, _| panic!("an acknowledged retry must not reach persistence"),
+        )
+        .unwrap_err();
+        assert!(retry_error.contains("already superseded") || retry_error.contains("changed"));
+        assert_eq!(fs::read(&journal).unwrap(), durable_before_retry);
+
+        // A later C publication owns the live token. A delayed B ACK must be
+        // rejected before durable state, snapshot, or coordinator mutation.
+        let coordinator_before_c_ack = project_authority_capture_stamp(&coordinator);
+        coordinator.epoch = coordinator.epoch.checked_add(1).unwrap();
+        coordinator.revision = 0;
+        coordinator.checkpoint_hash = "checkpoint-c".to_string();
+        let c_stamp = project_authority_capture_stamp(&coordinator);
+        let delayed_b_error = acknowledge_project_recovery_applied_core(
+            state,
+            &mut coordinator,
+            expected_epoch,
+            expected_revision,
+            target_hash,
+            expected_disposition_generation,
+            "e3-recovery-request-00000001".to_string(),
+            |_, _, _| panic!("stale B acknowledgement must not reach persistence"),
+        )
+        .unwrap_err();
+        assert!(delayed_b_error.contains("changed"));
+        assert_eq!(project_authority_capture_stamp(&coordinator), c_stamp);
+        assert_ne!(
+            project_authority_capture_stamp(&coordinator),
+            coordinator_before_c_ack
+        );
+        assert_eq!(fs::read(&journal).unwrap(), durable_before_retry);
+
+        drop(coordinator);
+
+        // The same registered service boundary proves the pre-publication
+        // failure order. Durable invalidation is intentionally first, but a
+        // retirement failure cannot publish an engine image, commit project
+        // identity, emit B, or make an acknowledgement admissible.
+        let failed_harness = MediaAssetA6CommandHarness::new();
+        let failed_state = &failed_harness.state;
+        let failed_journal = directory.join("failed-publication.json");
+        persist_project_recovery_authority_serial_to_path(
+            &failed_journal,
+            9,
+            ProjectRecoveryAuthorityTransition::ProjectPublication,
+        )
+        .unwrap();
+        {
+            let mut failed_coordinator = failed_state.project_coordinator.lock().unwrap();
+            failed_coordinator.recovery_authority_serial = 9;
+            failed_coordinator.recovery_authority_last_transition =
+                ProjectRecoveryAuthorityTransition::ProjectPublication;
+        }
+        let failed_engine_before =
+            project_snapshot_for_save(failed_state.engine.persistence_snapshot().unwrap());
+        let failed_project_before = {
+            let failed_coordinator = failed_state.project_coordinator.lock().unwrap();
+            project_authority_capture_stamp(&failed_coordinator)
+        };
+        let failed_platform = E3RecoveryPlatform {
+            journal: failed_journal.clone(),
+            emitted: AtomicU64::new(0),
+            fail_retirement: AtomicBool::new(true),
+            order: Mutex::new(Vec::new()),
+        };
+        let failure = load_project_checkpoint_core(
+            failed_state,
+            serde_json::to_value(empty_project_file()).unwrap(),
+            "E3 rejected B".to_string(),
+            Some("C:/shows/rejected.sdc".to_string()),
+            9,
+            "e3-recovery-request-rejected-0001".to_string(),
+            &failed_platform,
+        )
+        .unwrap_err();
+        assert!(failure.contains("injected E3 output retirement failure"));
+        assert_eq!(
+            *failed_platform.order.lock().unwrap(),
+            ["durable", "retire"]
+        );
+        assert_eq!(failed_platform.emitted.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            project_snapshot_for_save(failed_state.engine.persistence_snapshot().unwrap()),
+            failed_engine_before
+        );
+        let failed_coordinator = failed_state.project_coordinator.lock().unwrap();
+        let mut failed_project_after = project_authority_capture_stamp(&failed_coordinator);
+        failed_project_after.recovery_authority_serial =
+            failed_project_before.recovery_authority_serial;
+        failed_project_after.recovery_authority_last_transition = failed_project_before
+            .recovery_authority_last_transition
+            .clone();
+        assert_eq!(failed_project_after, failed_project_before);
+        assert_eq!(failed_coordinator.recovery_authority_serial, 10);
+        let failed_ack_epoch = failed_coordinator.epoch;
+        let failed_ack_revision = failed_coordinator.revision;
+        let failed_ack_hash = failed_coordinator.checkpoint_hash.clone();
+        let failed_ack_disposition_generation = failed_coordinator.authority_disposition_generation;
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&failed_journal)
+                .unwrap()
+                .serial,
+            10
+        );
+        drop(failed_coordinator);
+        let failed_ack = acknowledge_project_recovery_applied_service(
+            failed_state,
+            failed_ack_epoch,
+            failed_ack_revision,
+            failed_ack_hash,
+            failed_ack_disposition_generation,
+            "e3-recovery-request-rejected-0001".to_string(),
+            |_, _, _| panic!("retirement failure must make ACK inadmissible"),
+        )
+        .unwrap_err();
+        assert!(failed_ack.contains("already superseded"));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn recovered_display_project_allows_exact_renderer_ticketed_fixture_group_mutation() {
+        struct RecoveryFixturePlatform;
+
+        impl ProjectReplacementPlatform for RecoveryFixturePlatform {
+            fn advance_recovery_authority(
+                &self,
+                _state: &AppState,
+                coordinator: &mut ProjectCoordinator,
+                transition: ProjectRecoveryAuthorityTransition,
+            ) -> Result<u64, String> {
+                advance_project_recovery_authority_serial_with_persist(
+                    coordinator,
+                    transition,
+                    |_, _| Ok(()),
+                )
+            }
+
+            fn fence_and_retire_outputs(&self, _state: &AppState) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn emit_authority_event(
+                &self,
+                _coordinator_effect: ProjectReplacementCoordinatorEffect,
+                _result: &ProjectLoadResult,
+            ) {
+            }
+        }
+
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let mut recovered_project = empty_project_file();
+        recovered_project
+            .snapshot
+            .fixtures
+            .push(PatchedFixtureSummary {
+                id: 7,
+                label: "Recovered Fixture".to_string(),
+                profile_source_path: String::new(),
+                profile_name: "Synthetic".to_string(),
+                manufacturer: "Syndocal".to_string(),
+                mode_name: "Default".to_string(),
+                universe: 0,
+                address: 1,
+                group_ids: Vec::new(),
+                position: Vec3::default(),
+                rotation: Rotation3::default(),
+                geometries: Vec::new(),
+                controls: vec![AttributeControl {
+                    attribute: "Dimmer".to_string(),
+                    channel_name: "Dimmer".to_string(),
+                    geometry: None,
+                    offsets: vec![1],
+                    resolution: AttributeResolution::EightBit,
+                    default_value: 0,
+                    functions: Vec::new(),
+                }],
+                attribute_values: Vec::new(),
+                limits: FixtureLimits::default(),
+                highlighted: false,
+                soloed: false,
+                parked: false,
+            });
+        recovered_project
+            .snapshot
+            .video
+            .compositions
+            .push(CompositionSummary {
+                id: 1,
+                label: "Main".to_string(),
+                layer_ids: Vec::new(),
+                output_ids: vec![1],
+            });
+        recovered_project
+            .snapshot
+            .video
+            .outputs
+            .push(VideoOutputSummary {
+                id: 1,
+                label: "Recovered Display".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: true,
+                composition_id: 1,
+                fullscreen: true,
+                monitor_id: Some(1),
+                monitor_identity: Some("d".repeat(64)),
+                width: 1920,
+                height: 1080,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: VideoOutputMapping::default(),
+            });
+        {
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            coordinator.recovery_authority_serial = 41;
+        }
+        let request_id = "recovery-fixture-display-0001".to_string();
+        let loaded = load_project_checkpoint_core(
+            state,
+            serde_json::to_value(recovered_project).unwrap(),
+            "Recovered Display project".to_string(),
+            None,
+            41,
+            request_id.clone(),
+            &RecoveryFixturePlatform,
+        )
+        .unwrap();
+        let loaded_authority = loaded.authority.unwrap();
+        let acknowledged = acknowledge_project_recovery_applied_service(
+            state,
+            loaded_authority.project_epoch,
+            loaded_authority.project_revision,
+            loaded_authority.checkpoint_hash,
+            loaded_authority.authority_disposition_generation,
+            request_id,
+            |_, coordinator, transition| {
+                advance_project_recovery_authority_serial_with_persist(
+                    coordinator,
+                    transition,
+                    |_, _| Ok(()),
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            acknowledged.authority_disposition,
+            ProjectAuthorityDisposition::UnsavedReplacement
+        );
+        assert_eq!(state.engine.snapshot().video.outputs.len(), 1);
+
+        // Refresh the synthetic test project's normalized checkpoint exactly as
+        // the production authority poll does before renderer Begin.
+        {
+            let _external_admission = lock_project_external_command_admission(state).unwrap();
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+        }
+        let window_label = "recovered-fixture-editor";
+        let owner_id = "recovered-fixture-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        let (epoch, revision) = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (coordinator.epoch, coordinator.revision)
+        };
+        let shape =
+            canonical_project_transaction_shape("create_fixture_group", "Create fixture group", "");
+        let ticket = begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            "Create fixture group".to_string(),
+            String::new(),
+            epoch,
+            revision,
+            owner_id.to_string(),
+            "project-op:9101:recovered-fixture".to_string(),
+            shape.clone(),
+            "create_fixture_group".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        let before_wrong_ticket =
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        assert!(create_fixture_group_for_window_label(
+            state,
+            "Wrong ticket".to_string(),
+            None,
+            Vec::new(),
+            RendererTicketedProjectMutationContext {
+                window_label,
+                project_transaction_id: ticket.transaction_id.checked_add(1).unwrap(),
+                expected_epoch: ticket.project_epoch,
+                owner_id,
+            },
+        )
+        .unwrap_err()
+        .contains("Unknown project transaction"));
+        assert!(create_fixture_group_for_window_label(
+            state,
+            "Wrong owner".to_string(),
+            None,
+            Vec::new(),
+            RendererTicketedProjectMutationContext {
+                window_label,
+                project_transaction_id: ticket.transaction_id,
+                expected_epoch: ticket.project_epoch,
+                owner_id: "different-owner",
+            },
+        )
+        .unwrap_err()
+        .contains("another renderer session"));
+        assert!(create_fixture_group_for_window_label(
+            state,
+            "Wrong epoch".to_string(),
+            None,
+            Vec::new(),
+            RendererTicketedProjectMutationContext {
+                window_label,
+                project_transaction_id: ticket.transaction_id,
+                expected_epoch: ticket.project_epoch.checked_add(1).unwrap(),
+                owner_id,
+            },
+        )
+        .unwrap_err()
+        .contains("belongs to a replaced project"));
+        assert!(rename_fixture_group_for_window_label(
+            state,
+            "missing".to_string(),
+            "Cross-route".to_string(),
+            RendererTicketedProjectMutationContext {
+                window_label,
+                project_transaction_id: ticket.transaction_id,
+                expected_epoch: ticket.project_epoch,
+                owner_id,
+            },
+        )
+        .unwrap_err()
+        .contains("belongs to command 'create_fixture_group'"));
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            before_wrong_ticket
+        );
+        assert!(state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .fixture_groups
+            .is_empty());
+
+        let group = create_fixture_group_for_window_label(
+            state,
+            "Recovered Show Fixtures".to_string(),
+            None,
+            Vec::new(),
+            RendererTicketedProjectMutationContext {
+                window_label,
+                project_transaction_id: ticket.transaction_id,
+                expected_epoch: ticket.project_epoch,
+                owner_id,
+            },
+        )
+        .unwrap();
+        let committed = commit_project_transaction_for_window_label(
+            state,
+            window_label,
+            ticket.transaction_id,
+            ticket.project_epoch,
+            ticket.client_operation_id,
+            shape,
+            "create_fixture_group".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(committed.history_status.undo_depth, 1);
+        assert!(!state.project_transaction_active.load(Ordering::Acquire));
+        assert_eq!(
+            state
+                .project_coordinator
+                .lock()
+                .unwrap()
+                .ancillary
+                .fixture_groups,
+            vec![group.clone()]
+        );
+        assert_eq!(state.engine.snapshot().video.outputs[0].id, 1);
+
+        let begin_route = |command_name: &str, label: &str, sequence: u64| {
+            let (epoch, revision) = {
+                let coordinator = state.project_coordinator.lock().unwrap();
+                (coordinator.epoch, coordinator.revision)
+            };
+            let shape = canonical_project_transaction_shape(command_name, label, "");
+            let ticket = begin_project_transaction_for_window_label(
+                state,
+                window_label,
+                label.to_string(),
+                String::new(),
+                epoch,
+                revision,
+                owner_id.to_string(),
+                format!("project-op:{sequence}:{command_name}"),
+                shape.clone(),
+                command_name.to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+            )
+            .unwrap();
+            (ticket, shape)
+        };
+        let commit_route = |ticket: ProjectTransactionTicket, shape: String, command_name: &str| {
+            let committed = commit_project_transaction_for_window_label(
+                state,
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                ticket.client_operation_id,
+                shape,
+                command_name.to_string(),
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id.to_string(),
+            )
+            .unwrap();
+            assert!(!state.project_transaction_active.load(Ordering::Acquire));
+            let coordinator = state.project_coordinator.lock().unwrap();
+            assert!(coordinator.history.pending.is_empty());
+            assert_eq!(coordinator.revision, committed.authority.project_revision);
+            committed
+        };
+
+        let (rename_ticket, rename_shape) =
+            begin_route("rename_fixture_group", "Rename fixture group", 9102);
+        let renamed = rename_fixture_group_for_window_label(
+            state,
+            group.id.clone(),
+            "Recovered Fixtures Renamed".to_string(),
+            RendererTicketedProjectMutationContext {
+                window_label,
+                project_transaction_id: rename_ticket.transaction_id,
+                expected_epoch: rename_ticket.project_epoch,
+                owner_id,
+            },
+        )
+        .unwrap();
+        let renamed_commit = commit_route(rename_ticket, rename_shape, "rename_fixture_group");
+        assert_eq!(renamed_commit.history_status.undo_depth, 2);
+        assert_eq!(renamed.label, "Recovered Fixtures Renamed");
+
+        let (recolor_ticket, recolor_shape) =
+            begin_route("recolor_fixture_group", "Recolor fixture group", 9103);
+        let recolored = recolor_fixture_group_for_window_label(
+            state,
+            group.id.clone(),
+            Some("#112233".to_string()),
+            RendererTicketedProjectMutationContext {
+                window_label,
+                project_transaction_id: recolor_ticket.transaction_id,
+                expected_epoch: recolor_ticket.project_epoch,
+                owner_id,
+            },
+        )
+        .unwrap();
+        let recolored_commit = commit_route(recolor_ticket, recolor_shape, "recolor_fixture_group");
+        assert_eq!(recolored_commit.history_status.undo_depth, 3);
+        assert_eq!(recolored.color.as_deref(), Some("#112233"));
+        assert_eq!(
+            state.engine.persistence_snapshot().unwrap().group_colors[&group.id],
+            "#112233"
+        );
+
+        let (color_ticket, color_shape) = begin_route("set_group_color", "Set group color", 9104);
+        set_group_color_for_window_label(
+            state,
+            group.id.clone(),
+            Some("#445566".to_string()),
+            RendererTicketedProjectMutationContext {
+                window_label,
+                project_transaction_id: color_ticket.transaction_id,
+                expected_epoch: color_ticket.project_epoch,
+                owner_id,
+            },
+        )
+        .unwrap();
+        let color_commit = commit_route(color_ticket, color_shape, "set_group_color");
+        assert_eq!(color_commit.history_status.undo_depth, 4);
+        assert_eq!(
+            state.engine.persistence_snapshot().unwrap().group_colors[&group.id],
+            "#445566"
+        );
+
+        let (membership_ticket, membership_shape) =
+            begin_route("set_fixture_groups", "Set fixture groups", 9105);
+        set_fixture_groups_for_window_label(
+            state,
+            7,
+            vec![group.id.clone()],
+            RendererTicketedProjectMutationContext {
+                window_label,
+                project_transaction_id: membership_ticket.transaction_id,
+                expected_epoch: membership_ticket.project_epoch,
+                owner_id,
+            },
+        )
+        .unwrap();
+        let membership_commit =
+            commit_route(membership_ticket, membership_shape, "set_fixture_groups");
+        assert_eq!(membership_commit.history_status.undo_depth, 5);
+        assert_eq!(
+            state.engine.persistence_snapshot().unwrap().fixtures[0].group_ids,
+            vec![group.id.clone()]
+        );
+
+        let (delete_ticket, delete_shape) =
+            begin_route("delete_fixture_group", "Delete fixture group", 9106);
+        let deleted = delete_fixture_group_for_window_label(
+            state,
+            window_label,
+            group.id.clone(),
+            delete_ticket.transaction_id,
+            delete_ticket.project_epoch,
+            owner_id,
+        )
+        .unwrap();
+        let delete_commit = commit_route(delete_ticket, delete_shape, "delete_fixture_group");
+        assert_eq!(delete_commit.history_status.undo_depth, 6);
+        assert_eq!(deleted.id, group.id);
+        assert!(state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .fixture_groups
+            .is_empty());
+        assert!(state.engine.persistence_snapshot().unwrap().fixtures[0]
+            .group_ids
+            .is_empty());
+
+        let (undo_ticket, undo_shape) = begin_route(
+            "undo_delete_fixture_group",
+            "Undo fixture group delete",
+            9107,
+        );
+        let restored = undo_delete_fixture_group_for_window_label(
+            state,
+            window_label,
+            undo_ticket.transaction_id,
+            undo_ticket.project_epoch,
+            owner_id,
+        )
+        .unwrap()
+        .unwrap();
+        let undo_commit = commit_route(undo_ticket, undo_shape, "undo_delete_fixture_group");
+        assert_eq!(undo_commit.history_status.undo_depth, 7);
+        assert_eq!(restored.id, group.id);
+        assert_eq!(
+            state.engine.persistence_snapshot().unwrap().fixtures[0].group_ids,
+            vec![group.id.clone()]
+        );
+
+        let policy = sample_operator_policy();
+        let (epoch, revision) = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (coordinator.epoch, coordinator.revision)
+        };
+        let set_shape =
+            canonical_project_transaction_shape("set_operator_policy", "Set operator policy", "");
+        let set_ticket = begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            "Set operator policy".to_string(),
+            String::new(),
+            epoch,
+            revision,
+            owner_id.to_string(),
+            "project-op:9108:recovered-operator-set".to_string(),
+            set_shape.clone(),
+            "set_operator_policy".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        set_operator_policy_for_window_label(
+            state,
+            window_label,
+            policy.clone(),
+            set_ticket.transaction_id,
+            set_ticket.project_epoch,
+            owner_id,
+        )
+        .unwrap();
+        let set_committed = commit_project_transaction_for_window_label(
+            state,
+            window_label,
+            set_ticket.transaction_id,
+            set_ticket.project_epoch,
+            set_ticket.client_operation_id,
+            set_shape,
+            "set_operator_policy".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(set_committed.history_status.undo_depth, 8);
+        assert_eq!(
+            state
+                .project_coordinator
+                .lock()
+                .unwrap()
+                .ancillary
+                .operator_policy,
+            Some(policy)
+        );
+
+        let (epoch, revision) = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (coordinator.epoch, coordinator.revision)
+        };
+        let clear_shape = canonical_project_transaction_shape(
+            "clear_operator_policy",
+            "Clear operator policy",
+            "",
+        );
+        let clear_ticket = begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            "Clear operator policy".to_string(),
+            String::new(),
+            epoch,
+            revision,
+            owner_id.to_string(),
+            "project-op:9109:recovered-operator-clear".to_string(),
+            clear_shape.clone(),
+            "clear_operator_policy".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+        )
+        .unwrap();
+        clear_operator_policy_for_window_label(
+            state,
+            window_label,
+            clear_ticket.transaction_id,
+            clear_ticket.project_epoch,
+            owner_id,
+        )
+        .unwrap();
+        let clear_committed = commit_project_transaction_for_window_label(
+            state,
+            window_label,
+            clear_ticket.transaction_id,
+            clear_ticket.project_epoch,
+            clear_ticket.client_operation_id,
+            clear_shape,
+            "clear_operator_policy".to_string(),
+            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(clear_committed.history_status.undo_depth, 9);
+        assert!(state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .ancillary
+            .operator_policy
+            .is_none());
+
+        let display_fence = MediaAssetA6CommandHarness::new();
+        display_fence
+            .state
+            .project_transaction_active
+            .store(true, Ordering::Release);
+        let display_error = lock_renderer_ticketed_project_mutation(
+            &display_fence.state,
+            "editor",
+            "create_fixture_group",
+            1,
+            0,
+            "owner",
+        )
+        .err()
+        .expect("Display reservation must reject a renderer-ticketed mutation");
+        assert!(display_error.contains("retry after Display output publication"));
+        assert!(display_fence
+            .state
+            .project_transaction_active
+            .load(Ordering::Acquire));
+    }
+
+    #[test]
     fn stale_save_ticket_never_enters_recovery_invalidation() {
         let mut invalidation_calls = 0usize;
         let error = invalidate_recovery_for_current_save_ticket(false, || {
@@ -79409,14 +81311,23 @@ pub(crate) mod tests {
         // Keep the ordering review executable. The runtime locks are not
         // re-entrant and a coordinator -> admission inversion can deadlock a
         // replacement which is waiting for a retired callback worker. This
-        // list contains every command/helper intentionally holding both.
+        // audit covers direct mutators plus the shared renderer-ticketed lane.
         let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"));
+        let function_body = |function: &str| {
+            let plain = format!("fn {function}(");
+            let generic = format!("fn {function}<");
+            let (start, marker_len) = [plain.as_str(), generic.as_str()]
+                .into_iter()
+                .filter_map(|marker| source.find(marker).map(|start| (start, marker.len())))
+                .min_by_key(|(start, _)| *start)
+                .unwrap_or_else(|| panic!("missing audited function {function}"));
+            let remainder = &source[start + marker_len..];
+            let end = remainder.find("\nfn ").unwrap_or(remainder.len());
+            &remainder[..end]
+        };
+
+        // These routes intentionally acquire both locks directly.
         for function in [
-            "create_fixture_group",
-            "rename_fixture_group",
-            "recolor_fixture_group",
-            "delete_fixture_group",
-            "undo_delete_fixture_group",
             "connect_midi_clock",
             "disconnect_midi_clock",
             "connect_midi_control",
@@ -79429,22 +81340,12 @@ pub(crate) mod tests {
             "start_remote_control",
             "start_dmx_input",
             "stop_dmx_input",
-            "set_group_color",
             "set_project_control_mappings",
-            "begin_project_transaction",
-            "commit_project_transaction",
-            "cancel_project_transaction",
             "clear_project_history",
             "navigate_project_history",
-            "replace_prepared_project_snapshot_after_standby_stop",
+            "replace_prepared_project_snapshot_after_standby_stop_with_platform",
         ] {
-            let marker = format!("fn {function}");
-            let start = source
-                .find(&marker)
-                .unwrap_or_else(|| panic!("missing audited function {function}"));
-            let remainder = &source[start + marker.len()..];
-            let end = remainder.find("\nfn ").unwrap_or(remainder.len());
-            let body = &remainder[..end];
+            let body = function_body(function);
             let admission = body
                 .find("lock_project_external_command_admission")
                 .unwrap_or_else(|| panic!("{function} no longer takes external admission"));
@@ -79454,6 +81355,130 @@ pub(crate) mod tests {
             assert!(
                 admission < coordinator,
                 "{function} acquired coordinator before external admission"
+            );
+        }
+
+        // Begin/Commit/Cancel accept exact reply-lost retries through their
+        // operation admission helper. Prove both the wrapper routing and that
+        // the specialized gate still precedes the coordinator.
+        let operation_gate = function_body("lock_project_transaction_operation_admission");
+        assert!(
+            operation_gate.contains("project_external_command_admission")
+                && operation_gate.contains(".gate")
+                && operation_gate.contains(".lock()"),
+            "project transaction operation admission no longer owns the external gate"
+        );
+        for (wrapper, helper) in [
+            (
+                "begin_project_transaction",
+                "begin_project_transaction_for_window_label",
+            ),
+            (
+                "commit_project_transaction",
+                "commit_project_transaction_for_window_label",
+            ),
+            (
+                "cancel_project_transaction",
+                "cancel_project_transaction_for_window_label",
+            ),
+        ] {
+            assert!(
+                function_body(wrapper).contains(helper),
+                "{wrapper} no longer routes through {helper}"
+            );
+            let body = function_body(helper);
+            let admission = body
+                .find("lock_project_transaction_operation_admission")
+                .unwrap_or_else(|| panic!("{helper} no longer takes operation admission"));
+            let coordinator = body
+                .find("lock_project_coordinator")
+                .unwrap_or_else(|| panic!("{helper} no longer takes coordinator"));
+            assert!(
+                admission < coordinator,
+                "{helper} acquired coordinator before operation admission"
+            );
+        }
+
+        // Renderer-ticketed routes share one exact admission implementation.
+        // Prove the lock order once at that implementation, then prove every
+        // public wrapper reaches a command-bound helper which uses it.
+        let ticketed_admission = function_body("lock_renderer_ticketed_project_mutation");
+        let external = ticketed_admission
+            .find("lock_project_transaction_owner_lifecycle_admission")
+            .expect("renderer-ticketed admission no longer takes the external owner gate");
+        let coordinator = ticketed_admission
+            .find("lock_project_coordinator")
+            .expect("renderer-ticketed admission no longer takes the coordinator");
+        assert!(
+            external < coordinator,
+            "renderer-ticketed admission acquired coordinator before external admission"
+        );
+        let owner_gate = function_body("lock_project_transaction_owner_lifecycle_admission");
+        assert!(
+            owner_gate.contains("project_external_command_admission")
+                && owner_gate.contains(".gate")
+                && owner_gate.contains(".lock()"),
+            "renderer-ticketed owner admission no longer owns the external gate"
+        );
+        for (wrapper, helper, command_name) in [
+            (
+                "set_fixture_groups",
+                "set_fixture_groups_for_window_label",
+                "set_fixture_groups",
+            ),
+            (
+                "create_fixture_group",
+                "create_fixture_group_for_window_label",
+                "create_fixture_group",
+            ),
+            (
+                "rename_fixture_group",
+                "rename_fixture_group_for_window_label",
+                "rename_fixture_group",
+            ),
+            (
+                "recolor_fixture_group",
+                "recolor_fixture_group_for_window_label",
+                "recolor_fixture_group",
+            ),
+            (
+                "delete_fixture_group",
+                "delete_fixture_group_for_window_label",
+                "delete_fixture_group",
+            ),
+            (
+                "undo_delete_fixture_group",
+                "undo_delete_fixture_group_for_window_label",
+                "undo_delete_fixture_group",
+            ),
+            (
+                "set_group_color",
+                "set_group_color_for_window_label",
+                "set_group_color",
+            ),
+            (
+                "set_operator_policy",
+                "set_operator_policy_for_window_label",
+                "set_operator_policy",
+            ),
+            (
+                "clear_operator_policy",
+                "clear_operator_policy_for_window_label",
+                "clear_operator_policy",
+            ),
+        ] {
+            assert!(
+                function_body(wrapper).contains(helper),
+                "{wrapper} no longer routes through {helper}"
+            );
+            let helper_body = function_body(helper);
+            assert!(
+                helper_body.contains("lock_renderer_ticketed_project_mutation"),
+                "{helper} no longer uses shared renderer-ticketed admission"
+            );
+            assert!(
+                helper_body.contains(&format!("\"{command_name}\"")),
+                "{helper} lost its exact command binding"
             );
         }
     }
@@ -104671,17 +106696,7 @@ fn main() {
             // startup truthfully (the `?`) rather than silently exposing S while
             // the real outcome is unknown; the pending record is left durable so a
             // healthier relaunch can reconcile it.
-            let recovery_authority =
-                load_and_reconcile_project_recovery_authority_state_from_path(
-                    &recovery_authority_path,
-                )?;
-            let mut coordinator = state
-                .project_coordinator
-                .lock()
-                .map_err(|_| "Project coordinator lock was poisoned during recovery authority initialization")?;
-            coordinator.recovery_authority_serial = recovery_authority.recovery_authority_serial;
-            coordinator.recovery_authority_last_transition = recovery_authority.last_transition;
-            drop(coordinator);
+            install_project_recovery_authority_from_path(&state, &recovery_authority_path)?;
             if let Err(error) = initialize_output_ownership(app.handle(), &state) {
                 eprintln!("machine output ownership remains Standby: {error}");
             }

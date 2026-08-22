@@ -330,7 +330,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active development train advances from the long-lived `1.1.0` metadata to
-`1.2.0-alpha.4`. The branch name may remain historical; artifact metadata and tags
+`1.2.0-alpha.5`. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from the branch name.
 
 The synchronized product-version surfaces are:
@@ -473,11 +473,11 @@ evidence ledgers, clean reviewed commit, and pushed handoff.
 
 - [x] E1 generic Begin reply-loss, terminal recovery, live-owner transaction
   liveness, renderer retirement, and stale delayed Commit/Cancel rejection.
-- [ ] E2 authority bundle/generation consistency across every project mutation.
-- [ ] E3 recovery durable handshake and crash/reply-loss behavior.
+- [x] E2 authority bundle/generation consistency across every project mutation.
+- [x] E3 recovery durable handshake and crash/reply-loss behavior.
 - [ ] E4 Save/Save As/template/backup reservation, journal, mapping flush, atomic
   replacement, and truthful terminal receipt.
-- [ ] D1 machine/session cache read purity.
+- [x] D1 machine/session cache read purity.
 - [ ] D2 atomic PATCH/GDTF Repair with whole-batch prevalidation, Published ACK,
   allocator/cache/output rollback, and one history result.
 - [ ] D3 server-side admission for every mutation, including raw Tauri paths.
@@ -1130,3 +1130,109 @@ responsive `Syndocal` window was maximized and Edit > Timeline displayed Click,
 Guide, Follow waiting, the shared lanes, and source shelf without a fault. No
 project state was changed; audible playback, the final three-screen pass, and
 fixture/serial-DMX/audio hardware acceptance remain required.
+
+## 25. 2026-08-22 alpha.5 E2/D1 ledger and E3 automated checkpoint
+
+The active distributed-development ordinal is `1.2.0-alpha.5`. This is a
+product-version-only advance for a new artifact; it does not change project,
+command, API, ABI, recovery-storage, or journal schema versions.
+
+E2 and D1 are accepted from the independently reviewed alpha.3 production
+implementation and the current rerun evidence. E2 applies authority bundles only
+through the production event/reply/poll/fallback orchestration and preserves exact
+authority/disposition generations. D1 keeps cache listing read-only and the custom
+fixture preview route pure; Patch remains the mutation boundary. Their checked
+Phase 1 boxes advanced the Windows denominator from 14/71 to 16/71. The native
+E3 acceptance below advances it to 17/71.
+
+E3 automated code evidence is independently green with P0/P1/P2 all zero. App and
+the driver share the same v3 publication, startup, and intent-consumer functions;
+the registered Rust load and acknowledgement commands share the same outer
+lifecycle service used by the process-boundary test. The Rust proof observes
+`durable -> retire -> publish -> commit -> event`, while an injected retirement
+failure permits only the conservative durable recovery invalidation and produces
+no engine publication, project-identity commit, event, or admissible ACK. Reply
+loss, renderer/native restart interpretation, delayed ACK, competing C, duplicate
+delivery, and CleanSave retirement are covered without mirrored state machines.
+
+Current automated gates pass: E3 production driver, project authority/transaction
+and storage checks, TypeScript, Vite build, exact 411 frontend invokes, 3541/3541
+localization, Rust E3 1/1, project-recovery authority 2/2 and recovery-authority
+3/3, no-default Cargo check, Rust format, diff-check, and frontend warning ratchet
+with zero first-party and total warnings. At that automated checkpoint, E3 remained
+unchecked pending native acceptance of the real Tauri dispatch and localStorage at
+both crash boundaries: B published with its reply lost, and ACK durable before
+renderer cleanup. The final operation also had to build and launch the alpha.5
+release executable and record its exact hash/window evidence; the accepted result
+is recorded below.
+
+The first alpha.5 native repair acceptance is now recorded, without closing E3.
+Immediately before the build, the only process whose resolved executable path was
+exactly this checkout's `target/release/syndocal.exe` (PID `113004`) was terminated;
+the exact-path process count then reached zero. The first build attempt stopped in
+`ffmpeg-sys-next` before product compilation because the existing shared SDK had
+not been exposed as `FFMPEG_DIR` and `pkg-config` was unavailable. Re-running
+`pnpm --dir app tauri build --no-bundle` with the installed LGPL shared SDK root
+as `FFMPEG_DIR`, its `bin` on `PATH`, and the installed LLVM directory as
+`LIBCLANG_PATH` succeeded in 2m34s. The resulting
+`target/release/syndocal.exe` reports ProductVersion/FileVersion
+`1.2.0-alpha.5` and SHA-256
+`F318FAEBEFBA88B03EC179DF34395E34F5BD8D960D37C2C579F8A209BD4BADC5`.
+PID `54456` exposed exactly one responsive `Syndocal` window; the native titlebar
+reported `Restore`, proving it was maximized before input. In that verified window,
+Edit > Lighting created `Native QA Group` and reported
+`Created fixture group Native QA Group.`; the former self-rejection
+`Project transaction is active; retry after Display output publication` did not
+occur. This closes the native regression for the renderer-ticketed fixture-group
+Begin/commit route, but not the two E3 crash boundaries.
+
+The crash-boundary preflight found that journal polling alone could not prove either
+"durable B before command reply" or "durable ACK before renderer cleanup". An
+ordinary-off acceptance helper was therefore added and independently reviewed at
+P0/P1/P2 zero. Its final frozen hashes are main
+`5014DEA37D6788FB6EECFAA4A5A7C9FF59FD83C593F93EC6D27F5EBE83D5AF23` and helper
+`17CF98F17095EE89559CA26B03772A09AE5C85CE60F158D6712434A643DDADC8`;
+`e3_` passed 6/6, no-default Cargo check reported zero first-party warnings, and
+format/diff checks passed. The helper accepts only a fixed local control directory
+under the executable, rejects UNC/device/outside/parent/reparse/non-fixed-drive
+paths before remote probing, requires an exact resume record, and is a zero-I/O
+no-op when its environment is unset.
+
+Native E3 acceptance then used the rebuilt 56,461,824-byte alpha.5 executable,
+ProductVersion/FileVersion `1.2.0-alpha.5`, SHA-256
+`97C21F367A46375A2B6010CC6E9307E7D853CEC4EAF420150A06CA47AD9D4182`.
+The release build passed in 1m42s after the exact-checkout process count was verified
+as zero. In the first pass, PID `94632` paused after durable RecoveryPublication
+serial 44 and before event/reply for request
+`69fb623e-7640-4cda-b7cf-261e70f0685d`, checkpoint
+`3a7e24b723a38dd7cffd478b67fc87c78a9df6fba09eb9e1e2825a2a6d4d22cd`.
+The exact process was force-terminated; journal serial/hash and the WebView LevelDB
+intent remained. In the second pass, PID `67752` published a fresh request
+`da5547eb-fdd5-4fcc-84f9-3f658aae706f` at serial 45, resumed from the exact trace,
+then paused after durable RecoveryAcknowledged serial 46 and before command reply/
+renderer cleanup. Its journal SHA-256 was
+`22E329110C96997CFEC893CFE6EF48D5F9F77A5A453C9DE64FC91ABACAF650F9`;
+the exact process was again force-terminated with the matching LevelDB intent still
+present. A final hook-free launch produced exactly one responsive, maximized
+`Syndocal` window at PID `44376`; after startup journal serial 46 and its SHA-256
+remained unchanged. The recovery offer remained, as required for the acknowledged
+checkpoint until a later coherent CleanSave. E3 is accepted; E4 is now the next
+Phase 1 tranche, and AI4 remains blocked by the dependency order.
+
+Immediately before committing this checkpoint, the warning ratchet rejected five
+new `too_many_arguments` suppressions in renderer-ticketed fixture helpers. They
+were replaced with one internal context object without changing Tauri command
+signatures or wire schemas. The executable lock-order audit was strengthened to
+prove direct mutators, Begin/Commit/Cancel delegation, the shared renderer owner
+gate, and all nine exact wrapper/helper/command bindings. Independent review
+returned P0/P1/P2 zero; the targeted audit, E3 6/6, recovered fixture 1/1,
+project-transaction 4/4, no-default Cargo check, format/diff, and the frontend
+warning ratchet all passed with zero first-party warnings and zero new suppressions.
+Because this behavior-preserving native refactor changed `main.rs`, a final release
+build was run from the checkpoint source. It passed in 1m49s and produced the
+56,470,016-byte executable SHA-256
+`8FDFD0EFB8D71D49BD1A137A4AA68F440F098B2C7B3BA253461F5C2AC14D6F19`,
+ProductVersion/FileVersion `1.2.0-alpha.5`. PID `113948` provided exactly one
+responsive, maximized `Syndocal` window. The crash-boundary evidence above remains
+bound to the explicitly identified `97C21F...` acceptance executable; the final
+build proves the reviewed checkpoint source still satisfies the native launch gate.

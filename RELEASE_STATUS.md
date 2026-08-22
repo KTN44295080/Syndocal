@@ -6,7 +6,42 @@ Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
-> Current continuation note: the active `1.2.0-alpha.4` train is not represented by the old v1.0 completion statement alone. Use the [current completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md), [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md), [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) as the current authorities. Do not mark AI3 complete, advance to AI4, or close the current Windows product release until their unchecked gates are closed.
+> Current continuation note: the active `1.2.0-alpha.5` train is not represented by the old v1.0 completion statement alone. Use the [current completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md), [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md), [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) as the current authorities. Do not mark AI3 complete, advance to AI4, or close the current Windows product release until their unchecked gates are closed.
+
+## 2026-08-22 alpha.5 recovery-durability checkpoint
+
+`1.2.0-alpha.5` is the next distributed-development ordinal; it is not beta, RC,
+or release. E2 authority bundle/generation consistency and D1 cache read purity
+are reconciled as accepted. E3 automated production-path evidence is independently
+green at P0/P1/P2 zero: App and its driver share publication/startup/ACK consumers,
+and the registered Rust commands share the complete durable/lifecycle/publication
+service with the process-boundary test. All focused frontend, Rust, build, invoke,
+localization, format, diff, and warning gates pass with zero first-party warnings.
+
+E3 is now accepted. The ordinary-off pause/trace implementation was independently
+reviewed at P0/P1/P2 zero and passed `e3_` 6/6 with zero first-party Cargo warnings.
+The E3 crash-acceptance build produced a 56,461,824-byte executable with SHA-256
+`97C21F367A46375A2B6010CC6E9307E7D853CEC4EAF420150A06CA47AD9D4182` and
+ProductVersion/FileVersion `1.2.0-alpha.5`.
+
+The first exact-path kill captured durable RecoveryPublication after journal
+43 -> 44 and before reply, with its browser intent retained. The second pass used
+a fresh request, resumed its exact B trace at serial 45, then captured durable
+RecoveryAcknowledged at serial 46 before reply/renderer cleanup; the journal and
+browser intent again survived the exact-path kill. A hook-free relaunch provided
+exactly one responsive, maximized `Syndocal` window at PID `44376`. Journal serial
+46 and SHA-256 `22E329110C96997CFEC893CFE6EF48D5F9F77A5A453C9DE64FC91ABACAF650F9`
+remained unchanged. The acknowledged recovery offer remained until a later
+coherent CleanSave, as specified. Phase 1 progress is 17/71. E4 Save durability is
+the next tranche; this does not complete AI3, physical I/O, ASIO, or the release.
+
+Commit preflight removed five newly added `too_many_arguments` suppressions through
+an internal context refactor and strengthened the external-admission lock-order
+audit. Independent review returned P0/P1/P2 zero; first-party warnings and new
+suppressions are both zero. The final checkpoint-source native build passed in
+1m49s and produced a 56,470,016-byte executable with SHA-256
+`8FDFD0EFB8D71D49BD1A137A4AA68F440F098B2C7B3BA253461F5C2AC14D6F19`.
+PID `113948` provided exactly one responsive, maximized `Syndocal` window.
 
 ## 2026-08-22 alpha.4 development checkpoint
 

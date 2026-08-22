@@ -4,7 +4,7 @@
 > requirement and final-gate authority, but its frozen checkpoint, 75.5% planning
 > roll-up, and Media A1 resume instructions are historical. Use
 > `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for the current dependency order,
-> `1.2.0-alpha.4` version train, warning ratchet, AI3 resume point, and checkpoint
+> `1.2.0-alpha.5` version train, warning ratchet, AI3 resume point, and checkpoint
 > workflow. Do not compare old and current percentages without identical denominators.
 
 > **OutputControl supersession (2026-08-21):** physical six-digit/Raw Input/Enter
@@ -2184,3 +2184,19 @@ Exactly one responsive window was maximized; Edit > Timeline rendered Click,
 Guide, Follow waiting, lanes, and the source shelf without a fault. This is a
 native UI smoke, not audible playback or physical editor + LED + projector,
 fixture/DMX, MTC/DJ Link, audio-device, soak, beta, RC, or whole-product proof.
+
+## 32. 2026-08-22 alpha.5 E3 recovery durability checkpoint
+
+The active artifact ordinal advances to `1.2.0-alpha.5` without changing any
+project or wire schema. E2 authority-bundle consistency and D1 cache/read purity
+are reconciled as accepted from their alpha.3 independent review and current
+focused reruns. E3 now has one shared App/driver publication, startup, and ACK
+consumer plus one shared registered Rust lifecycle service. Two independent
+reviews report P0/P1/P2 zero, and all focused frontend/Rust/build/warning gates
+are green with zero first-party warnings.
+
+E3 is still pending the single final native operation. That pass must use the
+real Tauri dispatch and browser localStorage, kill/relaunch after B publication
+with reply loss, kill/relaunch after durable ACK before browser cleanup, and then
+record the alpha.5 release executable identity and one responsive maximized
+Syndocal window. No static or headless result is substituted for this evidence.

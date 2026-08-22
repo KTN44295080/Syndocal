@@ -669,8 +669,8 @@ import {
   loadProjectRecoveryStorageState,
   projectRecoverySourceLabel,
   projectRecoveryTimeLabel,
-  registerProjectRecoveryIntent,
   saveProjectRecoveryCheckpoint,
+  startProjectRecoveryPublication,
   tombstoneProjectRecoveryCheckpoint,
   type ProjectRecoveryCheckpoint,
   type ProjectRecoveryIntent,
@@ -760,10 +760,6 @@ import {
   type ProjectAuthorityDispositionState,
   projectRecoveryCaptureIsCurrent,
   projectRecoveryAuthoritySignature,
-  projectRecoveryAcknowledgementCanClear,
-  projectRecoveryAcknowledgementApplicationIsCurrent,
-  projectRecoveryIntentDeliveryForAuthority,
-  projectRecoveryIntentStartupAction,
   projectAuthorityShouldRetryPersist,
   projectAuthorityTokenIsCurrent,
   rebaseDirtyProjectAuthorityMappings,
@@ -774,9 +770,10 @@ import {
   applyProjectAuthorityBundleProduction,
   applyProjectAuthorityReplacementProduction,
   applyProjectAuthorityRuntimeStatusProduction,
+  applyProjectRecoveryStartupProduction,
   beginProjectAuthorityRuntimeApplication,
+  createProjectRecoveryIntentConsumerProduction,
   projectAuthorityFallbackIsCurrent,
-  deliverProjectAuthorityStartupRecoveryIntentProduction,
   type ProjectAuthorityBundleApplicationDisposition,
   type ProjectAuthorityRuntimeEffects,
   type ProjectAuthorityRuntimeState,
@@ -2170,7 +2167,6 @@ export default function App() {
   const [projectRecoveryAuthoritySerial, setProjectRecoveryAuthoritySerial] = createSignal<number | null>(null);
   let activeProjectRecoveryIntent: ProjectRecoveryIntent | null = null;
   let projectRecoveryIntentRequestGeneration = 0;
-  let projectRecoveryIntentConsumer: Promise<void> | null = null;
   const [projectBackups, setProjectBackups] = createSignal<ProjectBackupSummary[]>([]);
   const [applicationUpdateConfiguration, setApplicationUpdateConfiguration] =
     createSignal<ApplicationUpdateConfiguration | null>(null);
@@ -13204,175 +13200,43 @@ export default function App() {
     Object.entries(timelineEventDrafts()).sort(([left], [right]) => Number(left) - Number(right)),
   );
 
-  const abandonProjectRecoveryIntent = (serial: number) => {
-    activeProjectRecoveryIntent = null;
-    projectRecoveryIntentConsumer = null;
-    recoveryCheckpointNeedsReplacement = true;
-    lastRecoverySignature = null;
-    setProjectRecoveryCheckpoint(null);
-    // This is best effort like the UnsavedReplacement preflight. The backend
-    // authority already won; a failed browser write must not resurrect A in
-    // the live UI or prevent C from remaining visible.
-    void tombstoneProjectRecoveryCheckpoint(serial);
-  };
-
-  /**
-   * One recovery invoke can be delivered in any order: Tauri event first,
-   * command reply first, or only a later authority poll. The intent is stored
-   * before invoke and this is the sole draft-staging/ACK owner, so duplicate
-   * deliveries coalesce instead of acknowledging or clearing twice.
-   */
-  const consumePendingProjectRecoveryIntent = (bundle: ProjectAuthorityBundle): Promise<void> => {
-    const intent = activeProjectRecoveryIntent;
-    if (!intent) return Promise.resolve();
-    const delivery = projectRecoveryIntentDeliveryForAuthority(intent, bundle);
-    if (delivery === "keep") return Promise.resolve();
-    if (delivery === "offer") {
-      if (saveProjectRecoveryCheckpoint(intent.checkpoint, bundle.recovery_authority_serial)) {
-        activeProjectRecoveryIntent = null;
-        recoveryCheckpointNeedsReplacement = false;
-        setProjectRecoveryCheckpoint(intent.checkpoint);
-        setMessage("Project recovery did not publish. The recovery checkpoint remains available to retry.");
-      } else {
-        setMessage(
-          "Project recovery did not publish, and browser storage could not be refreshed. Keep Syndocal open and retry recovery.",
-        );
-      }
-      return Promise.resolve();
-    }
-    if (delivery === "invalidate") {
-      abandonProjectRecoveryIntent(bundle.recovery_authority_serial);
-      return Promise.resolve();
-    }
-    if (projectRecoveryIntentConsumer) return projectRecoveryIntentConsumer;
-    const capturedIntent = intent;
-    if (delivery === "acknowledged") {
-      const expectedDrafts = reconcileTimelineEventDrafts(
+  const projectRecoveryIntentConsumer = createProjectRecoveryIntentConsumerProduction({
+    getActiveIntent: () => activeProjectRecoveryIntent,
+    setActiveIntent: (intent) => { activeProjectRecoveryIntent = intent; },
+    currentAuthority: () => authorityToken(projectMappingsAuthority()),
+    currentRecoverySerial: () => projectRecoveryAuthoritySerial(),
+    currentDraftSignature: timelineEventDraftSignature,
+    expectedDraftSignature: (bundle, intent) => JSON.stringify(
+      Object.entries(reconcileTimelineEventDrafts(
         bundle.snapshot.timeline.events,
-        capturedIntent.checkpoint.editor_drafts?.timeline_events ?? {},
-      );
-      const expectedDraftSignature = JSON.stringify(
-        Object.entries(expectedDrafts).sort(([left], [right]) => Number(left) - Number(right)),
-      );
-      if (timelineEventDraftSignature() === expectedDraftSignature) {
-        if (saveProjectRecoveryCheckpoint(
-          capturedIntent.checkpoint,
-          bundle.recovery_authority_serial,
-        )) {
-          activeProjectRecoveryIntent = null;
-          recoveryCheckpointNeedsReplacement = true;
-          lastRecoverySignature = null;
-          setProjectRecoveryCheckpoint(null);
-          setMessage(
-            `Recovered ${projectRecoverySourceLabel(capturedIntent.checkpoint)} from ${projectRecoveryTimeLabel(capturedIntent.checkpoint)}. Save to keep it.`,
-          );
-        } else {
-          setMessage(
-            "Recovered project is active, but its crash-recovery checkpoint could not be updated. Keep Syndocal open and save the project.",
-          );
-        }
-      } else {
-        setMessage(
-          "Recovered project acknowledgement arrived after local draft changes. The recovery intent remains available until the project is saved.",
-        );
-      }
-      return Promise.resolve();
-    }
-    const capturedAuthority = authorityToken(bundle);
-    const work = (async () => {
-      // The event may be observed before the original invoke resolves, but B
-      // must already be the UI's current authority before local A drafts can
-      // be reconciled into B's timeline.
-      if (activeProjectRecoveryIntent !== capturedIntent
-        || !projectAuthorityTokenIsCurrent(capturedAuthority, projectMappingsAuthority())
-        || projectRecoveryAuthoritySerial() !== capturedIntent.expected_target_serial) {
-        return;
-      }
-      const recoveredTimelineEventDrafts = capturedIntent.checkpoint.editor_drafts?.timeline_events ?? {};
+        intent.checkpoint.editor_drafts?.timeline_events ?? {},
+      )).sort(([left], [right]) => Number(left) - Number(right)),
+    ),
+    stageDrafts: (bundle, intent) => {
       setTimelineEventDrafts(reconcileTimelineEventDrafts(
         bundle.snapshot.timeline.events,
-        recoveredTimelineEventDrafts,
+        intent.checkpoint.editor_drafts?.timeline_events ?? {},
       ));
-      const stagedDraftSignature = timelineEventDraftSignature();
-      try {
-        const acknowledged = await tauriInvoke<ProjectAuthorityBundle>("acknowledge_project_recovery_applied", {
-          expectedEpoch: bundle.project_epoch,
-          expectedRevision: bundle.project_revision,
-          expectedCheckpointHash: bundle.checkpoint_hash,
-          expectedAuthorityDispositionGeneration: bundle.authority_disposition_generation,
-          recoveryRequestId: capturedIntent.request_id,
-        });
-        const acknowledgementApplicationCurrent = projectRecoveryAcknowledgementApplicationIsCurrent(
-          activeProjectRecoveryIntent === capturedIntent,
-          capturedAuthority,
-          projectMappingsAuthority(),
-        );
-        if (!acknowledgementApplicationCurrent) {
-          // A later project C already applied and is the live authority: its
-          // own application invalidated this intent and/or replaced the
-          // authority token while the ACK was in flight. Applying this stale B
-          // acknowledgement bundle would rewind C's MIDI/OSC/DMX/path/history/
-          // disposition UI, so drop every side effect and let C win. C's
-          // application already resolved this intent, and the durable
-          // acknowledged transition stays stored/recoverable for a restart.
-          return;
-        }
-        // Recovery ACK changes durable recovery/disposition state only. Input
-        // workers may have been connected or stopped while this RPC was in
-        // flight without changing the project token, so never let the ACK's
-        // captured input snapshot rewind that newer live UI truth.
-        applyProjectAuthorityRuntimeStatus(acknowledged, false);
-        const currentDraftSignature = timelineEventDraftSignature();
-        if (acknowledged.recovery_authority_serial === capturedIntent.expected_target_serial + 1
-          && projectRecoveryAcknowledgementCanClear(
-            stagedDraftSignature,
-            currentDraftSignature,
-            capturedAuthority,
-            authorityToken(acknowledged),
-            projectMappingsAuthority(),
-            acknowledgementApplicationCurrent,
-          )) {
-          if (saveProjectRecoveryCheckpoint(
-            capturedIntent.checkpoint,
-            acknowledged.recovery_authority_serial,
-          )) {
-            activeProjectRecoveryIntent = null;
-            recoveryCheckpointNeedsReplacement = true;
-            lastRecoverySignature = null;
-            setProjectRecoveryCheckpoint(null);
-            setMessage(
-              `Recovered ${projectRecoverySourceLabel(capturedIntent.checkpoint)} from ${projectRecoveryTimeLabel(capturedIntent.checkpoint)}. Save to keep it.`,
-            );
-          } else {
-            setMessage(
-              "Recovered project is active, but its crash-recovery checkpoint could not be updated. Keep Syndocal open and save the project.",
-            );
-          }
-        } else {
-          // B is still the live authority (the stale-C case returned above),
-          // but a local draft edit occurred while ACK was in flight. The
-          // backend is now truthfully unsaved B; retain that draft and force
-          // the next capture to write a coherent B envelope rather than
-          // clearing it.
-          activeProjectRecoveryIntent = null;
-          recoveryCheckpointNeedsReplacement = true;
-          lastRecoverySignature = null;
-        }
-      } catch (error) {
-        // A later C may have won the exact ACK race. Its event/poll will
-        // invalidate this intent; until then the one durable v3 envelope
-        // remains available for retry/restart rather than losing local drafts.
-        if (activeProjectRecoveryIntent === capturedIntent) {
-          setMessage(`Recovered project is waiting for acknowledgement: ${String(error)}`);
-        }
-      }
-    })();
-    const settled = work.finally(() => {
-      if (projectRecoveryIntentConsumer === settled) projectRecoveryIntentConsumer = null;
-    });
-    projectRecoveryIntentConsumer = settled;
-    return settled;
-  };
+      return timelineEventDraftSignature();
+    },
+    persistCheckpoint: (intent, serial) => saveProjectRecoveryCheckpoint(intent.checkpoint, serial),
+    setRecoveryOffer: (intent) => setProjectRecoveryCheckpoint(intent?.checkpoint ?? null),
+    setCheckpointNeedsReplacement: (required) => { recoveryCheckpointNeedsReplacement = required; },
+    resetRecoveryCaptureSignature: () => { lastRecoverySignature = null; },
+    tombstone: (serial) => { void tombstoneProjectRecoveryCheckpoint(serial); },
+    acknowledge: (request) => tauriInvoke<ProjectAuthorityBundle>(
+      "acknowledge_project_recovery_applied",
+      request,
+    ),
+    applyAcknowledgementRuntimeStatus: (acknowledged) => {
+      applyProjectAuthorityRuntimeStatus(acknowledged, false);
+    },
+    message: setMessage,
+    recoveredMessage: (intent) =>
+      `Recovered ${projectRecoverySourceLabel(intent.checkpoint)} from ${projectRecoveryTimeLabel(intent.checkpoint)}. Save to keep it.`,
+  });
+  const consumePendingProjectRecoveryIntent = (bundle: ProjectAuthorityBundle): Promise<void> =>
+    projectRecoveryIntentConsumer.consume(bundle);
 
   const captureProjectAuthorityIdentity = (): ProjectAuthorityToken => ({
     ...projectMappingsAuthority(),
@@ -14995,27 +14859,32 @@ export default function App() {
       setMessage("Recovery request generation is exhausted; reload Syndocal before retrying.");
       return;
     }
-    const intent = registerProjectRecoveryIntent(
+    const publication = startProjectRecoveryPublication(
       checkpoint,
       sourceSerial,
       ++projectRecoveryIntentRequestGeneration,
-    );
-    if (!intent) {
-      setMessage("Unable to persist the recovery handoff. Browser recovery storage is unavailable.");
-      return;
-    }
-    // Register before invoking Tauri. An event-only B can now find this exact
-    // A/source+1 rendezvous even if the command reply is dropped.
-    activeProjectRecoveryIntent = intent;
-    setProjectRecoveryCheckpoint(null);
-    try {
-      const result = await invoke<ProjectLoadResult>("load_project_checkpoint", {
+      (intent) => {
+        // Install the in-memory rendezvous before the Tauri callback runs. An
+        // event-only B can therefore be consumed even if its command reply is
+        // dropped immediately after backend publication.
+        activeProjectRecoveryIntent = intent;
+        setProjectRecoveryCheckpoint(null);
+      },
+      (intent) => invoke<ProjectLoadResult>("load_project_checkpoint", {
         project: checkpoint.project,
         label: `Recovery ${checkpoint.saved_at}`,
         currentPath: checkpoint.source_path,
         expectedRecoveryAuthoritySerial: intent.source_serial,
         recoveryRequestId: intent.request_id,
-      });
+      }),
+    );
+    if (!publication) {
+      setMessage("Unable to persist the recovery handoff. Browser recovery storage is unavailable.");
+      return;
+    }
+    const { intent } = publication;
+    try {
+      const result = await publication.reply;
       const applied = await applyLoadedProjectResult(result, checkpoint.source_path);
       if (!projectAuthorityApplicationResultIsCurrent(applied) || !applied.bundle) return;
     } catch (error) {
@@ -15065,41 +14934,13 @@ export default function App() {
       setProjectRecoveryAuthoritySerial(observedRecoveryAuthoritySerial);
       const stored = loadProjectRecoveryStorageState(bundle.recovery_authority_serial);
       if (projectRecoveryAuthoritySerial() !== bundle.recovery_authority_serial) return;
-      if (stored.kind === "checkpoint") {
-        setProjectRecoveryCheckpoint(stored.checkpoint);
-        return;
-      }
-      if (stored.kind !== "intent") return;
-
-      // A renderer can restart in either half of the handoff. Use the same
-      // coherent authority image which selected the storage envelope to
-      // decide whether A remains an offer or B must resume draft staging.
-      const startup = projectRecoveryIntentStartupAction(
-        stored.intent,
-        bundle.recovery_authority_serial,
-        bundle.authority_disposition,
-        bundle.recovery_authority_last_transition,
-        bundle.checkpoint_hash,
-      );
-      if (startup === "offer_checkpoint") {
-        setProjectRecoveryCheckpoint(stored.intent.checkpoint);
-        return;
-      }
-      if (startup !== "resume_intent") return;
-      activeProjectRecoveryIntent = stored.intent;
-      const applied = applyAuthorityBundleAsReplacement(bundle);
-      // The replacement event may have hydrated this exact B before the
-      // recovery-storage handshake completed. In that one startup-only
-      // duplicate case, deliver the newly installed intent once. Ordinary
-      // duplicate event/poll paths never use this gate.
-      if (applied.verdict === "duplicate") {
-        deliverProjectAuthorityStartupRecoveryIntentProduction(
-          projectAuthorityRuntimeState(),
-          stored.intent,
-          bundle,
-          (candidate) => { void consumePendingProjectRecoveryIntent(candidate); },
-        );
-      }
+      applyProjectRecoveryStartupProduction(bundle, stored, {
+        setRecoveryOffer: setProjectRecoveryCheckpoint,
+        setActiveIntent: (intent) => { activeProjectRecoveryIntent = intent; },
+        applyReplacement: (candidate) => applyAuthorityBundleAsReplacement(candidate).verdict,
+        currentRuntimeState: projectAuthorityRuntimeState,
+        consume: (candidate) => { void consumePendingProjectRecoveryIntent(candidate); },
+      });
     } catch (error) {
       // Do not offer an unstamped v1/browser payload when the durable backend
       // journal cannot be read. Recovery remains absent rather than guessing.

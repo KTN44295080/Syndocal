@@ -290,6 +290,36 @@ export const registerProjectRecoveryIntent = (
   return writeRecoveryStorage({ kind: "intent", intent }) ? intent : null;
 };
 
+export type ProjectRecoveryPublicationStart<T> = {
+  intent: ProjectRecoveryIntent;
+  reply: Promise<T>;
+};
+
+/**
+ * Production handoff boundary for browser recovery publication.
+ *
+ * The durable v3 intent and the renderer's active-intent owner are installed
+ * synchronously before the Tauri invoke callback is entered. This ordering is
+ * what makes an event-only B publication recoverable when the command reply is
+ * lost, and keeping it in one exported seam lets the crash/reply-loss driver
+ * exercise the exact ordering used by App rather than duplicating it.
+ */
+export const startProjectRecoveryPublication = <T>(
+  checkpoint: ProjectRecoveryCheckpoint,
+  sourceSerial: number,
+  requestGeneration: number,
+  onRegistered: (intent: ProjectRecoveryIntent) => void,
+  invokePublication: (intent: ProjectRecoveryIntent) => Promise<T>,
+): ProjectRecoveryPublicationStart<T> | null => {
+  const intent = registerProjectRecoveryIntent(checkpoint, sourceSerial, requestGeneration);
+  if (!intent) return null;
+  onRegistered(intent);
+  return {
+    intent,
+    reply: invokePublication(intent),
+  };
+};
+
 /** Atomically hide a stale checkpoint after an unsaved authority replacement. */
 export const tombstoneProjectRecoveryCheckpoint = (recoveryAuthoritySerial: number) =>
   isRecoveryAuthoritySerial(recoveryAuthoritySerial)

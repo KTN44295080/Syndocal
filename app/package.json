@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.4",
+  "version": "1.2.0-alpha.5",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
@@ -61,6 +61,7 @@
     "check:move-effect-helpers": "node scripts/check-move-effect-helpers.mjs",
     "check:project-storage": "node scripts/check-project-storage-helpers.mjs",
     "check:project-transaction": "node scripts/check-project-transaction.mjs && node scripts/check-project-authority.mjs",
+    "check:project-recovery-e3": "node scripts/check-project-recovery-e3.mjs",
     "check:project-shortcuts": "node scripts/check-project-shortcuts.mjs",
     "check:workspace-operator": "node scripts/check-workspace-operator.mjs",
     "check:workspace-operator-viewport": "node scripts/check-viewport-containment.mjs --workspace-operator-only",

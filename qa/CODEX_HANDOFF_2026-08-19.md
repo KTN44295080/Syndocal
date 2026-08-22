@@ -6,7 +6,7 @@
 - Current implementation checkpoint: `0a3e91ab87d4be4735710234d1ba002e484375ef`
   (`feat: add sample-accurate timeline cue audio`). Push evidence is recorded by
   the documentation follow-up commit containing this line.
-- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.4`.
+- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.5`.
 - **2026-08-22 Windows-only scope:** current completion targets this operator's
   Windows PC. macOS/Linux control/native/warning rows and the six distribution,
   legal, signing, SBOM, clean-machine, updater, and publication rows are deferred
@@ -1384,3 +1384,87 @@ and main
 - Remaining external acceptance is audible playback plus the editor + LED panel
   + projector operation, fixture/serial-DMX, MTC/DJ Link, audio device, and soak/
   recovery rows. Do not infer those from the native UI smoke.
+
+## 2026-08-22 alpha.5 E3 recovery durability automated handoff
+
+- Branch/starting HEAD: `codex/syndocal-v1.2` /
+  `396f9f207bb264a39bce29869f7d7f54d93096ad`. Product metadata is advancing to
+  `1.2.0-alpha.5`; no project, command, API, ABI, recovery-storage, or journal
+  schema version changes with this product ordinal.
+- E2 authority generation/bundle consistency and D1 cache/read-purity were already
+  included in the independently accepted alpha.3 tranche. Current project-storage
+  and project-transaction/authority checks remain green, so their previously stale
+  completion-flow boxes are now reconciled as accepted.
+- E3 uses one production orchestration. App and the JavaScript driver import the
+  same publication/startup/intent-consumer functions. The registered Rust load
+  and ACK commands call the same external-admission, standby lifecycle, durable
+  journal, output-retirement, engine-publication, coordinator-commit, and event
+  service exercised by the Rust process-boundary test.
+- Stable pre-version-bump implementation hashes are main
+  `58C0E9F64C6A53EADF54AE5A475A58F0FA8FC46549418CDFB9A9148EA118764C`, App
+  `A53767D042D0B9D37FDA3EA6E8A5C7BD50124CC6EED726B630A903C6AF1AAABF`, runtime
+  `EFD6AC1392DC567A896500CF365CBC4FA46C013CB9E690A0AAD74E01687DF14B`, storage
+  `C90ACC544375958EFAD6694B5167E7B3CBEF69DEB96BBE557BF35FA337A92D99`, E3 driver
+  `C25B901AED824C4CF93C4AF73396685E190ADA2B379F82801A369891B9359FE9`, and package
+  `E97C76F1DB583D648528D7EE046DD953B7C0D2C3FA7836FC2EC25665C96F9077`.
+- Two independent reviews report P0/P1/P2 zero. Automated gates pass: E3 driver,
+  project transaction/authority, project storage, TypeScript, Vite build, exact
+  411 frontend invokes, 3541/3541 localization, Rust E3 1/1, project-recovery
+  authority 2/2, recovery-authority 3/3, no-default Cargo check, Rust format,
+  diff-check, and frontend warning ratchet at zero first-party/total warnings.
+- Automated production-core evidence is not native process-kill evidence. Before
+  E3 is checked complete, one final maximized Windows operation must exercise the
+  real Tauri/localStorage path at B-published/reply-lost kill/relaunch and at
+  ACK-durable/browser-cleanup-pending kill/relaunch. Record exact alpha.5 build,
+  executable hash, process/window, and recovery outcomes below this handoff.
+- Native alpha.5 repair checkpoint: exact-path PID `113004` was the sole old
+  checkout process and was terminated before building. After exposing the existing
+  LGPL shared FFmpeg SDK through `FFMPEG_DIR`/`PATH` and LLVM through
+  `LIBCLANG_PATH`, `pnpm --dir app tauri build --no-bundle` passed. The executable
+  SHA-256 is `F318FAEBEFBA88B03EC179DF34395E34F5BD8D960D37C2C579F8A209BD4BADC5`;
+  ProductVersion/FileVersion are `1.2.0-alpha.5`. PID `54456` supplied one
+  responsive, maximized `Syndocal` window. Edit > Lighting created
+  `Native QA Group` and reported success, proving the repaired renderer-ticketed
+  group route no longer rejects its own Begin as a Display publication.
+- E3 is complete. The ordinary-off pause/trace implementation froze at main hash
+  `5014DEA37D6788FB6EECFAA4A5A7C9FF59FD83C593F93EC6D27F5EBE83D5AF23` and helper
+  hash `17CF98F17095EE89559CA26B03772A09AE5C85CE60F158D6712434A643DDADC8`;
+  independent review returned P0/P1/P2 zero. `e3_` passed 6/6, no-default Cargo
+  check had zero first-party warnings, and format/diff checks passed.
+- The final native release build passed in 1m42s and produced the 56,461,824-byte
+  `1.2.0-alpha.5` executable with SHA-256
+  `97C21F367A46375A2B6010CC6E9307E7D853CEC4EAF420150A06CA47AD9D4182`.
+  The exact-checkout process count was zero before the build.
+- B/reply-loss pass: PID `94632`, request
+  `69fb623e-7640-4cda-b7cf-261e70f0685d`, checkpoint
+  `3a7e24b723a38dd7cffd478b67fc87c78a9df6fba09eb9e1e2825a2a6d4d22cd`,
+  journal 43 -> 44. The ready trace and journal matched before the exact process
+  was force-terminated. The journal and WebView LevelDB intent remained afterward.
+- ACK/cleanup-pending pass: PID `67752` issued the fresh request
+  `da5547eb-fdd5-4fcc-84f9-3f658aae706f`; RecoveryPublication advanced 44 -> 45,
+  the exact ready record resumed it, and durable RecoveryAcknowledged advanced
+  45 -> 46 before reply. Journal SHA-256 was
+  `22E329110C96997CFEC893CFE6EF48D5F9F77A5A453C9DE64FC91ABACAF650F9`.
+  The exact process was killed while unresponsive only because it was deliberately
+  paused; the matching browser intent remained.
+- Final hook-free relaunch PID `44376` provided exactly one responsive, maximized
+  `Syndocal` window. Journal serial 46/hash stayed unchanged and the acknowledged
+  recovery offer remained available until a coherent CleanSave, matching the E3
+  startup contract. The next tranche is E4 Save durability; do not begin AI4.
+- Commit-preflight warning audit then found five new `too_many_arguments`
+  suppressions in renderer-ticketed fixture helpers. They were removed through one
+  internal context object; public Tauri signatures and wire schemas are unchanged.
+  The lock-order audit now proves direct routes, transaction delegation, the shared
+  renderer owner gate, and all nine exact wrapper/helper/command bindings.
+  Independent review returned P0/P1/P2 zero, and the audit, E3 6/6, recovered
+  fixture 1/1, project-transaction 4/4, no-default check, format/diff, and warning
+  ratchet passed at zero first-party warnings and zero new suppressions. Final main
+  SHA-256 is `EEFAFB425E935BCBFB3C94278021EBB58D4143B94EB30F78DA9CA6CA794E2B62`.
+- The final checkpoint-source native build passed in 1m49s after the exact checkout
+  process count was verified as zero. The 56,470,016-byte executable reports
+  ProductVersion/FileVersion `1.2.0-alpha.5` and SHA-256
+  `8FDFD0EFB8D71D49BD1A137A4AA68F440F098B2C7B3BA253461F5C2AC14D6F19`.
+  PID `113948` supplied exactly one responsive, maximized `Syndocal` window. The
+  two crash boundaries remain explicitly bound to the earlier `97C21F...`
+  acceptance build; this final launch covers the later behavior-preserving internal
+  refactor and strengthened proof gate.
