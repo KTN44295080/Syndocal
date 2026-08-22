@@ -64,6 +64,20 @@ const backupSuccessStatus = (request, overrides = {}) => ({
   ...overrides,
 });
 
+const userTemplateSuccessStatus = (request, overrides = {}) => ({
+  request: structuredClone(request),
+  shapeHash: "c".repeat(64),
+  surface: "user_template",
+  state: "succeeded",
+  targetPath: "C:/shows/template.sdctemplate",
+  artifactDigest: "d".repeat(64),
+  backup: null,
+  recoveryAuthoritySerial: 4,
+  authority: null,
+  error: null,
+  ...overrides,
+});
+
 const pendingStatus = (request, state, overrides = {}) => ({
   request: structuredClone(request),
   shapeHash: "d".repeat(64),
@@ -321,6 +335,18 @@ try {
     null,
     "unsafe nested authority generations fail before authority application",
   );
+  const userTemplateRequest = {
+    ...first.request,
+    surface: "user_template",
+    reason: null,
+    targetPolicy: "dialog",
+  };
+  const userTemplateTerminal = userTemplateSuccessStatus(userTemplateRequest);
+  assert.deepEqual(
+    publication.projectPublicationStatusForRequestFromUnknown(userTemplateTerminal, userTemplateRequest),
+    userTemplateTerminal,
+    "a successful user template export accepts the canonical authority:null receipt",
+  );
   assert.deepEqual(terminal.request, publication.loadProjectPublicationIntent().request);
   const applyOrder = [];
   await publication.settleProjectPublicationStatusV1(
@@ -501,6 +527,70 @@ try {
   );
   assert.equal(lateEvent.state, "selected", "reply-before-event must reject a stale phase regression");
   assert.equal(storage.get("syndocal.projectPublication.v1"), beforeLateEvent, "late events cannot mutate durable browser state");
+
+  // A user-template export is an external artifact, not a project authority
+  // publication. The production controller accepts its canonical Success, but
+  // must reject a backend regression that attaches a project authority before
+  // either UI application or the durable ACK path can run.
+  publication.clearProjectPublicationStorageForTests();
+  let canonicalTemplateApplyCount = 0;
+  let canonicalTemplateAckCount = 0;
+  const canonicalTemplateHarness = createControllerHarness({
+    invokeStatus: async (command, request) => {
+      assert.equal(command, "save_user_template_v1");
+      return userTemplateSuccessStatus(request);
+    },
+    applyTerminal: async () => { canonicalTemplateApplyCount += 1; },
+    acknowledgeTerminal: async (request) => {
+      canonicalTemplateAckCount += 1;
+      assert.equal(publication.acknowledgeProjectPublicationIntent(request), true);
+    },
+  });
+  const canonicalTemplate = await canonicalTemplateHarness.controller.start("user_template");
+  assert.equal(canonicalTemplate.state, "succeeded");
+  assert.equal(canonicalTemplateApplyCount, 1);
+  assert.equal(canonicalTemplateAckCount, 1);
+
+  publication.clearProjectPublicationStorageForTests();
+  let malformedTemplateApplyCount = 0;
+  let malformedTemplateAckCount = 0;
+  const malformedTemplateHarness = createControllerHarness({
+    invokeStatus: async (command, request) => {
+      assert.equal(command, "save_user_template_v1");
+      return userTemplateSuccessStatus(request, { authority: canonicalAuthority(request) });
+    },
+    applyTerminal: async () => { malformedTemplateApplyCount += 1; },
+    acknowledgeTerminal: async () => { malformedTemplateAckCount += 1; },
+  });
+  await assert.rejects(
+    malformedTemplateHarness.controller.start("user_template"),
+    /malformed or unsupported project publication receipt/,
+  );
+  assert.equal(malformedTemplateApplyCount, 0, "user-template authority regression must reject before UI application");
+  assert.equal(malformedTemplateAckCount, 0, "user-template authority regression must reject before native ACK");
+  assert.equal(publication.loadProjectPublicationIntent().request.surface, "user_template");
+
+  // Backup Success likewise owns only a backup artifact. Use a complete,
+  // otherwise canonical authority bundle here (rather than `{}`) to prove
+  // the surface-specific authority:null invariant rejects before settlement.
+  publication.clearProjectPublicationStorageForTests();
+  let malformedBackupApplyCount = 0;
+  let malformedBackupAckCount = 0;
+  const malformedBackupHarness = createControllerHarness({
+    invokeStatus: async (command, request) => {
+      assert.equal(command, "save_project_backup_v1");
+      return backupSuccessStatus(request, { authority: canonicalAuthority(request) });
+    },
+    applyTerminal: async () => { malformedBackupApplyCount += 1; },
+    acknowledgeTerminal: async () => { malformedBackupAckCount += 1; },
+  });
+  await assert.rejects(
+    malformedBackupHarness.controller.start("backup", "autosave"),
+    /malformed or unsupported project publication receipt/,
+  );
+  assert.equal(malformedBackupApplyCount, 0, "backup authority regression must reject before UI application");
+  assert.equal(malformedBackupAckCount, 0, "backup authority regression must reject before native ACK");
+  assert.equal(publication.loadProjectPublicationIntent().request.surface, "backup");
 
   // Malformed/future native replies are rejected by the production controller
   // before apply, ACK queueing, or any pending UI callback.

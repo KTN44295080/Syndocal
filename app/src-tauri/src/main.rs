@@ -39942,20 +39942,24 @@ fn publication_terminal_authority_if_current(
     coordinator: &ProjectCoordinator,
     terminal: &PersistedProjectPublicationTerminalV1,
 ) -> Option<ProjectAuthorityBundle> {
-    let path_is_current = if matches!(
+    if !matches!(
         terminal.surface,
         ProjectPublicationSurfaceV1::Save | ProjectPublicationSurfaceV1::SaveAs
     ) {
-        coordinator.authority_disposition == ProjectAuthorityDisposition::CleanAtPath
-            && coordinator
-                .ancillary
-                .current_project_path
-                .as_ref()
-                .map(|path| path.to_string_lossy().to_string())
-                == terminal.target_path
-    } else {
-        true
-    };
+        // Template and backup publication never adopt or mutate project
+        // authority. Returning a coincidentally matching E/R/H bundle would
+        // falsely describe them as project saves and violates the V1 receipt
+        // invariant consumed by the renderer.
+        return None;
+    }
+    let path_is_current = coordinator.authority_disposition
+        == ProjectAuthorityDisposition::CleanAtPath
+        && coordinator
+            .ancillary
+            .current_project_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+            == terminal.target_path;
     (terminal.outcome == ProjectPublicationTerminalOutcomeV1::Succeeded
         && coordinator.epoch == terminal.project_epoch
         && coordinator.revision == terminal.project_revision
@@ -80498,6 +80502,184 @@ pub(crate) mod tests {
         assert_eq!(coordinator.revision, revision_before);
         assert_eq!(coordinator.checkpoint_hash, hash_before);
         drop(coordinator);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn template_and_backup_terminal_receipts_never_expose_project_authority() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("publication-nonproject-authority");
+        fs::create_dir_all(&directory).unwrap();
+        let journal_path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("show.sdctemplate");
+        let digest = "b".repeat(64);
+        let (epoch, revision, checkpoint_hash, recovery_authority_serial) = {
+            let coordinator = harness.state.project_coordinator.lock().unwrap();
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+                coordinator.recovery_authority_serial,
+            )
+        };
+        let mut request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::UserTemplate,
+            "renderer_template_authority",
+            1,
+            None,
+            None,
+        );
+        request.expected_project_epoch = epoch;
+        request.expected_project_revision = revision;
+        request.expected_checkpoint_hash = checkpoint_hash.clone();
+        request.mapping_authority_hash = checkpoint_hash.clone();
+        let shape_hash = project_publication_shape_hash_v1(&request).unwrap();
+        let template_terminal = PersistedProjectPublicationTerminalV1 {
+            request: request.clone(),
+            shape_hash: shape_hash.clone(),
+            surface: ProjectPublicationSurfaceV1::UserTemplate,
+            outcome: ProjectPublicationTerminalOutcomeV1::Succeeded,
+            project_epoch: epoch,
+            project_revision: revision,
+            checkpoint_hash: checkpoint_hash.clone(),
+            target_path: Some(target.to_string_lossy().to_string()),
+            artifact_digest: Some(digest.clone()),
+            backup: None,
+            recovery_authority_serial,
+            error: None,
+            warning: None,
+        };
+        let backup_target = directory.join("backup-1.json");
+        let backup_digest = "c".repeat(64);
+        let mut backup_request = project_publication_request_for_test(
+            ProjectPublicationSurfaceV1::Backup,
+            "renderer_backup_authority",
+            1,
+            None,
+            Some("autosave".to_string()),
+        );
+        backup_request.expected_project_epoch = epoch;
+        backup_request.expected_project_revision = revision;
+        backup_request.expected_checkpoint_hash = checkpoint_hash.clone();
+        backup_request.mapping_authority_hash = checkpoint_hash.clone();
+        let backup_summary = ProjectBackupSummary {
+            id: 1,
+            created_at_unix_ms: 1,
+            source_path: None,
+            reason: "autosave".to_string(),
+            bytes: 128,
+        };
+        let backup_terminal = PersistedProjectPublicationTerminalV1 {
+            request: backup_request.clone(),
+            shape_hash: project_publication_shape_hash_v1(&backup_request).unwrap(),
+            surface: ProjectPublicationSurfaceV1::Backup,
+            outcome: ProjectPublicationTerminalOutcomeV1::Succeeded,
+            project_epoch: epoch,
+            project_revision: revision,
+            checkpoint_hash: checkpoint_hash.clone(),
+            target_path: Some(backup_target.to_string_lossy().to_string()),
+            artifact_digest: Some(backup_digest.clone()),
+            backup: Some(backup_summary.clone()),
+            recovery_authority_serial,
+            error: None,
+            warning: None,
+        };
+        {
+            let coordinator = harness.state.project_coordinator.lock().unwrap();
+            assert!(publication_terminal_authority_if_current(
+                &harness.state,
+                &coordinator,
+                &template_terminal,
+            )
+            .is_none());
+            assert!(project_publication_terminal_status_v1(
+                &template_terminal,
+                publication_terminal_authority_if_current(
+                    &harness.state,
+                    &coordinator,
+                    &template_terminal,
+                ),
+            )
+            .authority
+            .is_none());
+
+            assert!(publication_terminal_authority_if_current(
+                &harness.state,
+                &coordinator,
+                &backup_terminal,
+            )
+            .is_none());
+            assert!(project_publication_terminal_status_v1(
+                &backup_terminal,
+                publication_terminal_authority_if_current(
+                    &harness.state,
+                    &coordinator,
+                    &backup_terminal,
+                ),
+            )
+            .authority
+            .is_none());
+        }
+
+        persist_project_recovery_authority_state_to_path(
+            &journal_path,
+            &PersistedProjectRecoveryAuthorityState {
+                version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                serial: recovery_authority_serial,
+                last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+                pending_clean_save: None,
+                publication_journal: PersistedProjectPublicationJournalV1 {
+                    origins: vec![
+                        PersistedProjectPublicationOriginV1 {
+                            origin_id: request.origin_id.clone(),
+                            high_water_request_id: request.request_id,
+                            acknowledged_request_id: 0,
+                            acknowledged_shape_hash: None,
+                        },
+                        PersistedProjectPublicationOriginV1 {
+                            origin_id: backup_request.origin_id.clone(),
+                            high_water_request_id: backup_request.request_id,
+                            acknowledged_request_id: 0,
+                            acknowledged_shape_hash: None,
+                        },
+                    ],
+                    pending: Vec::new(),
+                    terminals: vec![template_terminal, backup_terminal],
+                    latest_reservation_generation: 0,
+                },
+            },
+        )
+        .unwrap();
+        install_project_recovery_authority_from_path(&harness.state, &journal_path).unwrap();
+        let restarted_query = get_project_publication_receipt_with_observer_v1(
+            &harness.state,
+            &journal_path,
+            request,
+            observe_prepared_project_publication_v1,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(restarted_query.state, "succeeded");
+        assert_eq!(
+            restarted_query.artifact_digest.as_deref(),
+            Some(digest.as_str())
+        );
+        assert!(restarted_query.authority.is_none());
+        let restarted_backup_query = get_project_publication_receipt_with_observer_v1(
+            &harness.state,
+            &journal_path,
+            backup_request,
+            observe_prepared_project_publication_v1,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(restarted_backup_query.state, "succeeded");
+        assert_eq!(
+            restarted_backup_query.artifact_digest.as_deref(),
+            Some(backup_digest.as_str())
+        );
+        assert_eq!(restarted_backup_query.backup, Some(backup_summary));
+        assert!(restarted_backup_query.authority.is_none());
         let _ = fs::remove_dir_all(directory);
     }
 
