@@ -3,9 +3,9 @@
 ## Current checkpoint
 
 - Branch: `codex/syndocal-v1.2`
-- Pushed checkpoint HEAD: `4b3781d7e998d70f56d738c64af0fdf473421c51`
-  (`feat: expand two-song guide cues`), with the complete five-commit checkpoint
-  range `486d420..4b3781d` published to `origin/codex/syndocal-v1.2`.
+- Current implementation checkpoint: `0a3e91ab87d4be4735710234d1ba002e484375ef`
+  (`feat: add sample-accurate timeline cue audio`). Push evidence is recorded by
+  the documentation follow-up commit containing this line.
 - Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.4`.
 - **2026-08-22 Windows-only scope:** current completion targets this operator's
   Windows PC. macOS/Linux control/native/warning rows and the six distribution,
@@ -1346,9 +1346,9 @@ and main
 
 ## 2026-08-22 alpha.4 cue-audio integration handoff
 
-- Branch/HEAD before the alpha.4 checkpoint commit: `codex/syndocal-v1.2` /
-  `9b0bd7e1755571037c9ff552e880467f6ee47f8d`. The integrated implementation and
-  independent reviews are complete and ready for one checkpoint commit/push.
+- Branch/implementation checkpoint: `codex/syndocal-v1.2` /
+  `0a3e91ab87d4be4735710234d1ba002e484375ef`. Its parent was
+  `9b0bd7e1755571037c9ff552e880467f6ee47f8d`.
 - Product metadata has advanced consistently to `1.2.0-alpha.4` across the
   workspace manifest, first-party Cargo.lock entries, frontend/Tauri manifests,
   release checker, artifact names, README, completion flow, roadmap, and release
