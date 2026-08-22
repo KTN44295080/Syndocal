@@ -14,6 +14,21 @@
   same registered Tauri/control-plane production paths from backend drivers.
   Do not repeat Computer Use for every fix. Run one maximized release-executable
   UI/hardware acceptance after the integrated bundle is otherwise green.
+- **2026-08-22 `1.2.0-alpha.3` checkpoint:** Commit A `486d420` records the
+  integrated Windows show-core work and synchronized product metadata; Commit B
+  `4120539` contains only the reviewed frontend build-marker rebaseline. The
+  explicit `486d420...4120539` output-marker audit passed. Release metadata and
+  its 65 self-test groups, Cargo locked metadata, frontend build (268 modules),
+  localization 3530/3530, invoke inventory 411, OutputControl, video-window,
+  project-authority, fixture-catalog, Timeline DnD, empty-state, and the focused
+  five-viewport Edit/Timeline/Setup checks all passed. The no-default Syndocal
+  check emitted zero first-party warnings. Timeline media audio passed 30/30,
+  engine audio 12/12, Follow and child-quorum 1/1, with fixed-hash independent
+  review P0/P1/P2=0 (`engine` `C9FB7C0A...`, `main` `BEA51F02...`). The remaining
+  checkpoint actions are the normal warning gate on this documentation-only
+  successor, the mandatory native release build/window check, and push. No
+  feature UI operation has been repeated; the single full operator/hardware pass
+  remains reserved for final acceptance.
 - **2026-08-22 Timeline click gap:** the present Rodio click is a 25 ms polling,
   fixed-4/4 sine-tone implementation. It is not accepted for the show-core. The
   next independent tranche after the real MediaAsset path must add an authored
