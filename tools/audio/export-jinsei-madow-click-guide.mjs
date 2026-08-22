@@ -22,7 +22,56 @@ const LIFE_RAMP_BEATS = 32;
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "../..");
 const GUIDE_DIR = resolve(REPO_ROOT, "app/src-tauri/assets/timeline-guide/en");
-const OUTPUT_DIR = resolve(process.argv[2] ?? "C:/TEMP/syndocal-show-audio");
+
+// The default export remains the original one-performance-beat preview.  The
+// perceptual mode is deliberately opt-in because it is an audition artifact,
+// not a runtime scheduling change.  Both `--perceptual-preview` and
+// `--mode perceptual-preview` are accepted so the mode is explicit in scripts
+// as well as in the generated manifest.
+function parseExportArgs(args) {
+  let output;
+  let mode = "default";
+  let modeWasSet = false;
+  const setMode = (value) => {
+    assert(!modeWasSet, "export mode is specified at most once");
+    mode = value;
+    modeWasSet = true;
+  };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--perceptual-preview") {
+      setMode("perceptual-preview");
+    } else if (arg === "--mode") {
+      setMode(args[index + 1] ?? "");
+      index += 1;
+    } else if (arg.startsWith("--mode=")) {
+      setMode(arg.slice("--mode=".length));
+    } else if (arg.startsWith("-")) {
+      assert(false, `unknown export option ${arg}`);
+    } else {
+      assert(arg.trim().length > 0, "output argument is not blank");
+      assert(output === undefined, `unexpected extra output argument ${arg}`);
+      output = arg;
+    }
+  }
+  assert(mode === "default" || mode === "perceptual-preview", `unsupported export mode ${mode}`);
+  return { output: output ?? "C:/TEMP/syndocal-show-audio", mode };
+}
+
+const EXPORT_OPTIONS = parseExportArgs(process.argv.slice(2));
+const EXPORT_MODE = EXPORT_OPTIONS.mode;
+const OUTPUT_DIR = resolve(EXPORT_OPTIONS.output);
+
+// Perceptual alignment uses a conservative short-time RMS activity envelope.
+// Each 10 ms forward-looking window is active when its RMS is at least 0.004 or 2%
+// of the asset's peak RMS, whichever is greater.  The first active window
+// starts the audible interval; the last active window owns all of its 10 ms
+// frames.  This intentionally rounds the audible tail later (never earlier),
+// making the 50 ms end margin safe and deterministic for the current PCM set.
+const ACTIVITY_WINDOW_FRAMES = Math.round(SAMPLE_RATE * 0.010);
+const ACTIVITY_ABSOLUTE_RMS_FLOOR = 0.004;
+const ACTIVITY_RELATIVE_RMS = 0.02;
+const PERCEPTUAL_END_MARGIN_FRAMES = Math.round(SAMPLE_RATE * 0.050);
 
 const MADOW_METER = new Map([
   [18, 6],
@@ -143,6 +192,61 @@ function resampleLinearDeterministic(samples, sourceRate, destinationRate) {
   return output;
 }
 
+function measurePcmActivity(samples) {
+  assert(samples.length >= ACTIVITY_WINDOW_FRAMES, "guide asset is longer than one activity window");
+  let rollingEnergy = 0;
+  for (let frame = 0; frame < ACTIVITY_WINDOW_FRAMES; frame += 1) {
+    rollingEnergy += samples[frame] * samples[frame];
+  }
+  let peakRms = 0;
+  const windowRms = new Float64Array(samples.length - ACTIVITY_WINDOW_FRAMES + 1);
+  for (let start = 0; start < windowRms.length; start += 1) {
+    if (start > 0) {
+      rollingEnergy += samples[start + ACTIVITY_WINDOW_FRAMES - 1] ** 2;
+      rollingEnergy -= samples[start - 1] ** 2;
+    }
+    // Tiny negative values can result from rolling floating-point subtraction
+    // when the source window is digital silence.
+    const rms = Math.sqrt(Math.max(0, rollingEnergy / ACTIVITY_WINDOW_FRAMES));
+    windowRms[start] = rms;
+    peakRms = Math.max(peakRms, rms);
+  }
+  const threshold = Math.max(ACTIVITY_ABSOLUTE_RMS_FLOOR, peakRms * ACTIVITY_RELATIVE_RMS);
+  const firstActiveWindow = windowRms.findIndex((rms) => rms >= threshold);
+  let lastActiveWindow = windowRms.length - 1;
+  while (lastActiveWindow >= 0 && windowRms[lastActiveWindow] < threshold) {
+    lastActiveWindow -= 1;
+  }
+  assert(firstActiveWindow >= 0, "guide asset contains an audible activity window");
+  assert(lastActiveWindow >= firstActiveWindow, "guide asset activity interval is ordered");
+  return {
+    rule: "10ms forward-looking RMS window; active if RMS >= max(0.004, peakRms*0.02); interval owns every frame in active windows",
+    windowFrames: ACTIVITY_WINDOW_FRAMES,
+    windowMs: ACTIVITY_WINDOW_FRAMES * 1000 / SAMPLE_RATE,
+    absoluteRmsFloor: ACTIVITY_ABSOLUTE_RMS_FLOOR,
+    relativePeakRms: ACTIVITY_RELATIVE_RMS,
+    peakRms: round9(peakRms),
+    thresholdRms: round9(threshold),
+    firstActiveWindow,
+    lastActiveWindow,
+    firstActiveFrame: firstActiveWindow,
+    lastActiveFrame: Math.min(samples.length - 1, lastActiveWindow + ACTIVITY_WINDOW_FRAMES - 1),
+  };
+}
+
+function measurePhysicalPcmBounds(samples) {
+  const firstNonZeroFrame = samples.findIndex((sample) => quantizePcm16Sample(sample) !== 0);
+  let lastNonZeroFrame = samples.length - 1;
+  while (lastNonZeroFrame >= 0 && quantizePcm16Sample(samples[lastNonZeroFrame]) === 0) lastNonZeroFrame -= 1;
+  assert(firstNonZeroFrame >= 0, "guide asset contains non-zero PCM");
+  assert(lastNonZeroFrame >= firstNonZeroFrame, "guide asset physical PCM bounds are ordered");
+  return { firstNonZeroFrame, lastNonZeroFrame };
+}
+
+function quantizePcm16Sample(sample) {
+  return Math.max(-32768, Math.min(32767, Math.round(sample * 32767)));
+}
+
 function encodePcm16MonoWav(samples) {
   const dataBytes = samples.length * 2;
   const wav = Buffer.alloc(44 + dataBytes);
@@ -165,7 +269,7 @@ function encodePcm16MonoWav(samples) {
     assert(Number.isFinite(sample), `output sample ${i} is finite`);
     peak = Math.max(peak, Math.abs(sample));
     assert(Math.abs(sample) <= 1, `output sample ${i} does not clip (${sample})`);
-    wav.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sample * 32767))), 44 + i * 2);
+    wav.writeInt16LE(quantizePcm16Sample(sample), 44 + i * 2);
   }
   return { wav, peak };
 }
@@ -397,6 +501,8 @@ async function loadGuideAssets() {
       sourceSha256: sha256(bytes),
       samples: resampleLinearDeterministic(decoded.samples, 22_050, SAMPLE_RATE),
     };
+    assets[label].activity = measurePcmActivity(assets[label].samples);
+    assets[label].physical = measurePhysicalPcmBounds(assets[label].samples);
   }
   return assets;
 }
@@ -420,6 +526,11 @@ async function writeStem(fileName, samples, kind, song) {
   };
 }
 
+async function writeComparisonSnippet(fileName, source, startFrame, endFrame) {
+  assert(startFrame >= 0 && endFrame > startFrame && endFrame <= source.length, `${fileName} comparison range is in bounds`);
+  return writeStem(fileName, source.slice(startFrame, endFrame), "comparison", "jinsei-over");
+}
+
 await mkdir(OUTPUT_DIR, { recursive: true });
 const assets = await loadGuideAssets();
 const schedule = buildSchedules();
@@ -434,7 +545,7 @@ const guideTargetClick = (event) => {
   return target;
 };
 const guideSongOffset = (song) => (song === "madow-hoshi" ? schedule.life.frames : 0);
-const connectedGuideEvents = [
+const baseConnectedGuideEvents = [
   ...schedule.life.guides,
   schedule.transitionGuide,
   ...schedule.madow.guides,
@@ -443,6 +554,22 @@ const connectedGuideEvents = [
   globalFrame: guideSongOffset(event.song) + event.localFrame,
   announcesGlobalFrame: guideSongOffset(event.announcesSong) + guideTargetClick(event).localFrame,
 })).sort((left, right) => left.globalFrame - right.globalFrame);
+
+const connectedGuideEvents = baseConnectedGuideEvents.map((event) => {
+  if (EXPORT_MODE !== "perceptual-preview" || event.label === "Intro") return event;
+  const asset = assets[event.label];
+  const perceptualStart = event.announcesGlobalFrame
+    - PERCEPTUAL_END_MARGIN_FRAMES
+    - asset.activity.lastActiveFrame;
+  assert(perceptualStart >= 0, `${event.label} perceptual onset stays inside connected timeline`);
+  const songOffset = guideSongOffset(event.song);
+  return {
+    ...event,
+    globalFrame: perceptualStart,
+    localFrame: perceptualStart - songOffset,
+    placement: "perceptual-audible-end-50ms-before-target",
+  };
+}).sort((left, right) => left.globalFrame - right.globalFrame);
 
 assert(LIFE_AUTHORED_MEASURES * 4 === 624, "Life authored beat count is 624");
 assert((LIFE_LOOP_PASSES - 1) * 4 === 28, "Life loop adds 28 beats");
@@ -536,10 +663,23 @@ for (const event of connectedGuideEvents) {
   ];
   const targetIndex = connectedClicks.findIndex((click) => click.globalFrame === event.announcesGlobalFrame);
   assert(targetIndex > 0, `${event.label} target has a previous connected click`);
-  const previousClick = connectedClicks[targetIndex - 1];
-  assert(event.globalFrame === previousClick.globalFrame, `${event.label} starts on the exact previous performance beat`);
-  assert(event.measure === previousClick.measure && event.pass === previousClick.pass && event.beat === previousClick.beat, `${event.label} manifest onset measure/pass/beat matches the previous performance beat`);
-  assert(event.leadPerformanceBeats === 1, `${event.label} records an exact one-beat lead`);
+  if (EXPORT_MODE === "default") {
+    const previousClick = connectedClicks[targetIndex - 1];
+    assert(event.globalFrame === previousClick.globalFrame, `${event.label} starts on the exact previous performance beat`);
+    assert(event.measure === previousClick.measure && event.pass === previousClick.pass && event.beat === previousClick.beat, `${event.label} manifest onset measure/pass/beat matches the previous performance beat`);
+    assert(event.leadPerformanceBeats === 1, `${event.label} records an exact one-beat lead`);
+  } else {
+    const activity = assets[event.label].activity;
+    const audibleEndFrame = event.globalFrame + activity.lastActiveFrame;
+    assert(
+      audibleEndFrame <= event.announcesGlobalFrame - PERCEPTUAL_END_MARGIN_FRAMES,
+      `${event.label} audible tail ends at least 50 ms before its target`,
+    );
+    assert(
+      (event.announcesGlobalFrame - PERCEPTUAL_END_MARGIN_FRAMES) - audibleEndFrame <= 1,
+      `${event.label} audible tail uses the exact perceptual alignment (within one frame)`,
+    );
+  }
 }
 for (let index = 1; index < connectedGuideEvents.length; index += 1) {
   const previous = connectedGuideEvents[index - 1];
@@ -572,10 +712,20 @@ const lifeMix = renderMix(lifeClick, lifeGuide);
 const madowMix = renderMix(madowClick, madowGuide);
 const connectedMix = renderMix(connectedClick, connectedGuide);
 const firstMadowConnectedClick = schedule.life.frames + schedule.madow.clicks[0].localFrame;
+const completeGuideEvent = connectedGuideEvents.find((event) => event.label === "Complete");
+assert(completeGuideEvent, "connected guide contains Complete");
+const completePhysicalFirstNonZeroFrame = completeGuideEvent.globalFrame + assets.Complete.physical.firstNonZeroFrame;
+const completePhysicalLastNonZeroFrame = completeGuideEvent.globalFrame + assets.Complete.physical.lastNonZeroFrame;
+const startsWithCompleteTail = completePhysicalLastNonZeroFrame >= firstMadowConnectedClick;
 assert(firstMadowConnectedClick === schedule.life.frames, "Madow connected downbeat lands exactly at the independently calculated Life end boundary");
 assert(schedule.transitionGuide.localFrame === schedule.life.clicks.at(-1).localFrame, "Complete starts on Life's exact final performance beat");
-assert(connectedGuideEvents.find((event) => event.label === "Complete").announcesGlobalFrame === firstMadowConnectedClick, "Complete announces Madow's exact first downbeat without a Madow Intro voice");
+assert(completeGuideEvent.announcesGlobalFrame === firstMadowConnectedClick, "Complete announces Madow's exact first downbeat without a Madow Intro voice");
 assert(schedule.transitionGuide.localFrame + assets.Complete.samples.length > schedule.life.frames, "Complete voice tail crosses the song boundary without being truncated from the connected Guide");
+if (EXPORT_MODE === "default") {
+  assert(startsWithCompleteTail, "default Madow guide starts with Complete's non-zero PCM tail");
+} else {
+  assert(!startsWithCompleteTail, "perceptual Madow guide truthfully starts after Complete's non-zero PCM ends");
+}
 
 const outputs = [];
 outputs.push(await writeStem("jinsei-over-click.wav", lifeClick, "click", "jinsei-over"));
@@ -588,6 +738,40 @@ outputs.push(await writeStem("connected-click.wav", connectedClick, "click", "co
 outputs.push(await writeStem("connected-guide.wav", connectedGuide, "guide", "connected"));
 outputs.push(await writeStem("connected-mix.wav", connectedMix, "mix", "connected"));
 
+const comparisonSnippets = [];
+if (EXPORT_MODE === "perceptual-preview") {
+  const currentGuide = renderGuide(baseConnectedGuideEvents, connectedFrames, assets);
+  const currentMix = renderMix(connectedClick, currentGuide);
+  const comparisonTargets = [
+    { measure: 26, label: "pre-chorus" },
+    { measure: 34, label: "chorus" },
+  ];
+  for (const comparison of comparisonTargets) {
+    const target = schedule.life.clicks.find((click) => (
+      click.measure === comparison.measure && click.pass === 1 && click.beat === 1
+    ));
+    assert(target, `comparison target measure ${comparison.measure} exists`);
+    const beforeFrames = Math.round(4 * 60 / target.bpm * SAMPLE_RATE);
+    const afterFrames = Math.round(2 * 60 / target.bpm * SAMPLE_RATE);
+    const startFrame = Math.max(0, target.localFrame - beforeFrames);
+    const endFrame = Math.min(schedule.life.frames, target.localFrame + afterFrames);
+    const currentFile = `jinsei-over-m${comparison.measure}-${comparison.label}-current-ab.wav`;
+    const perceptualFile = `jinsei-over-m${comparison.measure}-${comparison.label}-perceptual-ab.wav`;
+    comparisonSnippets.push({
+      targetMeasure: comparison.measure,
+      targetBeat: 1,
+      targetFrame: target.localFrame,
+      windowBeforeBeats: 4,
+      windowAfterBeats: 2,
+      startFrame,
+      endFrame,
+      current: await writeComparisonSnippet(currentFile, currentMix, startFrame, endFrame),
+      perceptual: await writeComparisonSnippet(perceptualFile, lifeMix, startFrame, endFrame),
+    });
+  }
+  outputs.push(...comparisonSnippets.flatMap((snippet) => [snippet.current, snippet.perceptual]));
+}
+
 const decorateClick = (event, songOffsetFrames) => ({
   ...event,
   globalFrame: songOffsetFrames + event.localFrame,
@@ -595,20 +779,44 @@ const decorateClick = (event, songOffsetFrames) => ({
   globalSeconds: round9((songOffsetFrames + event.localFrame) / SAMPLE_RATE),
 });
 const decorateGuide = (event) => ({
-  ...event,
-  localSeconds: round9(event.localFrame / SAMPLE_RATE),
-  globalSeconds: round9(event.globalFrame / SAMPLE_RATE),
-  announcesLocalFrame: guideTargetClick(event).localFrame,
-  announcesLocalSeconds: round9(guideTargetClick(event).localFrame / SAMPLE_RATE),
-  announcesGlobalSeconds: round9(event.announcesGlobalFrame / SAMPLE_RATE),
-  sourceAsset: GUIDE_ASSETS[event.label],
-  sourceFrames22050: assets[event.label].sourceFrames,
-  resampledFrames48000: assets[event.label].samples.length,
+  ...(() => {
+    const target = guideTargetClick(event);
+    const asset = assets[event.label];
+    const audibleOnsetGlobalFrame = event.globalFrame + asset.activity.firstActiveFrame;
+    const audibleEndGlobalFrame = event.globalFrame + asset.activity.lastActiveFrame;
+    const scheduledLeadFrames = event.announcesGlobalFrame - event.globalFrame;
+    return {
+      ...event,
+      mode: EXPORT_MODE,
+      localSeconds: round9(event.localFrame / SAMPLE_RATE),
+      globalSeconds: round9(event.globalFrame / SAMPLE_RATE),
+      announcesLocalFrame: target.localFrame,
+      announcesLocalSeconds: round9(target.localFrame / SAMPLE_RATE),
+      announcesGlobalSeconds: round9(event.announcesGlobalFrame / SAMPLE_RATE),
+      scheduledLeadFrames,
+      scheduledLeadSeconds: round9(scheduledLeadFrames / SAMPLE_RATE),
+      scheduledLeadBeatsAtTargetBpm: round9(scheduledLeadFrames * target.bpm / (SAMPLE_RATE * 60)),
+      audibleOnsetFrame: asset.activity.firstActiveFrame,
+      audibleOnsetGlobalFrame,
+      audibleOnsetLeadFrames: event.announcesGlobalFrame - audibleOnsetGlobalFrame,
+      audibleOnsetLeadSeconds: round9((event.announcesGlobalFrame - audibleOnsetGlobalFrame) / SAMPLE_RATE),
+      audibleEndFrame: asset.activity.lastActiveFrame,
+      audibleEndGlobalFrame,
+      audibleEndMarginFrames: event.announcesGlobalFrame - audibleEndGlobalFrame,
+      audibleEndMarginSeconds: round9((event.announcesGlobalFrame - audibleEndGlobalFrame) / SAMPLE_RATE),
+      audibleActivityRule: asset.activity.rule,
+      audibleActivityThresholdRms: asset.activity.thresholdRms,
+      sourceAsset: GUIDE_ASSETS[event.label],
+      sourceFrames22050: asset.sourceFrames,
+      resampledFrames48000: asset.samples.length,
+    };
+  })(),
 });
 
 const manifest = {
   schema: "syndocal-show-audio-export/v2",
   deterministicSource: "tools/audio/export-jinsei-madow-click-guide.mjs",
+  mode: EXPORT_MODE,
   audioFormat: { codec: "pcm_s16le", sampleRate: SAMPLE_RATE, channels: 1, bitsPerSample: 16 },
   clickSpec: {
     waveform: "square",
@@ -620,13 +828,25 @@ const manifest = {
     exponentialRampMs: CLICK_RAMP_SECONDS * 1000,
   },
   guideSpec: {
+    mode: EXPORT_MODE,
     voice: "Microsoft Zira Desktop",
     synthesisRate: 2,
     synthesisVolume: 100,
     pitchOrTimeShift: false,
     sourceFormat: "PCM16 mono 22050 Hz",
     resampler: "deterministic linear interpolation 22050->48000; outputLength=round(inputFrames*48000/22050)",
-    placement: "Section and operational announcements start on the exact previous performance click. Life Intro is the sole frame-zero/no-preroll exception. Madow Intro is intentionally silent and Complete starts on Life's final click.",
+    placement: EXPORT_MODE === "perceptual-preview"
+      ? "Opt-in audition mode: every guide except Life Intro is placed so its conservative audible tail ends 50 ms before the announced target downbeat. Life Intro remains frame zero; Madow Intro is silent and Complete remains the sole cross-song cue."
+      : "Section and operational announcements start on the exact previous performance click. Life Intro is the sole frame-zero/no-preroll exception. Madow Intro is intentionally silent and Complete starts on Life's final click.",
+    activityRule: {
+      description: "10ms forward-looking RMS window; active if RMS >= max(0.004, peakRms*0.02); interval owns every frame in active windows",
+      windowFrames: ACTIVITY_WINDOW_FRAMES,
+      windowMs: ACTIVITY_WINDOW_FRAMES * 1000 / SAMPLE_RATE,
+      absoluteRmsFloor: ACTIVITY_ABSOLUTE_RMS_FLOOR,
+      relativePeakRms: ACTIVITY_RELATIVE_RMS,
+      perceptualEndMarginFrames: PERCEPTUAL_END_MARGIN_FRAMES,
+      perceptualEndMarginMs: PERCEPTUAL_END_MARGIN_FRAMES * 1000 / SAMPLE_RATE,
+    },
     sectionEvidence: {
       source: "C:/Users/kouty/Documents/Guiter/app/trainer.tsx",
       life: "LIFE_OVER_SONG_MAP: Intro 1, Verse 18/58, Pre Chorus 26/66, Chorus 34/82/117, Interlude 50, Bridge 98, Breakdown 114, Outro 142, End/Trans 149",
@@ -643,6 +863,8 @@ const manifest = {
       sourceFrames: asset.sourceFrames,
       resampledFrames: asset.samples.length,
       sha256: asset.sourceSha256,
+      activity: asset.activity,
+      physical: asset.physical,
     }])),
   },
   mixSpec: {
@@ -683,8 +905,10 @@ const manifest = {
       connectedStartSeconds: round9(schedule.life.frames / SAMPLE_RATE),
       meterMap: Object.fromEntries([...MADOW_METER].map(([measure, beats]) => [String(measure), beats])),
       defaultBeatsPerMeasure: 4,
-      startsWithCompleteTail: true,
-      completePhysicalOnsetFrame: schedule.transitionGuide.localFrame,
+      startsWithCompleteTail,
+      completePhysicalOnsetFrame: completeGuideEvent.globalFrame,
+      completePhysicalFirstNonZeroFrame,
+      completePhysicalLastNonZeroFrame,
       completeTargetFrame: schedule.life.frames,
     },
   },
@@ -702,6 +926,17 @@ const manifest = {
     ...schedule.madow.clicks.map((event) => decorateClick(event, schedule.life.frames)),
   ],
   guideEvents: connectedGuideEvents.map(decorateGuide),
+  comparisonSnippets: comparisonSnippets.map((snippet) => ({
+    targetMeasure: snippet.targetMeasure,
+    targetBeat: snippet.targetBeat,
+    targetFrame: snippet.targetFrame,
+    windowBeforeBeats: snippet.windowBeforeBeats,
+    windowAfterBeats: snippet.windowAfterBeats,
+    startFrame: snippet.startFrame,
+    endFrame: snippet.endFrame,
+    current: snippet.current.file,
+    perceptual: snippet.perceptual.file,
+  })),
   outputs,
 };
 
