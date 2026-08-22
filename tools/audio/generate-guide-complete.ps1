@@ -1,5 +1,6 @@
 param(
-    [string]$OutputPath = (Join-Path $PSScriptRoot "../../app/src-tauri/assets/timeline-guide/en/complete.wav")
+    [string]$OutputPath = (Join-Path $PSScriptRoot "../../app/src-tauri/assets/timeline-guide/en/complete.wav"),
+    [string]$Text = "Complete"
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,21 +36,24 @@ try {
     $synthesizer.Rate = $rate
     $synthesizer.Volume = $volume
     $synthesizer.SetOutputToWaveFile($temporaryPath, $format)
-    $synthesizer.Speak("Complete")
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        throw "Guide text must not be empty; existing output was not changed."
+    }
+    $synthesizer.Speak($Text)
     $synthesizer.SetOutputToNull()
 
     $bytes = [System.IO.File]::ReadAllBytes($temporaryPath)
     if ($bytes.Length -lt 44 -or
         [System.Text.Encoding]::ASCII.GetString($bytes, 0, 4) -cne "RIFF" -or
         [System.Text.Encoding]::ASCII.GetString($bytes, 8, 4) -cne "WAVE") {
-        throw "Generated Complete asset is not a valid RIFF/WAVE file; existing output was not changed."
+        throw "Generated Guide asset is not a valid RIFF/WAVE file; existing output was not changed."
     }
     $audioFormat = [System.BitConverter]::ToUInt16($bytes, 20)
     $channels = [System.BitConverter]::ToUInt16($bytes, 22)
     $actualSampleRate = [System.BitConverter]::ToUInt32($bytes, 24)
     $bitsPerSample = [System.BitConverter]::ToUInt16($bytes, 34)
     if ($audioFormat -ne 1 -or $channels -ne 1 -or $actualSampleRate -ne $sampleRate -or $bitsPerSample -ne 16) {
-        throw "Generated Complete asset format is not PCM16 mono 22050 Hz; existing output was not changed."
+        throw "Generated Guide asset format is not PCM16 mono 22050 Hz; existing output was not changed."
     }
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $temporaryPath).Hash.ToLowerInvariant()
 
@@ -75,7 +79,7 @@ try {
     [ordered]@{
         outputPath = $resolvedOutput
         voice = $voiceName
-        text = "Complete"
+        text = $Text
         rate = $rate
         volume = $volume
         codec = "pcm_s16le"

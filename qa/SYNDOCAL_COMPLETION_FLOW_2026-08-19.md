@@ -160,14 +160,21 @@ between the registered UI command path and the backend production driver.
 
 The operator-confirmed show chart, rather than the currently truncated FRET STEP
 `totalMeasures: 151`, is authoritative for this Syndocal material. `人生オーバー`
-has 156 authored 4/4 measures at 170 BPM. Measure 34 emits `Chorus` on its
-downbeat. Measure 98 is performed exactly eight times; every pass emits
-`Looping`, and the first downbeat of measure 99 emits `Break`. Measures 149-156
-form one phase-continuous 32-quarter-note tempo ramp from 170 to 194 BPM. Each
-of those eight measure downbeats emits `Trans`. The songs do not overlap;
-`惑う星` measure 1 begins on the exact ramp-end sample frame at 194 BPM and
-emits `Complete` once. `惑う星` then uses its confirmed 207-measure map with
-5/4 at measures 117-119 and 121-123, 6/4 at 18, 120, and 124, and 4/4 elsewhere.
+has 156 authored 4/4 measures at 170 BPM. Its fixed Guide chart announces Intro,
+Verse, Pre Chorus, Chorus, Interlude, Breakdown, and Outro; each phrase begins on
+the preceding measure's final beat, except the first Intro at frame zero. Measure
+98 is performed exactly eight times and every pass announces `Looping`. `Bridge`
+is deliberately suppressed so it cannot overlap the loop call, and measure 99
+announces `Break` from its preceding beat. Measures 149-156 form one
+phase-continuous 32-quarter-note tempo ramp from 170 to 194 BPM. `Trans` is
+announced every two measures, targeting measures 149, 151, 153, and 155 from each
+preceding beat. The songs do not overlap; `Complete` begins on the final beat of
+`人生オーバー` and its uncut tail crosses the exact boundary where `惑う星`
+measure 1 begins at 194 BPM. The conflicting `惑う星` Intro call is deliberately
+suppressed. `惑う星` announces its remaining Verse, Pre Chorus, Chorus,
+Interlude, and Outro sections from the preceding beat and uses its confirmed
+207-measure map with 5/4 at measures 117-119 and 121-123, 6/4 at 18, 120, and
+124, and 4/4 elsewhere.
 
 The deterministic pre-render tool is
 `tools/audio/export-jinsei-madow-click-guide.mjs`; the matching Zira voice
@@ -177,7 +184,9 @@ audition outputs live outside Git at `C:\TEMP\syndocal-show-audio`: nine
 48 kHz, PCM16, mono WAVs (per-song and connected click/Guide/mix stems) plus a
 sample-frame manifest. Independent review recomputed all PCM samples and accepted
 P0/P1/P2 as zero: 652 `人生オーバー` performance clicks, 840 `惑う星`
-clicks, 1,492 total clicks, and 19 Guide events. The connected boundary is frame
+clicks, 1,492 total clicks, and 33 physical/semantic Guide events. Thirty-two
+Guide onsets are exactly one beat before their target and the sole exception is
+the frame-zero `人生オーバー` Intro. The connected boundary is frame
 11,010,639; duration is 23,480,742 frames / 489.182125 seconds. Fresh export
 reproduced every WAV SHA-256 exactly and no output clipped. These files prove the
 pinned authored material and provide audition/backstop stems; they do not replace

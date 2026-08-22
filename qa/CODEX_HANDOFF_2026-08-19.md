@@ -22,13 +22,23 @@
   localization 3530/3530, invoke inventory 411, OutputControl, video-window,
   project-authority, fixture-catalog, Timeline DnD, empty-state, and the focused
   five-viewport Edit/Timeline/Setup checks all passed. The no-default Syndocal
-  check emitted zero first-party warnings. Timeline media audio passed 30/30,
+  check emitted zero first-party warnings. Timeline media audio passed 31/31,
   engine audio 12/12, Follow and child-quorum 1/1, with fixed-hash independent
-  review P0/P1/P2=0 (`engine` `C9FB7C0A...`, `main` `BEA51F02...`). The remaining
-  checkpoint actions are the normal warning gate on this documentation-only
-  successor, the mandatory native release build/window check, and push. No
-  feature UI operation has been repeated; the single full operator/hardware pass
-  remains reserved for final acceptance.
+  review P0/P1/P2=0 (`engine` `C9FB7C0A...`, `main` `D85641CF...`). The normal
+  warning gate on the documentation-only successor passed at 0/0/0. Before the
+  native build, exact-checkout `syndocal.exe` process count was 0. The successful
+  `pnpm --dir app tauri build --no-bundle` used the WinGet FFmpeg 8.1.2 shared SDK,
+  VS 2022 amd64 environment, and an absolute MSVC linker to avoid the unrelated
+  Git `link.exe` name collision. After the final typed audio-fault and Guide-asset
+  integration, the release build was repeated with delayed VS environment
+  expansion; the preceding attempt failed before linking with environment-only
+  `LNK1181: opengl32.lib` and produced no acceptance artifact. The resulting
+  executable SHA-256 is
+  `7A630F1DBAF54A1E7B74A5CD108A3EE33C968C8E77BC9F983236D1E19F269AA9`;
+  FileVersion/ProductVersion are both `1.2.0-alpha.3`. PID 102788 supplied exactly
+  one responsive `Syndocal` window and was maximized. No feature UI operation was
+  repeated; the single full operator/hardware pass remains reserved for final
+  acceptance. The only remaining action for this checkpoint is push.
 - **2026-08-22 Timeline click gap:** the present Rodio click is a 25 ms polling,
   fixed-4/4 sine-tone implementation. It is not accepted for the show-core. The
   next independent tranche after the real MediaAsset path must add an authored
@@ -1279,29 +1289,49 @@ localization `66F29B4BA44EFBD9FA13BD17F94F414E70EB80003914CC8FEAD2F49C85DE9BB9`,
 and DnD checker `0BE8D1D967D986314F45440265232D644AD621494F05B2C8F3139FA5635AC3E3`.
 
 The operator confirmed the show chart as `人生オーバー` 156 measures, all 4/4,
-despite the separate FRET STEP definition still ending at 151. Measure 34
-announces `Chorus`; measure 98 is performed for eight total passes with `Looping`
-on every pass and `Break` at measure 99. Measures 149-156 ramp phase-continuously
-from 170 to 194 BPM with `Trans` on each downbeat. There is no song overlap:
-`惑う星` begins at 194 BPM on the identical boundary frame and announces
-`Complete`, then follows the pinned 207-measure 4/4, 5/4, and 6/4 map.
+despite the separate FRET STEP definition still ending at 151. Its Guide chart
+announces Intro, Verse, Pre Chorus, Chorus, Interlude, Breakdown, and Outro on
+the preceding measure's final beat, except Intro at frame zero. Measure 98 is
+performed for eight total passes with `Looping` on every pass. `Bridge` is
+deliberately suppressed, and `Break` targets measure 99 from its preceding beat.
+Measures 149-156 ramp phase-continuously from 170 to 194 BPM with `Trans` targeting
+measures 149, 151, 153, and 155. There is no song overlap: `Complete` begins on
+the final beat of `人生オーバー` and continues uncut across the identical frame
+where `惑う星` begins at 194 BPM. The conflicting `惑う星` Intro is suppressed;
+its Verse, Pre Chorus, Chorus, Interlude, and Outro calls retain the same
+preceding-beat rule over the pinned 207-measure 4/4, 5/4, and 6/4 map.
 
 The reproducible exporter and Zira generator are
 `tools/audio/export-jinsei-madow-click-guide.mjs` and
-`tools/audio/generate-guide-complete.ps1`; `complete.wav` is now in the embedded
-English Guide source pack. Canonical audition files are in
+`tools/audio/generate-guide-complete.ps1`; `complete.wav` and `interlude.wav` are
+now in the embedded English Guide source pack. Canonical audition files are in
 `C:\TEMP\syndocal-show-audio`. Independent PCM review accepted P0/P1/P2 all zero:
-all nine WAVs are 48 kHz PCM16 mono, total click count is 1,492, Guide event count
-is 19, the song boundary is frame 11,010,639, connected duration is 489.182125
-seconds, fresh-export WAV hashes are identical, and all mixes remain below clip.
+all nine WAVs are 48 kHz PCM16 mono, total click count is 1,492, and physical and
+semantic Guide event counts are both 33. Thirty-two Guide onsets are exactly one
+beat before their target and the only exception is the frame-zero `人生オーバー`
+Intro. The song boundary is frame 11,010,639, connected duration is 489.182125
+seconds, fresh-export WAV hashes are identical, all voice intervals are globally
+non-overlapping, and all mixes remain below clip.
+The canonical manifest SHA-256 is
+`FA2613B575E0AB68026E3A91AB49ABF6418FDDD2DE2544A5C26F4440ED24CF58`;
+exporter, generator, and Interlude asset hashes are respectively
+`8516F8C18099CF21D32C419E0774116CEE99ABBB06B1854518A31DED8BFD9C7A`,
+`C13A377E926790AAE4006252738A30272CE5C7DB712586CBFE654CC19ED37259`,
+and `695E2ADDF83D1F3C236E14B57BF20124269B587A098293293A4EE9CAB99EAE21`.
 This is a pre-rendered material checkpoint only. Runtime click/Guide completion
 still requires the shared sample-frame tempo/meter scheduler and discontinuity
 generation fences.
 
-Audio-lane mute/solo and sink-generation work is not accepted at this checkpoint.
-Its latest independent review found two P1 issues: Follow settlement did not wait
-for active child-only audio sinks, and potentially blocking media open/decode/
-stream/sink/seek work still occurred while holding the shared media-audio mutex.
-The owner is repairing both before the next immutable review. Do not advance the
-product numerator from this checkpoint, and do not run the native UI before the
-integrated backend bundle is green.
+Audio-lane mute/solo, Follow settlement, and sink-generation work is accepted at
+this checkpoint. The final production worker uses a semantic audio generation,
+exact Follow-context attribution, device-fenced single-flight preparation,
+bounded quarantine/recovery, and a typed `BudgetExhausted` fault from worker to
+coordinator. Potentially blocking open/decode/seek work occurs outside the shared
+media-audio mutex; the final commit revalidates publication, position, device,
+deadline, and timeout/commit linearization before installing a sink. Independent
+review accepted P0/P1/P2 all zero. Focused evidence passed 31/31 media-audio,
+12/12 engine timeline-audio, Follow 1/1, child-quorum 1/1, no-default Cargo check
+with zero first-party warnings, fmt, and diff-check. Stable hashes are engine
+`C9FB7C0AA033A7CC4C03C4A3928B86CF83B390247154861A256D9467FB106EEC`
+and main
+`D85641CF45731C9F2C5C773A1F4AA0A6619632EA75F3753D4B354D4BE963904C`.

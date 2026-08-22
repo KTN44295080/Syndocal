@@ -37,12 +37,48 @@ const MADOW_METER = new Map([
 ]);
 
 const GUIDE_ASSETS = {
+  Intro: "intro.wav",
+  Verse: "verse.wav",
+  "Pre Chorus": "pre_chorus.wav",
   Chorus: "chorus.wav",
+  Interlude: "interlude.wav",
+  Bridge: "bridge.wav",
+  Breakdown: "breakdown.wav",
+  Outro: "outro.wav",
   Looping: "looping.wav",
   Break: "break_word.wav",
   Trans: "trans.wav",
   Complete: "complete.wav",
 };
+
+// Section starts are copied from the authoritative SongPart maps in
+// C:/Users/kouty/Documents/Guiter/app/trainer.tsx. The English Guide labels
+// below are the product-approved vocabulary for those chart parts.
+const LIFE_SECTION_GUIDES = [
+  { label: "Intro", measure: 1 },
+  { label: "Verse", measure: 18 },
+  { label: "Pre Chorus", measure: 26 },
+  { label: "Chorus", measure: 34 },
+  { label: "Interlude", measure: 50 },
+  { label: "Verse", measure: 58 },
+  { label: "Pre Chorus", measure: 66 },
+  { label: "Chorus", measure: 82 },
+  { label: "Bridge", measure: 98 },
+  { label: "Breakdown", measure: 114 },
+  { label: "Chorus", measure: 117 },
+  { label: "Outro", measure: 142 },
+];
+
+const MADOW_SECTION_GUIDES = [
+  { label: "Verse", measure: 19 },
+  { label: "Pre Chorus", measure: 43 },
+  { label: "Chorus", measure: 77 },
+  { label: "Interlude", measure: 101 },
+  { label: "Verse", measure: 125 },
+  { label: "Pre Chorus", measure: 147 },
+  { label: "Chorus", measure: 164 },
+  { label: "Outro", measure: 192 },
+];
 
 function assert(condition, message) {
   if (!condition) throw new Error(`Self-test failed: ${message}`);
@@ -154,9 +190,38 @@ function rampSecondsAtBeat(beat) {
     * Math.log((LIFE_FIXED_BPM + bpmDelta * beat / LIFE_RAMP_BEATS) / LIFE_FIXED_BPM);
 }
 
+function guideBeforeTarget(clicks, {
+  label, measure, pass = 1, allowSongStart = false, leadPerformanceBeats = 1, kind = "section",
+}) {
+  const targetIndex = clicks.findIndex((event) => (
+    event.measure === measure && event.pass === pass && event.beat === 1
+  ));
+  assert(targetIndex >= 0, `${label} target measure ${measure} pass ${pass} exists`);
+  assert(targetIndex >= leadPerformanceBeats || allowSongStart, `${label} target has the requested preceding performance beats`);
+  const target = clicks[targetIndex];
+  const onset = targetIndex === 0 ? target : clicks[targetIndex - leadPerformanceBeats];
+  return {
+    song: onset.song,
+    label,
+    kind,
+    semanticLabels: [label],
+    measure: onset.measure,
+    pass: onset.pass,
+    beat: onset.beat,
+    localFrame: onset.localFrame,
+    announcesSong: target.song,
+    announcesMeasure: target.measure,
+    announcesPass: target.pass,
+    announcesBeat: target.beat,
+    leadPerformanceBeats: targetIndex === 0 ? 0 : leadPerformanceBeats,
+    placement: targetIndex === 0
+      ? "song-start-no-preroll"
+      : leadPerformanceBeats === 1 ? "previous-performance-beat" : `${leadPerformanceBeats}-performance-beats-before`,
+  };
+}
+
 function buildSchedules() {
   const lifeClicks = [];
-  const lifeGuides = [];
   let seconds = 0;
   const appendLifeBeat = (measure, pass, beat, bpm, eventSeconds) => {
     lifeClicks.push({
@@ -170,23 +235,10 @@ function buildSchedules() {
       frequencyHz: beat === 1 ? STRONG_FREQUENCY : WEAK_FREQUENCY,
     });
   };
-  const appendLifeGuide = (label, measure, pass, eventSeconds) => {
-    lifeGuides.push({
-      song: "jinsei-over",
-      label,
-      measure,
-      pass,
-      beat: 1,
-      localFrame: Math.round(eventSeconds * SAMPLE_RATE),
-    });
-  };
 
   for (let measure = 1; measure <= 148; measure += 1) {
     const passes = measure === LIFE_LOOP_MEASURE ? LIFE_LOOP_PASSES : 1;
     for (let pass = 1; pass <= passes; pass += 1) {
-      if (measure === 34 && pass === 1) appendLifeGuide("Chorus", measure, pass, seconds);
-      if (measure === LIFE_LOOP_MEASURE) appendLifeGuide("Looping", measure, pass, seconds);
-      if (measure === 99 && pass === 1) appendLifeGuide("Break", measure, pass, seconds);
       for (let beat = 1; beat <= 4; beat += 1) {
         appendLifeBeat(measure, pass, beat, LIFE_FIXED_BPM, seconds);
         seconds += 60 / LIFE_FIXED_BPM;
@@ -201,7 +253,6 @@ function buildSchedules() {
     const eventSeconds = rampStartSeconds + rampSecondsAtBeat(rampBeat);
     const bpm = LIFE_FIXED_BPM
       + (MADOW_BPM - LIFE_FIXED_BPM) * rampBeat / LIFE_RAMP_BEATS;
-    if (beat === 1) appendLifeGuide("Trans", measure, 1, eventSeconds);
     appendLifeBeat(measure, 1, beat, bpm, eventSeconds);
   }
   const lifeDurationSeconds = rampStartSeconds + rampSecondsAtBeat(LIFE_RAMP_BEATS);
@@ -226,18 +277,53 @@ function buildSchedules() {
     }
   }
   const madowFrames = Math.round(madowBeatOffset * 60 / MADOW_BPM * SAMPLE_RATE);
-  const madowGuides = [{
-    song: "madow-hoshi",
+
+  // Bridge at measure 98 is intentionally silent because its requested cue
+  // would collide with the required Looping cue for pass 1.
+  const lifeGuides = LIFE_SECTION_GUIDES.filter((guide) => guide.label !== "Bridge").map((guide) => guideBeforeTarget(lifeClicks, {
+    ...guide,
+    allowSongStart: guide.measure === 1,
+  }));
+  for (let pass = 1; pass <= LIFE_LOOP_PASSES; pass += 1) {
+    lifeGuides.push(guideBeforeTarget(lifeClicks, {
+      label: "Looping",
+      measure: LIFE_LOOP_MEASURE,
+      pass,
+      kind: "operation",
+    }));
+  }
+  lifeGuides.push(guideBeforeTarget(lifeClicks, { label: "Break", measure: 99, kind: "operation" }));
+  for (let measure = LIFE_RAMP_START_MEASURE; measure <= LIFE_AUTHORED_MEASURES; measure += 2) {
+    lifeGuides.push(guideBeforeTarget(lifeClicks, { label: "Trans", measure, kind: "transition" }));
+  }
+
+  // Madow Intro is intentionally silent: the cross-song cue is Complete only.
+  const madowGuides = MADOW_SECTION_GUIDES.map((guide) => (
+    guideBeforeTarget(madowClicks, guide)
+  ));
+  const lifeLastBeat = lifeClicks.at(-1);
+  const madowFirstBeat = madowClicks[0];
+  const transitionGuide = {
+    song: lifeLastBeat.song,
     label: "Complete",
-    measure: 1,
-    pass: 1,
-    beat: 1,
-    localFrame: 0,
-  }];
+    kind: "transition",
+    semanticLabels: ["Complete"],
+    measure: lifeLastBeat.measure,
+    pass: lifeLastBeat.pass,
+    beat: lifeLastBeat.beat,
+    localFrame: lifeLastBeat.localFrame,
+    announcesSong: madowFirstBeat.song,
+    announcesMeasure: madowFirstBeat.measure,
+    announcesPass: madowFirstBeat.pass,
+    announcesBeat: madowFirstBeat.beat,
+    leadPerformanceBeats: 1,
+    placement: "previous-connected-performance-beat",
+  };
 
   return {
     life: { clicks: lifeClicks, guides: lifeGuides, frames: lifeFrames, durationSeconds: lifeDurationSeconds },
     madow: { clicks: madowClicks, guides: madowGuides, frames: madowFrames, durationSeconds: madowBeatOffset * 60 / MADOW_BPM },
+    transitionGuide,
   };
 }
 
@@ -261,9 +347,9 @@ function renderGuide(events, frameCount, assets) {
   for (const event of events) {
     const asset = assets[event.label];
     assert(asset, `guide asset exists for ${event.label}`);
-    assert(event.localFrame + asset.samples.length <= frameCount, `${event.label} voice tail stays inside its song`);
+    assert(event.globalFrame + asset.samples.length <= frameCount, `${event.label} voice tail stays inside the connected timeline`);
     for (let frame = 0; frame < asset.samples.length; frame += 1) {
-      output[event.localFrame + frame] += asset.samples[frame];
+      output[event.globalFrame + frame] += asset.samples[frame];
     }
   }
   return output;
@@ -282,6 +368,20 @@ function countBy(values, key) {
   const counts = {};
   for (const value of values) counts[value[key]] = (counts[value[key]] ?? 0) + 1;
   return counts;
+}
+
+function clickScheduleFingerprint(events) {
+  const projection = events.map((event) => ({
+    song: event.song,
+    measure: event.measure,
+    pass: event.pass,
+    beat: event.beat,
+    bpm: event.bpm,
+    localFrame: event.localFrame,
+    strong: event.strong,
+    frequencyHz: event.frequencyHz,
+  }));
+  return sha256(Buffer.from(JSON.stringify(projection)));
 }
 
 async function loadGuideAssets() {
@@ -323,19 +423,91 @@ async function writeStem(fileName, samples, kind, song) {
 await mkdir(OUTPUT_DIR, { recursive: true });
 const assets = await loadGuideAssets();
 const schedule = buildSchedules();
+const guideTargetClick = (event) => {
+  const songSchedule = event.announcesSong === "jinsei-over" ? schedule.life : schedule.madow;
+  const target = songSchedule.clicks.find((click) => (
+    click.measure === event.announcesMeasure
+    && click.pass === event.announcesPass
+    && click.beat === event.announcesBeat
+  ));
+  assert(target, `${event.label} announced click exists`);
+  return target;
+};
+const guideSongOffset = (song) => (song === "madow-hoshi" ? schedule.life.frames : 0);
+const connectedGuideEvents = [
+  ...schedule.life.guides,
+  schedule.transitionGuide,
+  ...schedule.madow.guides,
+].map((event) => ({
+  ...event,
+  globalFrame: guideSongOffset(event.song) + event.localFrame,
+  announcesGlobalFrame: guideSongOffset(event.announcesSong) + guideTargetClick(event).localFrame,
+})).sort((left, right) => left.globalFrame - right.globalFrame);
 
 assert(LIFE_AUTHORED_MEASURES * 4 === 624, "Life authored beat count is 624");
 assert((LIFE_LOOP_PASSES - 1) * 4 === 28, "Life loop adds 28 beats");
 assert(schedule.life.clicks.length === 652, "Life performance click count is 652");
 assert(schedule.madow.clicks.length === 840, "Madow click count is 840");
 assert(schedule.life.clicks.length + schedule.madow.clicks.length === 1492, "connected click count is 1492");
-const guideCounts = countBy([...schedule.life.guides, ...schedule.madow.guides], "label");
-assert(guideCounts.Looping === 8, "Guide has 8 Looping cues");
-assert(guideCounts.Break === 1, "Guide has 1 Break cue");
-assert(guideCounts.Trans === 8, "Guide has 8 Trans cues");
-assert(guideCounts.Chorus === 1, "Guide has 1 Chorus cue");
-assert(guideCounts.Complete === 1, "Guide has 1 Complete cue");
-assert(Object.values(guideCounts).reduce((sum, count) => sum + count, 0) === 19, "Guide has 19 events");
+assert(schedule.life.frames === 11_010_639, "Life timeline frames stay unchanged");
+assert(schedule.madow.frames === 12_470_103, "Madow timeline frames stay unchanged");
+assert(clickScheduleFingerprint(schedule.life.clicks) === "6e27f826d53572fe914d0e551b38261b3ec7f474a2219846d60061bc5785e46b", "Life click sample schedule stays byte-for-byte unchanged");
+assert(clickScheduleFingerprint(schedule.madow.clicks) === "809aa5faa51df68f1298ef9c239fae77a6ff56c2604150f89fa0efe4be3f573b", "Madow click sample schedule stays byte-for-byte unchanged");
+const physicalGuideCounts = countBy(connectedGuideEvents, "label");
+assert(physicalGuideCounts.Intro === 1, "Guide has one Life Intro cue and intentionally no Madow Intro cue");
+assert(physicalGuideCounts.Verse === 4, "Guide has 4 Verse cues");
+assert(physicalGuideCounts["Pre Chorus"] === 4, "Guide has 4 Pre Chorus cues");
+assert(physicalGuideCounts.Chorus === 5, "Guide has 5 Chorus cues");
+assert(physicalGuideCounts.Interlude === 2, "Guide has 2 Interlude cues");
+assert(physicalGuideCounts.Breakdown === 1, "Guide has one chart-section Breakdown cue");
+assert(physicalGuideCounts.Outro === 2, "Guide has 2 Outro cues");
+assert(physicalGuideCounts.Bridge === undefined, "Guide intentionally suppresses the colliding measure-98 Bridge cue");
+assert(physicalGuideCounts.Looping === 8, "Guide has 8 Looping cues");
+assert(physicalGuideCounts.Break === 1, "Guide has 1 Break cue");
+assert(physicalGuideCounts.Trans === 4, "Guide has 4 two-measure Trans cues");
+assert(physicalGuideCounts.Complete === 1, "Guide has one Complete cue and no Madow Intro voice");
+assert(connectedGuideEvents.length === 33, "Guide has 33 non-overlapping physical events");
+const semanticGuideCounts = {};
+for (const event of connectedGuideEvents) {
+  for (const label of event.semanticLabels) {
+    semanticGuideCounts[label] = (semanticGuideCounts[label] ?? 0) + 1;
+  }
+}
+assert(semanticGuideCounts.Intro === 1, "Guide semantically announces Life Intro only");
+assert(semanticGuideCounts.Verse === 4, "Guide semantically announces 4 Verses");
+assert(semanticGuideCounts["Pre Chorus"] === 4, "Guide semantically announces 4 Pre Choruses");
+assert(semanticGuideCounts.Chorus === 5, "Guide semantically announces 5 Choruses");
+assert(semanticGuideCounts.Interlude === 2, "Guide semantically announces 2 Interludes");
+assert(semanticGuideCounts.Bridge === undefined, "Guide has no Bridge semantic event because Looping owns the coincident entry");
+assert(semanticGuideCounts.Breakdown === 1, "Guide semantically announces one Breakdown section");
+assert(semanticGuideCounts.Outro === 2, "Guide semantically announces 2 Outros");
+assert(semanticGuideCounts.Looping === 8, "Guide semantically announces 8 loop passes");
+assert(semanticGuideCounts.Break === 1, "Guide semantically announces one Break");
+assert(semanticGuideCounts.Trans === 4, "Guide semantically announces 4 two-measure transition blocks");
+assert(semanticGuideCounts.Complete === 1, "Guide semantically announces Complete once");
+assert(Object.values(semanticGuideCounts).reduce((sum, count) => sum + count, 0) === 33, "Guide has 33 semantic announcements");
+const chartKeys = (song, kind) => connectedGuideEvents
+  .filter((event) => event.announcesSong === song && event.kind === kind)
+  .map((event) => `${event.label}@${event.announcesMeasure}:${event.announcesPass}`);
+assert(JSON.stringify(chartKeys("jinsei-over", "section")) === JSON.stringify([
+  "Intro@1:1", "Verse@18:1", "Pre Chorus@26:1", "Chorus@34:1",
+  "Interlude@50:1", "Verse@58:1", "Pre Chorus@66:1", "Chorus@82:1",
+  "Breakdown@114:1", "Chorus@117:1", "Outro@142:1",
+]), "Life section Guide chart matches every approved song-map boundary exactly");
+assert(JSON.stringify(chartKeys("madow-hoshi", "section")) === JSON.stringify([
+  "Verse@19:1", "Pre Chorus@43:1", "Chorus@77:1", "Interlude@101:1",
+  "Verse@125:1", "Pre Chorus@147:1", "Chorus@164:1", "Outro@192:1",
+]), "Madow section Guide chart matches every approved boundary and omits Intro exactly");
+assert(JSON.stringify(chartKeys("jinsei-over", "operation")) === JSON.stringify([
+  "Looping@98:1", "Looping@98:2", "Looping@98:3", "Looping@98:4",
+  "Looping@98:5", "Looping@98:6", "Looping@98:7", "Looping@98:8", "Break@99:1",
+]), "Life operational Guide chart has every loop pass then Break exactly");
+assert(JSON.stringify(chartKeys("jinsei-over", "transition")) === JSON.stringify([
+  "Trans@149:1", "Trans@151:1", "Trans@153:1", "Trans@155:1",
+]), "Life transition Guide chart announces every two-measure block exactly");
+assert(JSON.stringify(chartKeys("madow-hoshi", "transition")) === JSON.stringify([
+  "Complete@1:1",
+]), "connected transition chart has Complete only at Madow entry");
 for (const [measure, beats] of MADOW_METER) {
   assert(schedule.madow.clicks.filter((event) => event.measure === measure).length === beats, `Madow measure ${measure} has ${beats} clicks`);
 }
@@ -352,34 +524,58 @@ assert(transitionClicks.length === LIFE_RAMP_BEATS, "transition has 32 beats");
 assert(transitionClicks.filter((event) => event.strong).length === 8, "transition has 8 measure downbeats");
 assert(transitionClicks.at(-1).localFrame < schedule.life.frames, "transition last click precedes exact boundary");
 assert(schedule.madow.clicks[0].localFrame === 0, "Madow first click is its own downbeat");
-assert(schedule.madow.guides[0].localFrame === 0, "Madow Complete is its own downbeat");
-
-for (const events of [schedule.life.guides, schedule.madow.guides]) {
-  const ordered = [...events].sort((left, right) => left.localFrame - right.localFrame);
-  for (let index = 1; index < ordered.length; index += 1) {
-    const previous = ordered[index - 1];
-    assert(
-      previous.localFrame + assets[previous.label].samples.length <= ordered[index].localFrame,
-      `${previous.label} Guide voice does not overlap ${ordered[index].label}`,
-    );
+for (const event of connectedGuideEvents) {
+  if (event.placement === "song-start-no-preroll") {
+    assert(event.label === "Intro" && event.song === "jinsei-over" && event.globalFrame === 0, "only Life Intro uses the no-preroll frame-zero exception");
+    assert(event.announcesGlobalFrame === 0 && event.leadPerformanceBeats === 0, "Life Intro truthfully records zero-beat lead");
+    continue;
   }
+  const connectedClicks = [
+    ...schedule.life.clicks.map((click) => ({ ...click, globalFrame: click.localFrame })),
+    ...schedule.madow.clicks.map((click) => ({ ...click, globalFrame: schedule.life.frames + click.localFrame })),
+  ];
+  const targetIndex = connectedClicks.findIndex((click) => click.globalFrame === event.announcesGlobalFrame);
+  assert(targetIndex > 0, `${event.label} target has a previous connected click`);
+  const previousClick = connectedClicks[targetIndex - 1];
+  assert(event.globalFrame === previousClick.globalFrame, `${event.label} starts on the exact previous performance beat`);
+  assert(event.measure === previousClick.measure && event.pass === previousClick.pass && event.beat === previousClick.beat, `${event.label} manifest onset measure/pass/beat matches the previous performance beat`);
+  assert(event.leadPerformanceBeats === 1, `${event.label} records an exact one-beat lead`);
+}
+for (let index = 1; index < connectedGuideEvents.length; index += 1) {
+  const previous = connectedGuideEvents[index - 1];
+  const current = connectedGuideEvents[index];
+  assert(
+    previous.globalFrame + assets[previous.label].samples.length <= current.globalFrame,
+    `${previous.label} Guide voice does not overlap ${current.label} across the connected show`,
+  );
 }
 
 const lifeClick = renderClick(schedule.life.clicks, schedule.life.frames);
-const lifeGuide = renderGuide(schedule.life.guides, schedule.life.frames, assets);
-const lifeMix = renderMix(lifeClick, lifeGuide);
 const madowClick = renderClick(schedule.madow.clicks, schedule.madow.frames);
-const madowGuide = renderGuide(schedule.madow.guides, schedule.madow.frames, assets);
-const madowMix = renderMix(madowClick, madowGuide);
 const connectedFrames = schedule.life.frames + schedule.madow.frames;
 const connectedClick = new Float64Array(connectedFrames);
-const connectedGuide = new Float64Array(connectedFrames);
 connectedClick.set(lifeClick, 0);
 connectedClick.set(madowClick, schedule.life.frames);
-connectedGuide.set(lifeGuide, 0);
-connectedGuide.set(madowGuide, schedule.life.frames);
+const connectedGuide = renderGuide(connectedGuideEvents, connectedFrames, assets);
+for (const event of connectedGuideEvents) {
+  const asset = assets[event.label];
+  const firstAudibleFrame = asset.samples.findIndex((sample) => sample !== 0);
+  assert(firstAudibleFrame >= 0, `${event.label} source contains audible PCM`);
+  assert(
+    connectedGuide[event.globalFrame + firstAudibleFrame] === asset.samples[firstAudibleFrame],
+    `${event.label} first audible PCM sample is injected at its exact scheduled onset offset`,
+  );
+}
+const lifeGuide = connectedGuide.slice(0, schedule.life.frames);
+const madowGuide = connectedGuide.slice(schedule.life.frames);
+const lifeMix = renderMix(lifeClick, lifeGuide);
+const madowMix = renderMix(madowClick, madowGuide);
 const connectedMix = renderMix(connectedClick, connectedGuide);
-assert(schedule.life.frames === schedule.life.frames + schedule.madow.clicks[0].localFrame, "Madow connected downbeat equals Life end frame");
+const firstMadowConnectedClick = schedule.life.frames + schedule.madow.clicks[0].localFrame;
+assert(firstMadowConnectedClick === schedule.life.frames, "Madow connected downbeat lands exactly at the independently calculated Life end boundary");
+assert(schedule.transitionGuide.localFrame === schedule.life.clicks.at(-1).localFrame, "Complete starts on Life's exact final performance beat");
+assert(connectedGuideEvents.find((event) => event.label === "Complete").announcesGlobalFrame === firstMadowConnectedClick, "Complete announces Madow's exact first downbeat without a Madow Intro voice");
+assert(schedule.transitionGuide.localFrame + assets.Complete.samples.length > schedule.life.frames, "Complete voice tail crosses the song boundary without being truncated from the connected Guide");
 
 const outputs = [];
 outputs.push(await writeStem("jinsei-over-click.wav", lifeClick, "click", "jinsei-over"));
@@ -398,18 +594,20 @@ const decorateClick = (event, songOffsetFrames) => ({
   localSeconds: round9(event.localFrame / SAMPLE_RATE),
   globalSeconds: round9((songOffsetFrames + event.localFrame) / SAMPLE_RATE),
 });
-const decorateGuide = (event, songOffsetFrames) => ({
+const decorateGuide = (event) => ({
   ...event,
-  globalFrame: songOffsetFrames + event.localFrame,
   localSeconds: round9(event.localFrame / SAMPLE_RATE),
-  globalSeconds: round9((songOffsetFrames + event.localFrame) / SAMPLE_RATE),
+  globalSeconds: round9(event.globalFrame / SAMPLE_RATE),
+  announcesLocalFrame: guideTargetClick(event).localFrame,
+  announcesLocalSeconds: round9(guideTargetClick(event).localFrame / SAMPLE_RATE),
+  announcesGlobalSeconds: round9(event.announcesGlobalFrame / SAMPLE_RATE),
   sourceAsset: GUIDE_ASSETS[event.label],
   sourceFrames22050: assets[event.label].sourceFrames,
   resampledFrames48000: assets[event.label].samples.length,
 });
 
 const manifest = {
-  schema: "syndocal-show-audio-export/v1",
+  schema: "syndocal-show-audio-export/v2",
   deterministicSource: "tools/audio/export-jinsei-madow-click-guide.mjs",
   audioFormat: { codec: "pcm_s16le", sampleRate: SAMPLE_RATE, channels: 1, bitsPerSample: 16 },
   clickSpec: {
@@ -428,6 +626,17 @@ const manifest = {
     pitchOrTimeShift: false,
     sourceFormat: "PCM16 mono 22050 Hz",
     resampler: "deterministic linear interpolation 22050->48000; outputLength=round(inputFrames*48000/22050)",
+    placement: "Section and operational announcements start on the exact previous performance click. Life Intro is the sole frame-zero/no-preroll exception. Madow Intro is intentionally silent and Complete starts on Life's final click.",
+    sectionEvidence: {
+      source: "C:/Users/kouty/Documents/Guiter/app/trainer.tsx",
+      life: "LIFE_OVER_SONG_MAP: Intro 1, Verse 18/58, Pre Chorus 26/66, Chorus 34/82/117, Interlude 50, Bridge 98, Breakdown 114, Outro 142, End/Trans 149",
+      madow: "MADOW_SONG_MAP: Intro 1, Verse 19/125, Pre Chorus 43/147, Chorus 77/164, Interlude 101, Outro 192",
+      productExceptions: [
+        "Life Bridge 98 is silent because Looping pass 1 owns the same required pre-entry beat.",
+        "Madow Intro 1 is silent; Complete is the sole transition-boundary voice.",
+        "Life End 149-156 uses Trans every two measures at 149/151/153/155.",
+      ],
+    },
     assets: Object.fromEntries(Object.entries(assets).map(([label, asset]) => [label, {
       file: asset.file,
       absolutePath: asset.path,
@@ -474,12 +683,17 @@ const manifest = {
       connectedStartSeconds: round9(schedule.life.frames / SAMPLE_RATE),
       meterMap: Object.fromEntries([...MADOW_METER].map(([measure, beats]) => [String(measure), beats])),
       defaultBeatsPerMeasure: 4,
-      startsWithComplete: true,
+      startsWithCompleteTail: true,
+      completePhysicalOnsetFrame: schedule.transitionGuide.localFrame,
+      completeTargetFrame: schedule.life.frames,
     },
   },
   totals: {
     clickCount: schedule.life.clicks.length + schedule.madow.clicks.length,
-    guideEventCount: schedule.life.guides.length + schedule.madow.guides.length,
+    physicalGuideEventCount: connectedGuideEvents.length,
+    semanticGuideEventCount: Object.values(semanticGuideCounts).reduce((sum, count) => sum + count, 0),
+    physicalGuideCounts,
+    semanticGuideCounts,
     connectedFrames,
     connectedDurationSeconds: round9(connectedFrames / SAMPLE_RATE),
   },
@@ -487,10 +701,7 @@ const manifest = {
     ...schedule.life.clicks.map((event) => decorateClick(event, 0)),
     ...schedule.madow.clicks.map((event) => decorateClick(event, schedule.life.frames)),
   ],
-  guideEvents: [
-    ...schedule.life.guides.map((event) => decorateGuide(event, 0)),
-    ...schedule.madow.guides.map((event) => decorateGuide(event, schedule.life.frames)),
-  ],
+  guideEvents: connectedGuideEvents.map(decorateGuide),
   outputs,
 };
 
@@ -504,6 +715,7 @@ console.log(JSON.stringify({
   madowFrames: schedule.madow.frames,
   connectedFrames,
   clickCount: manifest.totals.clickCount,
-  guideEventCount: manifest.totals.guideEventCount,
+  physicalGuideEventCount: manifest.totals.physicalGuideEventCount,
+  semanticGuideEventCount: manifest.totals.semanticGuideEventCount,
   outputCount: outputs.length,
 }, null, 2));
