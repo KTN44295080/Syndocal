@@ -330,7 +330,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active development train advances from the long-lived `1.1.0` metadata to
-`1.2.0-alpha.8`. The branch name may remain historical; artifact metadata and tags
+`1.2.0-alpha.9`. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from the branch name.
 
 The synchronized product-version surfaces are:
@@ -1522,3 +1522,54 @@ claim display-output playback, fullscreen playback, GPU reset/recovery, hardware
 DJ Link/rekordbox, Stream Deck Pedal/MIDI, ASIO, real DMX, fault/recovery
 matrices, or the integrated one-hour soak. The accepted denominator is unchanged
 at 19/71 (26.8%).
+
+## 33. 2026-08-24 alpha.8 push and alpha.9 registration-order tranche
+
+The alpha.8 current-source/native/display checkpoint was committed as
+`ec9fca4887e079fa61950056d94aca5ab5d65da9` and pushed to
+`origin/codex/syndocal-v1.2`. The post-push branch was exactly synchronized at
+ahead/behind 0/0 with no staged or unstaged tracked files; 19 old evidence paths
+remain intentionally untracked.
+
+The next distributed development ordinal is synchronized at `1.2.0-alpha.9`
+across 20/20 authoritative coordinates. Release metadata and locked Cargo metadata
+pass. Alpha.9 first repairs the detached-pane transaction-owner startup order:
+every WebView must register before owner-bound invocation, a failed registration
+must remain fail-closed yet re-arm on a later operation without a tight loop, and
+only the main window may consume startup or queued project opens. Completion
+requires focused gates, the exact-path native release build, fresh native pane
+evidence with no persisted owner-registration status, independent review, and
+commit/push. Until then the accepted denominator remains 19/71 (26.8%).
+
+## 34. 2026-08-24 alpha.9 registration-order closure and alpha.10 entry
+
+Alpha.9 satisfies its source, automated, native-build, and fresh-pane proof
+requirements. Each WebView now blocks owner-bound work on one sticky fail-closed
+registration barrier; only later trusted activity can re-arm a failure, main-only
+startup/open consumption remains exclusive, disposed completions are ignored,
+and desired selection/audio work is serialized. Focused checkers cover concurrent
+callers, rejected registration, recovery, disposal, and bootstrap ordering.
+
+All focused release/routing/operator/transaction/runtime/workspace/localization/
+format gates passed, ten focused Rust tests passed with the exact pinned MSVC
+linker, and first-party plus third-party frontend warning counts were 0/0. The
+required no-bundle native release build passed. Its EXE SHA-256 is
+`BD4375D09EA09E099E6F24D74DC57B014E60F0C4C124401D1CBA6ACB1EE207FF`.
+The privacy-safe native record is
+`qa/artifacts/native-owner-registration/2026-08-24-alpha9/acceptance.json`.
+
+Native acceptance used the real Workspaces controls for all seven detachable
+panes and proved registration-before-selection, main reload without pane-owner
+rotation, no registration status/error/crash, and final return to one responsive
+maximized main window. Five displays including a 3840x2160 display were enumerated
+only. The 19/71 (26.8%) denominator does not move because physical playback,
+hardware, fault/recovery, ASIO, and soak rows remain unaccepted.
+
+Alpha.10 starts with a separate P1: both Stage and Timeline detached currently
+leave an empty lower main-window band. Completion requires collapsed outer and
+inner grid tracks, upper-content expansion in restored/maximized/fullscreen
+modes, usable Stage and Timeline rejoin controls, inert hidden splitters, saved
+ratio restoration, focused browser proof, and required native geometry proof.
+After each committed/pushed checkpoint, verified-regenerable stale build/cache
+output must be inventoried and removed while current release/QA evidence remains
+protected.

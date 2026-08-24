@@ -1,16 +1,72 @@
 import { spawnSync } from "node:child_process";
+import { statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const appDir = path.resolve(scriptDir, "..");
 
+const isRegularFile = (candidate) => {
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+};
+
+export function tauriSubcommand(args) {
+  return args.find((argument) => typeof argument === "string" && !argument.startsWith("-")) ?? "";
+}
+
 export function isNativeReleaseBuild(args) {
-  return args[0] === "build";
+  return tauriSubcommand(args) === "build";
+}
+
+export function isWindowsNativeCargoCommand(args) {
+  const command = tauriSubcommand(args);
+  return command === "build" || command === "dev";
 }
 
 export function releaseExecutablePath(baseAppDir = appDir) {
   return path.resolve(baseAppDir, "..", "target", "release", "syndocal.exe");
+}
+
+export function verifiedNativeBuildEnvironment(
+  environment = process.env,
+  platform = process.platform,
+  fileIsRegular = isRegularFile,
+) {
+  if (platform !== "win32") return environment;
+
+  const vcToolsInstallDir = environment.VCToolsInstallDir?.trim();
+  if (!vcToolsInstallDir) {
+    throw new Error(
+      "Refusing the Windows native build without VCToolsInstallDir. Run it from an x64 Visual Studio Developer Shell.",
+    );
+  }
+  const linker = path.resolve(vcToolsInstallDir, "bin", "Hostx64", "x64", "link.exe");
+  if (!fileIsRegular(linker)) {
+    throw new Error(`Refusing the Windows native build because the asserted MSVC linker is missing: ${linker}`);
+  }
+
+  // Cargo otherwise resolves a bare `link.exe` from PATH. Git for Windows also
+  // ships usr/bin/link.exe, which accepts Unix arguments and fails MSVC links.
+  // Pin the target linker to the verified Visual C++ binary for every build.
+  return {
+    ...environment,
+    CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: linker,
+  };
+}
+
+export function tauriCommandEnvironment(
+  args,
+  environment = process.env,
+  platform = process.platform,
+  fileIsRegular = isRegularFile,
+) {
+  return isWindowsNativeCargoCommand(args)
+    ? verifiedNativeBuildEnvironment(environment, platform, fileIsRegular)
+    : environment;
 }
 
 export function stopCheckoutReleaseExecutable(baseAppDir = appDir) {
@@ -86,6 +142,8 @@ export function runTauri(args, baseAppDir = appDir) {
     stopCheckoutReleaseExecutable(baseAppDir);
   }
 
+  const environment = tauriCommandEnvironment(args);
+
   const tauriCli = path.join(
     baseAppDir,
     "node_modules",
@@ -95,7 +153,7 @@ export function runTauri(args, baseAppDir = appDir) {
   );
   const result = spawnSync(process.execPath, [tauriCli, ...args], {
     cwd: baseAppDir,
-    env: process.env,
+    env: environment,
     stdio: "inherit",
   });
 

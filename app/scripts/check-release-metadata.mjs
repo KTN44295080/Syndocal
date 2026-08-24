@@ -18,7 +18,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 
-export const expectedVersion = "1.2.0-alpha.8";
+export const expectedVersion = "1.2.0-alpha.9";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");

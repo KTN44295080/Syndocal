@@ -133,6 +133,12 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Initialize Windows x64 MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
@@ -338,7 +344,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: syndocal-1.2.0-alpha.8-${{ matrix.os }}
+          name: syndocal-1.2.0-alpha.9-${{ matrix.os }}
           path: target/release/bundle/**
           if-no-files-found: error
           retention-days: 14

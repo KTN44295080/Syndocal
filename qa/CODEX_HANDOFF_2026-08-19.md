@@ -6,7 +6,7 @@
 - Current implementation checkpoint: `0a3e91ab87d4be4735710234d1ba002e484375ef`
   (`feat: add sample-accurate timeline cue audio`). Push evidence is recorded by
   the documentation follow-up commit containing this line.
-- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.8`.
+- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.9`.
 - **2026-08-22 Windows-only scope:** current completion targets this operator's
   Windows PC. macOS/Linux control/native/warning rows and the six distribution,
   legal, signing, SBOM, clean-machine, updater, and publication rows are deferred
@@ -1762,3 +1762,64 @@ incremental, and 90.36 GiB for the old named QA target directories. The
 not historical source/worktree copies. No cleanup was performed because the
 deletion/rebuild-cost tradeoff was not authorized; generated `target` remains
 excluded from Git.
+
+## 2026-08-24 alpha.8 push and alpha.9 owner-registration start
+
+Checkpoint commit `ec9fca4887e079fa61950056d94aca5ab5d65da9`
+(`checkpoint: validate Syndocal 1.2.0-alpha.8`) is pushed to
+`origin/codex/syndocal-v1.2`. Post-push verification found HEAD equal to upstream,
+ahead/behind 0/0, and no staged or unstaged tracked files. The 19 untracked paths
+remain deliberate historical alpha.7/pre-fix-alpha.8 evidence exclusions.
+
+The active version is now `1.2.0-alpha.9` at 20/20 authoritative coordinates;
+`pnpm --dir app run check:release` and locked Cargo metadata pass. Work in progress
+is limited first to the detached-pane owner-registration ordering P1. It must
+prove a fail-closed/re-armable registration barrier, main-only startup/queued-open
+consumption, focused automated gates, the required native release build, a clean
+fresh detached-pane status, independent review, and a new commit/push before this
+boundary can be accepted. The denominator remains 19/71.
+
+## 2026-08-24 alpha.9 owner-registration acceptance handoff
+
+Current branch is `codex/syndocal-v1.2`; the pre-commit baseline is pushed
+alpha.8 commit `ec9fca4887e079fa61950056d94aca5ab5d65da9`, and the working product
+version is synchronized at `1.2.0-alpha.9` across 20/20 authoritative
+coordinates. Alpha.9 implements a per-WebView sticky fail-closed owner
+registration barrier, main-only startup/queued-open consumption, disposed-result
+suppression, and latest-desired selection/audio serialization. Its independent
+implementation and adversarial reviews have no remaining P0/P1 or release-P2.
+
+Verified gates: release and locked metadata; Tauri wrapper 26; frontend invokes
+417; routing 133 renderer / 29 server / 30 raw / 402 facade; backend/operator
+contracts 478/308/133; project transaction/authority; E3/E4 and four focused
+runtime gates; workspace/operator 27; localization 3556/3556 with zero bare
+strings; Cargo format; and ten focused Rust tests. Frontend warning counts are
+0 first-party and 0 third-party.
+
+The required release build passed in 2m27s with the exact MSVC 14.43.34808
+Hostx64/x64 linker. EXE: 57,489,408 bytes,
+`BD4375D09EA09E099E6F24D74DC57B014E60F0C4C124401D1CBA6ACB1EE207FF`;
+PDB: 19,582,976 bytes,
+`0DAF81F154F6C3953D5B9DC4A9DC85FF9889CC8CA5A277F4D635E80C2A17FC56`.
+The fresh native record is
+`qa/artifacts/native-owner-registration/2026-08-24-alpha9/`: seven pane
+screenshots plus open/final screenshots and redacted JSON. Every pane registered
+before its initial owner-bound operation, survived the main reload, remained
+maximized and error-free, then closed through the main UI. Final native state was
+one exact responsive maximized `Syndocal` window. Five connected displays were
+enumerated, including 3840x2160; no display playback is claimed.
+
+Next actions are exact: commit and push alpha.9; verify HEAD=upstream; delete the
+pre-verified regenerable stale target trees while preserving `target/release`,
+`target/qa`, current warning evidence, sources, and QA artifacts; record reclaimed
+bytes; then advance to alpha.10. Alpha.10 first fixes the empty lower band when
+Stage and Timeline are both detached, proves restored/maximized/fullscreen
+reflow and both rejoin paths, and rebuilds/rechecks native. The accepted
+denominator remains 19/71; DJ Link/rekordbox, DMX, MIDI/Pedal, ASIO, real output,
+fault matrices, and soak remain pending.
+
+Delegation policy is now explicit: Sol retains decomposition/integration and
+completion authority; Ox `opencode/x-preview-f-free` is the default delegate;
+Terra implementation requires independent Ox review; Luna Max is limited to
+small, explicit parallel assignments. Stale generated artifacts are an ongoing
+checkpoint cleanup obligation.

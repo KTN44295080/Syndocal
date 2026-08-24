@@ -4,7 +4,7 @@
 > requirement and final-gate authority, but its frozen checkpoint, 75.5% planning
 > roll-up, and Media A1 resume instructions are historical. Use
 > `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for the current dependency order,
-> `1.2.0-alpha.8` version train, warning ratchet, D2 acceptance/D3 resume point, and checkpoint
+> `1.2.0-alpha.9` version train, warning ratchet, D2 acceptance/D3 resume point, and checkpoint
 > workflow. Do not compare old and current percentages without identical denominators.
 
 > **OutputControl supersession (2026-08-21):** physical six-digit/Raw Input/Enter
@@ -2514,3 +2514,47 @@ incremental, and 90.36 GiB for the old named QA target directories. The
 not historical source/worktree copies. No cleanup was performed because the
 deletion/rebuild-cost tradeoff was not authorized; generated `target` remains
 excluded from Git.
+
+## 42. 2026-08-24 alpha.8 push and alpha.9 owner-registration tranche
+
+The reviewed alpha.8 checkpoint is committed and pushed at
+`ec9fca4887e079fa61950056d94aca5ab5d65da9` on
+`origin/codex/syndocal-v1.2`. The immediate post-push state was HEAD=upstream,
+ahead/behind 0/0, staged/unstaged tracked paths 0/0, with only the 19 intentional
+historical evidence exclusions left untracked.
+
+The active product train is now synchronized at `1.2.0-alpha.9` across all 20
+authoritative coordinates. Release metadata and locked Cargo metadata pass. The
+next required dependency is the detached-pane transaction-owner registration
+barrier: registration must precede owner-bound startup work, only the main window
+may consume startup/queued project opens, failure must re-arm without a retry
+loop, and a fresh native pane must be free of the prior six-second owner status.
+This row remains in progress and does not change 19/71.
+
+## 43. 2026-08-24 alpha.9 owner-registration accepted
+
+The detached-WebView registration barrier is implemented and independently
+reviewed: one sticky fail-closed owner registration precedes owner-bound work,
+failure re-arms only from later trusted activity, disposed late results cannot
+publish, main-only startup/open consumption is preserved, and latest desired
+selection/audio state is serialized. Concurrency, retry, disposal, bootstrap,
+transaction, authority, routing, runtime, workspace, localization, format, and
+focused Rust gates pass. Frontend warning evidence is 0 first-party and 0
+third-party warnings.
+
+The required `pnpm --dir app tauri build --no-bundle` completed with the exact
+pinned MSVC Hostx64/x64 linker. Native evidence in
+`qa/artifacts/native-owner-registration/2026-08-24-alpha9/` proves all seven
+detached panes register before their first owner-gated selection, remain usable
+after a main reload, show no owner-registration status/error/crash, and close
+back to one responsive maximized main window. The accepted EXE SHA-256 is
+`BD4375D09EA09E099E6F24D74DC57B014E60F0C4C124401D1CBA6ACB1EE207FF`.
+Five displays were enumerated, including 3840x2160, but no playback claim follows.
+
+Alpha.9 therefore closes its registration-order P1 without changing the
+whole-product denominator of 19/71. Alpha.10 owns the now-visible layout P1:
+when Stage and Timeline are both detached, remove the unused lower workspace
+area, let the upper workspace use the freed height in restored/maximized/
+fullscreen modes, retain explicit rejoin routes, and restore saved split ratios
+without shrinking existing targets. Stale generated build/cache trees are now a
+recurring checkpoint cleanup obligation after the owning commit/push.

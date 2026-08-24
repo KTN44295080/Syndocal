@@ -1307,6 +1307,28 @@ const projectMutationCoalesceKey = (command: string, args?: Record<string, unkno
   return targetEntries.length > 0 ? `${command}:${JSON.stringify(Object.fromEntries(targetEntries))}` : "";
 };
 
+/**
+ * `invoke` is module-scoped so controller helpers can share the typed facade,
+ * while owner registration is specific to one mounted App/WebView.  The App
+ * installs this bridge before it starts native work and removes only its own
+ * bridge on cleanup.  A missing bridge is deliberately a hard error: native
+ * calls must never race an unregistered transaction owner.
+ */
+type ProjectTransactionOwnerRegistrationBarrier = Readonly<{
+  identity: symbol;
+  awaitRegistration: () => Promise<void>;
+}>;
+
+let projectTransactionOwnerRegistrationBarrier: ProjectTransactionOwnerRegistrationBarrier | null = null;
+
+const awaitProjectTransactionOwnerRegistrationBarrier = async (): Promise<void> => {
+  const barrier = projectTransactionOwnerRegistrationBarrier;
+  if (!barrier) {
+    throw new Error("Project transaction owner registration is unavailable; native work was not dispatched.");
+  }
+  await barrier.awaitRegistration();
+};
+
 const invoke = async <T,>(
   command: FrontendTauriInvokeCommand,
   args?: Record<string, unknown>,
@@ -1314,6 +1336,11 @@ const invoke = async <T,>(
   if (!isTauriRuntime()) {
     throw new Error(tauriBackendUnavailableMessage);
   }
+  // This is intentionally outside the transaction branches. Every native
+  // generic call (including reads, mapping flushes, Begin and Commit) waits
+  // for a concrete window owner; the registration command itself uses the
+  // direct Tauri primitive below so it cannot recurse through this facade.
+  await awaitProjectTransactionOwnerRegistrationBarrier();
   const rendererTicketedMutation = projectMutationCommands.has(command);
   const serverAuthoritativeMutation = serverAuthoritativeProjectMutationCommands.has(command);
   const projectMutation = rendererTicketedMutation || serverAuthoritativeMutation;
@@ -3613,7 +3640,7 @@ export default function App() {
       setOperatorLockMode(desiredSessionMode);
       if (desiredSessionMode !== null && isTauriRuntime()) {
         try {
-          const serverMode = await tauriInvoke<OperatorLockMode>("lock_project_operator_session", {
+          const serverMode = await invokeRegisteredOwnerCommand<OperatorLockMode>("lock_project_operator_session", {
             ownerId: projectTransactionOwnerId,
           });
           if (operatorPolicy()?.credential.verifier_b64 === policy.credential.verifier_b64) {
@@ -3657,7 +3684,7 @@ export default function App() {
     if (!policy) return false;
     try {
       if (isTauriRuntime()) {
-        await tauriInvoke<void>("unlock_project_operator_session", {
+        await invokeRegisteredOwnerCommand<void>("unlock_project_operator_session", {
           ownerId: projectTransactionOwnerId,
           password,
         });
@@ -4810,11 +4837,19 @@ export default function App() {
       selections_drawer_open: selectionsDrawerOpen(),
     });
   });
+  const projectTransactionOwnerRegistrationStatusKey = "project-owner-registration";
+  const [projectTransactionOwnerRegistrationRevision, setProjectTransactionOwnerRegistrationRevision] = createSignal(0);
   const [appStatus, setAppStatus] = createSignal(appStatusFromMessage("Ready"));
   const [daslightProjectImportBusy, setDaslightProjectImportBusy] = createSignal(false);
   const message = () => appStatus().text;
   const setMessage = (text: string, key?: string) => {
-    setAppStatus(appStatusFromMessage(text, key));
+    // A failed owner registration is the actionable native boundary. Do not
+    // let unrelated polling/background errors erase it before a later caller
+    // successfully re-arms the same owner registration.
+    setAppStatus((current) => current.key === projectTransactionOwnerRegistrationStatusKey
+      && key !== projectTransactionOwnerRegistrationStatusKey
+      ? current
+      : appStatusFromMessage(text, key));
     return text;
   };
   const finishDisplayAddPostCommitRefresh = (
@@ -4828,26 +4863,127 @@ export default function App() {
       refreshError,
     );
     if (result.kind === "clear") {
-      setAppStatus(appStatusFromMessage("Ready"));
+      setAppStatus((current) => current.key === projectTransactionOwnerRegistrationStatusKey
+        ? current
+        : appStatusFromMessage("Ready"));
     } else if (result.kind === "refresh_pending") {
       setMessage(result.message, "display-add-refresh-pending");
     }
   };
+  const projectTransactionOwnerRegistrationIdentity = Symbol("project-transaction-owner-registration");
   let projectTransactionOwnerRegistration: Promise<void> | null = null;
-  if (isTauriRuntime()) {
-    projectTransactionOwnerRegistration = tauriInvoke<ProjectHistoryMutationResult | null>("register_project_transaction_owner", {
+  let projectTransactionOwnerRegistrationDisposed = false;
+  // A failed registration remains fail-closed for background pollers. Only a
+  // trusted user gesture or a newly received single-instance open request may
+  // consume this arm and issue one more IPC attempt for this same owner UUID.
+  let projectTransactionOwnerRegistrationFailure: unknown = null;
+  let projectTransactionOwnerRegistrationHasFailure = false;
+  let projectTransactionOwnerRegistrationRetryArmed = false;
+  let projectTransactionOwnerRegistrationRetryRequestedDuringFlight = false;
+  const clearProjectTransactionOwnerRegistrationFailure = () => {
+    setAppStatus((current) => current.key === projectTransactionOwnerRegistrationStatusKey
+      ? appStatusFromMessage("Ready")
+      : current);
+  };
+  const armProjectTransactionOwnerRegistrationRetry = () => {
+    if (projectTransactionOwnerRegistrationDisposed) return;
+    if (projectTransactionOwnerRegistration) {
+      // An explicit event/gesture can arrive before the current registration
+      // rejects. Preserve exactly one arm for that failed attempt instead of
+      // losing the queued project path until another later interaction.
+      projectTransactionOwnerRegistrationRetryRequestedDuringFlight = true;
+    } else if (projectTransactionOwnerRegistrationHasFailure) {
+      projectTransactionOwnerRegistrationRetryArmed = true;
+    }
+  };
+  const armProjectTransactionOwnerRegistrationRetryFromTrustedInput = (event: Event) => {
+    if (event.isTrusted) armProjectTransactionOwnerRegistrationRetry();
+  };
+  window.addEventListener("pointerdown", armProjectTransactionOwnerRegistrationRetryFromTrustedInput, true);
+  window.addEventListener("keydown", armProjectTransactionOwnerRegistrationRetryFromTrustedInput, true);
+  const ensureProjectTransactionOwnerRegistration = (): Promise<void> => {
+    if (!isTauriRuntime()) return Promise.reject(new Error(tauriBackendUnavailableMessage));
+    if (projectTransactionOwnerRegistrationDisposed) {
+      return Promise.reject(new Error("Project transaction owner registration is unavailable; this window is closing."));
+    }
+    if (projectTransactionOwnerRegistration) return projectTransactionOwnerRegistration;
+    if (projectTransactionOwnerRegistrationHasFailure && !projectTransactionOwnerRegistrationRetryArmed) {
+      return Promise.reject(projectTransactionOwnerRegistrationFailure);
+    }
+    if (projectTransactionOwnerRegistrationHasFailure) {
+      projectTransactionOwnerRegistrationHasFailure = false;
+      projectTransactionOwnerRegistrationFailure = null;
+      projectTransactionOwnerRegistrationRetryArmed = false;
+      projectTransactionOwnerRegistrationRetryRequestedDuringFlight = false;
+    }
+
+    let attempt: Promise<void>;
+    // Registration is the one intentional direct Tauri call. Routing it through
+    // `invoke` would await this same barrier recursively.
+    attempt = tauriInvoke<ProjectHistoryMutationResult | null>("register_project_transaction_owner", {
       ownerId: projectTransactionOwnerId,
     }).then((recovered) => {
+      if (projectTransactionOwnerRegistrationDisposed) {
+        throw new DOMException("Project transaction owner registration was abandoned while this window closed.", "AbortError");
+      }
+      projectTransactionOwnerRegistrationHasFailure = false;
+      projectTransactionOwnerRegistrationFailure = null;
+      projectTransactionOwnerRegistrationRetryArmed = false;
+      clearProjectTransactionOwnerRegistrationFailure();
+      setProjectTransactionOwnerRegistrationRevision((current) => current + 1);
       if (!recovered) return;
       window.dispatchEvent(
         new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: recovered }),
       );
-      setMessage("Recovered a prior project edit. Undo is available.");
+      setMessage("Recovered a prior project edit. Undo is available.", "project-owner-registration-recovery");
+    }).catch((error) => {
+      // Keep a successful registration idempotent, but clear only the failed
+      // attempt so the next owner-bound/generic request can re-arm it. Do not
+      // schedule a retry here: callers, rather than a tight loop, own retry.
+      if (projectTransactionOwnerRegistration === attempt) {
+        projectTransactionOwnerRegistration = null;
+      }
+      const retryArmedForFailedAttempt = projectTransactionOwnerRegistrationRetryRequestedDuringFlight;
+      projectTransactionOwnerRegistrationRetryRequestedDuringFlight = false;
+      if (!projectTransactionOwnerRegistrationDisposed) {
+        projectTransactionOwnerRegistrationHasFailure = true;
+        projectTransactionOwnerRegistrationFailure = error;
+        projectTransactionOwnerRegistrationRetryArmed = retryArmedForFailedAttempt;
+        setMessage(`Project transaction owner registration failed: ${String(error)}`, projectTransactionOwnerRegistrationStatusKey);
+      }
+      throw error;
     });
-    void projectTransactionOwnerRegistration.catch((error) => {
-      setMessage(`Interrupted edit recovery failed: ${String(error)}`);
-    });
-  }
+    projectTransactionOwnerRegistration = attempt;
+    return attempt;
+  };
+  const ownerRegistrationBarrier: ProjectTransactionOwnerRegistrationBarrier = {
+    identity: projectTransactionOwnerRegistrationIdentity,
+    awaitRegistration: ensureProjectTransactionOwnerRegistration,
+  };
+  projectTransactionOwnerRegistrationBarrier = ownerRegistrationBarrier;
+  // Every main/pane App attempts its own registration. A failure remains
+  // fail-closed and is retried only by a later owner-bound/generic caller.
+  void ensureProjectTransactionOwnerRegistration().catch(() => undefined);
+  const invokeRegisteredOwnerCommand = async <T,>(
+    command:
+      | "lock_project_operator_session"
+      | "unlock_project_operator_session"
+      | "set_operator_selection_context",
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
+    await awaitProjectTransactionOwnerRegistrationBarrier();
+    return tauriInvoke<T>(command, args);
+  };
+  onCleanup(() => {
+    projectTransactionOwnerRegistrationDisposed = true;
+    window.removeEventListener("pointerdown", armProjectTransactionOwnerRegistrationRetryFromTrustedInput, true);
+    window.removeEventListener("keydown", armProjectTransactionOwnerRegistrationRetryFromTrustedInput, true);
+    // A delayed cleanup from an older App must never detach the replacement
+    // App's bridge after a reload/remount in this WebView.
+    if (projectTransactionOwnerRegistrationBarrier?.identity === projectTransactionOwnerRegistrationIdentity) {
+      projectTransactionOwnerRegistrationBarrier = null;
+    }
+  });
   const refreshFixtureGroups = async () => {
     if (!isTauriRuntime()) return fixtureGroups();
     const guard = captureProjectReadGuard();
@@ -4911,7 +5047,7 @@ export default function App() {
     setOperatorLockMode(mode);
     if (mode === null || !policy || !isTauriRuntime()) return;
     const expectedVerifier = policy.credential.verifier_b64;
-    void tauriInvoke<OperatorLockMode>("lock_project_operator_session", {
+    void invokeRegisteredOwnerCommand<OperatorLockMode>("lock_project_operator_session", {
       ownerId: projectTransactionOwnerId,
     }).then((serverMode) => {
       if (operatorPolicy()?.credential.verifier_b64 !== expectedVerifier) return;
@@ -6227,22 +6363,79 @@ export default function App() {
     return controls.filter((control) => controlCategoryForAttribute(control.attribute) === category);
   });
   let syncedOperatorSelectionKey = "";
+  let requestedOperatorSelectionKey = "";
+  let requestedOperatorSelectionContext: OperatorSelectionContext | null = null;
+  let operatorSelectionSyncInFlight = false;
+  let operatorSelectionSyncDisposed = false;
+  const syncOperatorSelectionContext = async () => {
+    if (operatorSelectionSyncInFlight || operatorSelectionSyncDisposed || !isTauriRuntime()) return;
+    operatorSelectionSyncInFlight = true;
+    let failed = false;
+    let failedOperatorSelectionKey: string | null = null;
+    try {
+      while (
+        !operatorSelectionSyncDisposed
+        && requestedOperatorSelectionContext
+        && requestedOperatorSelectionKey !== syncedOperatorSelectionKey
+      ) {
+        const context = requestedOperatorSelectionContext;
+        const key = requestedOperatorSelectionKey;
+        try {
+          await invokeRegisteredOwnerCommand<OperatorSelectionContext>("set_operator_selection_context", { context });
+        } catch (error) {
+          failedOperatorSelectionKey = key;
+          throw error;
+        }
+        // An older reply may arrive after a newer UI selection. Only the
+        // matching request becomes current; the loop then serializes the
+        // newer context instead of falsely marking the old one synchronized.
+        if (requestedOperatorSelectionKey === key) {
+          syncedOperatorSelectionKey = key;
+        }
+      }
+    } catch (error) {
+      failed = true;
+      console.warn("Unable to synchronize the backend operator selection context", error);
+    } finally {
+      operatorSelectionSyncInFlight = false;
+      // Continue after a successful request, or once for a newer desired
+      // context that arrived while a failed IPC was in flight. A same-context
+      // failure never spins a retry loop.
+      if (
+        (!failed || (
+          failedOperatorSelectionKey !== null
+          && requestedOperatorSelectionKey !== failedOperatorSelectionKey
+        ))
+        && !operatorSelectionSyncDisposed
+        && requestedOperatorSelectionContext
+        && requestedOperatorSelectionKey !== syncedOperatorSelectionKey
+      ) {
+        void syncOperatorSelectionContext();
+      }
+    }
+  };
+  onCleanup(() => {
+    operatorSelectionSyncDisposed = true;
+  });
   createEffect(() => {
+    // Revisit a desired-but-unsynced context after another native caller
+    // re-arms a previously failed owner registration.
+    projectTransactionOwnerRegistrationRevision();
     const context: OperatorSelectionContext = {
       fixture_ids: selectedControlTargetFixtures().map((fixture) => fixture.id),
       attributes: visibleControls().map((control) => control.attribute),
     };
     const key = JSON.stringify(context);
-    if (key === syncedOperatorSelectionKey) {
-      return;
+    if (key !== requestedOperatorSelectionKey) {
+      requestedOperatorSelectionContext = context;
+      requestedOperatorSelectionKey = key;
     }
-    syncedOperatorSelectionKey = key;
+    if (key === syncedOperatorSelectionKey) return;
     if (!isTauriRuntime()) {
+      syncedOperatorSelectionKey = key;
       return;
     }
-    void tauriInvoke<OperatorSelectionContext>("set_operator_selection_context", { context }).catch((error) => {
-      console.warn("Unable to synchronize the backend operator selection context", error);
-    });
+    void syncOperatorSelectionContext();
   });
   const showDimmerPanel = createMemo(() => Boolean(selectedDimmerControl()) && activeControlCategory() === "dimmer");
   const showPositionPad = createMemo(() => Boolean(selectedPositionControls()) && activeControlCategory() === "position");
@@ -11394,29 +11587,110 @@ export default function App() {
     });
   });
   createEffect(() => {
-    if (!isTauriRuntime()) {
+    // Startup/CLI-open ownership belongs to the main application window only.
+    // Detached panes still register their own owner, but must never consume the
+    // global startup queue or install the app-wide open-project listener.
+    if (!isTauriRuntime() || paneWindow) {
       return;
     }
-    void loadStartupProject();
-    void loadQueuedOpenProjects();
     let disposed = false;
     let unlistenOpenProject: (() => void) | null = null;
-    let unlistenProjectDrop: (() => void) | null = null;
-    void listen<string[]>("syndocal://open-project", (event) => {
-      const paths = Array.isArray(event.payload) ? event.payload : [];
-      const path = paths[paths.length - 1];
-      if (path) {
-        void loadProjectPath(path);
+    let mainProjectOpenBootstrapReady = false;
+    let startupProjectLoaded = false;
+    let mainProjectOpenBootstrapInFlight: Promise<void> | null = null;
+    let runMainProjectOpenBootstrap = async (): Promise<void> => undefined;
+    createEffect(() => {
+      // A user-armed registration retry may succeed outside the original
+      // bootstrap attempt. Resume exactly this main-only sequence; panes do
+      // not own it and no polling path can create a retry arm.
+      projectTransactionOwnerRegistrationRevision();
+      if (mainProjectOpenBootstrapReady && !queuedOpenProjectDrainReady) {
+        void runMainProjectOpenBootstrap();
       }
-    })
-      .then((unlisten) => {
+    });
+    void (async () => {
+      // Install before owner registration/startup so a single-instance event
+      // cannot be lost in the bootstrap gap. Its payload only requests a
+      // later queue drain; `queuedOpenProjectDrainReady` stays false here.
+      try {
+        const unlisten = await listen<string[]>("syndocal://open-project", (event) => {
+          if (!disposed && Array.isArray(event.payload) && event.payload.length > 0) {
+            armProjectTransactionOwnerRegistrationRetry();
+            requestQueuedOpenProjects();
+            void runMainProjectOpenBootstrap();
+          }
+        });
         if (disposed) {
           unlisten();
-        } else {
-          unlistenOpenProject = unlisten;
+          return;
         }
-      })
-      .catch((error) => setMessage(String(error)));
+        unlistenOpenProject = unlisten;
+      } catch (error) {
+        // Loss of the optional app-wide event listener cannot prevent the
+        // initial startup project or pre-existing backend open queue.
+        if (!disposed) setMessage(`Project open listener unavailable: ${String(error)}`);
+      }
+      if (disposed) return;
+      mainProjectOpenBootstrapReady = true;
+      runMainProjectOpenBootstrap = () => {
+        if (disposed || queuedOpenProjectDrainReady) return Promise.resolve();
+        if (mainProjectOpenBootstrapInFlight) return mainProjectOpenBootstrapInFlight;
+        let attempt: Promise<void> | null = null;
+        attempt = (async () => {
+          try {
+            // Keep this order serial. A queued external open cannot race a
+            // startup project or owner registration and accidentally apply an
+            // older reply.
+            await awaitProjectTransactionOwnerRegistrationBarrier();
+            if (disposed) return;
+            if (!startupProjectLoaded) {
+              await loadStartupProject();
+              if (disposed) return;
+              startupProjectLoaded = true;
+            }
+            queuedOpenProjectDrainReady = true;
+            await loadQueuedOpenProjects();
+          } catch (error) {
+            // setMessage preserves the dedicated registration failure key, so
+            // this bootstrap context cannot hide the actionable boundary.
+            if (!disposed) setMessage(String(error));
+          } finally {
+            if (mainProjectOpenBootstrapInFlight === attempt) {
+              mainProjectOpenBootstrapInFlight = null;
+            }
+            // An explicit open/gesture which arrived while registration was
+            // pending leaves one retry arm. Consume it only after this failed
+            // bootstrap has released its single-flight slot.
+            if (
+              !disposed
+              && !queuedOpenProjectDrainReady
+              && projectTransactionOwnerRegistrationRetryArmed
+            ) {
+              void runMainProjectOpenBootstrap();
+            }
+          }
+        })();
+        mainProjectOpenBootstrapInFlight = attempt;
+        return attempt;
+      };
+      // Keep this order serial. A queued external open cannot race a startup
+      // project or owner registration and accidentally apply an older reply.
+      await runMainProjectOpenBootstrap();
+    })().catch((error) => {
+      if (!disposed) setMessage(String(error));
+    });
+    onCleanup(() => {
+      disposed = true;
+      unlistenOpenProject?.();
+    });
+  });
+  createEffect(() => {
+    // Drag/drop is WebView-local rather than app-global. Keep it available in
+    // panes; any owner-bound project action it triggers enters `invoke` and
+    // therefore re-arms/awaits the same registration barrier.
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let unlistenProjectDrop: (() => void) | null = null;
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === "enter") {
@@ -11501,7 +11775,6 @@ export default function App() {
       .catch((error) => setMessage(String(error)));
     onCleanup(() => {
       disposed = true;
-      unlistenOpenProject?.();
       unlistenProjectDrop?.();
     });
   });
@@ -14547,7 +14820,8 @@ export default function App() {
     // Adoption is meaningful only after this Webview owns the new registered
     // transaction identity. The native command independently verifies the
     // injected window binding and current owner incarnation.
-    await projectTransactionOwnerRegistration;
+    const projectTransactionOwnerRegistrationBarrierPromise = awaitProjectTransactionOwnerRegistrationBarrier();
+    await projectTransactionOwnerRegistrationBarrierPromise;
     return tauriInvoke<unknown>("adopt_project_publication_owner_v1", {
       request,
       newOwnerId,
@@ -15405,15 +15679,41 @@ export default function App() {
     }
   };
 
+  let queuedOpenProjectDrainReady = false;
+  let queuedOpenProjectDrainInFlight = false;
+  let queuedOpenProjectDrainRequested = false;
+  const requestQueuedOpenProjects = () => {
+    queuedOpenProjectDrainRequested = true;
+    if (queuedOpenProjectDrainReady) void loadQueuedOpenProjects();
+  };
   const loadQueuedOpenProjects = async () => {
+    if (queuedOpenProjectDrainInFlight) {
+      queuedOpenProjectDrainRequested = true;
+      return;
+    }
+    queuedOpenProjectDrainInFlight = true;
     try {
-      const paths = await invoke<string[]>("take_open_project_paths");
-      const path = paths.at(-1);
-      if (path) {
-        await loadProjectPath(path);
-      }
+      do {
+        queuedOpenProjectDrainRequested = false;
+        // `take_open_project_paths` is destructive. It runs only after the
+        // current WebView has registered its owner and only from this serial
+        // main-window drain, never from a pane/event payload.
+        const paths = await invoke<string[]>("take_open_project_paths");
+        const path = paths.at(-1);
+        if (path) {
+          await loadProjectPath(path);
+        }
+      } while (queuedOpenProjectDrainRequested);
     } catch (error) {
       setMessage(String(error));
+    } finally {
+      queuedOpenProjectDrainInFlight = false;
+      // A newer single-instance event may have arrived while the destructive
+      // take failed. Its request remains durable in the backend queue, so
+      // resume one serialized drain rather than leaving the flag stranded.
+      if (queuedOpenProjectDrainReady && queuedOpenProjectDrainRequested) {
+        void loadQueuedOpenProjects();
+      }
     }
   };
 
@@ -19840,6 +20140,7 @@ export default function App() {
     if (programAudioHandoffSyncInFlight || programAudioHandoffDisposed || !isTauriRuntime()) return;
     programAudioHandoffSyncInFlight = true;
     let failed = false;
+    let failedProgramAudioHandoffSignature: string | null = null;
     try {
       while (
         !programAudioHandoffDisposed &&
@@ -19848,16 +20149,31 @@ export default function App() {
       ) {
         const config = desiredProgramAudioHandoffConfig;
         const signature = desiredProgramAudioHandoffSignature;
-        await invoke("set_program_audio_handoff_config", config);
+        try {
+          await invoke("set_program_audio_handoff_config", config);
+        } catch (error) {
+          failedProgramAudioHandoffSignature = signature;
+          throw error;
+        }
         appliedProgramAudioHandoffSignature = signature;
       }
     } catch (error) {
       failed = true;
-      if (!programAudioHandoffDisposed) setMessage(String(error));
+      if (!programAudioHandoffDisposed) {
+        // Preserve a keyed owner-registration failure. Replacing it with this
+        // background sync's unkeyed error would hide the actionable barrier.
+        setAppStatus((current) => current.key === projectTransactionOwnerRegistrationStatusKey
+          ? current
+          : appStatusFromMessage(String(error), "program-audio-handoff"));
+      }
     } finally {
       programAudioHandoffSyncInFlight = false;
       if (
-        !failed &&
+        (!failed || (
+          failedProgramAudioHandoffSignature !== null
+          && desiredProgramAudioHandoffSignature !== failedProgramAudioHandoffSignature
+        ))
+        &&
         !programAudioHandoffDisposed &&
         desiredProgramAudioHandoffSignature !== appliedProgramAudioHandoffSignature
       ) {
@@ -19866,6 +20182,9 @@ export default function App() {
     }
   };
   createEffect(() => {
+    // A successful re-arm after an earlier registration failure must retry the
+    // desired program-audio configuration even when its values did not change.
+    projectTransactionOwnerRegistrationRevision();
     const config = {
       enabled: videoProgramAudioEnabled(),
       volume: videoAudioMonitorVolume(),
@@ -22560,7 +22879,7 @@ export default function App() {
     // This is the same canonical mapping barrier the generic mutation facade
     // uses, but it precedes the backend authority read that issues the strict
     // process/session + E/R/H/publication envelope.
-    await projectTransactionOwnerRegistration;
+    await awaitProjectTransactionOwnerRegistrationBarrier();
     await flushProjectControlMappingsBeforeMutation();
     const authority = await tauriInvoke<AuthoredEffectAuthorityBundle>(
       "get_project_authority_bundle",

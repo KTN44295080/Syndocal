@@ -1,0 +1,167 @@
+{
+  "schema": "native-owner-registration.v1",
+  "version": "1.2.0-alpha.9",
+  "date": "2026-08-24",
+  "result": "pass",
+  "build": {
+    "command": "pnpm --dir app tauri build --no-bundle",
+    "exit_code": 0,
+    "elapsed": "2m27s",
+    "linker": "MSVC 14.43.34808 Hostx64/x64/link.exe",
+    "exe_bytes": 57489408,
+    "exe_sha256": "BD4375D09EA09E099E6F24D74DC57B014E60F0C4C124401D1CBA6ACB1EE207FF",
+    "pdb_bytes": 19582976,
+    "pdb_sha256": "0DAF81F154F6C3953D5B9DC4A9DC85FF9889CC8CA5A277F4D635E80C2A17FC56",
+    "file_version": "1.2.0-alpha.9",
+    "product_version": "1.2.0-alpha.9"
+  },
+  "launch": {
+    "project_argument_present": false,
+    "isolated_webview_profile": true,
+    "exact_process_count": 1,
+    "initial_main_window_count": 1,
+    "initial_main_title_matched": true,
+    "initial_main_responsive": true,
+    "initial_main_maximized_before_ui": true,
+    "stored_panes_initially_absent": true
+  },
+  "displays": {
+    "enumerated_count": 5,
+    "resolutions": [
+      "1920x1080",
+      "1920x1080",
+      "2560x1440",
+      "2560x720",
+      "3840x2160"
+    ],
+    "four_k_detected": true,
+    "enumeration_only": true
+  },
+  "main_reload": {
+    "hook_installed_before_accepted_reload": true,
+    "registration_fulfilled": 1,
+    "registration_rejected": 0,
+    "registration_begin_order": 1,
+    "registration_end_order": 2,
+    "initial_selection_begin_order": 3,
+    "initial_selection_end_order": 5,
+    "startup_begin_order": 4,
+    "startup_end_order": 6,
+    "registration_completed_before_selection": true,
+    "registration_completed_before_startup": true,
+    "selection_and_startup_overlap_allowed": true,
+    "startup_fulfilled": true,
+    "startup_binding_result_null": true,
+    "selection_echo_exact": true,
+    "maximized": true,
+    "owner_status_key_present": false,
+    "legacy_unregistered_text_present": false,
+    "window_error_count": 0,
+    "unhandled_rejection_count": 0,
+    "page_error_count": 0,
+    "console_error_count": 0,
+    "crash_count": 0
+  },
+  "panes": [
+    {
+      "pane": "stage",
+      "label": "pane-stage",
+      "native_title": "Syndocal Stage - 2D Map"
+    },
+    {
+      "pane": "timeline",
+      "label": "pane-timeline",
+      "native_title": "Syndocal Timeline"
+    },
+    {
+      "pane": "programmer",
+      "label": "pane-programmer",
+      "native_title": "Syndocal Programmer"
+    },
+    {
+      "pane": "setup",
+      "label": "pane-setup",
+      "native_title": "Syndocal Setup"
+    },
+    {
+      "pane": "live",
+      "label": "pane-live",
+      "native_title": "Syndocal Live Desk"
+    },
+    {
+      "pane": "mixer",
+      "label": "pane-mixer",
+      "native_title": "Syndocal Live Mixer"
+    },
+    {
+      "pane": "touch",
+      "label": "pane-touch",
+      "native_title": "Syndocal Touch"
+    }
+  ],
+  "pane_assertions_applied_to_all_seven": {
+    "native_title_matched": true,
+    "pane_mode_matched": true,
+    "maximized": true,
+    "registration_fulfilled": 1,
+    "registration_rejected": 0,
+    "registration_begin_order": 1,
+    "registration_end_order": 2,
+    "initial_selection_begin_order": 3,
+    "initial_selection_end_order": 4,
+    "initial_selection_after_registration": true,
+    "initial_selection_rejected": 0,
+    "startup_binding_result_null": true,
+    "selection_echo_exact": true,
+    "post_main_reload_binding_result_null": true,
+    "registration_count_unchanged_after_main_reload": true,
+    "owner_status_key_present": false,
+    "legacy_unregistered_text_present": false,
+    "window_error_count": 0,
+    "unhandled_rejection_count": 0,
+    "page_error_count": 0,
+    "console_error_count": 0,
+    "crash_count": 0
+  },
+  "final_state": {
+    "all_test_panes_closed_through_main_ui": true,
+    "remaining_exact_process_count": 1,
+    "remaining_window_count": 1,
+    "remaining_window_title_matched": true,
+    "remaining_window_responsive": true,
+    "remaining_window_maximized": true,
+    "stored_panes": [],
+    "owner_status_key_present": false,
+    "legacy_unregistered_text_present": false
+  },
+  "screenshots": [
+    "main-seven-panes-open.png",
+    "pane-stage.png",
+    "pane-timeline.png",
+    "pane-programmer.png",
+    "pane-setup.png",
+    "pane-live.png",
+    "pane-mixer.png",
+    "pane-touch.png",
+    "main-final-single.png"
+  ],
+  "privacy_exclusions": [
+    "owner identifiers",
+    "IPC payloads and return payloads",
+    "project authority values and project data",
+    "process identifiers",
+    "network details",
+    "display names and positions",
+    "private absolute paths"
+  ],
+  "non_claims": [
+    "fullscreen output or playback",
+    "GPU reset",
+    "physical DJ Link or rekordbox",
+    "physical DMX",
+    "physical MIDI or pedal",
+    "ASIO hardware completion",
+    "fault-injection matrix completion",
+    "soak completion"
+  ]
+}

@@ -328,6 +328,7 @@ const rendererDispatchBody = functionSlice(
   "const listen = <T,>",
 );
 for (const marker of [
+  "await awaitProjectTransactionOwnerRegistrationBarrier();",
   "projectMutationCommands.has(command)",
   "projectTransactionId: transaction.transaction_id",
   "expectedEpoch: transaction.project_epoch",
@@ -335,6 +336,16 @@ for (const marker of [
 ]) {
   assert(rendererDispatchBody.includes(marker), `central invoke facade is missing ${marker}`);
 }
+assert(
+  rendererDispatchBody.indexOf("await awaitProjectTransactionOwnerRegistrationBarrier();")
+    < rendererDispatchBody.indexOf("const rendererTicketedMutation"),
+  "central invoke must await an owner registration before any native command classification or transaction work",
+);
+assert.doesNotMatch(
+  rendererDispatchBody,
+  /register_project_transaction_owner/,
+  "owner registration must remain a raw primitive and never recurse through central invoke",
+);
 const legacySingleCueCommands = [
   "update_cue_from_current",
   "set_cue_list",

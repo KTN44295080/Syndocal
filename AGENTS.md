@@ -2,6 +2,7 @@
 
 - Changes that affect the native UI or runtime are not complete after a frontend-only build.
 - Immediately before every native release build, find any running process whose resolved executable path is exactly this checkout's `target/release/syndocal.exe`, verify that exact path, and force-terminate only that process. Do this proactively so the linker can replace the executable; do not wait for an access-denied build failure. Never terminate Daslight or an unrelated `syndocal.exe` from another checkout.
+- Before every Windows Cargo/Tauri native build, enter an x64 Visual Studio Developer Shell, resolve and verify the exact `%VCToolsInstallDir%\bin\Hostx64\x64\link.exe`, and pin that absolute path in `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`. Fail closed if it is missing, and never allow Cargo to fall through to Git for Windows' incompatible `usr\bin\link.exe`. Keep this invariant enforced by the Tauri build wrapper and its focused checker, not only by operator memory.
 - Before handing off such changes, run `pnpm --dir app tauri build --no-bundle` successfully.
 - Launch `target/release/syndocal.exe` after the build and verify that exactly one responsive `Syndocal` window is available.
 - Before using UI automation or manual QA actions on Syndocal, verify the intended Syndocal window and maximize it. Perform Syndocal UI operations only while that verified target window is maximized, except when a test explicitly covers restore/minimize behavior.
@@ -18,6 +19,7 @@
 
 - At every periodic or meaningful progress checkpoint, update the relevant roadmap/release/QA documents and leave a concise handoff containing the current branch/HEAD, verified evidence, remaining blockers, and next action. Do not leave the operational state only in chat.
 - After the checkpoint validation passes, create a meaningful commit and push it. Record exact commands and any unverified external or hardware acceptance in the handoff; never mark an item complete from an unverified result. If a push fails, preserve the commit and report the push failure and recovery action.
+- Treat stale generated artifacts as an ongoing cleanup obligation. At every checkpoint and before the next versioned native build, inventory workspace size and delete verified-regenerable obsolete build/cache trees after the owning checkpoint is committed and pushed. Resolve and verify every absolute deletion target, preserve current release/QA/evidence artifacts and user-authored files, and record the paths and reclaimed bytes in the handoff.
 
 ## Windows ASIO product gate
 
@@ -38,7 +40,11 @@
 
 ## Delegation and concurrency
 
-- For every material implementation task with available agent capacity, actively delegate implementation and an independent adversarial review as separate tasks. Prefer Codex CLI `gpt-5.6-luna` with `model_reasoning_effort="max"` for implementation; use `gpt-5.6-terra` at high/xhigh effort for difficult work, and `gpt-5.6-sol` when it is harder still.
+- Keep task decomposition, instruction design, integration decisions, and completion claims under the supervising `gpt-5.6-sol` agent. Delegated summaries are evidence inputs, not substitutes for the supervisor's diff and gate verification.
+- Use the capability hierarchy `gpt-5.6-sol` > Zen/Ox `opencode/x-preview-f-free` > `gpt-5.6-terra` > `gpt-5.6-luna`. Make Ox the default delegated lane for almost all bounded implementation, investigation, and independent adversarial review whenever it is callable and suitable.
+- Use `gpt-5.6-terra` at high/xhigh effort as a secondary difficult implementation or review lane when additional independent capacity is useful. Any implementation produced by Terra must receive an independent Ox adversarial review before integration.
+- Use `gpt-5.6-luna` at max effort only for small, explicit, low-ambiguity parallel tasks, including work that the Sol supervisor has first decomposed into a narrowly specified implementation assignment. Do not assign broad design, ambiguous root-cause work, or final review to Luna merely because a lane is free.
+- For every material implementation task with available agent capacity, actively delegate implementation and an independent adversarial review as separate tasks. Default both assignments to independent Ox sessions first, and keep the implementer and reviewer independent.
 - The reviewer must independently inspect failure modes, regressions, and proof strength instead of merely confirming the implementer's summary. Assign explicit file ownership before concurrent edits and keep review read-only until the implementation owner reports a stable checkpoint.
 - Do not idle while delegated work is running. Advance independent read-only investigation, test planning, documentation checks, release evidence, or non-overlapping implementation in parallel.
 - Never let agents edit the same files concurrently; keep review read-only until the implementation owner reports a stable checkpoint.

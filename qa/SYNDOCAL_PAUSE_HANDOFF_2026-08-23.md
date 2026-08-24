@@ -1087,3 +1087,62 @@ generated Rust build and QA cache output, not historical source/worktree copies.
 No cleanup was performed or authorized because the deletion/rebuild-cost tradeoff
 was not authorized; generated `target` remains excluded from Git. The accepted
 denominator remains exactly **19/71 (26.8%)**.
+
+### 9.15 2026-08-24 alpha.8 pushed checkpoint and alpha.9 start
+
+The independently reviewed alpha.8 checkpoint was committed as
+`ec9fca4887e079fa61950056d94aca5ab5d65da9` (`checkpoint: validate Syndocal
+1.2.0-alpha.8`) and pushed successfully to `origin/codex/syndocal-v1.2`.
+Post-push verification was HEAD=upstream with ahead/behind 0/0, no staged or
+unstaged tracked paths, and the same 19 intentionally excluded historical
+alpha.7/pre-fix-alpha.8 evidence paths.
+
+The active development train has now advanced to `1.2.0-alpha.9` at the exact 20
+authoritative version coordinates. `pnpm --dir app run check:release` and
+`cargo metadata --locked --no-deps --format-version 1` pass. Alpha.9 owns the
+detached-pane registration-order P1: no completion claim is made until its focused
+gates, required native build, fresh pane proof, independent review, commit, and
+push all pass.
+
+### 9.16 2026-08-24 alpha.9 owner-registration acceptance
+
+Alpha.9 closes the detached-WebView transaction-owner registration-order P1.
+Every renderer now has one sticky, fail-closed registration barrier before
+owner-bound work; later trusted pointer/key or single-instance activity may
+re-arm a cached failure without a retry loop. Only the main WebView consumes
+startup or queued project opens, late work from a disposed WebView is discarded,
+and selection/audio updates serialize to the latest desired value. The focused
+contract fixtures cover concurrency, retry, disposal, and bootstrap ordering.
+
+The checkpoint gates all passed: release metadata and locked Cargo metadata;
+the 26-assertion Tauri wrapper checker; 417 frontend invoke assertions; 133
+renderer / 29 server / 30 raw / 402 facade routing assertions; 478 backend /
+308 operator / 133 renderer contract assertions; project transaction and
+authority gates; E3, E4, output-ownership, output-control, video-window, and
+timeline-follow runtime gates; 27 workspace/operator assertions; 3556/3556
+localization assertions with zero bare strings; Cargo format; and ten focused
+Rust tests. The frontend warning ratchet remained 0 first-party and 0
+third-party warnings.
+
+The required fixed native build
+`pnpm --dir app tauri build --no-bundle` passed in 2m27s using the verified
+MSVC 14.43.34808 Hostx64/x64 linker. The 57,489,408-byte EXE SHA-256 is
+`BD4375D09EA09E099E6F24D74DC57B014E60F0C4C124401D1CBA6ACB1EE207FF`;
+the 19,582,976-byte PDB SHA-256 is
+`0DAF81F154F6C3953D5B9DC4A9DC85FF9889CC8CA5A277F4D635E80C2A17FC56`.
+Fresh native acceptance at
+`qa/artifacts/native-owner-registration/2026-08-24-alpha9/` opened all seven
+real Workspaces panes, proved registration before initial owner-bound work,
+proved pane ownership survived a main reload, observed no owner-status/error/
+crash, and returned to exactly one responsive maximized main window. Tauri
+enumerated all five connected displays including 3840x2160; this is enumeration,
+not playback acceptance.
+
+The accepted whole-product denominator remains **19/71 (26.8%)**. DJ Link/
+rekordbox, DMX, MIDI/Pedal, ASIO, output playback, fault matrices, and the
+integrated soak remain unaccepted. The newly observed blank lower band when both
+Stage and Timeline are detached is an alpha.10 P1: the main layout must collapse
+the unused band and expand the remaining content while keeping usable rejoin
+controls and saved split ratios. The user has now authorized ongoing deletion of
+verified-regenerable stale build/cache output; the alpha.9 commit/push is the
+safety boundary before that cleanup.
